@@ -12,7 +12,7 @@
 
 ## 為什麼是這個，而不是「一個殼包多個 terminal」
 
-競品分析（cmux / claude-view，2026-07 研究）的結論：
+競品分析（見 [`competitive-analysis.md`](./competitive-analysis.md)）的結論：
 
 - **cmux**（GPL、macOS 原生、23.8k stars）已經用免費 / 原生 / 開源佔住「一個殼包多個真 terminal agent session」這條路。跟它比「terminal 殼」是打不贏也不該打的仗。
 - 但 cmux 是 **agent 中立、卻完全沒有共享上下文層**——它管視窗，不管 agent 之間傳什麼。
