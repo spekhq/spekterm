@@ -15,7 +15,7 @@
 4. [產品原則](#4-產品原則)
 5. [功能總覽](#5-功能總覽)
 6. [使用者介面與體驗](#6-使用者介面與體驗)
-7. [護城河：跨 agent、spec 錨定的 Handoff](#7-護城河跨-agentspec-錨定的-handoff)
+7. [護城河：跨 agent、磁碟狀態驗證的 Handoff](#7-護城河跨-agent磁碟狀態驗證的-handoff)
 8. [系統架構](#8-系統架構)
 9. [與既有 spek 的關係](#9-與既有-spek-的關係)
 10. [商業模式（Freemium）](#10-商業模式freemium)
@@ -37,7 +37,7 @@ core 邏輯重用開源的 [`@spek/core`](https://github.com/kewang/spek)（MIT�
 
 **一句話定位（headline）**：spec-driven 的多 agent 開發工作台。
 
-**護城河（moat，非 headline）**：跨異質 agent、以 OpenSpec change 錨定 + 磁碟狀態驗證的**結構化工作交接（handoff）**——見 §7。
+**護城河（moat，非 headline）**：跨異質 agent、以**磁碟狀態驗證**為核心的**結構化工作交接（handoff）**——一級功能、不綁 OpenSpec，任何 repo 都能用；工作對應到 OpenSpec change 時再額外錨定 change 做語意增強。見 §7。
 
 **現況**：規劃／設計階段，尚未開始實作。UI 已有定案雛型（`workspace-mockup.html`）。
 
@@ -134,8 +134,8 @@ Electron，目標產出 macOS / Windows / Linux 三平台安裝檔。
 
 ## 4. 產品原則
 
-1. **OpenSpec 是主角**：OpenSpec 主畫面恆常存在於主編輯區（釘住、不可關閉的 home tab）；檔案與特定 spec/change 是可開關的 tab。
-2. **狀態變更才算數**（延續 spek 立場）：「agent 說做完不算，磁碟上的狀態變更才算」——這條原則直接決定 handoff 的誠實度設計（讀 checkbox / diff，而非 agent 自述）。
+1. **OpenSpec 是語意核心**：workspace 的差異化建立在懂 OpenSpec change 生命週期。版面上，OpenSpec 是 side panel 的**預設身分**（跟隨 focused session 的 change），與 Files 同層互斥切換、與中央 terminal 並存；repo 沒有 `openspec/` 時退為 Files——核心不因缺 OpenSpec 就殘廢。（版面以 §6 / mockup 為準。）
+2. **狀態變更才算數**（延續 spek 立場）：「agent 說做完不算，磁碟上的狀態變更才算」——這條原則直接決定 handoff 的誠實度設計（讀 diff / checkbox，而非 agent 自述），也是 handoff 不必綁 OpenSpec 的底氣：git diff 每個 repo 都有。
 3. **agent 中立**：目前只包 `claude`，但介面與資料模型從一開始就為多 agent（Claude / Codex / Gemini …）設計。
 4. **重用而非重造**：`@spek/core`（MIT）與 spek 前端元件最大化重用；不重做 Claude Code 已有能力。
 5. **信任邊界優先**：fs 寫入、terminal cwd、handoff auto-spawn 都受明確信任邊界約束（同機同人 vs 跨人／外部）。
@@ -160,84 +160,91 @@ Electron，目標產出 macOS / Windows / Linux 三平台安裝檔。
 
 ## 6. 使用者介面與體驗
 
+> **本章以 [`workspace-mockup.html`](./workspace-mockup.html) 為準**——它是定案的高保真互動雛型（OpenSpec / Files × Handoff）。以下文字描述雛型呈現的版面與行為；若文字與 mockup 有出入，以 mockup 為權威。
+
 ### 6.1 目標 Layout
 
-**定位原則**：職責劃分為 **左 = 檔案總管、主上 = OpenSpec + 編輯器、主下 = terminal**。
+**組織主軸**：workspace 以 **repo 為一級單位、session 為其下子項**（呼應 §2「repo 級，一 repo 一 session、多 worktree 多開」），不是檔案總管優先的 IDE 版面。**terminal（跑真 `claude` 的 pty）是主舞台中央**，OpenSpec／Files 是它右側可切換的副手。
+
+**版面三塊**：`① 活動列 ｜ ② workspace rail（repos→sessions）｜ ③ 主舞台`；主舞台內部再分成 `repo header + session 分頁 + （左 terminal ／右 side panel）`。
 
 ```
-┌────┬──────────────────┬─────────────────────────────────────────────┐
-│    │  EXPLORER        │ ┌─────────────────────────────────────────┐  │
-│ 📁 │  ════════════    │ │ 📊 OpenSpec │ scanner.ts ● │ Spec:auth │+│  │ ← 混合 tab bar
-│    │  ▾ project-a     │ ├──┴──────────┴──────────────┴───────────┴─┤  │   (📊 釘住,最左)
-│ 🔍 │     ▾ src/       │ │ ┌──────┬──────────────────────────────┐ │  │
-│    │        scanner.ts│ │ │Dash  │  Overview                    │ │  │
-│ ⚙  │        types.ts  │ │ │Specs │  ▸ 12 specs  ▸ 5 changes     │ │  │ ← OpenSpec home
-│    │     README.md    │ │ │Change│                              │ │  │   (= 現在的 spek
-│    │  ▸ project-b     │ │ │Graph │  [統計卡片 / 列表 / 圖]      │ │  │    完整 app)
-│    │                  │ │ └──────┴──────────────────────────────┘ │  │
-│    │  [+ Add Folder]  │ └─────────────────────────────────────────┘  │
-│    │                  │ ┌─────────────────────────────────────────┐  │
-│    │                  │ │ TERMINAL ⟩ claude │ bash │          + ▭ ✕│  │ ← terminal dock
-│    │                  │ │ ~/project-a $ claude                     │  │
-│    │                  │ └─────────────────────────────────────────┘  │
-├────┴──────────────────┴─────────────────────────────────────────────┤
-│ ◐ main · project-a                  UTF-8 │ TypeScript │ Ln 3  spek ws│ ← 狀態列
-└──────────────────────────────────────────────────────────────────────┘
-  ①活動列  ②側邊面板(檔案總管)   ③主編輯區(OpenSpec+編輯器)   ④terminal dock
+┌────┬─────────────────┬───────────────────────────────────────────────────┐
+│ ▤  │ WORKSPACE       │ project-a   2 sessions · master, feat/term         │
+│Ses │ ▾📁 project-a  2│    [◈ OpenSpec│▤ Files]  ⤳ Handoff  + session   ⟩  │ ← repo header
+│    │   ● master        ├───────────────────────────────────────────────────│
+│⤳ 2 │   ● feat/term 待ack│ ●master[multi-folder-explorer]│●feat/term[…]     │ ← session 分頁
+│Han │ ▸📁 acme… ①1│─────────────────────────┬─────────────────────────│
+│    │ ▸📁 spek-web    ↩│ ~/git/project-a $ claude │ project-a/changes/       │
+│ 🔍 │                 │ > 幫我把 FolderRow…      │   multi-folder-explorer  │
+│    │                 │ ⏺ Edit(fs.ts) +24 -2     │[本ch│Specs│Changes│Graph]│
+│ ⚙  │                 │ > ▏                      │ Tasks 3/9 ▓▓▓░░░░░░      │
+│    │                 │                          │ ☑ …   ☐ …               │
+│    │                 │   ← 左：純 terminal       │ SPEC DELTAS  WHEN…THEN… │
+│    │ [+ Add folder]  │     (pty 跑 claude)       │  → 右：side panel        │
+├────┴─────────────────┴─────────────────────────┴─────────────────────────┤
+│ ◐ 4 sessions   workspace                             UTF-8   spek ws 0.1  │ ← 狀態列
+└───────────────────────────────────────────────────────────────────────────┘
+ ①活動列 ②workspace rail  ③主舞台(repo header + session 分頁 + 左 terminal│右 side panel)
 ```
 
-四條分隔線（活動列｜面板、面板｜主區、主區｜dock、terminal 高度）皆可拖動。
+主舞台只屬於**當前選中的 repo**。分界（活動列｜rail、rail｜主舞台、terminal｜side panel）皆可拖動；side panel 可整個收合讓 terminal 佔滿。
 
-> 註：`workspace-mockup.html` 是定案的高保真互動雛型，已把 workspace rail（跨 repo 導覽）與 handoff 疊加（incoming badge／接棒 tag／待 ack tag／收件匣 view／compose modal）畫進去。並存 split 版本（左 terminal ／右 OpenSpec↔Files segmented switch）以 mockup 為準。
+### 6.2 各區塊
 
-### 6.2 各區操作
+- **① 活動列**：`Sessions`（工作台，預設）／`Handoffs`（收件匣，帶待處理 badge）／🔍 搜尋（沿用 spek `Cmd+K`）／⚙ 設定。組織軸是 **Sessions 與 Handoffs**，不是檔案總管——點 `Handoffs` 會把主舞台整個換成 workspace 層級的 Handoff 收件匣（見 §6.4），點 `Sessions` 切回工作台。
+- **② workspace rail**：跨 repo 導覽。每個 repo 為一列，可展開露出其下的 session 子列；repo／session 上疊加最急迫的狀態燈與 handoff 標記（incoming badge、`↩ 接棒`、`待 ack`）。底部 `[+ Add folder]`（原生對話框、持久化）。沒有 `openspec/` 的 repo 於此標示（如 mockup 的 spek-web），提示它只能用 Files 身分。
+- **③ 主舞台 · repo header**：左邊 repo 身分 + session 聚合資訊；右邊是 `[◈ OpenSpec │ ▤ Files]` segmented switch、`⤳ Handoff`（開 compose）、`+ session`、side panel 收合鈕。
+- **③ 主舞台 · session 分頁**：當前 repo 底下每個 session 一個分頁（branch + 狀態燈 + 錨定 change 的 badge）。切分頁 = 切 focused session；OpenSpec side panel 隨 focused session 的 change 更新。
+- **③ 主舞台 · 左 terminal**：跑 agent 的主場，`node-pty` 真 pty 跑 `claude`。**terminal 保持純淨**——結尾就是 `claude` 自己的 `>` prompt 行，spek **不另外畫輸入框**。`+ session` 開新 pty（預設 cwd = 當前 repo／worktree）。
+- **③ 主舞台 · 右 side panel**：一次只顯示一個身分（OpenSpec 或 Files），見 §6.3。
 
-- **① 活動列**：📁 Explorer / 🔍 搜尋（沿用 spek `Cmd+K`）/ ⚙ 設定。因 OpenSpec 恆在主區，活動列不再需要「切到 OpenSpec」按鈕。
-- **② 側邊面板（Explorer）**：多 folder 檔案樹，`[+ Add Folder]`（原生對話框、持久化）、右鍵移除；子目錄 lazy load；chokidar 監控自動更新。
-- **③ 主編輯區（混合 tab）**：
-  - `📊 OpenSpec` 為**釘住、不可關閉**的 home tab，內部就是現有 spek app（Dashboard/Specs/Changes/Graph），透過 `IpcAdapter` 整套重用。
-  - 檔案 tab 用 Monaco 顯示，可編輯 + syntax highlight；`●` 表未存檔，`Cmd/Ctrl+S` 存檔。
-  - 特定 spec/change 可「在新 tab 開啟」釘成獨立 tab，方便邊看 spec 邊改 code。
-- **④ Terminal dock**：跑 agent 主場；`+` 開新 `node-pty` session（預設 cwd = 選中 folder），多 terminal 以 tab 切換，可 resize / 最大化 / 關閉。
+> 註：本版面刻意**不**把 Monaco 檔案編輯器當主編輯區的一級公民。工作台圍繞「terminal 駕駛 agent + side panel 看 spec／檔案上下文」；深度改檔仍走 agent 或使用者自己的 IDE。Monaco 的角色退為 Files／檔案檢視（F3 編輯能力保留，但不是版面主角）。
 
-### 6.3 Tab 行為
+### 6.3 Side panel：OpenSpec ↔ Files（同層互斥切換）
 
-| 動作 | 行為 |
-|------|------|
-| 點 `📊 OpenSpec` home tab | 回 OpenSpec 主畫面（內部切 Dashboard/Specs/Changes/Graph，沿用 spek 路由） |
-| 在 OpenSpec 內點 spec/change | 預設在 home tab 內導覽（保留 spek 現有 UX） |
-| 對 spec/change「在新 tab 開啟」 | 釘成獨立 tab，可與 code 並排 |
-| 從 explorer 點檔案 | 開成可關閉的 Monaco 編輯器 tab |
-| spec ↔ 檔案 交叉跳轉 | spec 頁可跳底層 `.md`；編輯器可反查所屬 change |
+OpenSpec 與 Files 是 side panel 的**兩個同層級、互斥的身分**，用 repo header 的 segmented switch 切換，一次只顯示一個，與左側 terminal 並存。
+
+| 身分 | 內容 | 條件 |
+|------|------|------|
+| `◈ OpenSpec`（預設） | 現有 spek app（本 change／Specs／Changes／Graph），透過 `IpcAdapter` 重用；**自動跟隨 focused session 正在做的 change** | 條件式：repo 要有 `openspec/` 且有 active change 才可用；否則此鈕 disabled/dim |
+| `▤ Files` | 當前 repo 的檔案樹（子目錄 lazy load、chokidar 監控、git 狀態 tag） | 恆可用 |
+
+- **OpenSpec 是條件式身分**：沒有 `openspec/` 的 repo（如 mockup 的 spek-web），OpenSpec 鈕 disabled，side panel 退為 Files。這正是「spek 以 OpenSpec 為核心，但版面不因缺 OpenSpec 就殘廢」的體現。
+- **本 change 視圖**：change 標題／描述 + tasks 打勾進度（讀磁碟）+ spec deltas（BDD 呈現，ADDED／MODIFIED）。
+- **交叉導覽**：spec/change ↔ 底層 `.md` 互跳（保留 spek 現有 UX）。
 
 ### 6.4 Handoff 相關 UI（Phase 7+）
 
-- **workspace rail**：跨 repo 導覽，repo 上顯示 incoming handoff badge、「接棒」tag、「待 ack」tag。
-- **來件通知橫幅**：router probe 到跨人 handoff、等核准（含核准鈕）。
-- **repo header**：OpenSpec／Files segmented switch ＋ `⤳ Handoff`（compose）＋ `+ session`。
-- **Handoff 收件匣 view**（workspace 層級）：分區顯示「跨人需核准 / 同機已自動接棒 / 待你 ack / 已完成」。
-- **自動開的 session** 標示「picked up from handoff X」。
-- **compose modal**：手動寫 handoff。
+對齊 mockup 的五個時刻（Handoff 不綁 OpenSpec，見 §7；同機自動接棒／跨人需核准）：
+
+1. **活動列 `Handoffs` 圖示 + badge**：點擊把主舞台換成 workspace 層級的 **Handoff 收件匣 view**；再點 `Sessions` 切回工作台。
+2. **Handoff 收件匣 view**：`收件匣／待你 ack／已完成` 三區，每張卡片含狀態 badge、`from→to`、錨定（有 change 顯示 change slug；ad-hoc 顯示「無 change」）、「狀態驗證進度」（讀磁碟，非 agent 自述）、producer、依狀態的動作鈕。
+3. **跨人來件通知橫幅**：router probe 到跨人 handoff、等你核准（含核准／檢視／略過）。
+4. **workspace rail 標記**：repo 上 incoming handoff badge、session 上 `↩ 接棒`（同機自動接棒開的）、`待 ack`（已交接出去待對方 ack）。
+5. **repo header `⤳ Handoff` 鈕 → compose modal**：手動寫 handoff；`To` 選 repo 或人；「錨定 change」在 focused session 有 change 時自動唯讀帶入、ad-hoc 時留空；下方一句提示同機自動接棒／跨人需核准。自動開的 session 於分頁／rail 標示接棒來源。
 
 ---
 
-## 7. 護城河：跨 agent、spec 錨定的 Handoff
+## 7. 護城河：跨 agent、磁碟狀態驗證的 Handoff
 
 > 定位：這是 spek workspace 的**護城河層**，不是行銷 headline。headline 維持簡單好懂（「spec-driven 的多 agent 開發工作台」）；handoff 是往下證明 moat 的深水區，也是對「為什麼 cmux 抄不走我」的答案。
 
+> **Handoff 是一級功能，不綁 OpenSpec。** spek 以 OpenSpec 為核心沒錯，但 handoff 的守護價值來自「**磁碟狀態驗證**」——讀 git diff／檔案這種每個 repo 都有的 ground truth，任何 repo（含沒有 `openspec/` 的）都能收送 handoff。OpenSpec change 錨定是**選配的增強層**：當這一棒的工作剛好對應到一個 change 時，額外綁上 change slug、讀 tasks.md 打勾、對齊 spec deltas，讓上下文更濃。沒有 change（ad-hoc、或非 OpenSpec repo）時，handoff 退為「git diff 快照 + 自由文字意圖」，仍然是一級、仍然誠實。mockup 已同時畫出兩種：OpenSpec 錨定的 H1／H3，與 ad-hoc 的 H2。
+
 ### 7.1 一句話
 
-在包住多個異質 agent session 的工作台裡，讓工作以「**OpenSpec change 錨定 + 磁碟狀態驗證**」的結構化交接產物，在不同 session / agent（Claude / Codex / Gemini）/ 時間 / 甚至不同人之間傳遞——每一棒都讀得到「這個 change 做到哪、spec 是什麼、上一棒留了什麼雷」。
+在包住多個異質 agent session 的工作台裡，讓工作以「**磁碟狀態驗證**」的結構化交接產物，在不同 session / agent（Claude / Codex / Gemini）/ 時間 / 甚至不同人之間傳遞——每一棒都讀得到「這個工作做到哪、diff 長怎樣、上一棒留了什麼雷」；**當工作對應到 OpenSpec change 時，再額外錨定 change（spec 是什麼、tasks 打到哪）把上下文加濃。**
 
 ### 7.2 為什麼守得住
 
 | | 商品化（約半年被抄） | 可守護（抄不走） |
 |---|---|---|
-| 怎麼產生 | 叫 agent 自己總結 | **錨定在 change 上**：spec deltas + tasks 打勾狀態 + git diff + 「下一步 / 雷點」 |
-| 誠實度 | agent 自述（會樂觀、會說謊） | **磁碟 ground truth 驗證**：checkbox 真的勾、diff 真的存在才算 |
-| 誰能做 | cmux 用 socket API 週末拼一個 | 需懂 OpenSpec 結構 + 跨 session 狀態，對手資料模型裡沒這層 |
+| 怎麼產生 | 叫 agent 自己總結 | 從**磁碟 ground truth 推導**：git diff + 檔案狀態 + 「下一步 / 雷點」；有 OpenSpec change 時再疊上 tasks 打勾 + spec deltas |
+| 誠實度 | agent 自述（會樂觀、會說謊） | **磁碟驗證**：diff 真的存在、checkbox 真的勾才算 |
+| 誰能做 | cmux 用 socket API 週末拼一個 | 需跨 session／跨 agent 的狀態驗證管線 + 主動 router；懂 OpenSpec 結構讓錨定的那一棒又更濃——對手資料模型裡沒這層 |
 
-核心信念：**handoff 不是 agent 的自我總結，是對 change 當前真實狀態的結構化快照。**
+核心信念：**handoff 不是 agent 的自我總結，是對工作當前真實狀態的結構化快照**（有 OpenSpec change 時，快照再對齊到那個 change）。
 
 ### 7.3 殺手級組合
 
@@ -251,22 +258,27 @@ Gemini   跑 review / 測試
 
 ### 7.4 Handoff 產物內容（schema，初步）
 
-格式須 **agent-agnostic**（markdown + frontmatter）。frontmatter 帶狀態、來源、目標、主題與時間（目標可為人、群組或 repo），並有確認的生命週期，加上 spek 專屬欄位：
+格式須 **agent-agnostic**（markdown + frontmatter）。frontmatter 帶狀態、來源、目標、主題與時間（目標可為人、群組或 repo），並有確認的生命週期，加上 spek 專屬欄位。分**核心（恆有）**與 **OpenSpec 增強（選配）**兩層：
 
-- **錨點**：repo / worktree / branch / change slug。
-- **意圖**：這個 change 要達成什麼（引用 proposal）。
-- **進度（狀態驗證）**：tasks.md 已勾 / 未勾（實際讀檔）、目前 diff stat。
-- **spec 對齊**：這一棒觸及哪些 spec deltas（ADDED / MODIFIED），有無未落實的 requirement。
+**核心欄位（每個 handoff 都有，不依賴 OpenSpec）**
+- **錨點**：repo / worktree / branch。
+- **進度（狀態驗證）**：目前 diff stat、動到哪些檔案——實際讀磁碟。
+- **意圖**：這一棒想達成什麼（自由文字）。
 - **交棒內容**：下一步、已知雷 / 卡點 / 決策、需人類拍板的問題。
 - **產生者**：哪個 agent、哪個 session、何時。
 
-> 狀態部分由 spek 自動從磁碟推導；agent 只補意圖 / 下一步。傾向「自動從 ground truth 推導 + agent 補充意圖」的混合產生模式。
+**OpenSpec 增強欄位（僅當這一棒對應到一個 change 時才帶）**
+- **change 錨定**：change slug（把上面的錨點連到具體 change）。
+- **tasks 進度**：tasks.md 已勾 / 未勾（實際讀檔）。
+- **spec 對齊**：觸及哪些 spec deltas（ADDED / MODIFIED），有無未落實的 requirement。
+
+> 狀態部分由 spek 自動從磁碟推導；agent 只補意圖 / 下一步。傾向「自動從 ground truth 推導 + agent 補充意圖」的混合產生模式。ad-hoc（無 change）時，增強欄位整段省略，卡片上顯示「無 change」（見 mockup H2）。
 
 ### 7.5 Pipeline
 
 ```
 session A（repo-A 做完）
-  └─ 寫 handoff：to: repo-B、錨定某 OpenSpec change，附「狀態驗證過的」進度
+  └─ 寫 handoff：to: repo-B、附「狀態驗證過的」進度（有 change 時另錨定 OpenSpec change）
         │
         ▼
 spek 背景 router 主動 probe → 比對 to 命中的 repo-B
@@ -289,7 +301,7 @@ spek 背景 router 主動 probe → 比對 to 命中的 repo-B
    - **cascade 護欄**：handoff → session → handoff 的無限接力要有深度上限 / 迴圈偵測（上限與方式 TODO）。
 2. **Store 兩層**：
    - **信封（envelope）= 本機 daemon inbox**（`~/.spek/handoffs/`，workspace 範圍）。router 住這，看得到本機所有 repo 的 handoff，`to` 命中就路由。**同機跨 repo 完全本機、零 backend。**
-   - **內容（payload）= 儘量連到 repo 內的 OpenSpec change**，不重抄；豐富內容跟著 repo 走 git、天然 spec 錨定。
+   - **內容（payload）= 磁碟狀態快照（git diff／檔案）為底**；當工作對應到 change 時，再連到 repo 內的 OpenSpec change、不重抄（豐富內容跟著 repo 走 git、天然 spec 錨定）。無 change 時就只有磁碟快照。
    - **跨機 / 跨人 = relay**（spek 自己的中繼）：本機 daemon 把 outbox 同步到 relay，relay 送到別台機 / 別人的 daemon。
    - **不採**「主要存 repo 內用 git 傳」：解不了跨 repo 路由、又會弄髒版控。
 3. **Freemium**：本機單人 handoff 免費；跨機 / 跨人 / 自動編排 / 稽核 / 遠端核准付費（見 §10）。
@@ -501,7 +513,7 @@ spek 可重用 React 元件目前住在 `@spek/web`、未對外輸出。抽出�
 - **cascade 上限**：自動接力深度上限與迴圈偵測方式。
 - **產生時機**：agent 結束主動產生？人手動觸發？狀態自動推導？（傾向混合）
 - **relay 信任模型**：跨人核准的身分驗證、handoff 內容完整性 / 來源可信。
-- **OpenSpec 依賴**：payload 深綁 change；工作無對應 change（ad-hoc）時 handoff 長怎樣。
+- **OpenSpec 增強層**：核心 / 增強兩層已定（§7.4，不綁 OpenSpec）；待決的是增強欄位的自動偵測——如何判定「這一棒對應到哪個 change」以自動帶入（branch↔change 對應、focused session 上下文、或使用者指定）。
 - **UI 呈現**：handoff 是 OpenSpec 側欄裡的一個區塊，還是 session 之間的獨立產物 / inbox？（mockup 目前採 workspace 層級收件匣 + rail badge）
 
 ---
