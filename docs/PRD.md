@@ -2,12 +2,8 @@
 
 > 狀態：整合定案（consolidated draft）
 > 更新：2026-07-08
-> 這份 PRD 整合並取代先前散落的規劃文件，是後續開發的**單一權威來源**。
-> 補充素材（保留供參）：
-> - [`workspace-mockup.html`](./workspace-mockup.html) — 定案互動雛型（OpenSpec × terminal × Handoff）
-> - [`competitive-analysis.md`](./competitive-analysis.md) — 完整競品分析與 SWOT
-> - [`workspace-roadmap.md`](./workspace-roadmap.md) — 原始技術藍圖
-> - [`concept-cross-agent-handoff.md`](./concept-cross-agent-handoff.md) / [`handoff-design.md`](./handoff-design.md) — handoff 上游論證與設計
+> 這份 PRD 是後續開發的**單一權威來源**，已整合先前散落的規劃文件（roadmap / 競品分析 / handoff 概念與設計）。
+> 唯一並存的補充素材是 [`workspace-mockup.html`](./workspace-mockup.html) — 定案互動雛型（OpenSpec × terminal × Handoff），因為它是互動原型、無法併入 markdown。
 
 ---
 
@@ -28,6 +24,8 @@
 13. [技術風險與緩解](#13-技術風險與緩解)
 14. [開放問題](#14-開放問題)
 15. [建議的第一步](#15-建議的第一步)
+- [附錄 A：競品詳細檔案](#附錄-a競品詳細檔案)
+- [附錄 B：資料來源與信度](#附錄-b資料來源與信度)
 
 ---
 
@@ -54,7 +52,7 @@ core 邏輯重用開源的 [`@spek/core`](https://github.com/kewang/spek)（MIT�
 - agent 缺乏共享的、可驗證的上下文；工作在 session／agent／人之間交接時只能靠聊天摘要，會失真。
 - 現有 IDE 不理解 spec-driven 工作流（OpenSpec 的 change 生命週期），無法把 spec 上下文與終端機並排。
 
-### 2.2 競爭態勢（摘要，完整見 `competitive-analysis.md`）
+### 2.2 競爭態勢（摘要，詳細競品檔案見 [附錄 A](#附錄-a競品詳細檔案)）
 
 這是三個不同的 job：
 
@@ -81,6 +79,37 @@ core 邏輯重用開源的 [`@spek/core`](https://github.com/kewang/spek)（MIT�
 2. **跨平台是被低估的優勢**——cmux 鎖 macOS，Windows／Linux 的 agent 工作台市場現在是空的；**Electron 在此從弱點變武器**。
 
 最該怕的：cmux 生態讓社群拼出「夠用就好」的 spec 側欄。**因此必須把賭注從「會渲染 OpenSpec」推進到「懂 change 生命週期、抄介面抄不走語意」，而且要快**——這正是 handoff（§7）存在的理由。
+
+（各競品的完整 feature／平台／商業模式／traction 見 [附錄 A](#附錄-a競品詳細檔案)。）
+
+### 2.4 SWOT（以 spek workspace 為主體）
+
+**Strengths**
+- **唯一 spec-aware 工作台**：OpenSpec 側欄自動跟隨當前 change（deltas / BDD / tasks / graph），兩對手都沒有、也沒宣示要做。這是 workflow 綁定，不是 feature——用 OpenSpec 的人切換成本高。
+- **repo / worktree 是一級組織單位**：cmux 的 worktree 還是「自己寫 script」（官方 HN 親口、issue 未結）。
+- **不吃 API key、用使用者自己的訂閱**；刻意不重做 Claude Code 已有的 diff / task。
+- **open-core 結構清楚**：`@spek/core`（MIT）有機會成為 OpenSpec 生態的標準解析引擎。
+
+**Weaknesses**
+- **TAM 最小**：Claude Code ∩ OpenSpec 使用者。cmux 服務所有 CLI agent 使用者，分母大一個數量級。
+- **Electron vs 原生**：cmux 把「no Electron」當行銷主軸，終端機這種效能敏感品類 Electron 天生吃虧敘事。
+- **封閉商業 app 對上免費 GPL + 23.8k stars**：開發者對「本地功能免費」的預設期待已被錨定。
+- **單 agent 依賴**：目前只包 `claude`（已規劃擴充；未擴充前只覆蓋一半桌面）。
+- **無聲量基礎**：對手一個 HN #2 + YC、一個迭代極快；spek 尚無社群飛輪。
+
+**Opportunities**
+- **跨平台空窗**：cmux 僅 macOS、claude-view 的 Linux 未到。Windows / Linux 上「多 session agent 工作台」沒有強勢玩家——Electron 在這裡反而從弱點變武器。
+- **付費意願已被驗證**：$20~$100/月價格帶別人幫忙教育好了。
+- **spec-driven development 浪頭**：把自己定位成這個方法論的 reference tooling，而不是「又一個 terminal 管理器」。
+- **`@spek/core` 生態槓桿**：MIT 引擎做 VS Code / IntelliJ 甚至 cmux socket API 整合當漏斗，商業 app 收完整工作台的錢。
+- **cmux 的 worktree 缺口**：社群正在敲碗、官方還沒做——現在能拿來打的對比點，但窗口不會永遠開著。
+
+**Threats**
+- **最大威脅 = cmux 的可程式化 + 社群動能**：有 CLI / socket API + 23.8k stars，任何人週末能拼一個「夠用」的 OpenSpec 側欄 pane。**若差異化只停在「渲染 OpenSpec」，護城河約六個月。**
+- **cmux 補上一級 worktree 支援**（需求明確、官方有興趣）→ spek 的組織模型優勢只剩 spec 側欄一條腿。
+- **Anthropic 官方向上吃**：Claude Code teams / 官方 session 管理進化；若官方內建多 session + plan/spec 呈現，護城河最薄的先死。
+- **claude-view 往 orchestration 爬 + 定義付費天花板**：spek 定價被兩邊夾（cmux 免費、claude-view 錨定天花板）。
+- **OpenSpec 普及風險**：差異化全押 OpenSpec；若 spec-driven 收斂到別的格式（或 Anthropic 推自己的 spec 格式），核心賣點陪葬。
 
 ---
 
@@ -194,7 +223,7 @@ Electron，目標產出 macOS / Windows / Linux 三平台安裝檔。
 
 ## 7. 護城河：跨 agent、spec 錨定的 Handoff
 
-> 上游論證：[`concept-cross-agent-handoff.md`](./concept-cross-agent-handoff.md)、設計：[`handoff-design.md`](./handoff-design.md)。
+> 定位：這是 spek workspace 的**護城河層**，不是行銷 headline。headline 維持簡單好懂（「spec-driven 的多 agent 開發工作台」）；handoff 是往下證明 moat 的深水區，也是對「為什麼 cmux 抄不走我」的答案。
 
 ### 7.1 一句話
 
@@ -233,6 +262,14 @@ Gemini   跑 review / 測試
 
 > 狀態部分由 spek 自動從磁碟推導；agent 只補意圖 / 下一步。傾向「自動從 ground truth 推導 + agent 補充意圖」的混合產生模式。
 > 註：Funliday protocol 為內部規格，此處只引用其**機制**當靈感，不把內容納入本商業 repo。
+
+**spek 相對 Funliday protocol 要補的三件事**（把「Redmine 中央 + 被動 pull + 人讀」推到「本機 daemon + 主動 probe + 自動開 session + 跨異質 agent」）：
+
+| Funliday 協定現況 | spek 要補的 |
+|---|---|
+| Redmine wiki 當中央 store | **本機 daemon inbox**（免費）+ **relay**（付費）；不依賴 Redmine |
+| SessionStart 被動 pull、人讀 | **主動 probe**：背景 router 監看，`to` 命中它管的 repo 就即時路由 |
+| 人的 Claude 讀了自己做 | **自動開新 session + 注入 context**，且**跨異質 agent**（Claude / Codex / Gemini） |
 
 ### 7.5 Pipeline
 
@@ -467,7 +504,7 @@ spek 可重用 React 元件目前住在 `@spek/web`、未對外輸出。抽出�
 ### 工作台
 - 首個 change 的最小驗收邊界（建議 `workspace-foundation-spike`）。
 
-### Handoff（多屬 TODO，見 `handoff-design.md` §6）
+### Handoff（多屬 TODO）
 - **Addressing registry**：repo / workspace 全域命名與解析；跨人時 `to` 指向誰的哪個 repo？
 - **跨 agent 注入抽象**：Claude / Codex / Gemini CLI 的 context 注入方式不同（prompt / flag / 初始訊息 / 檔案引用），需一層統一介面。
 - **cascade 上限**：自動接力深度上限與迴圈偵測方式。
@@ -486,5 +523,36 @@ spek 可重用 React 元件目前住在 `@spek/web`、未對外輸出。抽出�
 3. 工作台可用後，進 **Phase 7** 做 handoff 免費核心的最小可行：本機 daemon inbox + `spek handoff` CLI + 同機 auto-spawn + context 注入（先只接 `claude`）——把護城河從概念推進到「用了回不去」。
 
 > 開新 change 用 `/openspec-new-change` 或 `/opsx:new`。
-</content>
-</invoke>
+
+---
+
+## 附錄 A：競品詳細檔案
+
+> 研究：2026-07（官網 + GitHub + Show HN 直取，佐以搜尋）。star 數 / 版本 / 定價為 2026-07 當下快照，會過時，之後重評需重查。
+
+### claude-view（claudeview.ai）—「Claude Code 的監控塔台」
+
+- **解決什麼**：同時跑多個 Claude Code session 時「它們在幹嘛、燒多少錢」。定位：Mission Control for AI coding agents。本質是 **observability 層**，不是工作環境。
+- **關鍵 feature**：即時多 session 儀表板、成本 / token 追蹤（細到 cache 讀寫）、全 session 搜尋、sub-agent tree、hook 事件時間軸、worktree branch drift 偵測、Kanban 泳道、遠端核准工作流、手機端監控。
+- **平台**：本機 binary / npx / Claude Code plugin + Web dashboard（瀏覽器 / 手機）。macOS 為主，Linux 標示後續版本才到。**無 pty、非終端機**。
+- **支援 agent**：僅 Claude Code。
+- **商業模式**：實質 open-core——GitHub（tombelieber/claude-view）**MIT**、本地監看免費；付費走雲端 Pro $20/月、Max $100/月、Team $30/人/月、Enterprise。
+- **traction**：開發活躍但聲量小，GitHub 約 90 stars，雲端 / 行動功能上線程度未能完全確認。
+
+### cmux（manaflow，YC S24）—「為並行 agent 而生的 macOS 原生終端機」
+
+- **解決什麼**：並行跑一堆 Claude Code / Codex session 時的視窗管理與「哪個 agent 在等我」。定位：不取代 agent，做它們周圍的「玻璃與黏著劑（the glass and glue）」。
+- **關鍵 feature**：垂直分頁側欄（git 分支 / 工作目錄 / port / 通知）、通知環、分割窗格（subagent 自動變 pane）、**內建可程式化瀏覽器**、CLI + Unix socket API、tmux 整合（beta）、SSH 遠端驅動、session 還原、GPU 加速（libghostty）。
+- **平台**：**僅 macOS**，原生 Swift + AppKit，行銷主打「無 Electron」。iOS 伴侶 app（beta）。**本身就是真 pty 終端機**。
+- **支援 agent**：**agent-agnostic**——Claude Code、Codex、OpenCode、Gemini CLI、Aider、Goose、Amp、Cline、Cursor Agent…「任何能從命令列啟動的工具」。
+- **worktree**：**不是一級公民**，官方建議「一 worktree 一 tab 自己擺」；GitHub issue（#156、#3414）在要求一級支援，官方目前答案是「自己寫 script 包 CLI」。
+- **商業模式**：**GPL-3.0 + 商業授權**，本地免費；Founders Edition 約 $30/月（搶先體驗 + 優先支援）。
+- **traction**：2026-02 Show HN #2，GitHub 約 23.8k stars，迭代極快，有繁中在地化官網。
+
+---
+
+## 附錄 B：資料來源與信度
+
+- **高信度（直取）**：[claudeview.ai](https://claudeview.ai/) + [/pricing](https://claudeview.ai/pricing)、[GitHub tombelieber/claude-view](https://github.com/tombelieber/claude-view)（MIT、~90 stars）、[cmux.com/zh-TW](https://cmux.com/zh-TW)、[GitHub manaflow-ai/cmux](https://github.com/manaflow-ai/cmux)（GPL-3.0、~23.8k stars）、[cmux Show HN](https://news.ycombinator.com/item?id=47079718)。
+- **中信度（二手佐證）**：cmux worktree issues #156 / #3414、cmux Founders Edition 定價（來自 HN 留言與 GitHub 描述）。
+- **未能完全確認**：claude-view 雲端 / 行動功能實際上線程度（有 waitlist 跡象）、其 HN / Product Hunt launch 紀錄（查無）、cmux Founders Edition 正式定價頁。
