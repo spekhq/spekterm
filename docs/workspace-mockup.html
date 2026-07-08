@@ -1,35 +1,40 @@
 <!DOCTYPE html>
 <!--
-  spek workspace 多 session layout — 互動雛型
+  spek workspace 多 session layout — 互動雛型（含 Handoff）
 
-  spek 定位為 agent 開發工作台：把多個「一個 repo/資料夾各自一個 claude
-  session」的 terminal 包在一個殼裡，加上看得懂 OpenSpec 結構與檔案的輕量瀏覽器。
+  spek 定位為 agent 開發工作台：把多個「一個 repo／資料夾各自一個 claude session」的
+  terminal 包在一個殼裡，加上看得懂 OpenSpec 結構與檔案的輕量瀏覽器。
 
-  版面：
-  - 左側 activity bar + workspace rail：列出各 repo/資料夾，選中的 repo 展開露出
-    它底下的 session（同一 repo 可多開，如 project-a 的 master / feat/term）。
-  - 主舞台只屬於當前選中的 repo：上方 session 分頁，下方左右 split。
-    - 左：純 terminal（pty 跑 claude）。結尾是 claude 自己的 `>` prompt 行 + 游標，
-      那一行就是輸入，spek 不另外畫輸入框。刻意不重做 diff review / task tracking，
-      那些 Claude Code 在 terminal 裡本來就有。
-    - 右：side panel，一次只顯示一個身分，在 OpenSpec ↔ Files 之間用 header 的
-      segmented control `[◈ OpenSpec] [▤ Files]` 切換；不論哪個都與 terminal 並存，
-      可收合讓 terminal 佔滿。
-      · OpenSpec（spek 的賣點）：自動跟隨 focused session 正在做的 change，顯示
-        breadcrumb、nav（本 change／Specs／Changes／Graph）、Tasks 進度、BDD spec
-        deltas。tasks 就長在 change 裡，不另外抽出。
-      · Files：當前 repo 的檔案樹（name + git M/A badge + 淡化修改時間）。
-      · 條件式：Files 一定在，OpenSpec 只有 repo 有 openspec/ 且有 active change
-        才可用（無 openspec/ 的 repo，如 spek-web，OpenSpec 鈕會 disabled）。
+  版面：activity bar（Sessions／Handoffs／搜尋／設定）+ workspace rail（repos +
+  sessions）｜主舞台 = repo header（[◈ OpenSpec][▤ Files] 側欄切換）+ session 分頁 +
+  左 terminal／右 side panel。主舞台只屬於當前選中的 repo；terminal 純淨（結尾是
+  claude 自己的 prompt，spek 不另外畫輸入框）。
 
-  單一 self-contained HTML：design token、視窗外框、terminal 渲染、共用 primitives
-  都內嵌在下方 <style>，專屬版面 CSS 集中在 <style id="layout-style"> 區塊。
+  Handoff（跨 session／repo／agent 工作交接）對齊 handoff-design.md 的安全邊界：
+  同機自動接棒／跨人需人核准才 spawn。5 個時刻：
+  1. Activity bar 多一顆「Handoffs」圖示 + badge（待處理數），點擊切換主舞台成
+     workspace 層級的「Handoff 收件匣」view，蓋掉原本的 repo 工作台；再點 Sessions
+     圖示切回去。
+  2. Handoff 收件匣 view：收件匣／待你 ack／已完成 三區，每張卡片含狀態 badge、
+     from→to、錨定 change、「狀態驗證進度」（讀磁碟，非 agent 自述）、producer、
+     依狀態的動作鈕。
+  3. 原本 repo 工作台頂端一條可關閉的跨人來件通知橫幅（router probe 到、等你核准）。
+  4. Workspace rail 指示：incoming handoff badge、「↩ 接棒」tag、「待 ack」tag。
+  5. repo header 新增「⤳ Handoff」鈕，開 compose modal（覆蓋在主舞台上）。
+
+  Canonical 資料（対齊 handoff-design.md 的 pipeline / 已定決策）：
+  - H1：@willie → funliday-ai-worker，change queue-retry-backoff，跨人、需核准。
+  - H2：project-a → spek-web，ad-hoc 無 change，同機、已自動接棒。
+  - H3：你 → @eric，change terminal-pty，對方做完、待你 ack。
+  - H4：你 → @willie，change aggregate-worktree-scan，已完成（dim）。
+
+  專屬 CSS 在檔尾 <style id="handoff-style">，專屬 JS 在檔尾 <script>。
 -->
 <html lang="zh-Hant">
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>spek workspace — OpenSpec × terminal 並存</title>
+<title>spek workspace — OpenSpec × terminal × Handoff</title>
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
@@ -144,7 +149,7 @@
   ::-webkit-scrollbar-track { background: transparent; }
 </style>
 
-<!-- ===================== 版面專屬 CSS（OpenSpec / Files 並存切換）===================== -->
+<!-- ===================== 版面專屬 CSS（OpenSpec / Files 並存切換，base 原封不動）===================== -->
 <style id="layout-style">
   /* ---- Workspace rail（跨 repo 導覽，沿用 proto-9）---- */
   .ws-rail {
@@ -429,19 +434,22 @@
 <div class="window">
   <div class="titlebar">
     <div class="traffic"><i class="r"></i><i class="y"></i><i class="g"></i></div>
-    <div class="title"><b>spek</b> workspace — <span class="proto">OpenSpec / Files 並存切換</span></div>
+    <div class="title"><b>spek</b> workspace — <span class="proto">OpenSpec / Files × Handoff</span></div>
     <div style="width:54px"></div>
   </div>
   <div class="body">
     <div class="activity">
-      <div class="act-btn active" title="Sessions"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="7" height="9"/><rect x="14" y="3" width="7" height="5"/><rect x="14" y="12" width="7" height="9"/><rect x="3" y="16" width="7" height="5"/></svg></div>
-      <div class="act-btn" title="OpenSpec"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 3v18h18"/><path d="M7 14l3-3 3 3 5-6"/></svg></div>
+      <div class="act-btn active" id="act-sessions" title="Sessions"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="7" height="9"/><rect x="14" y="3" width="7" height="5"/><rect x="14" y="12" width="7" height="9"/><rect x="3" y="16" width="7" height="5"/></svg></div>
+      <div class="act-btn" id="act-handoffs" title="Handoffs · 2 件待處理">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg>
+        <span class="act-badge" id="handoff-badge">2</span>
+      </div>
       <div class="act-btn" title="搜尋"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="11" cy="11" r="7"/><path d="m20 20-3-3"/></svg></div>
       <div class="act-spacer"></div>
       <div class="act-btn" title="設定"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></div>
     </div>
 
-    <!-- ===================== Workspace rail（跨 repo 導覽，沿用 proto-9）===================== -->
+    <!-- ===================== Workspace rail（跨 repo 導覽，沿用 proto-9；handoff 疊加：incoming badge / 接棒 tag / 待 ack tag）===================== -->
     <aside class="ws-rail">
       <div class="ws-rail-title">WORKSPACE</div>
       <div class="ws-list">
@@ -463,22 +471,24 @@
               <span class="sdot wait"></span>
               <span class="ws-session-label mono">master · multi-folder-explorer</span>
             </div>
-            <div class="ws-session-row" title="S2 · project-a · feat/term · change: terminal-pty · running">
+            <div class="ws-session-row" title="S2 · project-a · feat/term · change: terminal-pty · running · 已 handoff 給 @eric，等你 ack">
               <span class="sdot run"></span>
               <span class="ws-session-label mono">feat/term · terminal-pty</span>
+              <span class="ho-tag-ack" title="這個 change 已交接給 @eric，對方做完了，等你 ack">待 ack</span>
             </div>
           </div>
         </div>
 
-        <!-- funliday-ai-worker：收合，有 openspec/ 有 change -->
+        <!-- funliday-ai-worker：收合，有 openspec/ 有 change · 有 1 件跨人 handoff 等你核准 -->
         <div class="ws-repo" data-repo="funliday-ai-worker">
-          <div class="ws-repo-row" title="funliday-ai-worker — 1 個 session（main）· 有 openspec/ · 點擊展開">
+          <div class="ws-repo-row" title="funliday-ai-worker — 1 個 session（main）· 有 openspec/ · 1 件跨人 handoff 待核准 · 點擊展開">
             <span class="ws-repo-caret">▸</span>
             <span class="ws-repo-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/></svg></span>
             <div class="ws-repo-meta">
               <span class="ws-repo-name">funliday-ai-worker</span>
               <span class="ws-repo-sub mono">main</span>
             </div>
+            <span class="ho-rail-badge" title="1 件跨人 handoff 等你核准">1</span>
             <span class="ws-repo-count">1</span>
             <span class="sdot err" title="最急迫狀態：error"></span>
           </div>
@@ -490,7 +500,7 @@
           </div>
         </div>
 
-        <!-- spek-web：收合，沒有 openspec/ → 之後選到這個 repo 時 OpenSpec 鈕會 disabled/dim -->
+        <!-- spek-web：收合，沒有 openspec/ → 之後選到這個 repo 時 OpenSpec 鈕會 disabled/dim · session 由 project-a 自動接棒開的 -->
         <div class="ws-repo" data-repo="spek-web">
           <div class="ws-repo-row" title="spek-web — 1 個 session（develop）· 沒有 openspec/ · 只能用 Files · 點擊展開">
             <span class="ws-repo-caret">▸</span>
@@ -500,12 +510,13 @@
               <span class="ws-repo-sub mono no-os">develop · 無 openspec/</span>
             </div>
             <span class="ws-repo-count">1</span>
-            <span class="sdot idle" title="最急迫狀態：idle"></span>
+            <span class="sdot run" title="最急迫狀態：running（同機 handoff 自動接棒開的 session）"></span>
           </div>
           <div class="ws-sessions collapsed">
-            <div class="ws-session-row" title="S4 · spek-web · develop · ad-hoc（無 openspec/、無 change）· idle">
-              <span class="sdot idle"></span>
+            <div class="ws-session-row" title="S4 · spek-web · develop · ad-hoc（無 openspec/、無 change）· 由 project-a 自動接棒 · running">
+              <span class="sdot run"></span>
               <span class="ws-session-label mono">develop · ad-hoc</span>
+              <span class="ho-tag-pickup" title="同機 handoff 自動接棒開的 session">↩ 接棒</span>
             </div>
           </div>
         </div>
@@ -514,208 +525,426 @@
       <div class="ws-add">+ Add folder</div>
     </aside>
 
-    <!-- ===================== 主舞台＝project-a 的世界 ===================== -->
+    <!-- ===================== 主舞台 ===================== -->
     <div class="stage">
 
-      <!-- repo header bar：左邊身分，右邊是 OpenSpec／Files segmented switch ＋ + session ＋ 收合 -->
-      <div class="repo-header">
-        <span class="repo-header-name">project-a</span>
-        <span class="repo-header-agg mono">2 sessions · master, feat/term</span>
-        <div class="sp"></div>
-        <div class="repo-header-actions">
-          <div class="dest-tabs" id="panel-switch" role="group" aria-label="side panel 身分切換">
-            <div class="dtab active" data-panel="openspec" title="OpenSpec：跟隨 focused session 正在做的 change">
-              <span class="di">◈</span><span>OpenSpec</span>
+      <!-- ============ workspace view：project-a 的世界（base 原封不動，只在最上方加通知橫幅、repo header 加 Handoff 鈕）============ -->
+      <div id="stage-workspace-view">
+
+        <!-- 跨人來件通知橫幅：router probe 到一個跨人 handoff、等你核准（對應 H1） -->
+        <div class="ho-banner" id="ho-banner">
+          <span class="ic">⚠</span>
+          <span class="ho-banner-text"><span class="ho-person">@willie</span> 交接到 <b>funliday-ai-worker</b> · <span class="ho-anchor-link">queue-retry-backoff</span> —
+            等你核准才會開 session</span>
+          <span class="sp"></span>
+          <div class="ho-banner-actions">
+            <span class="ho-btn ghost">檢視</span>
+            <span class="ho-btn primary">核准並開 session</span>
+            <span class="ho-btn ghost">略過</span>
+          </div>
+          <span class="ho-banner-close" id="ho-banner-close" title="關閉這則通知">×</span>
+        </div>
+
+        <!-- repo header bar：左邊身分，右邊是 OpenSpec／Files segmented switch ＋ ⤳ Handoff ＋ + session ＋ 收合 -->
+        <div class="repo-header">
+          <span class="repo-header-name">project-a</span>
+          <span class="repo-header-agg mono">2 sessions · master, feat/term</span>
+          <div class="sp"></div>
+          <div class="repo-header-actions">
+            <div class="dest-tabs" id="panel-switch" role="group" aria-label="side panel 身分切換">
+              <div class="dtab active" data-panel="openspec" title="OpenSpec：跟隨 focused session 正在做的 change">
+                <span class="di">◈</span><span>OpenSpec</span>
+              </div>
+              <div class="dtab" data-panel="files" title="Files：project-a 的檔案樹">
+                <span class="di">▤</span><span>Files</span>
+              </div>
             </div>
-            <div class="dtab" data-panel="files" title="Files：project-a 的檔案樹">
-              <span class="di">▤</span><span>Files</span>
+            <div class="btn-handoff" id="btn-open-handoff-compose" title="把目前 focused session 的進度交接給另一個 repo 或人">⤳ Handoff</div>
+            <div class="btn-new-session">+ session</div>
+            <div class="btn-collapse-panel" id="panel-toggle-header" title="收合／展開右側 side panel">
+              <span class="panel-toggle-icon">⟩</span>
             </div>
           </div>
-          <div class="btn-new-session">+ session</div>
-          <div class="btn-collapse-panel" id="panel-toggle-header" title="收合／展開右側 side panel">
-            <span class="panel-toggle-icon">⟩</span>
+        </div>
+
+        <div class="hint-bar">右側面板在 <b>OpenSpec / Files</b> 之間切換 —— 同層級、一次一個，與 terminal 並存。</div>
+        <div class="hint-bar-sub">
+          <span><span class="di" style="color:var(--accent)">◈</span> OpenSpec 是條件式身分：repo 要有 <code>openspec/</code> 且有 active change 才可用；<span class="mini-demo-label">沒有 openspec/ 的 repo（如左側 spek-web）長這樣，只能用 Files：</span></span>
+          <span class="dest-tabs mini-demo" aria-hidden="true">
+            <span class="dtab disabled"><span class="di">◈</span><span>OpenSpec</span></span><span class="dtab"><span class="di">▤</span><span>Files</span></span>
+          </span>
+        </div>
+
+        <!-- session 分頁列（純資訊展示）-->
+        <div class="session-tabs">
+          <div class="stab active" title="S1 · master · change: multi-folder-explorer · waiting（等你回應）">
+            <span class="sdot wait"></span>
+            <span class="stab-branch mono">master</span>
+            <span class="badge wait">multi-folder-explorer</span>
+          </div>
+          <div class="stab" title="S2 · feat/term · change: terminal-pty · running">
+            <span class="sdot run"></span>
+            <span class="stab-branch mono">feat/term</span>
+            <span class="badge active">terminal-pty</span>
           </div>
         </div>
-      </div>
 
-      <div class="hint-bar">右側面板在 <b>OpenSpec / Files</b> 之間切換 —— 同層級、一次一個，與 terminal 並存。</div>
-      <div class="hint-bar-sub">
-        <span><span class="di" style="color:var(--accent)">◈</span> OpenSpec 是條件式身分：repo 要有 <code>openspec/</code> 且有 active change 才可用；<span class="mini-demo-label">沒有 openspec/ 的 repo（如左側 spek-web）長這樣，只能用 Files：</span></span>
-        <span class="dest-tabs mini-demo" aria-hidden="true">
-          <span class="dtab disabled"><span class="di">◈</span><span>OpenSpec</span></span><span class="dtab"><span class="di">▤</span><span>Files</span></span>
-        </span>
-      </div>
+        <!-- ===================== 並存 split：左 terminal ／ 右 side panel（OpenSpec ↔ Files）===================== -->
+        <div class="split-view" id="split-view">
 
-      <!-- session 分頁列（純資訊展示）-->
-      <div class="session-tabs">
-        <div class="stab active" title="S1 · master · change: multi-folder-explorer · waiting（等你回應）">
-          <span class="sdot wait"></span>
-          <span class="stab-branch mono">master</span>
-          <span class="badge wait">multi-folder-explorer</span>
-        </div>
-        <div class="stab" title="S2 · feat/term · change: terminal-pty · running">
-          <span class="sdot run"></span>
-          <span class="stab-branch mono">feat/term</span>
-          <span class="badge active">terminal-pty</span>
-        </div>
-      </div>
-
-      <!-- ===================== 並存 split：左 terminal ／ 右 side panel（OpenSpec ↔ Files）===================== -->
-      <div class="split-view" id="split-view">
-
-        <!-- 左：純 terminal，focused session（S1）。結尾是 claude 自己的 `>` prompt 行 + 游標，
-             那一行本身就是輸入，不再另外畫一個 compose 框。 -->
-        <div class="term-pane">
-          <div class="cc-term term-fill">
+          <!-- 左：純 terminal，focused session（S1）。結尾是 claude 自己的 `>` prompt 行 + 游標，
+               那一行本身就是輸入，不再另外畫一個 compose 框。 -->
+          <div class="term-pane">
+            <div class="cc-term term-fill">
 <span class="dim">~/git/project-a</span> <span class="green">$</span> <span class="acc">claude</span>
 <span class="dim">&gt;</span> 幫我把 FolderRow 改成展開才 fetch
 <span class="acc">⏺</span> 我會在 main/ipc/fs.ts 新增 listDir handler，重用 @spek/core 的 safeReadDir。
 <span class="acc">⏺</span> <span class="blue">Edit</span>(<span class="path">main/ipc/fs.ts</span>)  <span class="dim">⎿ +24 -2</span>
 <span class="acc">⏺</span> renderer 那邊的 FolderRow 要不要我一起改成 lazy？
 <span class="dim">&gt;</span> <span class="cursor"></span></div>
-        </div>
-
-        <!-- 溝縫：純視覺 resizer -->
-        <div class="split-resizer" title="拖曳調整寬度（示意，非實際可拖曳）"></div>
-
-        <!-- 右：side panel，一次只顯示一個身分（預設 OpenSpec） -->
-        <div class="side-panel">
-
-          <!-- ============ 身分 1／2：OpenSpec（預設，完全沿用 proto-9 的內容）============ -->
-          <div class="side-content" id="content-openspec">
-            <div class="os-panel-header">
-              <div class="os-crumb">project-a / changes / <span class="cur">multi-folder-explorer</span></div>
-              <div class="os-collapse-btn panel-toggle-inline" title="收合面板"><span class="panel-toggle-icon">⟩</span></div>
-            </div>
-
-            <div class="os-nav">
-              <div class="os-navtab active" data-tab="change">本 change</div>
-              <div class="os-navtab" data-tab="specs">Specs</div>
-              <div class="os-navtab" data-tab="changes">Changes</div>
-              <div class="os-navtab" data-tab="graph">Graph</div>
-            </div>
-
-            <div class="os-panel-body">
-
-              <!-- 本 change（預設）：change 標題／描述 + tasks + spec deltas -->
-              <div class="os-tab-content" id="os-tab-change">
-                <div class="os-change-head">
-                  <div class="os-change-title-row">
-                    <span class="os-change-slug mono">multi-folder-explorer</span>
-                    <span class="badge active">ACTIVE</span>
-                  </div>
-                  <div class="os-change-desc">renderer 資料夾樹改為展開才 fetch 子層，避免大型 workspace 一次掃整個子目錄。</div>
-                </div>
-
-                <div class="os-tasks">
-                  <div class="os-tasks-head">
-                    <span class="lbl">Tasks</span>
-                    <span class="cnt mono">3/9</span>
-                  </div>
-                  <div class="pbar"><i style="width:33%"></i></div>
-
-                  <div class="os-task-group-title">Backend</div>
-                  <div class="os-task-item done"><span class="chk">☑</span><span>新增 main/ipc/fs.ts listDir handler</span></div>
-                  <div class="os-task-item done"><span class="chk">☑</span><span>重用 @spek/core 的 safeReadDir</span></div>
-                  <div class="os-task-item"><span class="chk">☐</span><span>加上單層深度限制的單元測試</span></div>
-
-                  <div class="os-task-group-title">Frontend</div>
-                  <div class="os-task-item done"><span class="chk">☑</span><span>FolderRow 改成展開才 fetch</span></div>
-                  <div class="os-task-item"><span class="chk">☐</span><span>展開中的 loading skeleton</span></div>
-                  <div class="os-task-item"><span class="chk">☐</span><span>錯誤狀態 UI（無權限／目錄不存在）</span></div>
-
-                  <div class="os-task-group-title">Testing</div>
-                  <div class="os-task-item"><span class="chk">☐</span><span>unit test：listDir 只回傳直接子項目</span></div>
-                  <div class="os-task-item"><span class="chk">☐</span><span>integration test：多層 folder 展開</span></div>
-                  <div class="os-task-item"><span class="chk">☐</span><span>大型 repo 效能 regression</span></div>
-                </div>
-
-                <div class="os-section-title">SPEC DELTAS</div>
-
-                <div class="req-block">
-                  <div class="req-name">Requirement: Lazy folder expansion <span class="bdd-badge add">ADDED</span></div>
-                  <div class="req">
-                    <span class="when">WHEN</span> 使用者展開一個 folder<br>
-                    <span class="then">THEN</span> 系統 <span class="must">MUST</span> 只讀取該層的直接子項目<br>
-                    <span class="and">AND</span> 不遞迴掃描整個子樹
-                  </div>
-                </div>
-
-                <div class="req-block">
-                  <div class="req-name">Requirement: Multi-folder workspace <span class="bdd-badge mod">MODIFIED</span></div>
-                  <div class="req">
-                    <span class="when">WHEN</span> workspace 加入多個 root folder<br>
-                    <span class="then">THEN</span> 每個 folder <span class="must">MUST</span> 各自維護獨立的展開狀態
-                  </div>
-                </div>
-              </div>
-
-              <!-- Specs（stub） -->
-              <div class="os-tab-content" id="os-tab-specs" hidden>
-                <div class="os-stub-note">Specs — 本 repo 全部規格列表（stub，之後接 /specs 頁面）。</div>
-                <div class="os-stub-list">
-                  <div class="os-stub-row"><span class="mono">auth</span><span class="dim-note">4 changes</span></div>
-                  <div class="os-stub-row"><span class="mono">scanner</span><span class="dim-note">2 changes</span></div>
-                  <div class="os-stub-row"><span class="mono">api-adapter</span><span class="dim-note">3 changes</span></div>
-                  <div class="os-stub-row"><span class="mono">workspace-shell</span><span class="dim-note">1 change</span></div>
-                </div>
-              </div>
-
-              <!-- Changes（stub） -->
-              <div class="os-tab-content" id="os-tab-changes" hidden>
-                <div class="os-stub-note">Changes — 本 repo 全部 active changes（stub，之後接 /changes 頁面）。</div>
-                <div class="os-stub-list">
-                  <div class="os-stub-row highlight"><span class="mono">multi-folder-explorer</span><span class="dim-note">S1 · 3/9</span></div>
-                  <div class="os-stub-row"><span class="mono">terminal-pty</span><span class="dim-note">S2 · running</span></div>
-                  <div class="os-stub-row"><span class="mono">search-fuzzy-rank</span><span class="dim-note">3/6</span></div>
-                </div>
-              </div>
-
-              <!-- Graph（stub） -->
-              <div class="os-tab-content" id="os-tab-graph" hidden>
-                <div class="os-stub-note">Graph — spec 與 change 的關聯圖（stub，之後接 /graph 頁面）。</div>
-                <div class="os-stub-graph">◈──◇──◈</div>
-              </div>
-
-            </div>
           </div>
 
-          <!-- ============ 身分 2／2：Files（project-a 檔案樹，素材抄自 proto-8，壓成側欄寬度）============ -->
-          <div class="side-content" id="content-files" hidden>
-            <div class="os-panel-header">
-              <div class="os-crumb">project-a / <span class="cur">files</span></div>
-              <span class="files-count mono">18 個項目</span>
-              <div class="os-collapse-btn panel-toggle-inline" title="收合面板"><span class="panel-toggle-icon">⟩</span></div>
-            </div>
+          <!-- 溝縫：純視覺 resizer -->
+          <div class="split-resizer" title="拖曳調整寬度（示意，非實際可拖曳）"></div>
 
-            <div class="os-panel-body">
-              <div class="file-tree mono">
-                <div class="file-row dir"><span class="ico">▾</span><span class="nm">packages/</span></div>
-                <div class="file-row dir d1"><span class="ico">▾</span><span class="nm">core/</span><span class="mtime">2 小時前</span></div>
-                <div class="file-row dir d2"><span class="ico">▾</span><span class="nm">src/</span><span class="mtime">2 小時前</span></div>
-                <div class="file-row d3"><span class="ico">·</span><span class="nm">scanner.ts</span><span class="git-tag M">M</span><span class="mtime">2 小時前</span></div>
-                <div class="file-row d3"><span class="ico">·</span><span class="nm">scanner.test.ts</span><span class="git-tag A">A</span><span class="mtime">18 分鐘前</span></div>
-                <div class="file-row d3"><span class="ico">·</span><span class="nm">types.ts</span><span class="mtime">5 天前</span></div>
-                <div class="file-row dir d1"><span class="ico">▸</span><span class="nm">web/</span><span class="mtime">18 分鐘前</span></div>
-                <div class="file-row dir d1"><span class="ico">▸</span><span class="nm">vscode/</span><span class="mtime">1 天前</span></div>
-                <div class="file-row dir d1"><span class="ico">▸</span><span class="nm">intellij/</span><span class="mtime">4 天前</span></div>
-                <div class="file-row dir"><span class="ico">▸</span><span class="nm">docs/</span><span class="mtime">3 天前</span></div>
-                <div class="file-row dir"><span class="ico">▾</span><span class="nm">openspec/</span><span class="mtime">18 分鐘前</span></div>
-                <div class="file-row dir d1"><span class="ico">▾</span><span class="nm">changes/</span><span class="mtime">18 分鐘前</span></div>
-                <div class="file-row highlight d2" title="focused session S1 正在做這個 change"><span class="ico">·</span><span class="nm">multi-folder-explorer/</span><span class="mtime">18 分鐘前</span></div>
-                <div class="file-row d2"><span class="ico">·</span><span class="nm">terminal-pty/</span><span class="mtime">6 分鐘前</span></div>
-                <div class="file-row dir d1"><span class="ico">▸</span><span class="nm">specs/</span><span class="mtime">1 天前</span></div>
-                <div class="file-row dir"><span class="ico">▸</span><span class="nm">scripts/</span><span class="mtime">5 天前</span></div>
-                <div class="file-row"><span class="ico">·</span><span class="nm">CLAUDE.md</span><span class="mtime">2 小時前</span></div>
-                <div class="file-row"><span class="ico">·</span><span class="nm">package.json</span><span class="git-tag M">M</span><span class="mtime">5 天前</span></div>
-                <div class="file-row"><span class="ico">·</span><span class="nm">README.md</span><span class="mtime">12 天前</span></div>
+          <!-- 右：side panel，一次只顯示一個身分（預設 OpenSpec） -->
+          <div class="side-panel">
+
+            <!-- ============ 身分 1／2：OpenSpec（預設，完全沿用 proto-9 的內容）============ -->
+            <div class="side-content" id="content-openspec">
+              <div class="os-panel-header">
+                <div class="os-crumb">project-a / changes / <span class="cur">multi-folder-explorer</span></div>
+                <div class="os-collapse-btn panel-toggle-inline" title="收合面板"><span class="panel-toggle-icon">⟩</span></div>
+              </div>
+
+              <div class="os-nav">
+                <div class="os-navtab active" data-tab="change">本 change</div>
+                <div class="os-navtab" data-tab="specs">Specs</div>
+                <div class="os-navtab" data-tab="changes">Changes</div>
+                <div class="os-navtab" data-tab="graph">Graph</div>
+              </div>
+
+              <div class="os-panel-body">
+
+                <!-- 本 change（預設）：change 標題／描述 + tasks + spec deltas -->
+                <div class="os-tab-content" id="os-tab-change">
+                  <div class="os-change-head">
+                    <div class="os-change-title-row">
+                      <span class="os-change-slug mono">multi-folder-explorer</span>
+                      <span class="badge active">ACTIVE</span>
+                    </div>
+                    <div class="os-change-desc">renderer 資料夾樹改為展開才 fetch 子層，避免大型 workspace 一次掃整個子目錄。</div>
+                  </div>
+
+                  <div class="os-tasks">
+                    <div class="os-tasks-head">
+                      <span class="lbl">Tasks</span>
+                      <span class="cnt mono">3/9</span>
+                    </div>
+                    <div class="pbar"><i style="width:33%"></i></div>
+
+                    <div class="os-task-group-title">Backend</div>
+                    <div class="os-task-item done"><span class="chk">☑</span><span>新增 main/ipc/fs.ts listDir handler</span></div>
+                    <div class="os-task-item done"><span class="chk">☑</span><span>重用 @spek/core 的 safeReadDir</span></div>
+                    <div class="os-task-item"><span class="chk">☐</span><span>加上單層深度限制的單元測試</span></div>
+
+                    <div class="os-task-group-title">Frontend</div>
+                    <div class="os-task-item done"><span class="chk">☑</span><span>FolderRow 改成展開才 fetch</span></div>
+                    <div class="os-task-item"><span class="chk">☐</span><span>展開中的 loading skeleton</span></div>
+                    <div class="os-task-item"><span class="chk">☐</span><span>錯誤狀態 UI（無權限／目錄不存在）</span></div>
+
+                    <div class="os-task-group-title">Testing</div>
+                    <div class="os-task-item"><span class="chk">☐</span><span>unit test：listDir 只回傳直接子項目</span></div>
+                    <div class="os-task-item"><span class="chk">☐</span><span>integration test：多層 folder 展開</span></div>
+                    <div class="os-task-item"><span class="chk">☐</span><span>大型 repo 效能 regression</span></div>
+                  </div>
+
+                  <div class="os-section-title">SPEC DELTAS</div>
+
+                  <div class="req-block">
+                    <div class="req-name">Requirement: Lazy folder expansion <span class="bdd-badge add">ADDED</span></div>
+                    <div class="req">
+                      <span class="when">WHEN</span> 使用者展開一個 folder<br>
+                      <span class="then">THEN</span> 系統 <span class="must">MUST</span> 只讀取該層的直接子項目<br>
+                      <span class="and">AND</span> 不遞迴掃描整個子樹
+                    </div>
+                  </div>
+
+                  <div class="req-block">
+                    <div class="req-name">Requirement: Multi-folder workspace <span class="bdd-badge mod">MODIFIED</span></div>
+                    <div class="req">
+                      <span class="when">WHEN</span> workspace 加入多個 root folder<br>
+                      <span class="then">THEN</span> 每個 folder <span class="must">MUST</span> 各自維護獨立的展開狀態
+                    </div>
+                  </div>
+                </div>
+
+                <!-- Specs（stub） -->
+                <div class="os-tab-content" id="os-tab-specs" hidden>
+                  <div class="os-stub-note">Specs — 本 repo 全部規格列表（stub，之後接 /specs 頁面）。</div>
+                  <div class="os-stub-list">
+                    <div class="os-stub-row"><span class="mono">auth</span><span class="dim-note">4 changes</span></div>
+                    <div class="os-stub-row"><span class="mono">scanner</span><span class="dim-note">2 changes</span></div>
+                    <div class="os-stub-row"><span class="mono">api-adapter</span><span class="dim-note">3 changes</span></div>
+                    <div class="os-stub-row"><span class="mono">workspace-shell</span><span class="dim-note">1 change</span></div>
+                  </div>
+                </div>
+
+                <!-- Changes（stub） -->
+                <div class="os-tab-content" id="os-tab-changes" hidden>
+                  <div class="os-stub-note">Changes — 本 repo 全部 active changes（stub，之後接 /changes 頁面）。</div>
+                  <div class="os-stub-list">
+                    <div class="os-stub-row highlight"><span class="mono">multi-folder-explorer</span><span class="dim-note">S1 · 3/9</span></div>
+                    <div class="os-stub-row"><span class="mono">terminal-pty</span><span class="dim-note">S2 · running</span></div>
+                    <div class="os-stub-row"><span class="mono">search-fuzzy-rank</span><span class="dim-note">3/6</span></div>
+                  </div>
+                </div>
+
+                <!-- Graph（stub） -->
+                <div class="os-tab-content" id="os-tab-graph" hidden>
+                  <div class="os-stub-note">Graph — spec 與 change 的關聯圖（stub，之後接 /graph 頁面）。</div>
+                  <div class="os-stub-graph">◈──◇──◈</div>
+                </div>
+
               </div>
             </div>
+
+            <!-- ============ 身分 2／2：Files（project-a 檔案樹，素材抄自 proto-8，壓成側欄寬度）============ -->
+            <div class="side-content" id="content-files" hidden>
+              <div class="os-panel-header">
+                <div class="os-crumb">project-a / <span class="cur">files</span></div>
+                <span class="files-count mono">18 個項目</span>
+                <div class="os-collapse-btn panel-toggle-inline" title="收合面板"><span class="panel-toggle-icon">⟩</span></div>
+              </div>
+
+              <div class="os-panel-body">
+                <div class="file-tree mono">
+                  <div class="file-row dir"><span class="ico">▾</span><span class="nm">packages/</span></div>
+                  <div class="file-row dir d1"><span class="ico">▾</span><span class="nm">core/</span><span class="mtime">2 小時前</span></div>
+                  <div class="file-row dir d2"><span class="ico">▾</span><span class="nm">src/</span><span class="mtime">2 小時前</span></div>
+                  <div class="file-row d3"><span class="ico">·</span><span class="nm">scanner.ts</span><span class="git-tag M">M</span><span class="mtime">2 小時前</span></div>
+                  <div class="file-row d3"><span class="ico">·</span><span class="nm">scanner.test.ts</span><span class="git-tag A">A</span><span class="mtime">18 分鐘前</span></div>
+                  <div class="file-row d3"><span class="ico">·</span><span class="nm">types.ts</span><span class="mtime">5 天前</span></div>
+                  <div class="file-row dir d1"><span class="ico">▸</span><span class="nm">web/</span><span class="mtime">18 分鐘前</span></div>
+                  <div class="file-row dir d1"><span class="ico">▸</span><span class="nm">vscode/</span><span class="mtime">1 天前</span></div>
+                  <div class="file-row dir d1"><span class="ico">▸</span><span class="nm">intellij/</span><span class="mtime">4 天前</span></div>
+                  <div class="file-row dir"><span class="ico">▸</span><span class="nm">docs/</span><span class="mtime">3 天前</span></div>
+                  <div class="file-row dir"><span class="ico">▾</span><span class="nm">openspec/</span><span class="mtime">18 分鐘前</span></div>
+                  <div class="file-row dir d1"><span class="ico">▾</span><span class="nm">changes/</span><span class="mtime">18 分鐘前</span></div>
+                  <div class="file-row highlight d2" title="focused session S1 正在做這個 change"><span class="ico">·</span><span class="nm">multi-folder-explorer/</span><span class="mtime">18 分鐘前</span></div>
+                  <div class="file-row d2"><span class="ico">·</span><span class="nm">terminal-pty/</span><span class="mtime">6 分鐘前</span></div>
+                  <div class="file-row dir d1"><span class="ico">▸</span><span class="nm">specs/</span><span class="mtime">1 天前</span></div>
+                  <div class="file-row dir"><span class="ico">▸</span><span class="nm">scripts/</span><span class="mtime">5 天前</span></div>
+                  <div class="file-row"><span class="ico">·</span><span class="nm">CLAUDE.md</span><span class="mtime">2 小時前</span></div>
+                  <div class="file-row"><span class="ico">·</span><span class="nm">package.json</span><span class="git-tag M">M</span><span class="mtime">5 天前</span></div>
+                  <div class="file-row"><span class="ico">·</span><span class="nm">README.md</span><span class="mtime">12 天前</span></div>
+                </div>
+              </div>
+            </div>
+
           </div>
 
         </div>
 
       </div>
+      <!-- ============ /workspace view ============ -->
+
+      <!-- ============ Handoff 收件匣 view（workspace 層級，蓋掉原本的 repo 工作台）============ -->
+      <div class="ho-view" id="stage-handoff-view" hidden>
+        <div class="ho-header">
+          <div class="ho-title-block">
+            <div class="ho-title">Handoffs</div>
+            <div class="ho-subtitle">跨 session / repo / agent 的工作交接</div>
+          </div>
+          <div class="ho-chips" id="ho-chips">
+            <span class="ho-chip active" data-target="ho-sec-inbox">收件匣 <span class="ho-chip-count">2</span></span>
+            <span class="ho-chip" data-target="ho-sec-ack">待你 ack <span class="ho-chip-count">1</span></span>
+            <span class="ho-chip" data-target="ho-sec-done">已完成 <span class="ho-chip-count">1</span></span>
+          </div>
+        </div>
+
+        <div class="ho-body" id="ho-body">
+
+          <!-- 收件匣：H1（跨人・需核准）＋ H2（同機・已自動接棒） -->
+          <div class="ho-section" id="ho-sec-inbox">
+            <div class="os-section-title">收件匣</div>
+            <div class="ho-cards">
+
+              <!-- H1：跨人、需核准 -->
+              <div class="ho-card cross">
+                <div class="ho-card-top">
+                  <span class="badge active">OPEN</span>
+                  <span class="ho-flag cross">🔒 跨人 · 需核准</span>
+                  <span class="sp"></span>
+                  <span class="ho-meta">willie 的 Claude · session sess-8f21 · 8 分鐘前</span>
+                </div>
+                <div class="ho-route">
+                  <span class="ho-person">@willie</span>
+                  <span class="ho-arrow">→</span>
+                  <span class="ho-repo"><span class="sdot err"></span>funliday-ai-worker</span>
+                </div>
+                <div class="ho-anchor"><span class="ho-anchor-link">queue-retry-backoff</span></div>
+                <div class="ho-intent">retry 的 backoff 已修好，換你接手補測試。</div>
+                <div class="ho-progress">
+                  <span class="ho-tasks mono">tasks <b>5/8</b></span>
+                  <span class="diffstat">+<span class="a">12</span> −<span class="d">30</span> · 3 files</span>
+                  <span class="lbl-note">狀態驗證（讀磁碟）</span>
+                </div>
+                <div class="ho-actions">
+                  <span class="ho-btn">檢視</span>
+                  <span class="ho-btn primary">核准並開 session</span>
+                  <span class="ho-btn">略過</span>
+                </div>
+              </div>
+
+              <!-- H2：同機、已自動接棒 -->
+              <div class="ho-card">
+                <div class="ho-card-top">
+                  <span class="badge active">OPEN</span>
+                  <span class="ho-flag auto">↩ 已自動開 session</span>
+                  <span class="sp"></span>
+                  <span class="ho-meta">你的 Claude · session sess-c142 · 3 分鐘前</span>
+                </div>
+                <div class="ho-route">
+                  <span class="ho-repo"><span class="sdot wait"></span>project-a</span>
+                  <span class="ho-arrow">→</span>
+                  <span class="ho-repo"><span class="sdot run"></span>spek-web</span>
+                </div>
+                <div class="ho-anchor adhoc">ad-hoc · 無 change</div>
+                <div class="ho-intent">dashboard 那段抽成獨立元件，換這個 repo 接著做。</div>
+                <div class="ho-progress">
+                  <span class="diffstat">+<span class="a">18</span> −<span class="d">4</span> · 2 files</span>
+                  <span class="lbl-note">狀態驗證（讀磁碟）</span>
+                </div>
+                <div class="ho-actions">
+                  <span class="ho-btn">跳到 session</span>
+                </div>
+              </div>
+
+            </div>
+          </div>
+
+          <!-- 待你 ack：H3 -->
+          <div class="ho-section" id="ho-sec-ack">
+            <div class="os-section-title">待你 ACK</div>
+            <div class="ho-cards">
+
+              <div class="ho-card">
+                <div class="ho-card-top">
+                  <span class="badge wait">AWAITING-ACK</span>
+                  <span class="sp"></span>
+                  <span class="ho-meta">@eric 的 Claude · session sess-7c3d · 1 小時前</span>
+                </div>
+                <div class="ho-route">
+                  <span class="ho-repo"><span class="sdot run"></span>project-a · feat/term</span>
+                  <span class="ho-arrow">→</span>
+                  <span class="ho-person">@eric</span>
+                </div>
+                <div class="ho-anchor"><span class="ho-anchor-link">terminal-pty</span></div>
+                <div class="ho-intent">terminal-pty 收尾麻煩你，做完跟我說一聲。</div>
+                <div class="ho-progress">
+                  <span class="ho-tasks mono">tasks <b>6/6</b></span>
+                  <span class="diffstat">+<span class="a">58</span> −<span class="d">9</span> · 4 files</span>
+                  <span class="lbl-note">狀態驗證（讀磁碟）</span>
+                </div>
+                <div class="ho-actions">
+                  <span class="ho-btn">檢視處理紀錄</span>
+                  <span class="ho-btn primary">Ack 收工</span>
+                </div>
+              </div>
+
+            </div>
+          </div>
+
+          <!-- 已完成：H4（dim） -->
+          <div class="ho-section" id="ho-sec-done">
+            <div class="os-section-title">已完成</div>
+            <div class="ho-cards">
+
+              <div class="ho-card done">
+                <div class="ho-card-top">
+                  <span class="badge arch">DONE</span>
+                  <span class="sp"></span>
+                  <span class="ho-meta">@willie 的 Claude · session sess-2b90 · 2 天前</span>
+                </div>
+                <div class="ho-route">
+                  <span class="ho-repo"><span class="sdot idle"></span>project-a</span>
+                  <span class="ho-arrow">→</span>
+                  <span class="ho-person">@willie</span>
+                </div>
+                <div class="ho-anchor"><span class="ho-anchor-link">aggregate-worktree-scan</span></div>
+                <div class="ho-intent">worktree 聚合掃描交給你，麻煩補完 edge case。</div>
+                <div class="ho-progress">
+                  <span class="ho-tasks mono">tasks <b>12/12</b></span>
+                  <span class="diffstat">+<span class="a">210</span> −<span class="d">45</span> · 9 files</span>
+                  <span class="lbl-note">狀態驗證（讀磁碟）</span>
+                </div>
+              </div>
+
+            </div>
+          </div>
+
+        </div>
+      </div>
+      <!-- ============ /Handoff 收件匣 view ============ -->
+
+      <!-- ============ Handoff compose modal（覆蓋在主舞台上、可關）============ -->
+      <div class="ho-modal-overlay" id="ho-modal-overlay" hidden>
+        <div class="ho-modal">
+          <div class="ho-modal-head">
+            <span class="ho-modal-title">⤳ 送出 Handoff</span>
+            <span class="ho-modal-close" id="ho-modal-close" title="關閉">×</span>
+          </div>
+          <div class="ho-modal-body">
+
+            <div class="ho-field">
+              <span class="ho-field-label">To</span>
+              <div class="ho-picker" id="ho-picker">
+                <div class="ho-picker-box" id="ho-picker-box">
+                  <span id="ho-picker-value">選擇 repo 或人…</span>
+                  <span>▾</span>
+                </div>
+                <div class="ho-picker-dropdown" id="ho-picker-dropdown" hidden>
+                  <div class="ho-picker-group-label">REPO</div>
+                  <div class="ho-picker-option" data-value="project-a">project-a</div>
+                  <div class="ho-picker-option" data-value="funliday-ai-worker">funliday-ai-worker</div>
+                  <div class="ho-picker-option" data-value="spek-web">spek-web</div>
+                  <div class="ho-picker-group-label">人</div>
+                  <div class="ho-picker-option" data-value="@willie">@willie</div>
+                  <div class="ho-picker-option" data-value="@eric">@eric</div>
+                </div>
+              </div>
+            </div>
+
+            <div class="ho-field">
+              <span class="ho-field-label">錨定 Change（唯讀 · 自動帶入 focused session）</span>
+              <div class="ho-readonly-box">
+                <div class="ho-anchor-readonly">
+                  <span class="os-change-slug mono" style="font-size:12.5px;">multi-folder-explorer</span>
+                  <span class="badge active">ACTIVE</span>
+                </div>
+                <div class="ho-progress">
+                  <span class="ho-tasks mono">tasks <b>3/9</b></span>
+                  <span class="diffstat">+<span class="a">124</span> −<span class="d">18</span> · 6 files</span>
+                  <span class="lbl-note">狀態驗證 · 自動帶入</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="ho-field">
+              <span class="ho-field-label">交棒說明 / 下一步</span>
+              <textarea class="ho-textarea" placeholder="描述你做了什麼、對方接手後建議的下一步…"></textarea>
+            </div>
+
+            <div class="ho-modal-footnote">同機 → 對方自動接棒；跨人 → 對方需核准才開 session。</div>
+          </div>
+          <div class="ho-modal-actions">
+            <span class="ho-btn" id="ho-modal-cancel">取消</span>
+            <span class="ho-btn primary" id="ho-modal-submit">送出 handoff</span>
+          </div>
+        </div>
+      </div>
+      <!-- ============ /compose modal ============ -->
 
     </div>
 
@@ -780,6 +1009,277 @@
       caret.textContent = collapsed ? '▸' : '▾';
     });
   });
+</script>
+
+<!-- ===================== Handoff 疊加專屬 CSS ===================== -->
+<style id="handoff-style">
+  /* .stage 需要 position:relative 當 compose modal 的定位基準；不影響既有 flex 子項排列 */
+  .stage { position: relative; }
+
+  /* activity bar badge（待處理數） */
+  .act-badge {
+    position: absolute; top: 2px; right: 2px; min-width: 14px; height: 14px; padding: 0 3px;
+    border-radius: 7px; background: var(--accent); color: #1a1206;
+    font-size: 9px; font-weight: 800; line-height: 14px; text-align: center;
+  }
+
+  /* ---- workspace view ⇄ handoff 收件匣 view：兩個都是 .stage 的直接子項，flex:1 填滿剩餘空間 ---- */
+  #stage-workspace-view {
+    flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column;
+  }
+  #stage-workspace-view[hidden] { display: none; }
+
+  /* ---- repo header 的「⤳ Handoff」鈕：沿用 btn-new-session 的邊框感，accent 微底區別於一般次要鈕 ---- */
+  .btn-handoff {
+    padding: 6px 12px; font-size: 11.5px; color: var(--accent);
+    border: 1px solid rgba(245,158,11,0.4); background: var(--accent-soft);
+    border-radius: 7px; cursor: pointer; white-space: nowrap;
+  }
+  .btn-handoff:hover { border-color: var(--accent); background: rgba(245,158,11,0.22); }
+
+  /* ---- 跨人來件通知橫幅（顯示在 workspace view 最上方）---- */
+  .ho-banner {
+    flex: 0 0 auto; display: flex; align-items: center; gap: 12px; padding: 8px 16px;
+    background: linear-gradient(90deg, rgba(248,113,113,0.14), rgba(245,158,11,0.07));
+    border-bottom: 1px solid rgba(248,113,113,0.32);
+    font-size: 12.5px; color: var(--text);
+  }
+  .ho-banner .ic { color: var(--red); font-size: 13px; flex: 0 0 auto; }
+  .ho-banner .sp { flex: 1; }
+  .ho-banner-text { line-height: 1.5; }
+  .ho-banner-actions { display: flex; gap: 8px; flex: 0 0 auto; }
+  .ho-banner-close {
+    flex: 0 0 auto; cursor: pointer; color: var(--text-faint); padding: 1px 6px; font-size: 14px; border-radius: 4px;
+  }
+  .ho-banner-close:hover { color: var(--text); background: var(--bg-hover); }
+
+  /* ---- 共用小按鈕（收件匣卡片動作、通知橫幅動作、modal 動作共用；沿用既有 border/accent token）---- */
+  .ho-btn {
+    padding: 6px 12px; font-size: 11.5px; color: var(--text-dim);
+    border: 1px solid var(--border); border-radius: 7px; cursor: pointer; white-space: nowrap;
+    background: var(--bg-2);
+  }
+  .ho-btn:hover { border-color: var(--accent); color: var(--accent); }
+  .ho-btn.ghost { background: transparent; }
+  .ho-btn.primary { background: var(--accent); border-color: var(--accent); color: #1a1206; font-weight: 700; }
+  .ho-btn.primary:hover { background: #ffb020; color: #1a1206; }
+
+  /* ---- Workspace rail 疊加：incoming badge / 接棒 tag / 待 ack tag ---- */
+  .ho-rail-badge {
+    flex: 0 0 auto; min-width: 15px; height: 15px; padding: 0 4px; border-radius: 8px;
+    background: var(--accent); color: #1a1206; font-size: 9.5px; font-weight: 800;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .ho-tag-pickup, .ho-tag-ack {
+    flex: 0 0 auto; font-size: 9px; font-weight: 700; border-radius: 4px; padding: 1px 5px; margin-left: 2px;
+  }
+  .ho-tag-pickup { color: var(--blue); border: 1px solid rgba(96,165,250,0.4); background: rgba(96,165,250,0.1); }
+  .ho-tag-ack { color: var(--accent); border: 1px solid rgba(245,158,11,0.4); background: rgba(245,158,11,0.1); }
+
+  /* ===================== Handoff 收件匣 view（workspace 層級）===================== */
+  .ho-view {
+    flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; background: var(--bg-1);
+  }
+  .ho-view[hidden] { display: none; }
+
+  .ho-header {
+    flex: 0 0 auto; display: flex; align-items: flex-end; justify-content: space-between; gap: 20px; flex-wrap: wrap;
+    padding: 22px 28px 16px; background: var(--bg-2); border-bottom: 1px solid var(--border-soft);
+  }
+  .ho-title { font-size: 19px; font-weight: 800; color: var(--text); }
+  .ho-subtitle { font-size: 12px; color: var(--text-faint); margin-top: 4px; }
+
+  .ho-chips { display: flex; gap: 8px; flex-wrap: wrap; }
+  .ho-chip {
+    display: flex; align-items: center; gap: 6px; padding: 6px 13px; border-radius: 8px;
+    background: var(--bg-3); border: 1px solid var(--border-soft); font-size: 12px; color: var(--text-dim); cursor: pointer;
+  }
+  .ho-chip:hover { border-color: var(--accent); color: var(--text); }
+  .ho-chip.active { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); font-weight: 700; }
+  .ho-chip-count {
+    font-family: "JetBrains Mono", monospace; font-size: 10.5px; background: var(--bg-hover);
+    padding: 1px 6px; border-radius: 8px;
+  }
+  .ho-chip.active .ho-chip-count { background: rgba(245,158,11,0.2); }
+
+  .ho-body { flex: 1; min-height: 0; overflow-y: auto; padding: 22px 28px 40px; display: flex; flex-direction: column; gap: 30px; }
+  .ho-section:last-child { padding-bottom: 4px; }
+
+  .ho-cards { display: flex; flex-direction: column; gap: 12px; }
+
+  .ho-card {
+    background: var(--bg-2); border: 1px solid var(--border); border-radius: 12px;
+    padding: 14px 16px; display: flex; flex-direction: column; gap: 9px;
+  }
+  .ho-card.cross { border-color: rgba(248,113,113,0.4); }
+  .ho-card.done { opacity: .6; }
+
+  .ho-card-top { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .ho-card-top .sp { flex: 1; }
+
+  .ho-flag {
+    font-size: 10px; font-weight: 700; padding: 3px 8px; border-radius: 5px;
+    display: inline-flex; align-items: center; gap: 4px; white-space: nowrap;
+  }
+  .ho-flag.cross { background: rgba(248,113,113,0.14); color: var(--red); border: 1px solid rgba(248,113,113,0.35); }
+  .ho-flag.auto { background: rgba(96,165,250,0.14); color: var(--blue); }
+
+  .ho-meta { font-size: 10.5px; color: var(--text-faint); font-family: "JetBrains Mono", monospace; white-space: nowrap; }
+
+  .ho-route { display: flex; align-items: center; gap: 8px; font-size: 12.5px; font-weight: 600; color: var(--text); flex-wrap: wrap; }
+  .ho-person { color: var(--purple); }
+  .ho-arrow { color: var(--text-faint); font-weight: 400; }
+  .ho-repo { display: flex; align-items: center; gap: 6px; color: var(--text); }
+
+  .ho-anchor { font-size: 12.5px; }
+  .ho-anchor-link { color: var(--accent); font-weight: 600; cursor: pointer; }
+  .ho-anchor-link:hover { text-decoration: underline; }
+  .ho-anchor.adhoc { color: var(--text-faint); font-style: italic; font-size: 12px; }
+
+  .ho-intent { font-size: 12px; color: var(--text-dim); line-height: 1.6; }
+
+  .ho-progress { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+  .ho-tasks { font-size: 11.5px; color: var(--text-dim); }
+  .ho-tasks b { color: var(--accent); }
+  .ho-progress .lbl-note { font-size: 10px; color: var(--text-faint); }
+
+  .ho-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 2px; }
+
+  /* ===================== Handoff compose modal ===================== */
+  .ho-modal-overlay {
+    position: absolute; inset: 0; z-index: 50;
+    background: rgba(4,5,7,0.72); backdrop-filter: blur(2px);
+    display: flex; align-items: center; justify-content: center; padding: 24px;
+  }
+  .ho-modal-overlay[hidden] { display: none; }
+
+  .ho-modal {
+    width: 480px; max-width: 100%; max-height: 100%; overflow-y: auto;
+    background: var(--bg-2); border: 1px solid var(--border); border-radius: 14px;
+    box-shadow: 0 24px 64px rgba(0,0,0,0.55); display: flex; flex-direction: column;
+  }
+  .ho-modal-head {
+    flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between;
+    padding: 14px 18px; border-bottom: 1px solid var(--border-soft);
+  }
+  .ho-modal-title { font-size: 13.5px; font-weight: 700; color: var(--text); }
+  .ho-modal-close { cursor: pointer; color: var(--text-faint); font-size: 17px; line-height: 1; padding: 2px 6px; border-radius: 4px; }
+  .ho-modal-close:hover { color: var(--text); background: var(--bg-hover); }
+
+  .ho-modal-body { padding: 18px; display: flex; flex-direction: column; gap: 16px; }
+  .ho-field { display: flex; flex-direction: column; gap: 6px; }
+  .ho-field-label { font-size: 10.5px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; color: var(--text-faint); }
+
+  .ho-picker { position: relative; }
+  .ho-picker-box {
+    display: flex; align-items: center; justify-content: space-between; padding: 9px 12px;
+    background: var(--bg-3); border: 1px solid var(--border); border-radius: 8px;
+    font-size: 12.5px; color: var(--text); cursor: pointer;
+  }
+  .ho-picker-box:hover { border-color: var(--accent); }
+  .ho-picker-box span:last-child { color: var(--text-faint); font-size: 10px; }
+  .ho-picker-dropdown {
+    position: absolute; top: calc(100% + 5px); left: 0; right: 0; z-index: 10;
+    background: var(--bg-3); border: 1px solid var(--border); border-radius: 8px; padding: 6px;
+    box-shadow: 0 10px 28px rgba(0,0,0,0.45);
+  }
+  .ho-picker-dropdown[hidden] { display: none; }
+  .ho-picker-group-label {
+    font-size: 9.5px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase;
+    color: var(--text-faint); padding: 6px 8px 3px;
+  }
+  .ho-picker-option { padding: 6px 8px; border-radius: 6px; font-size: 12px; color: var(--text-dim); cursor: pointer; }
+  .ho-picker-option:hover { background: var(--bg-hover); color: var(--text); }
+
+  .ho-readonly-box { background: var(--bg-3); border: 1px solid var(--border-soft); border-radius: 8px; padding: 11px 12px; display: flex; flex-direction: column; gap: 9px; }
+  .ho-anchor-readonly { display: flex; align-items: center; gap: 9px; }
+
+  .ho-textarea {
+    width: 100%; min-height: 74px; background: var(--bg-3); border: 1px solid var(--border); border-radius: 8px;
+    padding: 9px 11px; font-size: 12px; color: var(--text); font-family: inherit; line-height: 1.6; resize: vertical;
+  }
+  .ho-textarea::placeholder { color: var(--text-faint); }
+  .ho-textarea:focus { outline: none; border-color: var(--accent); }
+
+  .ho-modal-footnote { font-size: 11px; color: var(--text-faint); line-height: 1.6; }
+
+  .ho-modal-actions {
+    flex: 0 0 auto; display: flex; justify-content: flex-end; gap: 8px; padding: 14px 18px;
+    border-top: 1px solid var(--border-soft);
+  }
+</style>
+
+<!-- ===================== Handoff 疊加專屬 JS ===================== -->
+<script>
+  (function () {
+    // ---- activity bar：Sessions ⇄ Handoffs 收件匣 view 切換 ----
+    var actSessions = document.getElementById('act-sessions');
+    var actHandoffs = document.getElementById('act-handoffs');
+    var viewWorkspace = document.getElementById('stage-workspace-view');
+    var viewHandoff = document.getElementById('stage-handoff-view');
+
+    function showWorkspace() {
+      actSessions.classList.add('active');
+      actHandoffs.classList.remove('active');
+      viewWorkspace.hidden = false;
+      viewHandoff.hidden = true;
+    }
+    function showHandoffInbox() {
+      actHandoffs.classList.add('active');
+      actSessions.classList.remove('active');
+      viewHandoff.hidden = false;
+      viewWorkspace.hidden = true;
+    }
+    actSessions.addEventListener('click', showWorkspace);
+    actHandoffs.addEventListener('click', showHandoffInbox);
+
+    // ---- 跨人來件通知橫幅：× 關閉 ----
+    var banner = document.getElementById('ho-banner');
+    var bannerClose = document.getElementById('ho-banner-close');
+    if (banner && bannerClose) {
+      bannerClose.addEventListener('click', function () { banner.style.display = 'none'; });
+    }
+
+    // ---- 收件匣 filter chips：三區同時可見，點擊捲動到對應區塊 + 標示 active ----
+    document.querySelectorAll('.ho-chip').forEach(function (chip) {
+      chip.addEventListener('click', function () {
+        document.querySelectorAll('.ho-chip').forEach(function (c) { c.classList.remove('active'); });
+        chip.classList.add('active');
+        var target = document.getElementById(chip.dataset.target);
+        if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      });
+    });
+
+    // ---- compose modal 開關 ----
+    var modal = document.getElementById('ho-modal-overlay');
+    var openBtn = document.getElementById('btn-open-handoff-compose');
+    var closeBtn = document.getElementById('ho-modal-close');
+    var cancelBtn = document.getElementById('ho-modal-cancel');
+
+    function openModal() { modal.hidden = false; }
+    function closeModal() { modal.hidden = true; }
+
+    if (openBtn) openBtn.addEventListener('click', openModal);
+    if (closeBtn) closeBtn.addEventListener('click', closeModal);
+    if (cancelBtn) cancelBtn.addEventListener('click', closeModal);
+    modal.addEventListener('click', function (e) { if (e.target === modal) closeModal(); });
+
+    // ---- To picker：純視覺 dropdown（repo / 人 grouped options）----
+    var pickerBox = document.getElementById('ho-picker-box');
+    var pickerDropdown = document.getElementById('ho-picker-dropdown');
+    var pickerValue = document.getElementById('ho-picker-value');
+    pickerBox.addEventListener('click', function (e) {
+      e.stopPropagation();
+      pickerDropdown.hidden = !pickerDropdown.hidden;
+    });
+    document.querySelectorAll('.ho-picker-option').forEach(function (opt) {
+      opt.addEventListener('click', function () {
+        pickerValue.textContent = opt.dataset.value;
+        pickerDropdown.hidden = true;
+      });
+    });
+    document.addEventListener('click', function () { pickerDropdown.hidden = true; });
+  })();
 </script>
 </body>
 </html>
