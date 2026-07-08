@@ -10,9 +10,14 @@
 
 規劃 / 設計階段，尚未開始實作。
 
-- `docs/workspace-roadmap.md` — 擴充規劃藍圖
+- **`docs/PRD.md`** — **整合定案的產品需求文件（單一權威來源，之後照這份開發）**
 - `docs/workspace-mockup.html` — 定案的多 session layout 互動雛型
   （純 terminal + OpenSpec / Files 同層級並存側欄；OpenSpec 自動跟隨當前 session 的 change）
+
+補充素材（PRD 已整合，保留供參）：
+- `docs/workspace-roadmap.md` — 原始技術藍圖
+- `docs/competitive-analysis.md` — 競品分析與 SWOT
+- `docs/concept-cross-agent-handoff.md` / `docs/handoff-design.md` — handoff 護城河的論證與設計
 
 ## 授權
 
