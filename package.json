@@ -5,7 +5,44 @@
   "license": "UNLICENSED",
   "description": "Spec-driven multi-agent development workbench (Electron desktop app)",
   "type": "module",
+  "main": "./out/main/index.js",
   "engines": {
     "node": ">=22.22.0"
+  },
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "preview": "electron-vite preview",
+    "probe:shell": "npm run build && node scripts/probe-shell.mjs",
+    "probe:native": "electron scripts/probe-native.mjs",
+    "probe:editor": "npm run build && node scripts/probe-editor.mjs",
+    "typecheck:node": "tsc --noEmit -p tsconfig.node.json",
+    "typecheck:web": "tsc --noEmit -p tsconfig.web.json",
+    "typecheck": "npm run typecheck:node && npm run typecheck:web",
+    "measure:bundle": "node scripts/measure-bundle.mjs",
+    "lint": "eslint ."
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@tailwindcss/vite": "^4.3.2",
+    "@types/node": "^22.10.0",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "@vitejs/plugin-react": "^5.0.4",
+    "electron": "43.1.0",
+    "electron-vite": "^5.0.0",
+    "eslint": "^10.6.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "globals": "^17.7.0",
+    "monaco-editor": "0.55.1",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "tailwindcss": "^4.3.2",
+    "typescript": "^5.9.0",
+    "typescript-eslint": "^8.63.0",
+    "vite": "^7.3.6"
+  },
+  "dependencies": {
+    "node-pty": "1.2.0-beta.14"
   }
 }

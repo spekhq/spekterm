@@ -136,6 +136,35 @@
 
 **編輯器一律包在一層薄 wrapper 介面之後**，Files 檢視只依賴該介面。無論最終用 Monaco 或退守 CM6，替換成本都侷限於單一模組。
 
+#### Phase 0 實測結果（2026-07-09）：維持 Monaco
+
+**(a) worker 兩模式皆通過 —— PRD §13 的風險不成立。**
+
+`scripts/probe-editor.mjs` 以 CDP 連進執行中的 app，dev 與 build 兩種模式下結果一致：註冊 3 種語言、model 語言為 `typescript`、7 種 token class、實際建立 `typescript` 與 `editorWorkerService` 兩支 worker，且 TypeScript worker 完成語意分析並回填 diagnostic marker。
+
+判定 worker 是否存活的依據刻意不是「看到語法高亮」—— tokenization 由主執行緒完成，看到顏色證明不了 worker。probe 建立一個帶型別錯誤的 model，唯有 `ts.worker` 跑完語意分析才會產生 marker，收到 marker 才算數。
+
+過程中確認的兩件事：Vite 打包後 `file://` 下的動態 import 與 module worker 建立**皆正常**（實測 `import('./assets/tsMode-*.js')` 與 `new Worker(url, {type:'module'})` 都成功），因此不需要改用自訂協定；而 `monaco-editor` 未宣告 `sideEffects`，rollup 不會 tree-shake 掉純副作用的 contribution import。
+
+**(b) 體積：20.88 MB，較不含 Monaco 的基準增加 20.34 MB（×38.7）。**
+
+| 項目 | 大小 |
+|---|---|
+| 不含 Monaco 的基準（React 19 + Tailwind v4） | 0.54 MB |
+| `ts.worker`（TypeScript 編譯器本身） | 12.65 MB |
+| 主 chunk（Monaco core + React） | 7.51 MB |
+| `editor.worker` | 0.52 MB |
+| `codicon` 字型 / `tsMode` / `markdown` | 0.16 MB |
+| **renderer 資產總計** | **20.88 MB** |
+
+（以 `npm run measure:bundle` 可重現。）
+
+**判定：維持 Monaco。** worker 風險已證偽，體積對一個 Electron 桌面 app（本體逾百 MB）不構成阻礙。
+
+**但體積的組成揭露了一個之後可收割的選項**：`ts.worker` 一支就佔 12.65 MB，它的存在只為語意分析（診斷 / IntelliSense）。PRD §6.2 已將編輯器降級為 side panel 的檔案檢視，而 F3 只需要語法高亮與存檔 —— 兩者都不需要 `ts.worker`。若 Phase 6 的打包體積成為問題，移除 `language/typescript` contribution 即可省下這 12.65 MB，且不影響 F3 的任何需求。這個取捨留給 Phase 6，不在本 change 執行。
+
+**實作上的兩個要點**（供後續 Phase 參考）：語法高亮與語言服務來自不同的 contribution（`basic-languages/*` 提供 monarch tokenizer、`language/*` 提供 worker 驅動的語意分析），少了前者只會得到單一 token class；`monaco.languages.typescript` 在 0.55 已標記 deprecated（型別為 `{ deprecated: true }`，runtime 尚存），不應用於新程式碼。
+
 ### D4：Electron 版本鎖定在 43.1.0
 
 鎖定實測過的版本以確保建置可重現。因 D2 的 N-API 結論，Electron 升版不再會打破 `node-pty`，鎖版的理由從「避免 ABI 災難」降級為「可重現建置」，但仍然保留。升版時需檢查 Electron 提供的 N-API 版本不低於 `node-pty` 的要求（目前雙方皆為 10）。
@@ -154,7 +183,7 @@ D1 需要註冊 npm org、改動 `spek` repo（更名 + 發佈設定 + 412 處�
 - **更名波及 `spek` repo 412 處引用** → 大部分是可批次替換的 import 與依賴宣告，且該 repo 有 `type-check` 與 `@spek/core` 的 unit test 可回歸。關鍵是**不要動 `openspec/changes/` 的歷史記錄**（68 檔），只改描述現況的 `openspec/specs/`（11 檔）與程式碼。
 - **`node-pty@1.2.0` 仍掛在 `beta` dist-tag（npm `latest` 是 1.1.0）** → VS Code main 分支依賴 `^1.2.0-beta.13`，實務風險低。釘死版本、升版前重跑「Electron 載入 + spawn 真 pty」驗證。若專案政策不接受 beta 依賴，退回 1.1.0 就必須接受 Linux 本地編譯（需 Python ≥3.8 + C++ toolchain），且 macOS / Windows 不受影響 —— 但那等於把痛苦轉嫁給 Linux 貢獻者與 Linux CI。
 - **版本管理器會遮蔽系統 Python（實測已發生：`pyenv` 的 3.7 蓋掉 `/usr/bin/python3.8`）** → 僅在退回 1.1.0 的情境下才會遇到。屆時應文件化前置需求並提供環境檢查腳本，且不在 repo 內硬編 `npm_config_python` 路徑（會綁死他人環境）。
-- **Monaco 的 Web Worker 在 electron-vite 下設定失敗，或打包體積不可接受** → 這是本 change 現在最主要的技術風險（D3 把它從假設變成待驗項）。Phase 0 必須在 dev 與 build 兩種模式下驗證，失敗即依 PRD §8.3 原文退守 CodeMirror 6；wrapper 介面確保替換成本侷限單一模組。
+- **~~Monaco 的 Web Worker 在 electron-vite 下設定失敗，或打包體積不可接受~~ → 已於 Phase 0 實測證偽**（見 D3「Phase 0 實測結果」）。dev 與 build 兩模式的 worker 皆正常運作，`file://` 下的動態 import 與 module worker 建立亦無阻礙。體積 20.88 MB 可接受，且其中 12.65 MB 的 `ts.worker` 隨時可移除。殘留風險僅在 Phase 6 打包時的安裝檔大小，屆時 wrapper 介面仍確保退守 CM6 的成本侷限單一模組。
 - **未來 `node-pty` 要求的 N-API 版本高於 Electron 提供的** → 目前兩邊都是 10，餘裕充足。升 Electron 或 node-pty 時納入檢查。
 - **core 發 npm 後，每次改動都要發版**（Phase 1 就會用到 §9.3 要新增的 `listDir` / `readFile` / `writeFile` / `stat`）→ 本機以 `npm link` 迭代，只在里程碑發版。
 - **Trade-off：把 core 發到公開 npm 等於讓私有 app 的核心解析邏輯公開可見** → 它本來就是 MIT 開源專案的一部分，發佈不增加任何暴露；商業價值在封閉的 app 與 handoff 層（PRD §10），不在 core。
@@ -177,7 +206,7 @@ D1 需要註冊 npm org、改動 `spek` repo（更名 + 發佈設定 + 412 處�
 ## Open Questions
 
 - **macOS / Windows 的 `node-pty` prebuilt 是否真能免編譯直接載入**？本 change 只在 Linux x64 驗證了 prebuilt 與 N-API 跨 runtime 載入。Windows 另有 `conpty.node` / `conpty_console_list.node` 兩顆額外 binary，其載入路徑未驗。
-- **Monaco 的 worker 在 electron-vite 的 dev 與 build 模式下如何設定**？這是 D3 的主要未知，也是 Phase 0 最需要優先引爆的風險。
+- ~~**Monaco 的 worker 在 electron-vite 的 dev 與 build 模式下如何設定**？~~ **已解答**：Vite 的 `?worker` 後綴 + 全域 `MonacoEnvironment.getWorker` 即可，dev 與 build 皆通過（D3）。
 - **`electron-builder` 打包時如何處理 `prebuilds/`**（asar unpack 規則、排除非目標平台）？屬 Phase 6，但選型不應在此埋雷。
 - **`node-pty@1.2.0` 何時脫離 beta**？影響是否需要長期釘死 beta 版本。
 - **是否要並行向 npm 申請 `@spek` 的 name dispute**？佔用者 0 套件、符合閒置條件。取回後可考慮 alias 或改名，但不應阻塞任何 Phase。

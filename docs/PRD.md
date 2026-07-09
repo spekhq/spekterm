@@ -33,7 +33,7 @@
 
 **spek workspace** 是一個**以 agent 為核心的本地開發工作台**——一個獨立的 Electron 桌面 app（私有、專有授權），把多個「一個 repo／資料夾各自一個 `claude` session」的 terminal 包在一個殼裡，並加上一塊**懂 OpenSpec 結構的側欄**，讓使用者不必另外開 IDE 就能一邊駕駛 agent、一邊看著 spec 上下文。
 
-core 邏輯重用開源的 [`@spek/core`](https://github.com/kewang/spek)（MIT）；app 本身封閉、商業授權。
+core 邏輯重用開源的 [`@spekjs/core`](https://github.com/kewang/spek)（MIT）；app 本身封閉、商業授權。
 
 **一句話定位（headline）**：spec-driven 的多 agent 開發工作台。
 
@@ -88,7 +88,7 @@ core 邏輯重用開源的 [`@spek/core`](https://github.com/kewang/spek)（MIT�
 - **唯一 spec-aware 工作台**：OpenSpec 側欄自動跟隨當前 change（deltas / BDD / tasks / graph），兩對手都沒有、也沒宣示要做。這是 workflow 綁定，不是 feature——用 OpenSpec 的人切換成本高。
 - **repo / worktree 是一級組織單位**：cmux 的 worktree 還是「自己寫 script」（官方 HN 親口、issue 未結）。
 - **不吃 API key、用使用者自己的訂閱**；刻意不重做 Claude Code 已有的 diff / task。
-- **open-core 結構清楚**：`@spek/core`（MIT）有機會成為 OpenSpec 生態的標準解析引擎。
+- **open-core 結構清楚**：`@spekjs/core`（MIT）有機會成為 OpenSpec 生態的標準解析引擎。
 
 **Weaknesses**
 - **TAM 最小**：Claude Code ∩ OpenSpec 使用者。cmux 服務所有 CLI agent 使用者，分母大一個數量級。
@@ -101,7 +101,7 @@ core 邏輯重用開源的 [`@spek/core`](https://github.com/kewang/spek)（MIT�
 - **跨平台空窗**：cmux 僅 macOS、claude-view 的 Linux 未到。Windows / Linux 上「多 session agent 工作台」沒有強勢玩家——Electron 在這裡反而從弱點變武器。
 - **付費意願已被驗證**：$20~$100/月價格帶別人幫忙教育好了。
 - **spec-driven development 浪頭**：把自己定位成這個方法論的 reference tooling，而不是「又一個 terminal 管理器」。
-- **`@spek/core` 生態槓桿**：MIT 引擎做 VS Code / IntelliJ 甚至 cmux socket API 整合當漏斗，商業 app 收完整工作台的錢。
+- **`@spekjs/core` 生態槓桿**：MIT 引擎做 VS Code / IntelliJ 甚至 cmux socket API 整合當漏斗，商業 app 收完整工作台的錢。
 - **cmux 的 worktree 缺口**：社群正在敲碗、官方還沒做——現在能拿來打的對比點，但窗口不會永遠開著。
 
 **Threats**
@@ -137,7 +137,7 @@ Electron，目標產出 macOS / Windows / Linux 三平台安裝檔。
 1. **OpenSpec 是語意核心**：workspace 的差異化建立在懂 OpenSpec change 生命週期。版面上，OpenSpec 是 side panel 的**預設身分**（跟隨 focused session 的 change），與 Files 同層互斥切換、與中央 terminal 並存；repo 沒有 `openspec/` 時退為 Files——核心不因缺 OpenSpec 就殘廢。（版面以 §6 / mockup 為準。）
 2. **狀態變更才算數**（延續 spek 立場）：「agent 說做完不算，磁碟上的狀態變更才算」——這條原則直接決定 handoff 的誠實度設計（讀 diff / checkbox，而非 agent 自述），也是 handoff 不必綁 OpenSpec 的底氣：git diff 每個 repo 都有。
 3. **agent 中立**：目前只包 `claude`，但介面與資料模型從一開始就為多 agent（Claude / Codex / Gemini …）設計。
-4. **重用而非重造**：`@spek/core`（MIT）與 spek 前端元件最大化重用；不重做 Claude Code 已有能力。
+4. **重用而非重造**：`@spekjs/core`（MIT）與 spek 前端元件最大化重用；不重做 Claude Code 已有能力。
 5. **信任邊界優先**：fs 寫入、terminal cwd、handoff auto-spawn 都受明確信任邊界約束（同機同人 vs 跨人／外部）。
 
 ---
@@ -327,7 +327,7 @@ spek 背景 router 主動 probe → 比對 to 命中的 repo-B
 |------|----------------|
 | Terminal（PTY） | 主行程是 Node，可直接 `node-pty` spawn shell，透過 IPC 串流，不需另架 WebSocket server |
 | 讀寫任意檔案 | 桌面 app 信任模型本就允許，不需處理沙盒 / CORS / localhost 綁定 |
-| 重用 `@spek/core` | core 是純 Node.js，主行程可直接 import，無需 HTTP 中介 |
+| 重用 `@spekjs/core` | core 是純 Node.js，主行程可直接 import，無需 HTTP 中介 |
 | 重用 spek 前端 | renderer 是標準 React + Vite，沿用 spek 的 React 19 / Tailwind v4 |
 
 ### 8.2 三層結構
@@ -337,9 +337,9 @@ spek 背景 router 主動 probe → 比對 to 命中的 repo-B
 ├── main/        # Electron 主行程（Node）
 │   ├── window.ts          # 視窗 / 選單 / 生命週期
 │   ├── ipc/               # IPC handlers
-│   │   ├── fs.ts          # 讀目錄 / 讀檔 / 寫檔 / 監看（重用 @spek/core）
+│   │   ├── fs.ts          # 讀目錄 / 讀檔 / 寫檔 / 監看（重用 @spekjs/core）
 │   │   ├── terminal.ts    # node-pty 管理（多 session）
-│   │   └── openspec.ts    # 呼叫 @spek/core scanner / reader
+│   │   └── openspec.ts    # 呼叫 @spekjs/core scanner / reader
 │   ├── handoff/           # (Phase 7) daemon inbox / router / spawner
 │   ├── workspace-store.ts # 多 folder 設定持久化（userData JSON）
 │   └── watcher.ts         # chokidar 檔案監控 → IPC push
@@ -362,7 +362,7 @@ spek 背景 router 主動 probe → 比對 to 命中的 repo-B
 | 打包 | **electron-builder** | 產出 mac / win / linux |
 | 編輯器 | **Monaco Editor** | VS Code 同款；需處理 Vite worker 設定。替代：CodeMirror 6（更輕、Vite 整合單純）——先以 Monaco 技術驗證，視打包大小再定 |
 | Terminal UI | **@xterm/xterm** | 搭配 fit / web-links addon |
-| PTY | **node-pty** | native 模組，需 `electron-rebuild` 對齊 Electron ABI |
+| PTY | **node-pty**（釘死 `1.2.0-beta.14`） | Node-API 模組，prebuilt 的 `.node` 可直接被 Electron 載入，**不需 `electron-rebuild`**。須採用 prebuilds 涵蓋全部目標平台的 1.2.0-beta 系列——npm `latest`（1.1.0）缺 Linux prebuild |
 | 檔案監控 | **chokidar** | spek 已用，主行程沿用 |
 | 設定持久化 | **electron-store** 或 userData JSON | 多 folder、開啟 tab、layout |
 | UI 技術棧 | React 19 + Tailwind v4 + react-markdown | 與 spek 完全一致，最大化重用 |
@@ -373,15 +373,15 @@ spek 背景 router 主動 probe → 比對 to 命中的 repo-B
 
 ### 9.1 直接重用
 
-- **`@spek/core`**：scanner、tasks、headings、git-cache、worktrees、types — 主行程直接 import。
+- **`@spekjs/core`**：scanner、tasks、headings、git-cache、worktrees、types — 主行程直接 import。
 - **spek 的 `ApiAdapter` 抽象**：spek 前端已把通訊層抽象成 `ApiAdapter`（Fetch / Message / Static）。Workspace 只要新增一個 **`IpcAdapter`**，既有 spek 頁面（Dashboard / SpecDetail / ChangeDetail / GraphView）幾乎可原封不動在 Electron renderer 跑起來。**這是整合既有畫面的關鍵槓桿。**
 
 ### 9.2 需要的抽取（Phase 5）
 
-spek 可重用 React 元件目前住在 `@spek/web`、未對外輸出。抽出一個 **`@spek/ui`** package：
+spek 可重用 React 元件目前住在 `@spek/web`、未對外輸出。抽出一個 **`@spekjs/ui`** package：
 - `ApiAdapter` 介面 + 共用型別
 - 可重用頁面 / 元件：Dashboard、SpecDetail、ChangeDetail、GraphView、TabView、markdown 渲染 + BDD 高亮
-- 讓 `@spek/web` 與 `@spek/workspace` 同時依賴 `@spek/ui`（此步會動到 web，需回歸測試）。
+- 讓 `@spek/web` 與 `@spek/workspace` 同時依賴 `@spekjs/ui`（此步會動到 web，需回歸測試）。
 
 ### 9.3 core 的小幅擴充
 
@@ -408,7 +408,7 @@ spek 可重用 React 元件目前住在 `@spek/web`、未對外輸出。抽出�
 - 與 claude-view（$0 本機 → 雲付費）、cmux（本機免費 → 雲付費）已驗證模式一致。
 - 防白嫖：本機 handoff 天生受限（一機 / 一人 / 跨 agent 要手動），有隊友、第二台機、或想自動接力就撞牆。
 
-授權：app 專有、保留所有權利（All rights reserved），私有 repo、非開源；`@spek/core` 維持 MIT。
+授權：app 專有、保留所有權利（All rights reserved），私有 repo、非開源；`@spekjs/core` 維持 MIT。
 
 ---
 
@@ -419,9 +419,9 @@ spek 可重用 React 元件目前住在 `@spek/web`、未對外輸出。抽出�
 ### Phase 0 — 基礎建設與技術驗證（spike）
 `@spek/workspace` 能開視窗、renderer 跑起來，並驗證高風險相依。
 - 建 package 骨架：electron-vite + React + Tailwind v4 + TypeScript。
-- 主行程 import `@spek/core` 成功（印出某 repo 掃描結果）。
-- **技術驗證**：node-pty（`electron-rebuild`）能 spawn shell；Monaco 能在 renderer 載入並高亮。
-- **風險前置**：node-pty native ABI、Monaco worker 打包。
+- 主行程 import `@spekjs/core` 成功（印出某 repo 掃描結果）。
+- **技術驗證**：node-pty 能在 Electron 主行程 spawn 真 pty（Node-API，免 `electron-rebuild`）；Monaco 能在 renderer 載入並高亮，且 worker 於 dev 與 build 兩種模式皆正常。
+- **風險前置**：node-pty 的 prebuild 平台覆蓋、Monaco worker 打包。
 
 ### Phase 1 — 多 folder 工作區骨架
 - Workspace 設定（folder 清單）存 userData，重開記得。
@@ -445,8 +445,8 @@ spek 可重用 React 元件目前住在 `@spek/web`、未對外輸出。抽出�
 - session 生命週期（視窗關閉時清理子行程）。
 
 ### Phase 5 — 整合既有 spek 視圖
-- 抽出 **`@spek/ui`**（§9.2），web 與 workspace 共用（動到 web，需回歸）。
-- 實作 **`IpcAdapter`**，主行程用 `@spek/core` 回應。
+- 抽出 **`@spekjs/ui`**（§9.2），web 與 workspace 共用（動到 web，需回歸）。
+- 實作 **`IpcAdapter`**，主行程用 `@spekjs/core` 回應。
 - OpenSpec home tab：Dashboard / Specs / Changes / Graph。
 - 交叉導覽：spec/change ↔ 底層檔案互跳。
 
@@ -489,11 +489,11 @@ spek 可重用 React 元件目前住在 `@spek/web`、未對外輸出。抽出�
 
 | 風險 | 緩解 |
 |------|------|
-| node-pty native ABI 對不上 Electron | Phase 0 先用 `electron-rebuild` 驗證；鎖 Electron 版本 |
-| Monaco + Vite worker 設定繁瑣 | Phase 0 驗證；必要時退守 CodeMirror 6 |
-| `@spek/ui` 抽取波及 web | 抽取前先確保 web 有基本回歸；小步搬移 |
+| node-pty 所選版本的 prebuilt 未涵蓋目標平台 | 釘死有全平台 prebuild 的版本（1.2.0-beta 系列）；Node-API 使其免 `electron-rebuild`。Electron 升版後重跑載入驗證（`npm run probe:native`） |
+| ~~Monaco + Vite worker 設定繁瑣~~（Phase 0 已證偽） | Vite `?worker` + `MonacoEnvironment.getWorker` 即可，dev 與 build 兩模式實測皆通過 |
+| `@spekjs/ui` 抽取波及 web | 抽取前先確保 web 有基本回歸；小步搬移 |
 | Electron 安全設定不當 | 預設 contextIsolation + preload 白名單，不開 nodeIntegration |
-| 打包體積大 | 評估 Monaco 按需載入 / CodeMirror 取捨 |
+| 打包體積大 | Phase 0 實測 renderer 資產 20.88 MB（基準 0.54 MB），其中 `ts.worker` 佔 12.65 MB。僅需高亮與存檔時可移除 `language/typescript` contribution；必要時退守 CodeMirror 6 |
 | **cmux 用 socket API 拼出「夠用」spec 側欄** | 差異化推進到「懂 change 生命週期」的 handoff 語意深度，且要快（Phase 7 前置） |
 | **cmux 補上一級 worktree 支援** | 不只靠組織模型，靠 spec + handoff 雙腿 |
 | **Anthropic 官方向上吃**（內建多 session + spec 呈現） | 綁 OpenSpec 語意 + 跨異質 agent，非官方單 agent 能覆蓋 |
