@@ -1,0 +1,11 @@
+{
+  "name": "@spek/workspace",
+  "version": "0.1.0",
+  "private": true,
+  "license": "UNLICENSED",
+  "description": "Spec-driven multi-agent development workbench (Electron desktop app)",
+  "type": "module",
+  "engines": {
+    "node": ">=22.22.0"
+  }
+}

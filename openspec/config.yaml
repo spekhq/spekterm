@@ -1,0 +1,12 @@
+schema: spec-driven
+
+context: |
+  Project: spek workspace — agent 開發工作台（Electron 桌面 app，私有、專有授權）
+  Purpose: 把多個「一個 repo／資料夾各自一個 claude session」的 terminal 包在一個殼裡，
+           並加上一塊懂 OpenSpec 結構的側欄
+  Tech stack（規劃中，尚未安裝）: Electron, electron-vite, TypeScript,
+           React 19, Tailwind CSS v4, node-pty, xterm.js, chokidar
+  Authority: docs/PRD.md 是產品需求的單一權威來源；
+             docs/workspace-mockup.html 是 UI 行為的權威雛型
+  Status: 規劃／設計階段，尚無產品程式碼
+  Conventions: 程式碼英文，註解與文件繁體中文（台灣用語）
