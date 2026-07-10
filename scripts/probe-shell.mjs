@@ -1,141 +1,121 @@
 /**
- * 以 CDP 連進執行中的 app，驗證 workspace-app-shell 的 spec scenario。
+ * 驗證 workspace-app-shell 的 spec scenario。
  *
- * 之所以走 CDP 而非在主行程塞驗證分支：驗收要檢查的正是產品實際傳給
- * BrowserWindow 的設定與 renderer 的真實全域環境，任何為了測試而加的分支
- * 都會讓被驗的東西不再是被出貨的東西。
+ * 以 CDP 連進執行中的 app，斷言全部落在 renderer 的**真實狀態**上：直接呼叫 preload
+ * 暴露的 API、量測真實版面元素的 computed style。Phase 0 曾在產品 UI 上掛 `data-*`
+ * 屬性供這支腳本讀取 —— 那是「不在產品程式碼裡塞測試分支」這條原則的軟性違反：
+ * 分支沒有，但為了驗收而存在的 UI 屬性有。診斷頁退場後一併修正。
  *
- * 用法：node scripts/probe-shell.mjs
+ * 用法：npm run probe:shell
  * 結束碼 0 表示全部 scenario 通過。
  */
 import { spawn } from 'node:child_process'
-import { readFileSync } from 'node:fs'
-import { setTimeout as sleep } from 'node:timers/promises'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { check, connect, pollUntil, waitForPageTarget } from './lib/cdp.mjs'
 
 const DEBUG_PORT = 9222
 const STARTUP_TIMEOUT_MS = 30_000
-const RENDER_TIMEOUT_MS = 15_000
 
-/** renderer 內求值：回傳信任模型與樣式的實測結果 */
-const PROBE_EXPRESSION = `(() => {
-  const root = document.querySelector('[data-testid="app-root"]')
-  if (!root) return { reactMounted: false }
-  const style = getComputedStyle(root)
+/** renderer 內求值：全部取自真實的 DOM 與 preload 介面，沒有專為驗收而生的鉤子。 */
+const PROBE_EXPRESSION = `(async () => {
+  const root = document.getElementById('root')
+  const nav = document.querySelector('nav[aria-label="活動列"]')
+  if (!root || root.children.length === 0 || !nav) return { mounted: false }
+
+  const navStyle = getComputedStyle(nav)
+  const api = globalThis.workspace
+
+  let folders = null
+  let apiError = null
+  try {
+    folders = await api.folders.list()
+  } catch (error) {
+    apiError = String(error)
+  }
+
   return {
-    reactMounted: true,
-    preloadApi: root.dataset.preloadApi,
+    mounted: true,
+    title: document.title,
+    navDisplay: navStyle.display,
+    navBackground: navStyle.backgroundColor,
+    regions: {
+      activityBar: Boolean(nav),
+      rail: Boolean(document.querySelector('aside[aria-label="工作區"]')),
+      mainStage: Boolean(document.querySelector('main[aria-label="主舞台"]')),
+    },
     requireExposed: typeof require !== 'undefined',
     processExposed: typeof process !== 'undefined',
-    trustModelText: document.querySelector('[data-testid="trust-model"]')?.textContent ?? null,
-    backgroundColor: style.backgroundColor,
-    padding: style.padding,
-    title: document.title,
+    foldersIsArray: Array.isArray(folders),
+    apiError,
+    listDirIsFunction: typeof api?.fs?.listDir === 'function',
+    // 未經本 change 規格定義的能力一律不得存在
+    surplusFsKeys: Object.keys(api?.fs ?? {}).filter((key) => key !== 'listDir'),
+    hasReadFile: typeof api?.fs?.readFile !== 'undefined',
+    hasWriteFile: typeof api?.fs?.writeFile !== 'undefined',
+    hasPing: typeof api?.ping !== 'undefined',
+    exposesIpcRenderer: typeof api?.ipcRenderer !== 'undefined',
   }
 })()`
 
-async function waitForPageTarget(deadline) {
-  while (Date.now() < deadline) {
-    try {
-      const res = await fetch(`http://127.0.0.1:${DEBUG_PORT}/json/list`)
-      const targets = await res.json()
-      const page = targets.find((t) => t.type === 'page' && t.webSocketDebuggerUrl)
-      if (page) return page
-    } catch {
-      // devtools endpoint 尚未就緒
-    }
-    await sleep(250)
-  }
-  throw new Error(`等待 CDP target 逾時（${STARTUP_TIMEOUT_MS}ms）`)
-}
-
-function cdpEvaluate(ws, id, expression) {
-  return new Promise((resolve, reject) => {
-    const onMessage = (event) => {
-      const msg = JSON.parse(event.data)
-      if (msg.id !== id) return
-      ws.removeEventListener('message', onMessage)
-      if (msg.error) return reject(new Error(msg.error.message))
-      if (msg.result?.exceptionDetails) {
-        return reject(new Error(msg.result.exceptionDetails.text))
-      }
-      resolve(msg.result?.result?.value)
-    }
-    ws.addEventListener('message', onMessage)
-    ws.send(JSON.stringify({
-      id,
-      method: 'Runtime.evaluate',
-      params: { expression, returnByValue: true, awaitPromise: true },
-    }))
-  })
-}
-
-async function probeUntilSettled(ws) {
-  const deadline = Date.now() + RENDER_TIMEOUT_MS
-  let id = 1
-  let last = null
-  while (Date.now() < deadline) {
-    last = await cdpEvaluate(ws, id++, PROBE_EXPRESSION)
-    // preload 的 ping 是非同步的，等它從 'pending' 落定再判定
-    if (last?.reactMounted && last.preloadApi !== 'pending') return last
-    await sleep(200)
-  }
-  return last
-}
-
-function check(name, passed, detail) {
-  console.log(`  ${passed ? '✓' : '✗'} ${name}${detail ? `：${detail}` : ''}`)
-  return passed
-}
+const profileDir = mkdtempSync(join(tmpdir(), 'spek-probe-shell-'))
 
 const electron = spawn(
   process.platform === 'win32' ? 'electron.cmd' : 'electron',
-  [`--remote-debugging-port=${DEBUG_PORT}`, '.'],
+  [`--remote-debugging-port=${DEBUG_PORT}`, `--user-data-dir=${profileDir}`, '.'],
   { stdio: ['ignore', 'pipe', 'pipe'], env: process.env, shell: process.platform === 'win32' },
 )
 
 let stderr = ''
 electron.stderr.on('data', (chunk) => (stderr += chunk))
 
+const results = []
 let exitCode = 1
+
 try {
-  const target = await waitForPageTarget(Date.now() + STARTUP_TIMEOUT_MS)
-  const ws = new WebSocket(target.webSocketDebuggerUrl)
-  await new Promise((resolve, reject) => {
-    ws.addEventListener('open', resolve, { once: true })
-    ws.addEventListener('error', () => reject(new Error('CDP WebSocket 連線失敗')), { once: true })
-  })
+  const target = await waitForPageTarget(DEBUG_PORT, STARTUP_TIMEOUT_MS)
+  const client = await connect(target)
 
-  const r = await probeUntilSettled(ws)
-  ws.close()
+  const r = await pollUntil(client, PROBE_EXPRESSION, (value) => value?.mounted === true)
+  client.close()
 
-  // spec 要求「檢查建立視窗時傳入的 webPreferences」——靜態驗證那兩個值是被明確寫出的，
+  // spec 要求「檢查建立視窗時傳入的 webPreferences」—— 靜態驗證那兩個值是被明確寫出的，
   // 而非仰賴 Electron 當版的預設值。與下方的執行期效果檢查互補。
   const mainSource = readFileSync(new URL('../src/main/index.ts', import.meta.url), 'utf8')
   const declaresTrustModel =
     /contextIsolation:\s*true/.test(mainSource) && /nodeIntegration:\s*false/.test(mainSource)
 
-  console.log('workspace-app-shell 驗收：')
-  const results = [
-    check('webPreferences 明確宣告信任模型', declaresTrustModel,
-      'contextIsolation: true, nodeIntegration: false'),
-    check('主行程開啟視窗且 renderer 載入', Boolean(r?.title), `title="${r?.title ?? ''}"`),
-    check('React 根元件掛載', r?.reactMounted === true),
-    // 不比對特定色值：Tailwind v4 預設輸出 oklch，寫死 rgb 會在色彩空間變動時假性失敗。
-    // 判準是「utility class 確實產生了 computed style」——p-10 → 40px、bg-* → 非透明背景。
-    check('Tailwind 樣式生效',
-      r?.padding === '40px' && Boolean(r?.backgroundColor) && r.backgroundColor !== 'rgba(0, 0, 0, 0)',
-      `p-10 → padding=${r?.padding}, bg-slate-950 → ${r?.backgroundColor}`),
-    check('preload 白名單 API 可用', r?.preloadApi === 'pong', `ping → ${r?.preloadApi}`),
-    check('renderer 看不到 require', r?.requireExposed === false),
-    check('renderer 看不到 process', r?.processExposed === false),
-    check('信任模型成立', r?.trustModelText === 'contextIsolation 生效', r?.trustModelText ?? ''),
-  ]
+  console.log('workspace-app-shell 驗收：\n')
+
+  check(results, 'webPreferences 明確宣告信任模型', declaresTrustModel,
+    'contextIsolation: true, nodeIntegration: false')
+  check(results, '主行程開啟視窗且 renderer 載入', Boolean(r?.title), `title="${r?.title ?? ''}"`)
+  check(results, 'React 根元件掛載（#root 有子節點）', r?.mounted === true)
+  check(results, '三個版面區域同時存在', Boolean(r?.regions?.activityBar && r?.regions?.rail && r?.regions?.mainStage),
+    JSON.stringify(r?.regions ?? {}))
+  // 不比對特定色值：Tailwind 的輸出色彩空間會變動。判準是「utility class 確實產生了
+  // computed style」—— 且量的是真實版面元素（活動列），不是為驗收而生的診斷節點。
+  check(results, 'Tailwind 樣式生效',
+    r?.navDisplay === 'flex' && Boolean(r?.navBackground) && r.navBackground !== 'rgba(0, 0, 0, 0)',
+    `活動列 display=${r?.navDisplay}, background=${r?.navBackground}`)
+  check(results, 'preload 白名單 API 可用', r?.foldersIsArray === true && r?.listDirIsFunction === true,
+    r?.apiError ?? 'folders.list() 回傳陣列、fs.listDir 為函式')
+  check(results, 'renderer 看不到 require', r?.requireExposed === false)
+  check(results, 'renderer 看不到 process', r?.processExposed === false)
+  check(results, '未暴露 ipcRenderer', r?.exposesIpcRenderer === false)
+  check(results, 'Phase 0 的示範 API ping 已移除', r?.hasPing === false)
+  check(results, 'fs 介面上只有 listDir', r?.surplusFsKeys?.length === 0 && !r?.hasReadFile && !r?.hasWriteFile,
+    r?.surplusFsKeys?.length ? `多出：${r.surplusFsKeys.join(', ')}` : '無 readFile / writeFile')
+
   exitCode = results.every(Boolean) ? 0 : 1
-} catch (err) {
-  console.error(`probe 失敗：${err.message}`)
+} catch (error) {
+  console.error(`probe 失敗：${error.message}`)
   if (stderr.trim()) console.error(`electron stderr:\n${stderr.trim().slice(0, 800)}`)
 } finally {
   electron.kill('SIGTERM')
+  rmSync(profileDir, { recursive: true, force: true })
 }
 
+console.log(`\n${exitCode === 0 ? '全部通過' : '有檢查未通過'}（${results.filter(Boolean).length}/${results.length}）`)
 process.exit(exitCode)

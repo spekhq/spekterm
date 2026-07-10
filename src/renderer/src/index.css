@@ -1,1 +1,29 @@
 @import 'tailwindcss';
+
+/* 取自 docs/workspace-mockup.html 的 :root 變數 —— 雛型是 UI 的權威來源 */
+@theme {
+  --color-shell: #07090c;
+  --color-rail: #0a0c0f;
+  --color-stage: #0f1216;
+  --color-panel: #14181d;
+  --color-hover: #1b2027;
+  --color-hairline: #1e242c;
+  --color-ink: #e2e8f0;
+  --color-ink-dim: #94a3b8;
+  --color-ink-faint: #5b6675;
+  --color-accent: #f59e0b;
+  --color-danger: #f87171;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  overflow: hidden;
+  background-color: var(--color-rail);
+  color: var(--color-ink);
+}

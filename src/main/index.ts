@@ -1,7 +1,10 @@
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { app, BrowserWindow, ipcMain } from 'electron'
+import { app, BrowserWindow } from 'electron'
+import { registerFsHandlers } from './ipc/fs'
+import { registerFolderHandlers } from './ipc/folders'
 import { formatScanSummary, scanRepo } from './openspec'
+import { WorkspaceStore } from './workspace-store'
 
 const currentDir = dirname(fileURLToPath(import.meta.url))
 
@@ -42,11 +45,6 @@ function createWindow(): BrowserWindow {
   return window
 }
 
-function registerIpcHandlers(): void {
-  // Phase 0 只需要一個最小的具名 API，用來證明 preload 白名單這條路是通的。
-  ipcMain.handle('workspace:ping', () => 'pong')
-}
-
 /**
  * 開發模式的掃描目標。預設掃描 repo 自身 —— 它就是一個含 `openspec/` 的 repo。
  * `SPEK_SCAN_PATH` 可指向任意 repo，供實測其他專案。
@@ -71,7 +69,14 @@ async function logScanSummary(): Promise<void> {
 }
 
 void app.whenReady().then(() => {
-  registerIpcHandlers()
+  // workspace 設定隨使用者資料目錄走，因此 `--user-data-dir` 可指向暫存 profile，
+  // 讓驗收得以反覆重啟應用程式而不污染真實設定。
+  const store = new WorkspaceStore(join(app.getPath('userData'), 'workspace.json'))
+  store.load()
+
+  registerFolderHandlers(store)
+  registerFsHandlers(store)
+
   createWindow()
 
   // 未打包的執行一律視為開發模式（`electron-vite dev` 與直接 `electron .` 皆涵蓋）。

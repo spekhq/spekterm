@@ -298,9 +298,17 @@ check('lockfile 自 npm registry 解析', resolved.startsWith('https://registry.
 
 // Requirement: 掃描不經 HTTP 或 IPC 中介（靜態面）
 console.log('\n掃描不經 HTTP 或 IPC 中介')
-const mainSources = readdirSync(join(PROJECT_ROOT, 'src', 'main'))
-  .map((f) => readFileSync(join(PROJECT_ROOT, 'src', 'main', f), 'utf8'))
-  .join('\n')
+// 遞迴收集：`src/main/` 之下有 `ipc/` 子目錄，只讀第一層會漏掉 IPC handler
+function readMainSources(dir) {
+  return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+    const full = join(dir, entry.name)
+    if (entry.isDirectory()) return readMainSources(full)
+    if (!entry.name.endsWith('.ts') || entry.name.endsWith('.test.ts')) return []
+    return [readFileSync(full, 'utf8')]
+  })
+}
+
+const mainSources = readMainSources(join(PROJECT_ROOT, 'src', 'main')).join('\n')
 check('主行程直接 import @spekjs/core', /from '@spekjs\/core'/.test(mainSources) && /scanOpenSpec\(/.test(mainSources))
 check('主行程未建立 server', !/createServer|\.listen\(/.test(mainSources))
 

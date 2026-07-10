@@ -8,17 +8,21 @@
 
 ## 現況
 
-**Phase 0（`workspace-foundation-spike`）已完成** —— 骨架已可執行，工作台功能尚未開始。
+**Phase 1（`multi-folder-workspace-shell`）實作中** —— 可以把 repo 加進 workspace 了，
+但工作台功能（檔案樹、terminal、OpenSpec 側欄）尚未開始。
 
 已驗證可用：
 
 - Electron 43 主行程開視窗、renderer 掛載 React 19 + Tailwind CSS v4
 - 信任模型：`contextIsolation` 啟用、`nodeIntegration` 停用，能力只走 preload 白名單
 - `node-pty` 在主行程 spawn 出真 pty（Node-API，免 `electron-rebuild`）
-- Monaco 編輯器與其 Web Worker 於 dev 與 build 兩種模式皆正常
 - 主行程直接 `import` `@spekjs/core` 掃描 OpenSpec 結構，全程不開任何 TCP 埠
+- 多 folder 工作區：原生對話框加入、清單持久化於 `userData`、重啟還原；
+  設定檔損毀時以空 workspace 啟動並保留原檔，不讓 app 開不起來
+- 活動列 + workspace rail + 主舞台三欄版面，分界可拖動與鍵盤操作，side panel 可收合
+- `listDir` IPC 受 workspace folder 邊界約束：絕對路徑、`..` 逃逸、symlink 越界一律拒絕
 
-尚未開始：多 folder 工作區、檔案樹、terminal UI、OpenSpec 側欄、handoff。
+尚未開始：檔案樹、tab manager、terminal UI、OpenSpec 側欄的內容、handoff。
 
 ### 文件
 
@@ -37,9 +41,11 @@ npm install
 npm run dev             # 開發模式
 npm run build           # 建置至 out/
 npm run typecheck       # 型別檢查
-npm run probe:shell     # 驗收：開視窗 + 信任模型
+npm test                # 單元測試：fs 邊界、workspace store、listDir
+npm run probe:shell     # 驗收：開視窗 + 信任模型 + preload 白名單
+npm run probe:workspace # 驗收：folder 清單持久化、fs 邊界、三欄版面
 npm run probe:native    # 驗收：主行程載入 node-pty 並 spawn 真 pty
-npm run probe:editor    # 驗收：Monaco worker（dev + build 兩模式）
+npm run probe:core      # 驗收：主行程掃描 OpenSpec，且不開 TCP 埠
 npm run measure:bundle  # renderer bundle 體積報告
 ```
 

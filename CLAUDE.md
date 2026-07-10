@@ -8,10 +8,11 @@ spek workspace 是一個以 agent 為核心的本地開發工作台 —— 獨�
 把多個「一個 repo／資料夾各自一個 `claude` session」的 terminal 包在一個殼裡，
 並加上一塊懂 OpenSpec 結構的側欄，讓使用者不必另外開 IDE 就能一邊駕駛 agent、一邊看著 spec 上下文。
 
-**現況：Phase 0（`workspace-foundation-spike`）已完成。** 已有可執行的 Electron 骨架
-（主行程開視窗、renderer 掛 React 19 + Tailwind v4、preload 白名單、Monaco 編輯器、node-pty
-可 spawn 真 pty），主行程並以 `@spekjs/core` 直接掃描 OpenSpec 結構。尚無任何工作台功能 ——
-多 folder 工作區、檔案樹、terminal UI、OpenSpec 側欄、handoff 都還沒開始。
+**現況：Phase 1（`multi-folder-workspace-shell`）實作中。** Phase 0 已封存：Electron 骨架、
+PRD §12 信任模型、`node-pty` spawn 真 pty、主行程以 `@spekjs/core` 直接掃描 OpenSpec 結構，
+皆已實測驗證。Phase 1 加上多 folder 工作區（清單持久化於 userData）、活動列 + rail + 三欄
+版面、以及第一個受邊界約束的 fs IPC（`listDir`）。尚未開始：檔案樹、tab manager、terminal UI、
+OpenSpec 側欄的內容、handoff。
 
 ### 開發指令
 
@@ -19,12 +20,16 @@ spek workspace 是一個以 agent 為核心的本地開發工作台 —— 獨�
 npm run dev             # electron-vite dev（開發模式）
 npm run build           # 建置至 out/
 npm run typecheck       # tsc：main / preload（node）+ renderer（web）
-npm run probe:shell     # 驗收 workspace-app-shell（開視窗 + 信任模型，走 CDP）
+npm test                # node:test 單元測試（fs 邊界、workspace store、listDir）
+npm run probe:shell     # 驗收 workspace-app-shell（開視窗 + 信任模型 + preload 白名單，走 CDP）
+npm run probe:workspace # 驗收 workspace-folders / filesystem-access / workspace-layout
 npm run probe:native    # 驗收 native-module-toolchain（Electron 主行程載入 node-pty + spawn pty）
-npm run probe:editor    # 驗收編輯器（Monaco worker 於 dev 與 build 兩模式）
 npm run probe:core      # 驗收 spek-core-integration（主行程掃描 OpenSpec，且不開 TCP 埠）
 npm run measure:bundle  # renderer bundle 體積報告
 ```
+
+`probe:workspace` 以 `--user-data-dir` 指向暫存 profile，因此可以反覆重啟 app、餵它一份
+損毀的設定檔，而不會污染你真實的 workspace 設定。
 
 開發模式（未打包）啟動時，主行程會輸出一行掃描摘要。掃描目標預設為本 repo，
 以 `SPEK_SCAN_PATH` 覆寫：
@@ -98,7 +103,16 @@ chokidar（檔案監控）、electron-builder（打包，Phase 6）。
 
 - **Phase 0** — `workspace-foundation-spike`（已完成）：package 骨架 + 高風險相依的技術驗證。
   除 PRD 列的三項外，另納入 core 套件的跨 repo 分發（`@spekjs/core`）。
-- Phase 1–6 建立工作台本體，Phase 7+ 建立護城河（handoff）。
+- **Phase 1** — `multi-folder-workspace-shell`（實作中）：folder 清單持久化、活動列 + rail +
+  三欄版面、受邊界約束的 `listDir`。
+- Phase 2–6 建立工作台本體，Phase 7+ 建立護城河（handoff）。
+
+> **Phase 2 必須償還的債**：`multi-folder-workspace-shell` 把 `workspace-app-shell` 的兩條
+> Monaco requirement（「在 renderer 載入並提供語法高亮」「對 bundle 的體積貢獻可量測」）標為
+> `REMOVED` —— 診斷頁退場後沒有任何模組引用 `editor/`，Monaco 不再進入 bundle，那兩條 spec
+> 無法成立。**Phase 2 的 Files 檢視實作時，必須以該檢視為載體把它們重新確立**，包含 dev 與
+> build 兩種模式的 worker 驗證。作法與體積基準見封存的
+> `openspec/changes/archive/2026-07-10-workspace-foundation-spike/design.md` D3。
 
 ## Conventions
 
@@ -128,3 +142,22 @@ chokidar（檔案監控）、electron-builder（打包，Phase 6）。
 與 renderer 跑在各自的 network namespace，主行程那張表看不到它們。`probe:core` 因此用兩道互補
 判準：逐 pid 取「該 pid 的 socket inode ∩ 該 pid 所屬 netns 的 LISTEN 表」，外加「app 存活期間
 本 netns 是否新增 LISTEN socket」—— 後者不需要讀任何 pid 的 fd，可繞過 sandbox 造成的權限死角。
+
+## 檔案系統邊界（`multi-folder-workspace-shell` 起）
+
+renderer 以 `(folderId, relPath)` 定址檔案系統，**永遠不傳絕對路徑** —— 它沒有詞彙可以表達
+workspace 之外的位置。邊界檢查一律在**主行程**執行；preload 與 renderer 同屬一個行程樹，
+在那裡檢查等同沒有檢查。
+
+- **包含關係一律用 `path.relative(root, target)` 判定，絕不用 `target.startsWith(root)`。**
+  前綴比對會把 `/a/bc` 誤判為位於 `/a/b` 之內。`src/main/fs-boundary.test.ts` 有一條測試就是
+  為了讓這個寫法必定失敗；不要「簡化」掉它。
+- **symlink 必須在比對之前解析**（root 與 target 兩端都要 `realpath`）。只看字面路徑會漏掉
+  「folder 內的 symlink 指向 folder 外」。
+- **TOCTOU 與 hard link 尚未防護。** Phase 1 只列目錄，越界的後果侷限於「看到不該看的檔名」。
+  **Phase 3 引入 `writeFile` 時必須重新評估**（`O_NOFOLLOW`、以 dirfd 相對開啟），不可沿用
+  Phase 1 的「只讀所以還好」。
+
+驗證「某段邏輯沒有 spawn 外部程式」時，**不要用行程樹取樣** —— 開發模式的掃描摘要本來就會
+spawn 一次 `git log`（core 的 `getTimestamps`），會混淆歸屬；而 `git` 是毫秒級行程，取樣容易
+漏抓。改在單元測試裡攔截 `node:child_process` 的全部入口，並加一個對照組證明攔截確實生效。

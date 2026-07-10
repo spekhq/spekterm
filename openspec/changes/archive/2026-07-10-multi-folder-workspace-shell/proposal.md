@@ -37,7 +37,7 @@ Phase 2 之後的每一件事都掛在「某個已加入的 folder」這個概�
 
 ## Impact
 
-**新增依賴**：可能需要一個 split pane 套件，或自行實作拖動分界（`design.md` 決定）。除此之外不預期新增 runtime 依賴 —— folder 持久化用 Node 內建 `fs` 與 Electron `app.getPath('userData')`，原生對話框用 `dialog.showOpenDialog`。
+**新增依賴**：一個 split pane 套件（`design.md` D7 選定 `react-resizable-panels`），以及一個能執行 TypeScript 測試檔的 runner（D9 選定 `tsx`）。兩者皆為 devDependency —— renderer 由 electron-vite 打包，`react` 與 `monaco-editor` 在本 repo 亦置於 devDependencies。**不新增 runtime 依賴**：folder 持久化用 Node 內建 `fs` 與 Electron `app.getPath('userData')`，原生對話框用 `dialog.showOpenDialog`。
 
 **`@spekjs/core` 不在本 change 動它。** PRD §9.3 規劃把 `listDir` / `readFile` / `writeFile` / `stat` 抽成 core 的公開模組供 workspace 重用，但**這些函式目前不存在於 core**（`safeReadDir` / `readFileOrNull` 是 `scanner.ts` 的私有 helper），且 core 位於另一個 repo（`spek`，MIT 公開授權）。要動它就得改那個 repo 並發一版 npm —— 與 Phase 0 被 `@spek` scope 卡住的是同一種跨 repo 前置，而本 change 的 `allowedEditRoots` 只有 `spek-workspace`。
 

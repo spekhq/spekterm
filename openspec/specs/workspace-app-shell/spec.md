@@ -1,8 +1,8 @@
 ## Purpose
 
 Electron app 的最小外殼 —— 主行程開啟視窗、renderer 載入 React 應用、主行程與 renderer 依 PRD §12 信任模型
-隔離（`contextIsolation`、preload 白名單），以及 Monaco 編輯器能在 renderer 載入並高亮（worker 於 dev 與
-build 模式皆正常）。Phase 1 之後的所有 UI 都長在這個外殼上。
+隔離（`contextIsolation`、preload 白名單）。編輯器套件只能經由單一 wrapper 模組取用，
+以確保日後替換編輯器的成本侷限於該模組。其上的所有 UI 都長在這個外殼上。
 
 ## Requirements
 
@@ -56,29 +56,6 @@ renderer SHALL 以 React 19 掛載根元件，且 Tailwind CSS v4 的樣式 SHAL
 
 - **WHEN** renderer 嘗試存取一個未經 `contextBridge` 暴露的主行程能力
 - **THEN** 該能力不存在於 renderer 的全域範圍
-
-### Requirement: Monaco 編輯器在 renderer 載入並提供語法高亮
-
-renderer SHALL 能載入 Monaco 編輯器並對已知語言的內容套用語法高亮。此能力在**開發模式與正式建置產物中皆 SHALL 成立** —— 兩種模式下 Monaco 的 Web Worker 載入路徑不同，僅驗證其中一種不足以證明選型可行。
-
-#### Scenario: 開發模式載入並高亮
-
-- **WHEN** 於 electron-vite 的 dev 模式開啟編輯器並載入一段 TypeScript 內容
-- **THEN** 編輯器完成掛載、內容呈現語法高亮，且 console 未出現 worker 載入失敗的錯誤
-
-#### Scenario: 正式建置產物載入並高亮
-
-- **WHEN** 執行正式建置後啟動應用程式，開啟編輯器並載入同一段 TypeScript 內容
-- **THEN** 編輯器完成掛載、內容呈現語法高亮，且 console 未出現 worker 載入失敗的錯誤
-
-### Requirement: Monaco 對 renderer bundle 的體積貢獻可量測
-
-建置流程 SHALL 產出足以辨識 Monaco 對 renderer bundle 體積貢獻的資訊，作為是否依 PRD §8.3 退守替代編輯器的判斷依據。
-
-#### Scenario: 建置後可取得體積數據
-
-- **WHEN** 執行正式建置
-- **THEN** 可從建置產物或報告中取得 Monaco 相關 chunk 的體積，並與不含 Monaco 的基準相比較
 
 ### Requirement: 編輯器透過 wrapper 介面存取
 

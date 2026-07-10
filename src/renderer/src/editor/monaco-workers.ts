@@ -5,18 +5,17 @@ import TsWorker from 'monaco-editor/esm/vs/language/typescript/ts.worker?worker'
 /**
  * Monaco 透過全域 MonacoEnvironment.getWorker 取得 worker 實例。
  * Vite 的 `?worker` 後綴會把每個 worker 打包成獨立 chunk 並產生對應的載入器 ——
- * 這正是 PRD §13 標記為風險的那段設定：dev 走 http:// 的 module worker、
- * build 後走 file://，載入路徑不同，必須分別驗證（見 scripts/probe-editor.mjs）。
+ * dev 走 http:// 的 module worker、build 後走 file://，兩者載入路徑不同。
+ *
+ * 兩種模式皆已於 Phase 0 實測通過。作法與那個反直覺的陷阱（看到語法高亮不代表
+ * worker 存活，tokenization 在主執行緒完成）記錄於封存的
+ * `openspec/changes/archive/2026-07-10-workspace-foundation-spike/design.md` D3。
  */
 
-const created: string[] = []
-const errors: string[] = []
-
 /** worker script 若載入失敗，錯誤只會出現在 worker 的 error 事件，不會拋到主執行緒 */
-function track(worker: Worker, label: string): Worker {
-  created.push(label)
+function reportErrors(worker: Worker, label: string): Worker {
   worker.addEventListener('error', (event) => {
-    errors.push(`${label}: ${event.message || 'worker load error'}`)
+    console.error(`[monaco] worker "${label}" 載入失敗：${event.message || 'unknown error'}`)
   })
   return worker
 }
@@ -24,14 +23,10 @@ function track(worker: Worker, label: string): Worker {
 const environment: Environment = {
   getWorker(_workerId: string, label: string): Worker {
     if (label === 'typescript' || label === 'javascript') {
-      return track(new TsWorker(), label)
+      return reportErrors(new TsWorker(), label)
     }
-    return track(new EditorWorker(), label)
+    return reportErrors(new EditorWorker(), label)
   },
 }
 
 ;(self as unknown as { MonacoEnvironment: Environment }).MonacoEnvironment = environment
-
-export function getWorkerDiagnostics(): { created: string[]; errors: string[] } {
-  return { created: [...created], errors: [...errors] }
-}

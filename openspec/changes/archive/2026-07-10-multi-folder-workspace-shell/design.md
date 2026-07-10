@@ -153,6 +153,20 @@ mockup 的 rail 是 `repos → sessions` 兩層，但 session 屬 Phase 4。本 
 
 但 DOM 與元件形狀沿用 mockup 的巢狀結構（`.ws-repo` 包住 `.ws-repo-row`），使 Phase 4 加入子列時不需要重構外層。沒有 `openspec/` 的 repo 於 rail 標示，且其 OpenSpec 身分按鈕 disabled（mockup 的 `spek-web`）。
 
+### D9：引入單元測試層（`node:test` + `tsx`），與探針分工
+
+本 repo 的驗收文化是「以 CDP 連進真正執行中的 app」，Phase 0 沒有任何單元測試。本 change 破例引入 `npm test`，理由不是「單元測試比較好」，而是**有兩類 scenario 探針根本測不到或代價過高**：
+
+- **「邊界檢查 SHALL 在主行程執行」在 `contextIsolation` 下無法從 renderer 驗證。** renderer 拿不到 `ipcRenderer`，也就無法繞過 preload 直接餵越界參數給主行程的處理常式。唯一的載體是主行程那個純函式。
+- **窮舉邊界的邪惡輸入，透過 app 建構的代價過高。** 兄弟目錄前綴（root `/a/b` 對目標 `/a/bc`）、root 內指向 root 外的 symlink、`realpath` 之後才越界的路徑 —— 這些要用臨時目錄擺出來，在單元測試裡是幾行，在探針裡要重啟 app、種 profile、跨 CDP 傳結果。
+- **「偵測不 spawn 外部程式」用行程樹取樣測不準。** 開發模式的掃描摘要本來就會 spawn 一次 `git log`（Phase 0 的 `getTimestamps`），會混淆歸屬；`git` 又是毫秒級行程，取樣容易漏抓。改在單元測試裡攔截 `node:child_process` 的全部入口，並加對照組證明攔截生效。
+
+**分工原則**：純邏輯與邪惡輸入歸單元測試；「被出貨的那份程式碼是否真的這樣運作」歸探針。兩者不重疊 —— 例如邊界的窮舉在 `npm test`，而「renderer 經 preload 呼叫時邊界仍然生效」在 `probe:workspace`。
+
+**執行環境**：`node --import tsx --test src/main/*.test.ts`。選 `tsx` 而非 Node 22 內建的 `--experimental-strip-types`，因為後者要求 import 具體副檔名，與本 repo 的 `moduleResolution: bundler`（省略副檔名）衝突；且 `spek` repo 的 `@spekjs/core` 已用同一組合，維持一致。`tsx` 為 devDependency，不進打包產物。
+
+**代價**：測試檔（`src/main/*.test.ts`）與產品碼同目錄，因此被 `tsconfig.node.json` 與 eslint 一併涵蓋 —— 好處是型別與風格不會漂移，壞處是 `src/main/` 看起來變雜。若日後檔案變多，再考慮移到 `tests/`。
+
 ## Risks / Trade-offs
 
 - **邊界檢查寫錯 = 整個檔案系統外洩** → D1 的結構性定址讓 renderer 無法表達越界路徑；執行期再以 `path.relative` 與 `realpath` 雙重把關。明文禁止 `startsWith` 前綴比對。

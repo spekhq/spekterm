@@ -30,27 +30,73 @@ export async function connect(target) {
   })
 
   let nextId = 1
+
+  function send(method, params = {}) {
+    const id = nextId++
+    return new Promise((resolve, reject) => {
+      const onMessage = (event) => {
+        const msg = JSON.parse(event.data)
+        if (msg.id !== id) return
+        ws.removeEventListener('message', onMessage)
+        if (msg.error) return reject(new Error(msg.error.message))
+        resolve(msg.result)
+      }
+      ws.addEventListener('message', onMessage)
+      ws.send(JSON.stringify({ id, method, params }))
+    })
+  }
+
   return {
-    evaluate(expression) {
-      const id = nextId++
-      return new Promise((resolve, reject) => {
-        const onMessage = (event) => {
-          const msg = JSON.parse(event.data)
-          if (msg.id !== id) return
-          ws.removeEventListener('message', onMessage)
-          if (msg.error) return reject(new Error(msg.error.message))
-          if (msg.result?.exceptionDetails) return reject(new Error(msg.result.exceptionDetails.text))
-          resolve(msg.result?.result?.value)
-        }
-        ws.addEventListener('message', onMessage)
-        ws.send(JSON.stringify({
-          id,
-          method: 'Runtime.evaluate',
-          params: { expression, returnByValue: true, awaitPromise: true },
-        }))
+    send,
+    async evaluate(expression) {
+      const result = await send('Runtime.evaluate', {
+        expression,
+        returnByValue: true,
+        awaitPromise: true,
       })
+      if (result?.exceptionDetails) throw new Error(result.exceptionDetails.text)
+      return result?.result?.value
     },
     close: () => ws.close(),
+  }
+}
+
+/** 在座標處按下、移動、放開 —— 用來拖動 role="separator" 的分界。 */
+export async function dragMouse(client, from, to, steps = 8) {
+  const base = { button: 'left', buttons: 1, clickCount: 1 }
+  // 先 hover 再按下：拖動實作多半在 pointerdown 才 setPointerCapture，
+  // 而沒有前置的 pointermove 時，某些版面在首次事件上不會建立拖動狀態。
+  await client.send('Input.dispatchMouseEvent', { type: 'mouseMoved', ...from, button: 'none', buttons: 0 })
+  await client.send('Input.dispatchMouseEvent', { type: 'mousePressed', ...from, ...base })
+  for (let step = 1; step <= steps; step++) {
+    await client.send('Input.dispatchMouseEvent', {
+      type: 'mouseMoved',
+      x: Math.round(from.x + ((to.x - from.x) * step) / steps),
+      y: Math.round(from.y + ((to.y - from.y) * step) / steps),
+      ...base,
+    })
+  }
+  await client.send('Input.dispatchMouseEvent', {
+    type: 'mouseReleased',
+    ...to,
+    ...base,
+    buttons: 0,
+  })
+}
+
+const KEY_CODES = { ArrowLeft: 37, ArrowRight: 39, ArrowUp: 38, ArrowDown: 40 }
+
+/** 對目前取得焦點的元素送出一次按鍵。 */
+export async function pressKey(client, key) {
+  const windowsVirtualKeyCode = KEY_CODES[key] ?? 0
+  for (const type of ['keyDown', 'keyUp']) {
+    await client.send('Input.dispatchKeyEvent', {
+      type,
+      key,
+      code: key,
+      windowsVirtualKeyCode,
+      nativeVirtualKeyCode: windowsVirtualKeyCode,
+    })
   }
 }
 
