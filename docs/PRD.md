@@ -148,7 +148,7 @@ Electron，目標產出 macOS / Windows / Linux 三平台安裝檔。
 |---|---|---|---|
 | F1 | 多 folder 工作區 | 加入／移除多個 folder，清單與狀態持久化 | Phase 1 |
 | F2 | File Explorer | 多 folder 檔案樹、子目錄 lazy load、chokidar 監控外部變更 | Phase 2 |
-| F3 | 檔案檢視／編輯 | Monaco 開檔，syntax highlight、dirty 狀態、`Cmd/Ctrl+S` 存檔 | Phase 2–3 |
+| F3 | 檔案檢視／編輯 | 於 side panel 內開檔（markdown 渲染、其餘 Monaco 唯讀高亮）；dirty 狀態與 `Cmd/Ctrl+S` 存檔屬 Phase 3 | Phase 2–3 |
 | F4 | 多 session terminal | 底部 dock，`node-pty` 多 session，跑 agent 主場，預設 cwd = 選中 folder | Phase 4 |
 | F5 | OpenSpec 側欄 | Dashboard / Specs / Changes / Graph，透過 `IpcAdapter` 重用 spek 前端；自動跟隨當前 session 的 change | Phase 5 |
 | F6 | 交叉導覽 | spec/change ↔ 底層檔案互跳 | Phase 5 |
@@ -429,9 +429,15 @@ spek 可重用 React 元件目前住在 `@spek/web`、未對外輸出。抽出�
 - IPC：`fs.listDir`（重用 core）。原生對話框加 folder。
 
 ### Phase 2 — File Explorer + 唯讀檢視
-- 遞迴檔案樹（子目錄 lazy load）。IPC：`fs.readFile`。
-- **全域 tab manager**：開檔成 tab；markdown 用 spek 渲染、其餘用 Monaco 唯讀。
+- side panel 的 `[◈ OpenSpec │ ▤ Files]` 身分切換（§6.3）；OpenSpec 為條件式身分。
+- 遞迴檔案樹（子目錄 lazy load）。IPC：`fs.readFile`、`fs.watch`。
+- **開檔在 side panel 內換頁**（樹 ↔ 檔案內容，以 breadcrumb 返回），**不做全域 tab manager**
+  —— 主舞台屬於 terminal（§6.2「terminal 是主場」），檔案 tab 會與 session 分頁搶同一列。
+  markdown 渲染、其餘以 Monaco 唯讀高亮（不含語言服務 worker）。
 - chokidar（主行程）→ IPC push → renderer 更新；外部變更提示重載。
+- **導航防護**：`will-navigate` / `setWindowOpenHandler` 一律阻擋，外部連結交系統瀏覽器。
+  渲染不受信任的 markdown 之後，這是 §12 信任模型的前提 —— 少了它，一個連結就能把
+  preload 白名單交給遠端頁面。
 
 ### Phase 3 — 編輯能力
 - 多語言 syntax highlight、dirty 狀態、`Cmd/Ctrl+S` 存檔、關閉未存提示。

@@ -1,0 +1,261 @@
+import path from 'node:path'
+import { pollingInterval, shouldUsePolling, withAuthoritativeChokidarEnv } from '@spekjs/core'
+import { type FSWatcher, watch as chokidarWatch } from 'chokidar'
+import { isWithin, resolveWithinRoot } from './fs-boundary'
+import { FsServiceError, toPosixRelPath } from './fs-service'
+import type { FolderLookup } from './workspace-store'
+
+export type WatchEventType = 'add' | 'change' | 'unlink' | 'addDir' | 'unlinkDir'
+
+const WATCH_EVENT_TYPES: readonly WatchEventType[] = [
+  'add',
+  'change',
+  'unlink',
+  'addDir',
+  'unlinkDir',
+]
+
+export interface WatchEvent {
+  type: WatchEventType
+  /** 相對於 folder 根目錄，以 `/` 分隔。renderer 沒有詞彙表達絕對路徑。 */
+  relPath: string
+}
+
+export interface WatchBatch {
+  folderId: string
+  events: WatchEvent[]
+}
+
+/** agent 一次寫十個檔案，不該讓 renderer 重繪十次。 */
+const DEFAULT_DEBOUNCE_MS = 50
+
+interface FolderWatcher {
+  watcher: FSWatcher
+  root: string
+  /** 訂閱者：正規化後的 relPath → 它解析出的絕對路徑。 */
+  subscriptions: Map<string, string>
+  /**
+   * 絕對路徑 → 訂閱它的 relPath 集合。
+   *
+   * **兩者不是一對一的。** folder 內一個指向 `sub/` 的 symlink `link-to-sub/`，在樹上是
+   * 兩個節點、在磁碟上是同一個目錄。少了這層參考計數，收合其中一個節點就會把另一個
+   * 節點的監看一併關掉（chokidar 只認絕對路徑）。
+   */
+  watchers: Map<string, Set<string>>
+  pending: WatchEvent[]
+  timer: NodeJS.Timeout | null
+}
+
+/**
+ * 監看集合的 key。**只做字面正規化，不碰檔案系統** —— `unwatch` 可能發生在目錄已被
+ * 刪除之後，那時 `realpath` 會失敗，而我們仍必須找得到要關閉的那個訂閱。
+ *
+ * 於是 `.`、`./sub` 與 `sub` 會收斂到同一個 key，與 renderer 傳來的字面形式無關。
+ */
+function watchKey(root: string, relPath: string): string {
+  return toPosixRelPath(path.relative(root, path.resolve(root, relPath)))
+}
+
+/** `''`（root）之下的 `a.txt` 是 `a.txt`，`sub` 之下的是 `sub/a.txt`。 */
+function joinPosix(dir: string, name: string): string {
+  return dir === '' ? name : `${dir}/${name}`
+}
+
+/**
+ * 監看 workspace folder 內「使用者正在看的那些目錄」。
+ *
+ * 監看集合恆等於檔案樹上已展開的目錄集合，這靠 `depth: 0` 達成：每個被加入的目錄只回報
+ * 它的直接子項目。於是沒展開的目錄一個 watcher 都不花，也就不需要猜測要排除哪些目錄
+ *（`node_modules`？`.git`？—— 使用者展開了它，他就是想看它）。
+ *
+ * **訂閱以樹上的路徑定址，監看以磁碟上的真實路徑進行。** 兩者靠 `watchers` 這層參考計數
+ * 對接：chokidar 只認絕對路徑，而樹上可能有多個節點指向同一個目錄（symlink）。
+ *
+ * 不依賴 Electron，因此可由單元測試直接驅動：推送的出口是建構時傳入的 `send`。
+ */
+export class WatchService {
+  readonly #folders = new Map<string, FolderWatcher>()
+
+  constructor(
+    private readonly store: FolderLookup,
+    private readonly send: (batch: WatchBatch) => void,
+    private readonly debounceMs: number = DEFAULT_DEBOUNCE_MS,
+  ) {}
+
+  /** 目前被訂閱的樹節點總數。驗收「收合後不再監看」與「重新載入不累積」用得上。 */
+  get watchedCount(): number {
+    let total = 0
+    for (const folder of this.#folders.values()) total += folder.subscriptions.size
+    return total
+  }
+
+  /** 目前實際交給 chokidar 的絕對路徑數量。symlink 別名不會讓它翻倍。 */
+  get watchedPathCount(): number {
+    let total = 0
+    for (const folder of this.#folders.values()) total += folder.watchers.size
+    return total
+  }
+
+  async watch(folderId: string, relPath: string): Promise<void> {
+    const folder = this.store.list().find((candidate) => candidate.id === folderId)
+    if (!folder) throw new FsServiceError('UNKNOWN_FOLDER', `unknown folder: ${folderId}`)
+    if (folder.status !== 'ok') {
+      throw new FsServiceError('FOLDER_UNAVAILABLE', `folder is unavailable: ${folder.path}`)
+    }
+
+    // 邊界檢查與 listDir 同源：解析 symlink 之後仍須位於 folder 之內。
+    const target = await resolveWithinRoot(folder.path, relPath)
+    const key = watchKey(folder.path, relPath)
+
+    const existing = this.#folders.get(folderId)
+    if (!existing) {
+      this.#folders.set(folderId, this.#createFolderWatcher(folderId, folder.path, key, target))
+      return
+    }
+
+    if (existing.subscriptions.has(key)) return
+    existing.subscriptions.set(key, target)
+
+    const subscribers = existing.watchers.get(target)
+    if (subscribers) {
+      // 這個絕對路徑已在監看中（另一個節點指向它）。只記一筆訂閱，不重複 add。
+      subscribers.add(key)
+      return
+    }
+
+    existing.watchers.set(target, new Set([key]))
+    existing.watcher.add(target)
+  }
+
+  unwatch(folderId: string, relPath: string): void {
+    const folder = this.#folders.get(folderId)
+    if (!folder) return
+
+    const key = watchKey(folder.root, relPath)
+    const target = folder.subscriptions.get(key)
+    if (!target) return
+
+    folder.subscriptions.delete(key)
+
+    const subscribers = folder.watchers.get(target)
+    if (!subscribers) return
+
+    subscribers.delete(key)
+    // 還有別的節點指向同一個目錄時，不能真的取消監看它。
+    if (subscribers.size === 0) {
+      folder.watchers.delete(target)
+      folder.watcher.unwatch(target)
+    }
+
+    if (folder.subscriptions.size === 0) void this.#closeFolder(folderId)
+  }
+
+  /**
+   * 清空所有監看。renderer 重新載入時必須呼叫 —— 重新載入不會銷毀 `webContents`，
+   * 因此只掛在銷毀事件上的清理不會被觸發，而新的頁面會重新訂閱它需要的目錄。
+   */
+  async unwatchAll(): Promise<void> {
+    await Promise.all([...this.#folders.keys()].map((folderId) => this.#closeFolder(folderId)))
+  }
+
+  /** 某個 folder 自 workspace 移除時，它的 watcher 就沒有意義了。 */
+  async releaseFolder(folderId: string): Promise<void> {
+    await this.#closeFolder(folderId)
+  }
+
+  async dispose(): Promise<void> {
+    await this.unwatchAll()
+  }
+
+  #createFolderWatcher(folderId: string, root: string, key: string, target: string): FolderWatcher {
+    const usePolling = shouldUsePolling(root)
+    const interval = pollingInterval()
+
+    // callback 必須同步（見 core 的 withAuthoritativeChokidarEnv）：env 的對齊只在
+    // set → chokidar 建構 → restore 這段同步窗口內有效。
+    const watcher = withAuthoritativeChokidarEnv(usePolling, interval, () =>
+      chokidarWatch(target, {
+        depth: 0,
+        // chokidar 的預設是 true。沿用預設的話，folder 內一個指向 /etc 的 symlink
+        // 被展開時，watcher 會跟著走出去，把邊界外的檔名經事件推給 renderer ——
+        // listDir 守住的邊界，會從這道側門漏掉。
+        followSymlinks: false,
+        ignoreInitial: true,
+        usePolling,
+        interval,
+      }),
+    )
+
+    const folder: FolderWatcher = {
+      watcher,
+      root,
+      subscriptions: new Map([[key, target]]),
+      watchers: new Map([[target, new Set([key])]]),
+      pending: [],
+      timer: null,
+    }
+
+    for (const type of WATCH_EVENT_TYPES) {
+      watcher.on(type, (absPath: string) => {
+        this.#enqueue(folderId, type, absPath)
+      })
+    }
+    watcher.on('error', (error) => {
+      console.error(`[watch] ${root}: ${String(error)}`)
+    })
+
+    return folder
+  }
+
+  /**
+   * 把一個絕對路徑的變更，派送給每一個「正在看它所在目錄」的樹節點。
+   *
+   * chokidar 回報的是磁碟上的真實路徑（`<root>/sub/x.txt`）。而樹上看著它的節點可能叫
+   * `sub`，也可能叫 `link-to-sub` —— 事件必須以**訂閱者的路徑**表達，否則 renderer 會拿
+   * 一個它認不得的 relPath 去找節點，什麼也找不到。
+   */
+  #enqueue(folderId: string, type: WatchEventType, absPath: string): void {
+    const folder = this.#folders.get(folderId)
+    if (!folder) return
+
+    // 縱深防禦。followSymlinks 已關閉，理應不會有邊界外的路徑走到這裡 ——
+    // 但推給 renderer 的每一個路徑，都必須是 renderer 有詞彙表達的路徑。
+    if (!isWithin(folder.root, absPath)) return
+
+    const parent = path.dirname(absPath)
+    const name = path.basename(absPath)
+    const subscribers = folder.watchers.get(parent)
+    if (!subscribers) return
+
+    for (const key of subscribers) {
+      folder.pending.push({ type, relPath: joinPosix(key, name) })
+    }
+    if (folder.pending.length === 0) return
+
+    if (folder.timer) return
+    folder.timer = setTimeout(() => {
+      folder.timer = null
+      this.#flush(folderId)
+    }, this.debounceMs)
+    // 合批的計時器不該讓 Electron 的主行程無法結束
+    folder.timer.unref?.()
+  }
+
+  #flush(folderId: string): void {
+    const folder = this.#folders.get(folderId)
+    if (!folder || folder.pending.length === 0) return
+
+    const events = folder.pending
+    folder.pending = []
+    this.send({ folderId, events })
+  }
+
+  async #closeFolder(folderId: string): Promise<void> {
+    const folder = this.#folders.get(folderId)
+    if (!folder) return
+
+    this.#folders.delete(folderId)
+    if (folder.timer) clearTimeout(folder.timer)
+    await folder.watcher.close()
+  }
+}

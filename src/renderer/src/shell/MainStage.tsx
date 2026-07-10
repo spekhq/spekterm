@@ -1,6 +1,8 @@
 import { useCallback, useState } from 'react'
 import { Group, Panel, Separator, usePanelRef } from 'react-resizable-panels'
-import type { WorkspaceFolder } from './types'
+import { PanelSwitch } from './side-panel/PanelSwitch'
+import { SidePanel } from './side-panel/SidePanel'
+import type { PanelIdentity, WorkspaceFolder } from './types'
 
 interface MainStageProps {
   folder: WorkspaceFolder | null
@@ -9,11 +11,23 @@ interface MainStageProps {
 export function MainStage({ folder }: MainStageProps): React.JSX.Element {
   const sidePanelRef = usePanelRef()
   const [collapsed, setCollapsed] = useState(false)
+  const [identity, setIdentity] = useState<PanelIdentity>('files')
+
+  const openSpecEnabled = folder?.hasOpenSpec ?? false
+  // 選中的 repo 若沒有 openspec/，OpenSpec 身分不可用 —— 由衍生值退回 Files，
+  // 而不是用一個 effect 去改狀態（那會多渲染一次，且順序難以推理）。
+  const activeIdentity: PanelIdentity =
+    identity === 'openspec' && !openSpecEnabled ? 'files' : identity
 
   // 拖到最小寬度以下時 Panel 會自行收合，因此收合狀態以實際尺寸為準，不靠按鈕自行記帳
   const syncCollapsed = useCallback((size: { inPixels: number }) => {
     setCollapsed(size.inPixels === 0)
   }, [])
+
+  const expandSidePanel = useCallback(() => {
+    const panel = sidePanelRef.current
+    if (panel?.isCollapsed()) panel.expand()
+  }, [sidePanelRef])
 
   const toggleSidePanel = useCallback(() => {
     const panel = sidePanelRef.current
@@ -21,6 +35,15 @@ export function MainStage({ folder }: MainStageProps): React.JSX.Element {
     if (panel.isCollapsed()) panel.expand()
     else panel.collapse()
   }, [sidePanelRef])
+
+  const selectIdentity = useCallback(
+    (next: PanelIdentity) => {
+      setIdentity(next)
+      // 收合狀態下點任一身分，都該把面板帶回來（雛型的 togglePanel(true)）
+      expandSidePanel()
+    },
+    [expandSidePanel],
+  )
 
   return (
     <main aria-label="主舞台" className="flex h-full flex-col bg-stage">
@@ -31,6 +54,12 @@ export function MainStage({ folder }: MainStageProps): React.JSX.Element {
         {folder && <span className="truncate text-xs text-ink-faint">{folder.path}</span>}
 
         <span className="flex-1" />
+
+        <PanelSwitch
+          active={activeIdentity}
+          openSpecEnabled={openSpecEnabled}
+          onSelect={selectIdentity}
+        />
 
         <button
           type="button"
@@ -65,11 +94,8 @@ export function MainStage({ folder }: MainStageProps): React.JSX.Element {
           onResize={syncCollapsed}
         >
           {/* 視覺分界由 Separator 提供；此處若再加 border-l，收合後會殘留一條 1px 的線 */}
-          <section
-            aria-label="Side panel"
-            className="flex h-full items-center justify-center overflow-hidden bg-panel text-xs text-ink-faint"
-          >
-            OpenSpec / Files（Phase 2+）
+          <section aria-label="Side panel" className="h-full overflow-hidden bg-panel">
+            <SidePanel identity={activeIdentity} folder={folder} />
           </section>
         </Panel>
       </Group>

@@ -135,7 +135,7 @@ const LAYOUT = `(() => {
     const r = el.getBoundingClientRect()
     return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) }
   })
-  const toggle = document.querySelector('main[aria-label="主舞台"] header button')
+  const toggle = document.querySelector('main[aria-label="主舞台"] header button[aria-expanded]')
   return {
     separators,
     rail: width('aside[aria-label="工作區"]'),
@@ -168,20 +168,24 @@ async function layoutUntil(client, predicate, timeoutMs = 4_000) {
   return last
 }
 
-/** 透過真正的 preload API 呼叫 listDir，回報成功或錯誤訊息。 */
+/**
+ * 透過真正的 preload API 呼叫 listDir，回報成功或錯誤訊息。
+ *
+ * fs 的失敗以結果物件回報而非拋出 —— Electron 的 IPC 序列化只保留 message，
+ * 會丟掉 `code` 與 `detail`，而 UI 需要它們。
+ */
 const callListDir = (folderId, relPath) => `(async () => {
-  try {
-    const entries = await window.workspace.fs.listDir(${JSON.stringify(folderId)}, ${JSON.stringify(relPath)})
-    return { ok: true, entries }
-  } catch (error) {
-    return { ok: false, message: String(error) }
-  }
+  const result = await window.workspace.fs.listDir(${JSON.stringify(folderId)}, ${JSON.stringify(relPath)})
+  return result.ok
+    ? { ok: true, entries: result.value }
+    : { ok: false, message: result.code + ': ' + result.message }
 })()`
 
 // 不以 aria-label 選取：它會隨收合狀態改變，而狀態的更新比 DOM 寬度晚一個 frame，
 // 依 label 選取會在競態下找不到按鈕，讓「展開」靜默地沒有發生。
+// 以 aria-expanded 選取而非「header 的第一顆按鈕」—— 身分切換的分頁排在它前面。
 const CLICK_TOGGLE = `(() => {
-  const button = document.querySelector('main[aria-label="主舞台"] header button')
+  const button = document.querySelector('main[aria-label="主舞台"] header button[aria-expanded]')
   if (!button) return false
   button.click()
   return true

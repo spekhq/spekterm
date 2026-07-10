@@ -22,7 +22,8 @@
     "typecheck:web": "tsc --noEmit -p tsconfig.web.json",
     "typecheck": "npm run typecheck:node && npm run typecheck:web",
     "measure:bundle": "node scripts/measure-bundle.mjs",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "probe:files": "npm run build && node scripts/probe-files.mjs"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
@@ -39,7 +40,9 @@
     "monaco-editor": "0.55.1",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
+    "react-markdown": "^10.1.0",
     "react-resizable-panels": "^4.12.1",
+    "remark-gfm": "^4.0.1",
     "tailwindcss": "^4.3.2",
     "tsx": "^4.23.0",
     "typescript": "^5.9.0",
@@ -48,6 +51,7 @@
   },
   "dependencies": {
     "@spekjs/core": "^1.0.0",
+    "chokidar": "^5.0.0",
     "node-pty": "1.2.0-beta.14"
   }
 }

@@ -5,15 +5,16 @@ context: |
   Purpose: 把多個「一個 repo／資料夾各自一個 claude session」的 terminal 包在一個殼裡，
            並加上一塊懂 OpenSpec 結構的側欄
   Tech stack（已安裝）: Electron 43.1.0（釘死）, electron-vite, TypeScript,
-           React 19, Tailwind CSS v4, react-resizable-panels,
+           React 19, Tailwind CSS v4, react-resizable-panels, chokidar 5（主行程檔案監控）,
            node-pty 1.2.0-beta.14（釘死）, @spekjs/core（npm 公開套件，主行程直接 import）,
-           monaco-editor（保留於 src/renderer/src/editor，Phase 2/3 才會被引用）
-  Tech stack（規劃中）: @xterm/xterm（terminal UI, Phase 4）, chokidar（檔案監控）,
-           electron-builder（打包, Phase 6）
+           monaco-editor（唯讀檢視器，只含語法高亮，不含任何 language/* 語言服務 worker）,
+           react-markdown + remark-gfm（markdown 檢視，與 spek 的 web 同版）
+  Tech stack（規劃中）: @xterm/xterm（terminal UI, Phase 4）, electron-builder（打包, Phase 6）
   Authority: docs/PRD.md 是產品需求的單一權威來源；
              docs/workspace-mockup.html 是 UI 行為的權威雛型
-  Status: Phase 0 已封存（骨架、信任模型、node-pty、core 整合皆已實測驗證）；
-          Phase 1「多 folder 工作區骨架」實作中
+  Status: Phase 0、Phase 1 已封存；
+          Phase 2「File Explorer + 唯讀檢視」實作中（side panel 的 Files 身分、
+          readFile/watch、markdown 與 Monaco 唯讀檢視、導航防護）
   Verification: 驗收走 scripts/probe-*.mjs（以 CDP 連進真正執行中的 app）與 npm test
                 （node:test 單元測試）。不在產品程式碼裡塞測試分支，也不為驗收而在
                 產品 UI 上掛 data-* 屬性。

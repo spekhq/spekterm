@@ -50,10 +50,13 @@ const PROBE_EXPRESSION = `(async () => {
     foldersIsArray: Array.isArray(folders),
     apiError,
     listDirIsFunction: typeof api?.fs?.listDir === 'function',
-    // 未經本 change 規格定義的能力一律不得存在
-    surplusFsKeys: Object.keys(api?.fs ?? {}).filter((key) => key !== 'listDir'),
-    hasReadFile: typeof api?.fs?.readFile !== 'undefined',
+    // 白名單原則：介面上只能有「已為其定義邊界要求」的能力。
+    // 這不是一份會隨版本增長的清單 —— 每加一個名字，都得先有一條 requirement 定義它的邊界。
+    surplusFsKeys: Object.keys(api?.fs ?? {}).filter(
+      (key) => !['listDir', 'readFile', 'watch', 'unwatch', 'onWatchEvent'].includes(key),
+    ),
     hasWriteFile: typeof api?.fs?.writeFile !== 'undefined',
+    hasDelete: typeof api?.fs?.delete !== 'undefined' || typeof api?.fs?.rm !== 'undefined',
     hasPing: typeof api?.ping !== 'undefined',
     exposesIpcRenderer: typeof api?.ipcRenderer !== 'undefined',
   }
@@ -105,8 +108,9 @@ try {
   check(results, 'renderer 看不到 process', r?.processExposed === false)
   check(results, '未暴露 ipcRenderer', r?.exposesIpcRenderer === false)
   check(results, 'Phase 0 的示範 API ping 已移除', r?.hasPing === false)
-  check(results, 'fs 介面上只有 listDir', r?.surplusFsKeys?.length === 0 && !r?.hasReadFile && !r?.hasWriteFile,
-    r?.surplusFsKeys?.length ? `多出：${r.surplusFsKeys.join(', ')}` : '無 readFile / writeFile')
+  check(results, 'fs 介面只暴露已定義邊界要求的能力',
+    r?.surplusFsKeys?.length === 0 && !r?.hasWriteFile && !r?.hasDelete,
+    r?.surplusFsKeys?.length ? `多出：${r.surplusFsKeys.join(', ')}` : '無 writeFile / delete')
 
   exitCode = results.every(Boolean) ? 0 : 1
 } catch (error) {

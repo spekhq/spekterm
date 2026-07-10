@@ -3,6 +3,8 @@ import { fileURLToPath } from 'node:url'
 import { app, BrowserWindow } from 'electron'
 import { registerFsHandlers } from './ipc/fs'
 import { registerFolderHandlers } from './ipc/folders'
+import { registerShellHandlers } from './ipc/shell'
+import { applyNavigationGuards } from './navigation'
 import { formatScanSummary, scanRepo } from './openspec'
 import { WorkspaceStore } from './workspace-store'
 
@@ -30,6 +32,9 @@ function createWindow(): BrowserWindow {
       ...trustModel,
     },
   })
+
+  // 在載入任何內容之前掛上。renderer 從第一幀起就會渲染使用者 repo 裡的不受信任內容。
+  applyNavigationGuards(window.webContents)
 
   window.on('ready-to-show', () => {
     window.show()
@@ -76,6 +81,7 @@ void app.whenReady().then(() => {
 
   registerFolderHandlers(store)
   registerFsHandlers(store)
+  registerShellHandlers()
 
   createWindow()
 

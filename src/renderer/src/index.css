@@ -27,3 +27,105 @@ body {
   background-color: var(--color-rail);
   color: var(--color-ink);
 }
+
+/*
+ * markdown 檢視的排版。本 repo 沒有 @tailwindcss/typography，這裡只補最低限度的
+ * 節奏與層級 —— side panel 的寬度不適合完整的 prose 樣式。
+ */
+.markdown > *:first-child {
+  margin-top: 0;
+}
+
+.markdown h1,
+.markdown h2,
+.markdown h3,
+.markdown h4 {
+  color: var(--color-ink);
+  font-weight: 600;
+  line-height: 1.3;
+  margin: 1.2em 0 0.5em;
+}
+
+.markdown h1 {
+  font-size: 1.35em;
+}
+.markdown h2 {
+  font-size: 1.2em;
+}
+.markdown h3 {
+  font-size: 1.05em;
+}
+
+.markdown p,
+.markdown ul,
+.markdown ol,
+.markdown blockquote,
+.markdown table {
+  margin: 0.6em 0;
+}
+
+.markdown ul,
+.markdown ol {
+  padding-left: 1.4em;
+}
+.markdown ul {
+  list-style: disc;
+}
+.markdown ol {
+  list-style: decimal;
+}
+
+.markdown blockquote {
+  border-left: 2px solid var(--color-hairline);
+  padding-left: 0.8em;
+  color: var(--color-ink-faint);
+}
+
+.markdown code {
+  background: var(--color-hover);
+  border-radius: 3px;
+  font-family: ui-monospace, monospace;
+  font-size: 0.9em;
+  padding: 0.1em 0.3em;
+}
+
+.markdown pre {
+  background: var(--color-shell);
+  border: 1px solid var(--color-hairline);
+  border-radius: 5px;
+  margin: 0.7em 0;
+  overflow-x: auto;
+  padding: 0.7em;
+}
+
+.markdown pre code {
+  background: none;
+  padding: 0;
+}
+
+.markdown table {
+  border-collapse: collapse;
+  display: block;
+  overflow-x: auto;
+}
+
+.markdown th,
+.markdown td {
+  border: 1px solid var(--color-hairline);
+  padding: 0.3em 0.6em;
+  text-align: left;
+}
+
+.markdown th {
+  color: var(--color-ink);
+}
+
+.markdown hr {
+  border: 0;
+  border-top: 1px solid var(--color-hairline);
+  margin: 1.2em 0;
+}
+
+.markdown img {
+  max-width: 100%;
+}
