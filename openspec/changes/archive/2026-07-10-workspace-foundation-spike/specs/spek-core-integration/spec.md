@@ -30,7 +30,9 @@ Electron 主行程 SHALL 能直接 `import` `@spekjs/core` 並呼叫其掃描 AP
 
 ### Requirement: 掃描不經 HTTP 或 IPC 中介
 
-core 的掃描 SHALL 在 Electron 主行程內以行程內函式呼叫完成。應用程式 SHALL NOT 為了取得掃描結果而啟動 HTTP server 或委派給外部行程。
+core 的掃描 SHALL 在 Electron 主行程內以行程內函式呼叫完成。應用程式 SHALL NOT 為了取得掃描結果而啟動 HTTP server，亦 SHALL NOT 將掃描委派給常駐的外部服務行程。
+
+註：core 內部會 spawn 一次 `git log` 取得 change 的時間戳，其輸出於行程內解析。那是短命的子行程，不是中介服務，也不監聽任何埠。
 
 #### Scenario: 掃描期間未開啟網路埠
 

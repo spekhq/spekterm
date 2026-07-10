@@ -32,7 +32,7 @@
 
 ## Impact
 
-**新增依賴**：`electron`（鎖定 43.1.0）、`electron-vite`、`electron-builder`（僅設定，打包留給 Phase 6）、`react` 19、`tailwindcss` v4、`typescript`、`node-pty`（釘死 1.2.0-beta.14）、`monaco-editor`、`@spekjs/core`。**不含 `@electron/rebuild`** —— design 階段實測證明 Node-API 模組不需要它。Electron 鎖版的理由是建置可重現，而非 ABI 對齊。
+**新增依賴**：`electron`（鎖定 43.1.0）、`electron-vite`、`react` 19、`tailwindcss` v4、`typescript`、`node-pty`（釘死 1.2.0-beta.14）、`monaco-editor`、`@spekjs/core`。`electron-builder` 連同其設定一併留給 Phase 6，本 change 不引入。**不含 `@electron/rebuild`** —— design 階段實測證明 Node-API 模組不需要它。Electron 鎖版的理由是建置可重現，而非 ABI 對齊。
 
 **跨 repo 影響（重要）**：`design.md` D1 已拍板註冊 npm org `spekjs`、將 core 更名為 `@spekjs/core` 並發佈到 npm public。因此本 change 依賴一次人工的 org 註冊，以及一次對 **`spek` repo** 的改動（更名、解除 `private`、加上 `files` 與 `publishConfig`、批次更新引用）與 npm publish。這超出本 change 的 `allowedEditRoots`（僅 `spek-workspace`）—— OpenSpec change 是 repo-local 的。依 `design.md` D5，該工作由 `spek` repo 自己的獨立 change 承載，本 change 的 `tasks.md` 只驗證其**結果**（`npm view @spekjs/core version` 能取得版本），不列出他 repo 的編輯步驟。
 

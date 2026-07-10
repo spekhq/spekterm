@@ -8,10 +8,10 @@ spek workspace 是一個以 agent 為核心的本地開發工作台 —— 獨�
 把多個「一個 repo／資料夾各自一個 `claude` session」的 terminal 包在一個殼裡，
 並加上一塊懂 OpenSpec 結構的側欄，讓使用者不必另外開 IDE 就能一邊駕駛 agent、一邊看著 spec 上下文。
 
-**現況：Phase 0（`workspace-foundation-spike`）實作中。** 已有可執行的 Electron 骨架
+**現況：Phase 0（`workspace-foundation-spike`）已完成。** 已有可執行的 Electron 骨架
 （主行程開視窗、renderer 掛 React 19 + Tailwind v4、preload 白名單、Monaco 編輯器、node-pty
-可 spawn 真 pty）。尚無任何工作台功能 —— 多 folder 工作區、檔案樹、terminal UI、OpenSpec
-側欄、handoff 都還沒開始。
+可 spawn 真 pty），主行程並以 `@spekjs/core` 直接掃描 OpenSpec 結構。尚無任何工作台功能 ——
+多 folder 工作區、檔案樹、terminal UI、OpenSpec 側欄、handoff 都還沒開始。
 
 ### 開發指令
 
@@ -22,7 +22,16 @@ npm run typecheck       # tsc：main / preload（node）+ renderer（web）
 npm run probe:shell     # 驗收 workspace-app-shell（開視窗 + 信任模型，走 CDP）
 npm run probe:native    # 驗收 native-module-toolchain（Electron 主行程載入 node-pty + spawn pty）
 npm run probe:editor    # 驗收編輯器（Monaco worker 於 dev 與 build 兩模式）
+npm run probe:core      # 驗收 spek-core-integration（主行程掃描 OpenSpec，且不開 TCP 埠）
 npm run measure:bundle  # renderer bundle 體積報告
+```
+
+開發模式（未打包）啟動時，主行程會輸出一行掃描摘要。掃描目標預設為本 repo，
+以 `SPEK_SCAN_PATH` 覆寫：
+
+```bash
+SPEK_SCAN_PATH=../spek npm run dev
+# [openspec] scan /home/me/git/spek specs=43 activeChanges=1 archivedChanges=67 defaultSchema=spec-driven
 ```
 
 `scripts/probe-*.mjs` 一律透過 CDP 或真正的 Electron 主行程來驗收，**不在產品程式碼裡塞測試分支** ——
@@ -44,15 +53,15 @@ ready 事件要等主 script 評估完成才觸發，會死鎖。
 
 ### core 套件的名稱與分發（已定案）
 
-core 對外發佈為 **`@spekjs/core`**，Phase 5 要抽出的 UI 套件對應為 `@spekjs/ui`。
+core 對外發佈為 **`@spekjs/core`**（已於 npm public registry 發佈，本 repo 以 `^1.0.0`
+宣告依賴）。Phase 5 要抽出的 UI 套件對應為 `@spekjs/ui`。
 
-它在 `spek` monorepo 裡目前仍名為 `@spek/core`、標記 `"private": true` 且未發佈。**`@spek`
-這個 npm scope 已被他人註冊**（佔用者 0 個套件），本專案帳號無權發佈，故必須改名 ——
-決策與證據見 `openspec/changes/.../design.md` D1。
+改名的原因：**`@spek` 這個 npm scope 已被他人註冊**（佔用者 0 個套件），本專案帳號無權
+發佈至該 scope —— 決策與證據見 `openspec/changes/.../design.md` D1。更名與發佈由 `spek`
+repo 自己的 change 承載（OpenSpec change 是 repo-local 的）。
 
-更名與發佈由 `spek` repo 自己的 change 承載（OpenSpec change 是 repo-local 的）。
-在 `@spekjs/core` 發佈之前，本 repo 的 core 整合無法完成，但 app shell 與 node-pty
-的工作不受阻。
+**依賴一律宣告 npm 版本，不要把 `file:` / `link:` / `portal:` 寫進版控** —— 那會讓 CI 與
+`electron-builder` 打包看到與開發者機器不同的依賴。本機要同步改 core 時用 `npm link` 覆寫。
 
 > 驗證 npm scope 是否可發佈時，**不要用 `npm publish --dry-run`** —— 它只做本地打包，
 > 不向 registry 驗證權限（對你無權的 scope 也會「成功」）。npm 的 `scope:` 搜尋過濾器
@@ -87,9 +96,8 @@ chokidar（檔案監控）、electron-builder（打包，Phase 6）。
 
 開發路線圖見 `docs/PRD.md` §11。每個 Phase 對應一個（或數個）OpenSpec change，可單獨驗收。
 
-- **Phase 0** — `workspace-foundation-spike`（實作中）：package 骨架 + 高風險相依的技術驗證。
+- **Phase 0** — `workspace-foundation-spike`（已完成）：package 骨架 + 高風險相依的技術驗證。
   除 PRD 列的三項外，另納入 core 套件的跨 repo 分發（`@spekjs/core`）。
-  目前僅 core 整合待 `@spekjs/core` 發佈後才能完成。
 - Phase 1–6 建立工作台本體，Phase 7+ 建立護城河（handoff）。
 
 ## Conventions
@@ -109,8 +117,14 @@ chokidar（檔案監控）、electron-builder（打包，Phase 6）。
 - **「Monaco 的 Vite worker 設定是風險」—— 已證偽。** dev（`http://`）與 build（`file://`）
   兩模式的 worker 皆正常。`file://` 下的動態 import 與 module worker 建立也都沒問題，
   不需要改用自訂協定。
-- **「主行程可直接 import `@spek/core`」—— 做不到。** 該套件未發佈，且 `@spek` scope 不屬於本專案。
-  已改名為 `@spekjs/core`。
+- **「主行程可直接 import `@spek/core`」—— 論點對，名字錯。** 主行程確實能直接 import core、
+  在行程內完成掃描（已實測，全程不開任何 TCP 埠）。但 `@spek/core` 從未發佈、`@spek` scope
+  也不屬於本專案 —— PRD 假設了一個不存在的取得管道。改名並發佈為 `@spekjs/core` 後才成立。
 
 驗證編輯器 worker 是否存活時，**不能靠「看到語法高亮」** —— tokenization 在主執行緒完成。
 必須讓 worker 真的做一次往返（例如等 `ts.worker` 回填 diagnostic marker）才算數。
+
+驗證「app 沒有開 TCP 埠」時，**不能只讀主行程的 `/proc/<pid>/net/tcp`** —— Chromium 的 zygote
+與 renderer 跑在各自的 network namespace，主行程那張表看不到它們。`probe:core` 因此用兩道互補
+判準：逐 pid 取「該 pid 的 socket inode ∩ 該 pid 所屬 netns 的 LISTEN 表」，外加「app 存活期間
+本 netns 是否新增 LISTEN socket」—— 後者不需要讀任何 pid 的 fd，可繞過 sandbox 造成的權限死角。

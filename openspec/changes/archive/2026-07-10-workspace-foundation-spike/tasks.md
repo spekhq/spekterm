@@ -5,7 +5,7 @@
 > 本節不阻擋第 2、3、4 節；僅第 5 節（core 整合）依賴它。
 
 - [x] 1.1 驗證 npm org `spekjs` 已註冊且本帳號為成員：`npm org ls spekjs` 列出 `kewangtw`
-- [ ] 1.2 驗證 core 套件已發佈：`npm view @spekjs/core version` 能取得版本號
+- [x] 1.2 驗證 core 套件已發佈：`npm view @spekjs/core version` 能取得版本號
 
 ## 2. Package 骨架與信任模型
 
@@ -39,12 +39,12 @@
 
 ## 5. `@spekjs/core` 整合（依賴第 1 節）
 
-- [ ] 5.1 於 `package.json` 以語意化版本宣告 `@spekjs/core` 依賴，不得使用 `file:` / `link:` / `portal:` 等本機協定
-- [ ] 5.2 主行程直接 `import @spekjs/core`，對一個含 `openspec/` 的 repo 路徑呼叫 `scanOpenSpec()`
-- [ ] 5.3 驗證回傳物件含 `specs` / `activeChanges` / `archivedChanges` / `defaultSchema`，且 `defaultSchema` 等於該 repo `openspec/config.yaml` 宣告的 schema
-- [ ] 5.4 驗證對不含 `openspec/` 的路徑呼叫時回傳空結構，而非拋出例外
-- [ ] 5.5 開發模式啟動時，主行程輸出掃描摘要（spec 數量、active change 數量、`defaultSchema`）
-- [ ] 5.6 確認掃描過程未為此監聽任何 TCP 埠，結果直接來自行程內函式呼叫
+- [x] 5.1 於 `package.json` 以語意化版本宣告 `@spekjs/core` 依賴，不得使用 `file:` / `link:` / `portal:` 等本機協定
+- [x] 5.2 主行程直接 `import @spekjs/core`，對一個含 `openspec/` 的 repo 路徑呼叫 `scanOpenSpec()`
+- [x] 5.3 驗證回傳物件含 `specs` / `activeChanges` / `archivedChanges` / `defaultSchema`，且 `defaultSchema` 等於該 repo `openspec/config.yaml` 宣告的 schema
+- [x] 5.4 驗證對不含 `openspec/` 的路徑呼叫時回傳空結構，而非拋出例外
+- [x] 5.5 開發模式啟動時，主行程輸出掃描摘要（spec 數量、active change 數量、`defaultSchema`）
+- [x] 5.6 確認掃描過程未為此監聽任何 TCP 埠，結果直接來自行程內函式呼叫
 
 ## 6. 文件回寫
 

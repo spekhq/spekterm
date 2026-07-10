@@ -8,7 +8,7 @@
 
 ## 現況
 
-**Phase 0（`workspace-foundation-spike`）實作中** —— 骨架已可執行，工作台功能尚未開始。
+**Phase 0（`workspace-foundation-spike`）已完成** —— 骨架已可執行，工作台功能尚未開始。
 
 已驗證可用：
 
@@ -16,9 +16,9 @@
 - 信任模型：`contextIsolation` 啟用、`nodeIntegration` 停用，能力只走 preload 白名單
 - `node-pty` 在主行程 spawn 出真 pty（Node-API，免 `electron-rebuild`）
 - Monaco 編輯器與其 Web Worker 於 dev 與 build 兩種模式皆正常
+- 主行程直接 `import` `@spekjs/core` 掃描 OpenSpec 結構，全程不開任何 TCP 埠
 
 尚未開始：多 folder 工作區、檔案樹、terminal UI、OpenSpec 側欄、handoff。
-`@spekjs/core` 的整合待該套件發佈後才能完成。
 
 ### 文件
 
