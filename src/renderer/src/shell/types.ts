@@ -30,6 +30,38 @@ export type WatchEvent = WatchBatch['events'][number]
 /** side panel 的兩個同層互斥身分。 */
 export type PanelIdentity = 'openspec' | 'files'
 
+type WorkspaceOpenSpec = Window['workspace']['openspec']
+
+/** 結果物件的成功值。OpenSpec 的每個 method 都回 `FsResult<T>`。 */
+type OkValue<T> = T extends { ok: true; value: infer V } ? V : never
+
+export type OverviewData = OkValue<Awaited<ReturnType<WorkspaceOpenSpec['getOverview']>>>
+
+export type SpecSummary = OkValue<Awaited<ReturnType<WorkspaceOpenSpec['getSpecs']>>>[number]
+
+export type SpecDetailView = OkValue<Awaited<ReturnType<WorkspaceOpenSpec['getSpec']>>>
+
+export type SpecVersionView = OkValue<Awaited<ReturnType<WorkspaceOpenSpec['getSpecAtChange']>>>
+
+export type ChangesData = OkValue<Awaited<ReturnType<WorkspaceOpenSpec['getChanges']>>>
+
+/** change 清單裡的一列。 */
+export type ChangeInfo = ChangesData['active'][number]
+
+export type ChangeDetailView = OkValue<Awaited<ReturnType<WorkspaceOpenSpec['getChange']>>>
+
+export type ChangeArtifactView = ChangeDetailView['artifacts'][number]
+
+export type ParsedTasks = NonNullable<ChangeArtifactView['tasks']>
+
+export type DeltaSpecView = NonNullable<ChangeArtifactView['specs']>[number]
+
+export type GraphData = OkValue<Awaited<ReturnType<WorkspaceOpenSpec['getGraphData']>>>
+
+export type GraphNode = GraphData['nodes'][number]
+
+export type GraphEdge = GraphData['edges'][number]
+
 type WorkspaceTerminal = Window['workspace']['terminal']
 
 /** 新 session 的 spawn 目標。同樣由白名單回推 —— renderer 不 import 主行程模組。 */

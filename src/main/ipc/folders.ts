@@ -1,6 +1,7 @@
 import { BrowserWindow, dialog, ipcMain } from 'electron'
 import type { WorkspaceFolder, WorkspaceStore } from '../workspace-store'
 import { releaseFolderWatchers } from './fs'
+import { releaseFolderOpenSpec } from './openspec'
 
 export const FOLDER_CHANNELS = {
   list: 'workspace:folders:list',
@@ -35,6 +36,7 @@ export function registerFolderHandlers(store: WorkspaceStore): void {
   ipcMain.handle(FOLDER_CHANNELS.remove, (_event, id: string): WorkspaceFolder[] => {
     // 先釋放 watcher 再改動 store —— 反過來的話，watcher 服務已經查不到這個 folder 了
     releaseFolderWatchers(id)
+    releaseFolderOpenSpec(id)
     store.remove(id)
     return store.list()
   })

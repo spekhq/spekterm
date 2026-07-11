@@ -1,7 +1,16 @@
+import type { GraphData } from '@spekjs/core'
 import { type IpcRendererEvent, contextBridge, ipcRenderer } from 'electron'
 import type { DirtyEntry } from '../main/dirty-state'
 import type { FsResult, WriteResponse } from '../main/ipc/fs'
 import type { DirEntry, FileContent } from '../main/fs-service'
+import type {
+  ChangeDetailView,
+  ChangesData,
+  OverviewData,
+  SpecDetailView,
+  SpecSummary,
+  SpecVersionView,
+} from '../main/openspec-service'
 import type { SpawnTarget } from '../main/terminal'
 import type { WatchBatch } from '../main/watch-service'
 import type { WorkspaceFolder } from '../main/workspace-store'
@@ -52,6 +61,47 @@ const workspaceApi = {
       ipcRenderer.on('workspace:fs:watchEvent', handler)
       return () => {
         ipcRenderer.off('workspace:fs:watchEvent', handler)
+      }
+    },
+  },
+  /**
+   * OpenSpec 結構的唯讀存取。`fs.*` 是「檔案」的詞彙，這裡是「spec 與 change」的詞彙。
+   *
+   * method 的形狀刻意對齊 spek 前端既有的 `ApiAdapter`（`openspec-side-panel` 的 design D1）
+   * —— 差別只在每個 method 的第一個參數是 `folderId`。日後若真要接 `@spekjs/ui`，換的是 UI，
+   * 不是這道接縫。
+   *
+   * **`slug` 與 `topic` 是不受信任的輸入**：它們會被 core 拿去拼接檔案路徑。主行程一律先在
+   * 掃描結果裡查表，只對確實存在的 identifier 呼叫 core（design D6）—— 這裡不做任何驗證，
+   * preload 與 renderer 同屬一個行程樹，在這裡檢查等同沒有檢查。
+   */
+  openspec: {
+    getOverview: (folderId: string): Promise<FsResult<OverviewData>> =>
+      ipcRenderer.invoke('workspace:openspec:getOverview', folderId),
+    getSpecs: (folderId: string): Promise<FsResult<SpecSummary[]>> =>
+      ipcRenderer.invoke('workspace:openspec:getSpecs', folderId),
+    getSpec: (folderId: string, topic: string): Promise<FsResult<SpecDetailView>> =>
+      ipcRenderer.invoke('workspace:openspec:getSpec', folderId, topic),
+    getSpecAtChange: (
+      folderId: string,
+      topic: string,
+      slug: string,
+    ): Promise<FsResult<SpecVersionView>> =>
+      ipcRenderer.invoke('workspace:openspec:getSpecAtChange', folderId, topic, slug),
+    getChanges: (folderId: string): Promise<FsResult<ChangesData>> =>
+      ipcRenderer.invoke('workspace:openspec:getChanges', folderId),
+    getChange: (folderId: string, slug: string): Promise<FsResult<ChangeDetailView>> =>
+      ipcRenderer.invoke('workspace:openspec:getChange', folderId, slug),
+    getGraphData: (folderId: string): Promise<FsResult<GraphData>> =>
+      ipcRenderer.invoke('workspace:openspec:getGraphData', folderId),
+    /** 該 folder 的 OpenSpec 結構已變更（agent 改了檔）。回傳取消訂閱的函式。 */
+    onChanged: (listener: (folderId: string) => void): (() => void) => {
+      const handler = (_event: IpcRendererEvent, folderId: string): void => {
+        listener(folderId)
+      }
+      ipcRenderer.on('workspace:openspec:changed', handler)
+      return () => {
+        ipcRenderer.off('workspace:openspec:changed', handler)
       }
     },
   },

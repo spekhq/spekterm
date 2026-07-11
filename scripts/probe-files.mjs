@@ -207,7 +207,11 @@ const SELECT_FOLDER = (name) => `(() => {
   return true
 })()`
 
-const TABS = `[...document.querySelectorAll('[role="tablist"] button[role="tab"]')].map((tab) => ({
+// 身分切換的 tablist 必須指名 —— 側欄的 OpenSpec 身分自己也有一個 tablist（四個視圖），
+// 全域的 [role="tablist"] 會把兩者混在一起（session 分頁列是第三個）。
+const SWITCH = '[role="tablist"][aria-label="side panel 身分切換"]'
+
+const TABS = `[...document.querySelectorAll('${SWITCH} button[role="tab"]')].map((tab) => ({
   label: tab.innerText.trim(),
   selected: tab.getAttribute('aria-selected') === 'true',
   disabled: tab.disabled,
@@ -215,7 +219,7 @@ const TABS = `[...document.querySelectorAll('[role="tablist"] button[role="tab"]
 }))`
 
 const CLICK_TAB = (label) => `(() => {
-  const tab = [...document.querySelectorAll('[role="tablist"] button[role="tab"]')]
+  const tab = [...document.querySelectorAll('${SWITCH} button[role="tab"]')]
     .find((el) => el.innerText.trim().startsWith(${JSON.stringify(label)}))
   if (!tab) return false
   tab.click()
@@ -519,14 +523,16 @@ async function probeBuild(fixture, profile) {
 
     const tabs = await app.client.evaluate(TABS)
     check(results, '身分切換入口呈現兩個分頁', tabs.length === 2, tabs.map((t) => t.label).join(', '))
-    check(results, '預設身分為 Files', (await app.client.evaluate(IDENTITY)) === 'files')
-    check(results, '當前身分於入口上可辨識', tabs.find((t) => t.label.includes('Files'))?.selected === true)
+    // 預設身分自 `openspec-side-panel` 起是 OpenSpec（雛型的預設）。Phase 2 暫以 Files 為預設，
+    // 理由是 OpenSpec 身分還沒有內容 —— 該理由已不復存在。
+    check(results, '預設身分為 OpenSpec', (await app.client.evaluate(IDENTITY)) === 'openspec')
+    check(results, '當前身分於入口上可辨識', tabs.find((t) => t.label.includes('OpenSpec'))?.selected === true)
     check(results, '含 openspec 時 OpenSpec 入口可用', tabs.find((t) => t.label.includes('OpenSpec'))?.disabled === false)
 
-    check(results, '可切換至 OpenSpec 身分', (await app.client.evaluate(CLICK_TAB('◈'))) === true)
-    check(results, '一次只顯示一個身分', (await app.client.evaluate(IDENTITY)) === 'openspec')
-    await app.client.evaluate(CLICK_TAB('▤'))
-    check(results, '可切回 Files 身分', (await app.client.evaluate(IDENTITY)) === 'files')
+    check(results, '可切換至 Files 身分', (await app.client.evaluate(CLICK_TAB('▤'))) === true)
+    check(results, '一次只顯示一個身分', (await app.client.evaluate(IDENTITY)) === 'files')
+    await app.client.evaluate(CLICK_TAB('◈'))
+    check(results, '可切回 OpenSpec 身分', (await app.client.evaluate(IDENTITY)) === 'openspec')
 
     check(results, '收合 side panel', (await app.client.evaluate(CLICK_COLLAPSE)) === true)
     await pollUntil(app.client, SIDE_PANEL_WIDTH, (width) => width === 0)
@@ -951,6 +957,8 @@ async function probeDev(fixture, profile) {
       folders.map((f) => f.name).join(', ') || '(空)')
 
     await app.client.evaluate(SELECT_FOLDER('repo-openspec'))
+    // 預設身分是 OpenSpec（`openspec-side-panel` 起）—— 檔案樹要先切到 Files 身分才存在。
+    await app.client.evaluate(CLICK_TAB('▤'))
     await pollUntil(app.client, ROW_PATHS, (paths) => paths.includes('sample.ts'))
     await app.client.evaluate(CLICK_ROW('sample.ts'))
 

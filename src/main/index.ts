@@ -6,6 +6,7 @@ import { registerAppHandlers } from './ipc/app'
 import { registerClipboardHandlers } from './ipc/clipboard'
 import { registerFsHandlers } from './ipc/fs'
 import { registerFolderHandlers } from './ipc/folders'
+import { registerOpenSpecHandlers } from './ipc/openspec'
 import { registerShellHandlers } from './ipc/shell'
 import { registerTerminalHandlers } from './ipc/terminal'
 import { applyNavigationGuards } from './navigation'
@@ -95,6 +96,7 @@ void app.whenReady().then(() => {
 
   registerFolderHandlers(store)
   registerFsHandlers(store)
+  registerOpenSpecHandlers(store)
   registerShellHandlers()
   registerAppHandlers(dirty)
   registerTerminalHandlers(store)

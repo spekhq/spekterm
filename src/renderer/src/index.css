@@ -1,4 +1,5 @@
 @import 'tailwindcss';
+@import '@spekjs/ui/styles.css';
 
 /* 取自 docs/workspace-mockup.html 的 :root 變數 —— 雛型是 UI 的權威來源 */
 @theme {
@@ -13,6 +14,36 @@
   --color-ink-faint: #5b6675;
   --color-accent: #f59e0b;
   --color-danger: #f87171;
+
+  /*
+   * OpenSpec 側欄用到的顏色（雛型的 --accent-soft / --blue / --green）。
+   *
+   * 雛型另有一個 --red（#f87171），與 --danger 同值 —— 不重複宣告，BDD 的 MUST／SHALL
+   * 直接用 text-danger。
+   */
+  --color-accent-soft: rgba(245, 158, 11, 0.12);
+  --color-blue: #60a5fa;
+  --color-green: #34d399;
+}
+
+/*
+ * `@spekjs/ui` 的顏色契約 —— 把套件的 8 個變數接到我們的 token 上。
+ *
+ * 套件擁有自己的變數名（`--spek-*`），刻意不讀宿主的 token —— 我們的叫 `--color-ink` 那一套，
+ * spek web 的叫 `--color-text-primary` 那一套，名字對不上。**這正是套件必須擁有自己命名的理由**：
+ * 少了這道契約，Graph 會畫出來但完全沒有顏色。
+ *
+ * 必須排在套件的 `styles.css` 之後（同為 `:root`，後者勝出）。換膚就只有這 8 行。
+ */
+:root {
+  --spek-bg-primary: var(--color-stage);
+  --spek-bg-secondary: var(--color-panel);
+  --spek-bg-tertiary: var(--color-hover);
+  --spek-border: var(--color-hairline);
+  --spek-text-primary: var(--color-ink);
+  --spek-text-secondary: var(--color-ink-dim);
+  --spek-text-muted: var(--color-ink-faint);
+  --spek-accent: var(--color-accent);
 }
 
 html,

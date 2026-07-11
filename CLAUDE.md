@@ -8,19 +8,24 @@ spek workspace 是一個以 agent 為核心的本地開發工作台 —— 獨�
 把多個「一個 repo／資料夾各自一個 `claude` session」的 terminal 包在一個殼裡，
 並加上一塊懂 OpenSpec 結構的側欄，讓使用者不必另外開 IDE 就能一邊駕駛 agent、一邊看著 spec 上下文。
 
-**現況：Phase 4（`terminal-agent-sessions`）實作完成，待封存。** Phase 0–3 已封存：Electron
+**現況：Phase 5（`openspec-side-panel`）實作完成，待封存。** Phase 0–4 已封存：Electron
 骨架、PRD §12 信任模型、`node-pty` spawn 真 pty、主行程以 `@spekjs/core` 直接掃描 OpenSpec
 結構、多 folder 工作區（清單持久化於 userData）、活動列 + rail + 三欄版面、受邊界約束的
 `listDir`、side panel 的 `[◈ OpenSpec │ ▤ Files]` 身分切換、遞迴檔案樹（lazy load + chokidar
 監控）、面板內的檔案檢視與編輯、完整 CRUD、dirty buffer（跨換頁與跨 folder 存活）、mtime
-樂觀鎖、watcher 的自寫事件抑制、關閉視窗時的未存提示。
+樂觀鎖、watcher 的自寫事件抑制、關閉視窗時的未存提示，以及 Phase 4 的 terminal（`node-pty`
+多 session、IPC 雙向串流、xterm + fit、session 分頁 + rail 子列、spawn 目標可選 `claude`／
+login shell、關分頁／reload／關視窗三路徑皆**不留孤兒行程**）。
 
-Phase 4 讓主舞台**首次能駕駛 agent**：`node-pty` 多 session 管理器（每個 `webContents` 一份、
-以擁有者生命週期釋放）、IPC 雙向串流（輸出不 debounce、嚴格保序）、xterm + fit（封裝於單一
-wrapper 模組）、頂部 session 分頁 + rail 的 repo→session 子列、**spawn 目標可選 `claude` 或
-login shell**、cwd = 選中的 folder、resize 時 pty 尺寸同步、以及關分頁／reload／關視窗三種
-路徑皆**不留孤兒行程**（`probe:terminal` 38/38，dev 與 build 兩模式）。尚未開始：OpenSpec
-側欄的內容（Phase 5）、打包（Phase 6）、handoff（Phase 7+）。
+Phase 5 讓側欄**首次真的懂 OpenSpec**（在此之前那格只是一塊 placeholder，這個 app 相對於
+「開四個終端機分頁」沒有增量價值）：主行程以 `@spekjs/core` 為**每個 folder** 供應 OpenSpec
+結構（per-folder 快取 + `openspec/` 的 chokidar 監看 → **agent 改檔，側欄自己更新**）、
+`openspec.*` IPC（形狀對齊 spek 的 `ApiAdapter`，全部只收 `folderId`）、renderer 的
+`IpcAdapter`、side panel 的兩個視圖（**本 change** ＝每個 artifact 一個分頁；**瀏覽** ＝ Specs／
+Changes 兩棵樹）、tasks 進度與 spec deltas 的 BDD 高亮、spec/change ↔ 檔案的**交叉導覽**、
+session 的**錨定 change**（側欄跟隨 focused session），以及 **Graph 與 Timeline 的全視窗 overlay**
+—— 那兩個來自新抽出的 **`@spekjs/ui`**（發佈至 npm，與 spek web 共用同一份 d3 力導向圖與 Gantt）。
+`probe:openspec` 142/142，dev 與 build 兩模式。尚未開始：打包（Phase 6）、handoff（Phase 7+）。
 
 ### 開發指令
 
@@ -33,6 +38,7 @@ npm run probe:shell     # 驗收 workspace-app-shell（開視窗 + 信任模型 
 npm run probe:workspace # 驗收 workspace-folders / filesystem-access / workspace-layout
 npm run probe:files     # 驗收 file-explorer / file-viewer / 編輯 / 存檔 / 衝突 / CRUD / 導航防護 / 編輯器 worker（dev + build 兩模式）
 npm run probe:terminal  # 驗收 terminal-sessions（pty 雙向／cwd／resize／多開／關分頁・reload・關窗皆不留孤兒，dev + build 兩模式）
+npm run probe:openspec  # 驗收 openspec-data-access / openspec-panel（兩個視圖／兩棵樹／artifact 分頁／agent 改檔即更新／錨定／交叉導覽／Graph・Timeline 的 overlay，dev + build 兩模式）
 npm run probe:native    # 驗收 native-module-toolchain（Electron 主行程載入 node-pty + spawn pty）
 npm run probe:core      # 驗收 spek-core-integration（主行程掃描 OpenSpec，且不開 TCP 埠）
 npm run measure:bundle  # renderer bundle 體積報告（依編輯器核心／worker／語言分類歸因）
@@ -158,10 +164,20 @@ node-pty 1.2.0-beta.14（釘死）、Monaco Editor、chokidar 5、react-markdown
   （lazy load + chokidar）、`readFile` / `watch`、面板內的唯讀檢視、導航防護。
 - **Phase 3** — `file-editing-and-crud`（已封存）：編輯能力、完整 CRUD、dirty buffer、
   mtime 樂觀鎖、寫入路徑的邊界。
-- **Phase 4** — `terminal-agent-sessions`（實作完成，待封存）：node-pty 多 session 管理、
-  IPC 雙向串流、xterm + fit、session 分頁 + rail 的 repo→session 子列、spawn 目標可選
-  （claude／login shell）、生命週期不留孤兒行程。
-- Phase 5–6 建立工作台其餘部分，Phase 7+ 建立護城河（handoff）。
+- **Phase 4** — `terminal-agent-sessions`（已封存）：node-pty 多 session 管理、IPC 雙向串流、
+  xterm + fit、session 分頁 + rail 的 repo→session 子列、spawn 目標可選（claude／login shell）、
+  生命週期不留孤兒行程。後續三個 change 亦已封存：`session-titles-and-controls`（pty 宣告的
+  OSC 標題）、`terminal-clipboard`（複製貼上）、`session-rename-and-reorder`（命名權與拖曳排序）。
+- **Phase 5** — `openspec-side-panel`（實作完成，待封存）：主行程的 per-folder OpenSpec 資料
+  供應層（快取 + watch）、`openspec.*` IPC、renderer 的 `IpcAdapter`、side panel 的兩個視圖
+  （本 change 的 artifact 分頁 / 瀏覽的兩棵樹）、tasks 進度與 spec deltas、交叉導覽、
+  session 的錨定 change、Graph 與 Timeline 的全視窗 overlay。
+  跨 repo：`spek` 的 `extract-ui-package` 抽出並發佈 **`@spekjs/ui@1.0.0`**。
+- Phase 6 打包與發佈，Phase 7+ 建立護城河（handoff）。
+
+> **Phase 5 對 PRD 的「抽出 `@spekjs/ui`」做了對半的裁決**（PRD §9.2 已回寫）：整頁視圖**不抽**
+> （側欄是窄欄 UI，spek 是全寬頁面，不是同一個東西），但 **Graph 與 Timeline 抽了** —— 它們不是
+> 頁面，是自足的視覺化元件。詳見下文「Phase 5 的實測與踩雷」。
 
 > **Phase 1 欠下的 Monaco 債，已於 Phase 2 償還。** `multi-folder-workspace-shell` 曾把
 > `workspace-app-shell` 的兩條 Monaco requirement 標為 `REMOVED`（診斷頁退場後沒有模組引用
@@ -310,6 +326,136 @@ double-invoke updater 來揪出不純的實作 —— 把 `onCommit` 寫在 `set
   模式因此讀到 0，dev 模式僥倖通過，是典型的 flaky）。要用「回顯不含答案」的形式：
   `echo OUT_$((6*7))` 只有真的執行才會出現 `OUT_42`；驗 cwd 用 `echo CWD=$(pwd)`（`$(pwd)`
   在回顯裡不會展開）。
+
+## Phase 5 的實測與踩雷（OpenSpec 側欄）
+
+### PRD §9.2 的「原封不動重用 spek 頁面」—— 對頁面是錯的，對視覺化元件是對的
+
+PRD 曾主張「新增一個 `IpcAdapter`，既有 spek 頁面（Dashboard / SpecDetail / ChangeDetail /
+GraphView）幾乎可原封不動跑起來」。Phase 5 對它做了**對半的裁決**：
+
+- **對「頁面」是錯的。** mockup 的側欄是為 320–620px 窄欄設計的緊湊 UI；spek 的頁面是為全寬瀏覽器
+  設計的（自帶 `Layout` + `Sidebar`）。**不是同一個東西。** 側欄因此自刻 —— 而且它在 spek 根本
+  沒有對應物（**spek web 的 sidebar 只是五個扁平的 nav link**，內容全在主頁面裡；真正的兩棵樹在
+  **VSCode extension** 的 tree provider，那才是為窄側欄設計的，才是該抄的對象）。
+- **對「視覺化元件」是對的。** `GraphView`（d3 力導向圖）與 `timeline/*`（Gantt）**不是頁面** ——
+  它們吃資料、吐 SVG，對宿主零認知。**這兩個抽了**（`@spekjs/ui@1.0.0`，已發佈 npm，與 spek web
+  共用同一份程式碼）。
+
+**我一度自刻了一個二分圖取代 force graph，被使用者判定為「四不像」。** 教訓不是「早該抽套件」，
+而是：**幾百行的 d3 模擬與時間軸刻度規則，重刻一次只會得到一個更差的版本，而且從此兩邊分叉。**
+判斷「該不該重用」要問的是「**它綁死了版面嗎**」，不是「它在 spek 長什麼樣」。
+
+**`@spekjs/ui` 不含 `ApiAdapter`。** 我們的 `IpcAdapter` 每個 method 第一個參數都是 `folderId`
+（同時開著多個 repo），**簽名與 spek 的 `ApiAdapter` 不相容、實作不了它** —— 搬進套件對我們零價值。
+但 **`openspec.*` IPC 照 `ApiAdapter` 形狀設計這個決定仍然回本了**：接上套件時換的是 UI，不是接縫。
+
+### 跨宿主的元件有三條鐵律（`@spekjs/ui` 的 design）
+
+1. **純呈現層** —— 沒有 router（導航是回呼）、沒有 adapter（資料由 props 進）、沒有 theme context。
+2. **顏色是明確的契約**，套件**擁有自己的變數名**（`--spek-*`）。**它絕不可讀宿主的 token** ——
+   spek web 叫 `--color-text-primary`，我們叫 `--color-ink`，名字對不上，圖會**畫得出來但完全沒有
+   顏色**。換膚＝在 `index.css` 覆寫那 8 個變數（`probe:openspec` 有一條專門驗這件事：套件的
+   `--spek-accent` 必須解析到我們的 `--color-accent`）。
+3. **React 必須是 peer 依賴** —— 兩份 React 實例會讓 hooks 直接爆炸。
+
+**d3 把顏色寫進 SVG 屬性**（命令式），不能用 `var()` —— 所以宿主換膚時圖必須重畫。套件**不去偵測**
+主題（監看 `data-theme` 是在猜宿主的實作），而是由宿主換一個 `themeKey` 明說「該重畫了」。
+我們只有深色主題，不傳。
+
+### Graph ≠ Timeline
+
+**它們是兩個不同的功能，別再搞混。** Graph 是 spec ↔ change 的**關聯結構**（無時間概念）；
+Timeline 是 change 的**生命週期**（Gantt，有日期軸）。我一度以為使用者說的 graph 就是 gantt，
+做出來的東西哪個都不是。
+
+**兩者都不屬於 side panel** —— Timeline 的最小可用寬度是 **920px**（label 欄 200 + 圖表區 720，
+皆為套件的預設常數），而側欄上限 620px。它們是「搞懂全局」的動作，不是「一邊駕駛 agent 一邊盯著」
+的動作，**沒有與 terminal 並存的需求** → 全視窗 overlay。
+
+### `@spekjs/core` 的四個簽名／語意陷阱（全部實測）
+
+- **`readSpec` / `readChange` 找不到目標時回 `null`，不拋錯**；而 **`readSpecAtChange` /
+  `buildGraphData` / `findRelatedChanges` 是同步函式**（會阻塞主行程做磁碟 IO）。把它們一律
+  當成「非同步且會拋錯」會直接編譯失敗 —— 但更危險的是反過來：把 `null` 當成成功值傳下去。
+- **`SpecInfo.path` 是絕對路徑。** 直接送給 renderer 會**破壞邊界語彙**（renderer 的全部設計
+  前提是「它沒有詞彙可以表達 workspace 之外的位置」）。主行程必須翻成 folder-relative，
+  翻不出來就回 `null` —— 側欄少一個「跳到檔案」的入口，好過洩漏一個絕對路徑。
+- **`listChangeMarkdownFiles(repo, slug)` 不是它聽起來的意思** —— 實測回的是 repo 根目錄的
+  `["CLAUDE.md", "README.md"]`，**不是** change 的 artifact 檔案。不要拿它推交叉導覽的路徑
+  （改以 OpenSpec 的目錄慣例推導候選路徑，再 `stat` 確認存在）。
+- **`GraphNode.label` 對 change 是 humanize 過的描述（`solo change`），不是 slug
+  （`solo-change`）。** 拿它去錨定會找不到那個 change。identity 一律從 `node.id`
+  （`change:<slug>` / `spec:<topic>`）取，`label` 只用於顯示。**這是探針抓到的 —— 而且我後來寫
+  探針時又踩了一次同一個坑**（用 slug 去找節點的文字標籤，於是根本沒點下去）。在 d3 的圖上定位
+  節點要讀它綁在 DOM 上的 `__data__.id`，不要讀文字。
+- 好消息：**`SpecInfo.historyCount` 恆等於 `findRelatedChanges()` 的長度**（實測吻合），
+  所以 Specs 清單的「N changes」是零成本的，不必為每個 topic 再跑一次查詢。
+
+- **`ChangeInfo.createdDate` 只來自每個 change 的 `.openspec.yaml`（`created:` key）。**
+  沒有它，change 就**放不上 Timeline**（會被歸到「沒有建立日期」那一區，Gantt 上一條 bar 都不會
+  有）。造 fixture 時很容易漏掉 —— `openspec/config.yaml` 是 repo 層的，跟這個無關。
+
+### `slug` / `topic` 是不受信任的輸入 —— 查表，不要過濾字元
+
+它們來自 renderer，且會被 core 拿去**拼接檔案路徑**（`readChange(repoPath, slug)`）。
+一個 `slug = "../../../../etc"` 就是 path traversal。
+
+**防護是白名單**：先在快取的掃描結果裡**查表**，只對確實存在的 identifier 呼叫 core。這比
+「檢查有沒有 `..`」強 —— 後者是黑名單，總有漏網的編碼形式。這與 `fs.*` 的路徑邊界是**互補而
+非重複**的：那道防的是 relPath，這道防的是 identifier，兩者的詞彙不同。
+
+### React：「把 prop 同步成 state」的 effect 會在**首次掛載時靜默失效**
+
+side panel 的兩個身分**互斥掛載**（顯示 OpenSpec 時 FilesPanel 根本不存在）。於是跨身分導航
+（「在 Files 中開啟」）送出的請求，抵達時 FilesPanel 是**那一刻才第一次掛載**的 —— 若用
+「nonce 變了才套用」的寫法，`useState(nonce)` 的初始值就等於當前 nonce，兩者相等，**跳過去的
+那一次永遠不會開檔**（實測：身分切過去了，畫面停在檔案樹）。**請求必須在 `useState` 的初始值
+就套用。**
+
+順帶兩條：**副作用不可寫在 effect 裡同步 setState**（`react-hooks/set-state-in-effect` 會抓
+到，且它是對的）—— 用 React 官方的「渲染期間調整 state」（`if (next !== seen) { setSeen(next);
+setX(...) }`）。但**渲染期間只能改自己的 state**，不能呼叫父層的 setState（React 會報
+「Cannot update a component while rendering a different component」）—— 所以錨定要在
+**送出請求的那個 event handler** 裡完成，不能等 panel 收到請求後回呼。
+
+**換 folder 必須清掉待處理的跨身分請求** —— 它是**上一個 repo** 的座標。少了這步，切到新 repo
+時側欄會停在「顯示某個 spec」的視圖，而那個 spec 屬於前一個 repo。**這也是探針抓到的。**
+
+### 側欄的資料流：重取時不可回到 loading
+
+`openspec/` 一有變更就重新取數 —— 但**保留舊資料、不回到 loading**。agent 每存一次檔就閃一次
+「載入中…」，側欄會變成一塊閃爍的東西，而使用者正在讀它。`loading` 只在「還沒有任何資料」時為真。
+
+反過來，**key 變了（切 folder、換 change）就必須把資料清掉**：沿用上一份的話，畫面會有一瞬間
+顯示**上一個 folder 的 change** —— 那比 loading 更糟，因為它看起來像是真的。
+
+### 一支永遠紅的探針等於沒有探針
+
+`probe:shell` 的「fs 介面只暴露已定義邊界要求的能力」這條，自 **Phase 3 起就是紅的** ——
+它還在斷言「不得有 `writeFile`」，而 Phase 3 正是加入寫入能力的那個 change（封存時漏了它）。
+Phase 5 把清單補齊，並補上兩條它本來就該守的：**`fs.symlink` 絕不可出現**（寫入邊界的 TOCTOU
+論證完全建立在這個前提上），以及 `openspec.*` 也受同一條白名單原則約束。
+
+**探針的斷言會隨規格過期。** 加能力到 preload 白名單時，記得那裡有一道守衛在等著。
+
+### 驗 reload 要用 `Page.reload`，不能用頁面裡的 `location.reload()`
+
+`location.reload()` 是**頁面發起**的導航，會觸發 `will-navigate` —— 而導航防護正是無條件
+`preventDefault()` 它。於是 **reload 被 app 自己的防護擋掉，頁面根本沒有重新載入**，而探針
+會在一個從未 reload 過的頁面上把整段驗收跑完（實測：看起來只是「莫名其妙地失敗」）。
+用 CDP 的 `Page.reload`（瀏覽器層發起，不走 `will-navigate`）—— `probe:terminal` 一直是這樣做的。
+
+**而且要斷言 reload 真的發生了。** 我一度寫了一支「重現腳本」證明 reload 之後一切正常，
+但那支腳本從頭到尾沒切換過身分，side panel 的身分**本來就是預設的 OpenSpec** —— 有沒有 reload
+都一樣，於是它對「頁面沒被換掉」完全無感，給了我一個假綠。可靠的作法是**先把狀態改成非預設值**
+（例如切到 Files 身分），reload 之後看它有沒有回到預設。
+
+### 現在有三個 `role="tablist"`
+
+身分切換（`side panel 身分切換`）、OpenSpec 的四個視圖（`OpenSpec 視圖`）、session 分頁列
+（`Session 分頁`）。**探針裡全域的 `[role="tablist"] button[role="tab"]` 會把它們混在一起**
+（`probe:files` 因此一度數到 6 個分頁）。選取時一律連 `aria-label` 一起指名。
 
 ## 檔案系統邊界（`multi-folder-workspace-shell` 起）
 

@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
+import type { FileRequest, OpenSpecTarget } from '../openspec/nav'
+import { targetOfPath } from '../openspec/nav'
 import type { FsFailure, FsResult, WorkspaceFolder } from '../types'
 import { ConfirmDelete, ContextMenu, type MenuItem, NameDialog } from './dialogs'
 import { FileTree } from './FileTree'
@@ -50,6 +52,10 @@ interface MenuState {
 
 interface FilesPanelProps {
   folder: WorkspaceFolder | null
+  /** 自 OpenSpec 身分跳過來要開的檔案（design D7 的跨身分導航）。 */
+  request?: FileRequest | null
+  /** 跳回 OpenSpec 身分。該 folder 沒有 `openspec/` 時為 null —— 那個身分本來就停用。 */
+  onViewInOpenSpec?: ((target: OpenSpecTarget) => void) | null
 }
 
 /**
@@ -65,13 +71,33 @@ interface FilesPanelProps {
  * 隨重新掛載自然歸零。**未存的變更不在此列** —— 它們由 `DirtyBuffersProvider` 持有，
  * 位於本元件之上（design D9）。
  */
-export function FilesPanel({ folder }: FilesPanelProps): React.JSX.Element {
-  const [openPath, setOpenPath] = useState<string | null>(null)
+export function FilesPanel({
+  folder,
+  request = null,
+  onViewInOpenSpec = null,
+}: FilesPanelProps): React.JSX.Element {
+  // 自 OpenSpec 身分跳過來的請求，**初始值就要套用**。
+  //
+  // 這個元件在切到 Files 身分的那一刻才第一次掛載（在那之前 SidePanel 渲染的是 OpenSpecPanel）
+  // —— 若只在「nonce 變了」時才開檔，首次掛載會把 seenNonce 直接初始化成當下的 nonce，
+  // 兩者相等，於是**跳過去的那一次永遠不會開檔**（已實測：探針點了「在 Files 中開啟」，
+  // 身分切過去了，但畫面停在檔案樹）。
+  const [openPath, setOpenPath] = useState<string | null>(request?.target ?? null)
   const [menu, setMenu] = useState<MenuState | null>(null)
   const [dialog, setDialog] = useState<Dialog | null>(null)
   const [pendingDelete, setPendingDelete] = useState<TreeRow | null>(null)
   const [serverError, setServerError] = useState<string | null>(null)
   const now = useNow()
+
+  // 已掛載時的後續請求依 nonce 觸發（同一個檔案可能被連續要求開兩次）。在渲染期間調整自己的
+  // state，不用 effect：effect 要等 commit 之後才跑，那一幀會先閃一下樹。
+  const requestNonce = request?.nonce ?? null
+  const [seenNonce, setSeenNonce] = useState(requestNonce)
+
+  if (requestNonce !== seenNonce) {
+    setSeenNonce(requestNonce)
+    if (request) setOpenPath(request.target)
+  }
 
   const dirty = useDirtyBuffers()
   const folderId = folder?.id ?? ''
@@ -255,13 +281,33 @@ export function FilesPanel({ folder }: FilesPanelProps): React.JSX.Element {
             </button>
           </>
         ) : (
-          <button
-            type="button"
-            onClick={() => setOpenPath(null)}
-            className="shrink-0 rounded border border-hairline px-2 py-[2px] text-[11px] text-ink-dim hover:text-accent"
-          >
-            ‹ 返回
-          </button>
+          <>
+            {/* 開著的是 openspec/ 底下的檔案 —— 提供跳回 OpenSpec 身分的入口（design D7）。 */}
+            {onViewInOpenSpec &&
+              (() => {
+                const target = targetOfPath(openPath)
+                if (!target) return null
+                return (
+                  <button
+                    type="button"
+                    onClick={() => onViewInOpenSpec(target)}
+                    aria-label="在 OpenSpec 中檢視"
+                    title="在 OpenSpec 中檢視"
+                    className="shrink-0 rounded border border-hairline px-2 py-[2px] text-[11px] text-ink-dim hover:border-accent hover:text-accent"
+                  >
+                    ◈
+                  </button>
+                )
+              })()}
+
+            <button
+              type="button"
+              onClick={() => setOpenPath(null)}
+              className="shrink-0 rounded border border-hairline px-2 py-[2px] text-[11px] text-ink-dim hover:text-accent"
+            >
+              ‹ 返回
+            </button>
+          </>
         )}
       </header>
 

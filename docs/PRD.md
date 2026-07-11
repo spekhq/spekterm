@@ -207,11 +207,17 @@ OpenSpec 與 Files 是 side panel 的**兩個同層級、互斥的身分**，用
 
 | 身分 | 內容 | 條件 |
 |------|------|------|
-| `◈ OpenSpec`（預設） | 現有 spek app（本 change／Specs／Changes／Graph），透過 `IpcAdapter` 重用；**自動跟隨 focused session 正在做的 change** | 條件式：repo 要有 `openspec/` 且有 active change 才可用；否則此鈕 disabled/dim |
+| `◈ OpenSpec`（預設） | **本 change** 與 **瀏覽** 兩個視圖，資料經 `IpcAdapter` 取自主行程；**跟隨 focused session 錨定的 change**。Graph 與 Timeline 另在全視窗 overlay | 條件式：repo 要有 `openspec/` 才可用；否則此鈕 disabled/dim |
 | `▤ Files` | 當前 repo 的檔案樹（子目錄 lazy load、chokidar 監控、git 狀態 tag） | 恆可用 |
 
 - **OpenSpec 是條件式身分**：沒有 `openspec/` 的 repo（如 mockup 的 spek-web），OpenSpec 鈕 disabled，side panel 退為 Files。這正是「spek 以 OpenSpec 為核心，但版面不因缺 OpenSpec 就殘廢」的體現。
-- **本 change 視圖**：change 標題／描述 + tasks 打勾進度（讀磁碟）+ spec deltas（BDD 呈現，ADDED／MODIFIED）。
+  - **啟用條件不含「且有 active change」**（本欄原本這樣寫，`openspec-side-panel` 推翻並回寫）。判定「有沒有 active change」需要一次完整掃描，而 folder 清單是啟動時一次算出來的 —— 那會讓啟動時間隨 folder 數線性成長（`workspace-folders` 規格明文禁止在此判定中掃描）。且沒有 active change 不代表側欄沒東西可看：瀏覽視圖的兩棵樹對一個只有 archived change 的 repo 仍然完全有用。降級的正確層級是**「本 change」視圖呈現空狀態**，而不是停用整個身分。
+- **本 change 視圖**：change 的識別與狀態，**每個 artifact 一個分頁**（Proposal │ Design │ Tasks │ Specs，順序依 schema），tasks 進度條**恆常可見、不進分頁**。tasks 依 section 分組；spec deltas 標示 ADDED／MODIFIED 並高亮 BDD 關鍵字。
+  - 初版把 tasks 與 spec deltas 攤開、其餘收合成區塊，一路往下堆 —— 使用者的判定是「在找資料的時候不好找」。**並排的分頁讓「找」變成一次點擊，而不是一次搜尋。**
+- **瀏覽視圖**：上下堆疊、各自可收合的**兩棵樹** —— Specs（`topic → heading`）與 Changes（`Active / Archived → change`，帶進度）。
+  - **藍本是 VSCode extension 的 tree provider，不是 spek web 的 sidebar** —— 後者只是五個扁平的 nav link，內容全在主頁面裡。VSCode 的兩棵樹才是為 ~300px 窄側欄設計的。
+- **Graph 與 Timeline 在全視窗 overlay，不在側欄**（`openspec-side-panel` 的 design D12）：Timeline 的最小可用寬度超過 900px，而側欄上限是 620px。而且它們是「**搞懂全局**」的動作，不是「一邊駕駛 agent 一邊盯著」的動作 —— 沒有與 terminal 並存的需求。兩者**是不同的視覺化**：Graph 是關聯結構（無時間），Timeline 是生命週期（有時間軸）。
+- **錨定關係由使用者建立，系統不猜**（design D3）：pty 裡的 agent 不會宣告它在做哪個 change，任何從終端標題／輸出去比對 slug 的推測都會假陽性與假陰性 —— 一個偶爾莫名其妙跳到別的 change 的側欄，比沒有側欄更糟。唯一的自動值是**衍生的預設**：該 folder **恰有一個** active change 時就顯示它（不需要先建 session）。使用者在 Changes 樹點一個 change 即可改變錨定。**Phase 7 的 handoff 會自然填上這個欄位** —— 屆時系統知道 session 在做哪個 change，是因為有人告訴它。
 - **交叉導覽**：spec/change ↔ 底層 `.md` 互跳（保留 spek 現有 UX）。
 
 ### 6.4 Handoff 相關 UI（Phase 7+）
@@ -374,14 +380,43 @@ spek 背景 router 主動 probe → 比對 to 命中的 repo-B
 ### 9.1 直接重用
 
 - **`@spekjs/core`**：scanner、tasks、headings、git-cache、worktrees、types — 主行程直接 import。
-- **spek 的 `ApiAdapter` 抽象**：spek 前端已把通訊層抽象成 `ApiAdapter`（Fetch / Message / Static）。Workspace 只要新增一個 **`IpcAdapter`**，既有 spek 頁面（Dashboard / SpecDetail / ChangeDetail / GraphView）幾乎可原封不動在 Electron renderer 跑起來。**這是整合既有畫面的關鍵槓桿。**
+- **spek 的 `ApiAdapter` 介面契約**：spek 前端已把通訊層抽象成 `ApiAdapter`（Fetch / Message / Static，11 個 method、全 Promise、參數皆可序列化）。Workspace 新增一個 **`IpcAdapter`** 實作它 —— 換的是接縫，不是視圖（見 §9.2）。
 
-### 9.2 需要的抽取（Phase 5）
+### 9.2 `@spekjs/ui` 的抽取 —— **已於 Phase 5 完成（但範圍與原計畫不同）**
 
-spek 可重用 React 元件目前住在 `@spek/web`、未對外輸出。抽出一個 **`@spekjs/ui`** package：
-- `ApiAdapter` 介面 + 共用型別
-- 可重用頁面 / 元件：Dashboard、SpecDetail、ChangeDetail、GraphView、TabView、markdown 渲染 + BDD 高亮
-- 讓 `@spek/web` 與 `@spek/workspace` 同時依賴 `@spekjs/ui`（此步會動到 web，需回歸測試）。
+> **本節原本主張「抽出 `@spekjs/ui`，既有 spek 頁面（Dashboard / SpecDetail / ChangeDetail /
+> GraphView）幾乎可原封不動在 Electron renderer 跑起來，這是整合既有畫面的關鍵槓桿」。
+> Phase 5 實作後的結論是：這句話對「頁面」是錯的，對「視覺化元件」是對的。**
+
+**對頁面而言是錯的。** `docs/workspace-mockup.html`（UI 的權威）定義的側欄是為 **320–620px 窄欄**
+設計的緊湊 UI；spek 的頁面是為**全寬瀏覽器**設計的（自帶 `Layout` + `Sidebar`）。**兩者不是同一個
+東西。** 側欄因此依 mockup **自刻**（兩棵樹、本 change 的 artifact 分頁、BDD 高亮）—— 而且它在 spek
+根本沒有對應物：spek web 的 sidebar 只是五個扁平的 nav link。
+
+**對視覺化元件而言是對的。** **`GraphView`（d3 力導向圖）與 `timeline/*`（Gantt）不是頁面** ——
+它們吃 `GraphData` / `ChangeInfo[]`，吐一塊 SVG，對宿主零認知。這兩個正是「真正可重用的那種」，
+而且重刻一次只會得到一個更差的版本（實測：自刻的二分圖被使用者判定為「四不像」）。
+
+**於是 `@spekjs/ui@1.0.0` 已抽出並發佈至 npm**（`extract-ui-package`），內容為：
+
+- **`<SpecGraph>`** —— 力導向圖（zoom / pan / drag / 鄰居高亮 / fit-to-viewport）
+- **`<ChangeTimeline>`** —— Gantt 時間軸（自適應刻度、active 延伸至今天、today 虛線、tooltip）
+- `buildLanes()` 等純函式，以及**顏色契約**
+
+**不含**：`ApiAdapter` 介面（我們的 `IpcAdapter` 每個 method 第一個參數都是 `folderId`，**簽名不
+相容、實作不了它** —— 搬進套件對我們零價值，卻要讓 web 十幾個檔案改 import 路徑），以及整頁視圖。
+
+**三個讓它能跨宿主的關鍵**（詳見 spek 的 `extract-ui-package` design）：
+
+1. **元件是純呈現層** —— 沒有 router（導航改為回呼）、沒有 adapter（資料由 props 進）、沒有
+   theme context。
+2. **顏色是一份明確的契約** —— 8 個 `--spek-*` CSS 變數，套件**擁有自己的變數名**而不讀宿主的
+   token。少了這道，我們的 token（`--color-ink` 那套）名字對不上，圖會畫出來但**完全沒有顏色**。
+   換膚就是在 `index.css` 覆寫那 8 個變數。
+3. **React 為 peer 依賴** —— 兩份 React 實例會讓 hooks 直接爆炸。
+
+**`openspec.*` IPC 的形狀對齊 `ApiAdapter` 這個決定在這裡得到了回報**：接上套件時換的是 UI，
+不是接縫。d3 讓 renderer bundle 增加約 160 KB。
 
 ### 9.3 core 的小幅擴充
 
@@ -452,10 +487,12 @@ spek 可重用 React 元件目前住在 `@spek/web`、未對外輸出。抽出�
 - 新 terminal 預設 cwd = 當前選中 folder。
 - session 生命週期（視窗關閉時清理子行程）。
 
-### Phase 5 — 整合既有 spek 視圖
-- 抽出 **`@spekjs/ui`**（§9.2），web 與 workspace 共用（動到 web，需回歸）。
-- 實作 **`IpcAdapter`**，主行程用 `@spekjs/core` 回應。
-- OpenSpec home tab：Dashboard / Specs / Changes / Graph。
+### Phase 5 — OpenSpec 側欄
+- 主行程以 `@spekjs/core` 為每個 folder 供應 OpenSpec 結構，經 `openspec.*` IPC 送達 renderer（快取 + `openspec/` 的 chokidar 監看 → agent 改檔，側欄自己更新）。
+- 實作 **`IpcAdapter`** —— 形狀對齊 spek 的 `ApiAdapter` 介面契約。
+- side panel 的 OpenSpec 身分：**本 change**（每個 artifact 一個分頁）與 **瀏覽**（Specs / Changes 兩棵樹）—— 依 mockup 與 VSCode 的 tree provider 自刻，非搬 spek 的頁面（見 §9.2）。
+- **抽出 `@spekjs/ui`**（發佈至 npm）：`SpecGraph`（d3 力導向圖）與 `ChangeTimeline`（Gantt），與 spek web 共用同一份程式碼 —— 兩者放在**全視窗 overlay**，不在側欄（Timeline 的最小可用寬度超過 900px）。
+- session 的**錨定 change**：側欄跟隨 focused session；錨定由使用者建立，系統不猜（§6.3）。
 - 交叉導覽：spec/change ↔ 底層檔案互跳。
 
 ### Phase 6 — 打包、設定與發佈

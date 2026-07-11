@@ -6,6 +6,29 @@ function isExternalHref(href: string): boolean {
   return /^https?:\/\//i.test(href)
 }
 
+/**
+ * BDD 關鍵字的顏色（雛型的 .req-block）。
+ *
+ * spec 裡的 `**WHEN**` 本來就是 markdown 的 strong —— 因此**不需要第二個 parser**，
+ * 依 strong 的文字內容上色即可。認不得的 strong 走預設（一般的強調）。
+ */
+function bddTone(text: string): string | null {
+  switch (text.trim()) {
+    case 'WHEN':
+      return 'text-blue'
+    case 'THEN':
+      return 'text-green'
+    case 'AND':
+      return 'text-ink-faint'
+    // 雛型的 --red 與 --danger 同值。
+    case 'MUST':
+    case 'SHALL':
+      return 'text-danger'
+    default:
+      return null
+  }
+}
+
 interface MarkdownViewProps {
   text: string
 }
@@ -30,6 +53,11 @@ export function MarkdownView({ text }: MarkdownViewProps): React.JSX.Element {
       <Markdown
         remarkPlugins={[remarkGfm]}
         components={{
+          strong({ children }) {
+            const tone = typeof children === 'string' ? bddTone(children) : null
+            if (!tone) return <strong className="font-semibold text-ink">{children}</strong>
+            return <strong className={`font-mono font-bold ${tone}`}>{children}</strong>
+          },
           a({ href, children }) {
             if (!href || !isExternalHref(href)) {
               // 相對連結（指向 repo 內的其他檔案）留待 Phase 5 的交叉導覽。

@@ -52,10 +52,45 @@ const PROBE_EXPRESSION = `(async () => {
     listDirIsFunction: typeof api?.fs?.listDir === 'function',
     // 白名單原則：介面上只能有「已為其定義邊界要求」的能力。
     // 這不是一份會隨版本增長的清單 —— 每加一個名字，都得先有一條 requirement 定義它的邊界。
+    //
+    // 寫入類的五個能力於 file-editing-and-crud（Phase 3）引入，其邊界要求見 file-editing
+    // 與 file-operations 規格。
     surplusFsKeys: Object.keys(api?.fs ?? {}).filter(
-      (key) => !['listDir', 'readFile', 'watch', 'unwatch', 'onWatchEvent'].includes(key),
+      (key) =>
+        ![
+          'listDir',
+          'readFile',
+          'watch',
+          'unwatch',
+          'onWatchEvent',
+          'writeFile',
+          'createFile',
+          'createDirectory',
+          'deleteEntry',
+          'rename',
+        ].includes(key),
     ),
-    hasWriteFile: typeof api?.fs?.writeFile !== 'undefined',
+    // OpenSpec 的唯讀存取（openspec-data-access）。同一條白名單原則 —— 這裡沒有任何寫入能力，
+    // 側欄是檢視，改檔走 agent 或 Files 身分。
+    surplusOpenSpecKeys: Object.keys(api?.openspec ?? {}).filter(
+      (key) =>
+        ![
+          'getOverview',
+          'getSpecs',
+          'getSpec',
+          'getSpecAtChange',
+          'getChanges',
+          'getChange',
+          'getGraphData',
+          'onChanged',
+        ].includes(key),
+    ),
+    // symlink 絕不可出現在白名單上。
+    //
+    // 寫入邊界的 TOCTOU 論證（file-editing-and-crud 的 design D3）整個建立在「renderer 既造不出、
+    // 也操縱不到 race 所需的 symlink」之上 —— Node 沒有 openat()，中間目錄段的 race 防不住。
+    // 一旦這個名字出現，那份論證即刻失效。
+    hasSymlink: typeof api?.fs?.symlink !== 'undefined' || typeof api?.fs?.link !== 'undefined',
     hasDelete: typeof api?.fs?.delete !== 'undefined' || typeof api?.fs?.rm !== 'undefined',
     hasPing: typeof api?.ping !== 'undefined',
     exposesIpcRenderer: typeof api?.ipcRenderer !== 'undefined',
@@ -109,8 +144,13 @@ try {
   check(results, '未暴露 ipcRenderer', r?.exposesIpcRenderer === false)
   check(results, 'Phase 0 的示範 API ping 已移除', r?.hasPing === false)
   check(results, 'fs 介面只暴露已定義邊界要求的能力',
-    r?.surplusFsKeys?.length === 0 && !r?.hasWriteFile && !r?.hasDelete,
-    r?.surplusFsKeys?.length ? `多出：${r.surplusFsKeys.join(', ')}` : '無 writeFile / delete')
+    r?.surplusFsKeys?.length === 0 && !r?.hasDelete,
+    r?.surplusFsKeys?.length ? `多出：${r.surplusFsKeys.join(', ')}` : '無未定義邊界的能力')
+  check(results, 'fs 介面不暴露 symlink（寫入邊界的 TOCTOU 論證以此為前提）',
+    r?.hasSymlink === false)
+  check(results, 'openspec 介面只暴露已定義邊界要求的能力',
+    r?.surplusOpenSpecKeys?.length === 0,
+    r?.surplusOpenSpecKeys?.length ? `多出：${r.surplusOpenSpecKeys.join(', ')}` : '無多餘能力')
 
   exitCode = results.every(Boolean) ? 0 : 1
 } catch (error) {

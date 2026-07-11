@@ -33,6 +33,20 @@ export interface SessionState {
    * 對話框會把畫面淹掉，而使用者真正關心的只有「它現在想叫什麼」（design D2）。
    */
   pendingTitle?: string
+  /**
+   * 這個 session 正在做的 change。側欄的「本 change」視圖跟著它走。
+   *
+   * **由使用者建立，不由系統從 pty 的輸出推測**（`openspec-side-panel` 的 design D3）。
+   * pty 裡跑的 agent 不會宣告它在處理哪個 change —— 拿終端標題去比對 slug，會在「標題碰巧
+   * 提到某個 slug」時假陽性、在「agent 用別的說法描述同一件事」時假陰性。一個偶爾莫名其妙
+   * 跳到別的 change 的側欄，比沒有側欄更糟，因為使用者會開始不信任它。
+   *
+   * 這與「標籤跟隨 pty 宣告的標題」不矛盾：那條之所以成立，是因為 pty **真的用 OSC 序列宣告
+   * 了標題**（一個明確的協定）。change 的錨定沒有這樣的協定。
+   *
+   * 唯一的自動值來自建立時：該 folder 恰有一個 active change 時錨定它，否則留空。
+   */
+  anchoredChange?: string
 }
 
 export type CreateOutcome =
@@ -53,7 +67,19 @@ export interface SessionsApi {
   /** 該 folder 當前聚焦的 session。未明確指定時退回它的第一個。 */
   focusedIdFor(folderId: string): string | null
   focus(folderId: string, sessionId: string): void
-  create(folderId: string, spawnTarget: SpawnTarget): Promise<CreateOutcome>
+  /**
+   * `anchoredChange` 是新 session 的初始錨定。呼叫端（`MainStage`）在該 folder **恰有一個**
+   * active change 時傳它，否則傳 `undefined` —— 多個候選之間不猜（design D3）。
+   */
+  create(
+    folderId: string,
+    spawnTarget: SpawnTarget,
+    anchoredChange?: string,
+  ): Promise<CreateOutcome>
+  /** 把一個 change 錨定到某個 session。`null` 解除錨定。 */
+  anchorChange(sessionId: string, slug: string | null): void
+  /** 該 session 錨定的 change。 */
+  anchoredChangeOf(sessionId: string | null): string | null
   close(sessionId: string): void
   /** pty 宣告的終端標題。空字串視為未設定。使用者已接管命名權時，改為待裁決而不覆蓋。 */
   setTitle(sessionId: string, title: string): void
@@ -137,7 +163,11 @@ export function SessionsProvider({ children }: { children: React.ReactNode }): R
   }, [])
 
   const create = useCallback(
-    async (folderId: string, spawnTarget: SpawnTarget): Promise<CreateOutcome> => {
+    async (
+      folderId: string,
+      spawnTarget: SpawnTarget,
+      anchoredChange?: string,
+    ): Promise<CreateOutcome> => {
       const result = await window.workspace.terminal.create(folderId, spawnTarget)
       if (!result.ok) return { status: 'failed', failure: result }
 
@@ -147,7 +177,7 @@ export function SessionsProvider({ children }: { children: React.ReactNode }): R
 
       setSessions((previous) => [
         ...previous,
-        { id: sessionId, folderId, spawnTarget, status: 'running', ordinal },
+        { id: sessionId, folderId, spawnTarget, status: 'running', ordinal, anchoredChange },
       ])
       setFocused((previous) => new Map(previous).set(folderId, sessionId))
 
@@ -155,6 +185,14 @@ export function SessionsProvider({ children }: { children: React.ReactNode }): R
     },
     [],
   )
+
+  const anchorChange = useCallback((sessionId: string, slug: string | null) => {
+    setSessions((previous) =>
+      previous.map((session) =>
+        session.id === sessionId ? { ...session, anchoredChange: slug ?? undefined } : session,
+      ),
+    )
+  }, [])
 
   const close = useCallback((sessionId: string) => {
     const target = sessionsRef.current.find((session) => session.id === sessionId)
@@ -300,6 +338,10 @@ export function SessionsProvider({ children }: { children: React.ReactNode }): R
         sessions.find(
           (session) => session.folderId === folderId && session.pendingTitle !== undefined,
         ) ?? null,
+      anchoredChangeOf: (sessionId) =>
+        sessionId === null
+          ? null
+          : (sessions.find((session) => session.id === sessionId)?.anchoredChange ?? null),
       focus,
       create,
       close,
@@ -307,6 +349,7 @@ export function SessionsProvider({ children }: { children: React.ReactNode }): R
       rename,
       acceptPendingTitle,
       keepCustomTitle,
+      anchorChange,
       reorder,
       attach,
     }),
@@ -320,6 +363,7 @@ export function SessionsProvider({ children }: { children: React.ReactNode }): R
       rename,
       acceptPendingTitle,
       keepCustomTitle,
+      anchorChange,
       reorder,
       attach,
     ],
