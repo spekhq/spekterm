@@ -1,17 +1,37 @@
 import { type WebContents, ipcMain } from 'electron'
 import { FsBoundaryError } from '../fs-boundary'
-import { FsServiceError, listDir, readFile } from '../fs-service'
+import {
+  FsServiceError,
+  createDirectory,
+  createFile,
+  deleteEntry,
+  listDir,
+  readFile,
+  rename,
+  writeFile,
+} from '../fs-service'
 import { type WatchBatch, WatchService } from '../watch-service'
 import type { FolderLookup } from '../workspace-store'
 
 export const FS_CHANNELS = {
   listDir: 'workspace:fs:listDir',
   readFile: 'workspace:fs:readFile',
+  writeFile: 'workspace:fs:writeFile',
+  createFile: 'workspace:fs:createFile',
+  createDirectory: 'workspace:fs:createDirectory',
+  deleteEntry: 'workspace:fs:deleteEntry',
+  rename: 'workspace:fs:rename',
   watch: 'workspace:fs:watch',
   unwatch: 'workspace:fs:unwatch',
   /** 主行程 → renderer 的單向推送。Phase 1 的 IPC 全是 invoke／回應，這是第一個。 */
   watchEvent: 'workspace:fs:watchEvent',
 } as const
+
+/** 存檔的回應。`realPath` 已在此接縫上剝除 —— renderer 只認得 `(folderId, relPath)`。 */
+export interface WriteResponse {
+  mtimeMs: number
+  size: number
+}
 
 export interface FsFailure {
   ok: false
@@ -93,6 +113,38 @@ export function registerFsHandlers(store: FolderLookup): void {
 
   ipcMain.handle(FS_CHANNELS.readFile, (_event, folderId: string, relPath: string) =>
     toResult(() => readFile(store, folderId, relPath)),
+  )
+
+  ipcMain.handle(
+    FS_CHANNELS.writeFile,
+    (event, folderId: string, relPath: string, text: string, baseMtimeMs?: number) =>
+      toResult(async (): Promise<WriteResponse> => {
+        const result = await writeFile(store, folderId, relPath, text, baseMtimeMs)
+
+        // 我們自己剛寫的那則 change 事件不該回頭警告使用者「檔案已在磁碟上變更」。
+        // realPath 的用途到此為止 —— 它不隨回應跨過 IPC。
+        serviceFor(store, event.sender).noteSelfWrite(result.realPath, result.mtimeMs)
+
+        return { mtimeMs: result.mtimeMs, size: result.size }
+      }),
+  )
+
+  ipcMain.handle(FS_CHANNELS.createFile, (_event, folderId: string, relPath: string) =>
+    toResult(() => createFile(store, folderId, relPath)),
+  )
+
+  ipcMain.handle(FS_CHANNELS.createDirectory, (_event, folderId: string, relPath: string) =>
+    toResult(() => createDirectory(store, folderId, relPath)),
+  )
+
+  ipcMain.handle(FS_CHANNELS.deleteEntry, (_event, folderId: string, relPath: string) =>
+    toResult(() => deleteEntry(store, folderId, relPath)),
+  )
+
+  ipcMain.handle(
+    FS_CHANNELS.rename,
+    (_event, folderId: string, fromRelPath: string, toRelPath: string) =>
+      toResult(() => rename(store, folderId, fromRelPath, toRelPath)),
   )
 
   ipcMain.handle(FS_CHANNELS.watch, (event, folderId: string, relPath: string) =>

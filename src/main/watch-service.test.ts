@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, it } from 'node:test'
 import { FsBoundaryError } from './fs-boundary'
-import { FsServiceError } from './fs-service'
+import { FsServiceError, writeFile } from './fs-service'
 import { type WatchBatch, WatchService } from './watch-service'
 import type { FolderLookup, WorkspaceFolder } from './workspace-store'
 
@@ -336,5 +336,58 @@ describe('WatchService 的釋放契約', () => {
     await service.dispose()
 
     assert.equal(service.watchedCount, 0)
+  })
+})
+
+
+describe('自寫事件的抑制', () => {
+  // 少了它，每一次存檔都會讓檢視器警告「檔案已在磁碟上變更」—— 一則自己造成的假警報。
+  it('存檔不推送 change 事件', async () => {
+    await service.watch('f1', '.')
+    await delay(READY_MS)
+
+    const result = await writeFile(okFolder(), 'f1', 'existing.txt', 'saved-by-us')
+    service.noteSelfWrite(result.realPath, result.mtimeMs)
+
+    await delay(400)
+    assert.equal(
+      hasEvent('change', 'existing.txt'),
+      false,
+      `不該收到自己造成的變更事件：${JSON.stringify(events())}`,
+    )
+    assert.equal(fs.readFileSync(path.join(repo, 'existing.txt'), 'utf8'), 'saved-by-us')
+  })
+
+  // 抑制不得延伸到寫入完成之後的變更 —— 那是 agent 真的改了檔。
+  it('存檔之後由其他程序造成的變更仍被推送', async () => {
+    await service.watch('f1', '.')
+    await delay(READY_MS)
+
+    const result = await writeFile(okFolder(), 'f1', 'existing.txt', 'saved-by-us')
+    service.noteSelfWrite(result.realPath, result.mtimeMs)
+    await delay(200)
+
+    fs.writeFileSync(path.join(repo, 'existing.txt'), 'changed-by-agent')
+    await waitFor(() => hasEvent('change', 'existing.txt'), { label: '外部變更仍須推送' })
+  })
+
+  it('沒有紀錄的變更照常推送', async () => {
+    await service.watch('f1', '.')
+    await delay(READY_MS)
+
+    fs.writeFileSync(path.join(repo, 'existing.txt'), 'external')
+    await waitFor(() => hasEvent('change', 'existing.txt'), { label: 'change existing.txt' })
+  })
+
+  it('抑制只涵蓋 change，新增與刪除照常推送', async () => {
+    await service.watch('f1', '.')
+    await delay(READY_MS)
+
+    const result = await writeFile(okFolder(), 'f1', 'existing.txt', 'saved-by-us')
+    service.noteSelfWrite(result.realPath, result.mtimeMs)
+
+    fs.writeFileSync(path.join(repo, 'created.txt'), 'new')
+    await waitFor(() => hasEvent('add', 'created.txt'), { label: 'add created.txt' })
+    assert.equal(hasEvent('change', 'existing.txt'), false)
   })
 })

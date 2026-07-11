@@ -29,6 +29,26 @@ export interface WatchBatch {
 /** agent 一次寫十個檔案，不該讓 renderer 重繪十次。 */
 const DEFAULT_DEBOUNCE_MS = 50
 
+/**
+ * 自寫紀錄的存活時間。
+ *
+ * 它只是清理機制，不承擔正確性 —— 正確性來自 mtime 的單調性：任何**後續**的外部寫入
+ * 都會產生比紀錄值更新的 mtime，因而不會被抑制。
+ */
+const SELF_WRITE_TTL_MS = 5_000
+
+interface SelfWrite {
+  mtimeMs: number
+  expiresAt: number
+}
+
+/** 尚未送出的事件。多帶兩個欄位供自寫比對，送出前會被剝除。 */
+interface PendingEvent extends WatchEvent {
+  absPath: string
+  /** `unlink` 類事件沒有 stats。 */
+  mtimeMs: number | null
+}
+
 interface FolderWatcher {
   watcher: FSWatcher
   root: string
@@ -42,7 +62,7 @@ interface FolderWatcher {
    * 節點的監看一併關掉（chokidar 只認絕對路徑）。
    */
   watchers: Map<string, Set<string>>
-  pending: WatchEvent[]
+  pending: PendingEvent[]
   timer: NodeJS.Timeout | null
 }
 
@@ -76,6 +96,14 @@ function joinPosix(dir: string, name: string): string {
 export class WatchService {
   readonly #folders = new Map<string, FolderWatcher>()
 
+  /**
+   * 本 renderer 自己剛寫過的檔案：真實絕對路徑 → 寫入後的 mtime。
+   *
+   * 我們寫檔，chokidar 就會推一則 `change`，而檢視器收到 `change` 就顯示「檔案已在磁碟上
+   * 變更」—— 每一次存檔都會變成一則自己造成的假警報（design D12）。
+   */
+  readonly #selfWrites = new Map<string, SelfWrite>()
+
   constructor(
     private readonly store: FolderLookup,
     private readonly send: (batch: WatchBatch) => void,
@@ -94,6 +122,40 @@ export class WatchService {
     let total = 0
     for (const folder of this.#folders.values()) total += folder.watchers.size
     return total
+  }
+
+  /**
+   * 記錄一次由本應用程式造成的寫入。以**真實絕對路徑**為 key —— 一次寫入在磁碟上是一個
+   * 事件，即使樹上有多個 symlink 別名指向它。
+   *
+   * 呼叫端必須在寫入完成後立即呼叫。事件仍可能比它先抵達 chokidar，因此比對發生在
+   * `#flush`（有 debounce 的窗口）而不是 `#enqueue`。
+   */
+  noteSelfWrite(realPath: string, mtimeMs: number): void {
+    const now = Date.now()
+    for (const [key, noted] of this.#selfWrites) {
+      if (now > noted.expiresAt) this.#selfWrites.delete(key)
+    }
+    this.#selfWrites.set(realPath, { mtimeMs, expiresAt: now + SELF_WRITE_TTL_MS })
+  }
+
+  /**
+   * 這則事件是不是我們自己剛才寫出來的？
+   *
+   * 比對用「**不新於**」而非「等於」：實測 chokidar 取得的 mtime 可能落在 truncate 與
+   * write 之間，比我們 `fstat` 到的值略小。而任何後續的外部寫入，其 mtime 必然更新。
+   */
+  #isSelfWrite(event: PendingEvent): boolean {
+    if (event.type !== 'change' || event.mtimeMs === null) return false
+
+    const noted = this.#selfWrites.get(event.absPath)
+    if (!noted) return false
+    if (Date.now() > noted.expiresAt) {
+      this.#selfWrites.delete(event.absPath)
+      return false
+    }
+
+    return event.mtimeMs <= noted.mtimeMs
   }
 
   async watch(folderId: string, relPath: string): Promise<void> {
@@ -181,6 +243,8 @@ export class WatchService {
         // listDir 守住的邊界，會從這道側門漏掉。
         followSymlinks: false,
         ignoreInitial: true,
+        // 事件必須帶著 mtime 抵達，否則無從分辨「agent 改的」與「我們自己存的」。
+        alwaysStat: true,
         usePolling,
         interval,
       }),
@@ -196,8 +260,8 @@ export class WatchService {
     }
 
     for (const type of WATCH_EVENT_TYPES) {
-      watcher.on(type, (absPath: string) => {
-        this.#enqueue(folderId, type, absPath)
+      watcher.on(type, (absPath: string, stats?: { mtimeMs: number }) => {
+        this.#enqueue(folderId, type, absPath, stats?.mtimeMs ?? null)
       })
     }
     watcher.on('error', (error) => {
@@ -214,7 +278,12 @@ export class WatchService {
    * `sub`，也可能叫 `link-to-sub` —— 事件必須以**訂閱者的路徑**表達，否則 renderer 會拿
    * 一個它認不得的 relPath 去找節點，什麼也找不到。
    */
-  #enqueue(folderId: string, type: WatchEventType, absPath: string): void {
+  #enqueue(
+    folderId: string,
+    type: WatchEventType,
+    absPath: string,
+    mtimeMs: number | null,
+  ): void {
     const folder = this.#folders.get(folderId)
     if (!folder) return
 
@@ -228,7 +297,7 @@ export class WatchService {
     if (!subscribers) return
 
     for (const key of subscribers) {
-      folder.pending.push({ type, relPath: joinPosix(key, name) })
+      folder.pending.push({ type, relPath: joinPosix(key, name), absPath, mtimeMs })
     }
     if (folder.pending.length === 0) return
 
@@ -245,8 +314,16 @@ export class WatchService {
     const folder = this.#folders.get(folderId)
     if (!folder || folder.pending.length === 0) return
 
-    const events = folder.pending
+    const pending = folder.pending
     folder.pending = []
+
+    // 自寫的比對留到此刻才做：事件可能比 `noteSelfWrite` 更早抵達 chokidar，
+    // debounce 的窗口正好讓那筆紀錄趕上。
+    const events = pending
+      .filter((event) => !this.#isSelfWrite(event))
+      .map(({ type, relPath }): WatchEvent => ({ type, relPath }))
+
+    if (events.length === 0) return
     this.send({ folderId, events })
   }
 

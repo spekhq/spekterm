@@ -8,8 +8,14 @@ import {
   BINARY_SNIFF_BYTES,
   FsServiceError,
   MAX_READ_FILE_BYTES,
+  createDirectory,
+  createFile,
+  deleteEntry,
   listDir,
   readFile,
+  rename,
+  validateName,
+  writeFile,
 } from './fs-service'
 import type { FolderLookup, WorkspaceFolder } from './workspace-store'
 
@@ -245,5 +251,278 @@ describe('readFile 的拒絕條件', () => {
       assert.equal(error.code, 'UNKNOWN_FOLDER')
       return true
     })
+  })
+})
+
+/** 錯誤碼是契約，訊息不是。FsServiceError 與 FsBoundaryError 都以 `code` 表達失敗。 */
+async function rejectsWithCode(promise: Promise<unknown>, code: string): Promise<void> {
+  await assert.rejects(promise, (error: unknown) => {
+    const typed = error as FsServiceError | FsBoundaryError
+    assert.ok(
+      typed instanceof FsServiceError || typed instanceof FsBoundaryError,
+      `expected a typed fs error, got ${String(error)}`,
+    )
+    assert.equal(typed.code, code)
+    return true
+  })
+}
+
+/** folder 之外的一塊地。beforeEach 只建了 repo/，越界的測試需要它。 */
+function outsideDir(): string {
+  const outside = path.join(base, 'outside')
+  fs.mkdirSync(outside, { recursive: true })
+  return outside
+}
+
+describe('validateName', () => {
+  it('接受一般的檔名', () => {
+    for (const name of ['a.txt', 'my notes.txt', 'fs-boundary.ts', '.gitignore', 'A_b-c.1']) {
+      assert.doesNotThrow(() => validateName(name), name)
+    }
+  })
+
+  it('拒絕空名稱與相對路徑記號', () => {
+    for (const name of ['', '.', '..']) {
+      assert.throws(() => validateName(name), { code: 'INVALID_NAME' }, name)
+    }
+  })
+
+  it('拒絕路徑分隔符', () => {
+    for (const name of ['a/b', 'a\\b']) {
+      assert.throws(() => validateName(name), { code: 'INVALID_NAME' }, name)
+    }
+  })
+
+  // 以碼位建構，避免把控制字元本身寫進原始碼。
+  it('拒絕 NUL 與控制字元', () => {
+    for (const codePoint of [0x00, 0x01, 0x1f, 0x7f]) {
+      const name = `a${String.fromCharCode(codePoint)}b`
+      assert.throws(() => validateName(name), { code: 'INVALID_NAME' }, `U+${codePoint}`)
+    }
+  })
+
+  // 這幾條在 Linux 上都是合法檔名。擋它們是為了不製造一個只在 Windows 壞掉的 repo。
+  it('拒絕其他平台無法開啟的名稱', () => {
+    for (const name of ['a:b', 'a?b', 'a*b', 'a|b', 'a<b', 'a>b', 'a"b']) {
+      assert.throws(() => validateName(name), { code: 'INVALID_NAME' }, name)
+    }
+    for (const name of ['x.', 'x ', 'CON', 'con', 'con.txt', 'AUX', 'COM1', 'lpt9.md']) {
+      assert.throws(() => validateName(name), { code: 'INVALID_NAME' }, name)
+    }
+  })
+})
+
+describe('writeFile', () => {
+  it('覆寫既有檔案並回報新的 mtime', async () => {
+    const result = await writeFile(okFolder(), 'f1', 'a-file.txt', 'updated')
+    assert.equal(fs.readFileSync(path.join(repo, 'a-file.txt'), 'utf8'), 'updated')
+    assert.equal(typeof result.mtimeMs, 'number')
+    assert.equal(result.size, 'updated'.length)
+  })
+
+  it('目標不存在時拒絕，且不建立檔案', async () => {
+    await rejectsWithCode(writeFile(okFolder(), 'f1', 'nope.txt', 'x'), 'NOT_FOUND')
+    assert.equal(fs.existsSync(path.join(repo, 'nope.txt')), false)
+  })
+
+  it('目標是目錄時拒絕', async () => {
+    await rejectsWithCode(writeFile(okFolder(), 'f1', 'sub', 'x'), 'NOT_A_FILE')
+  })
+
+  it('拒絕逃逸出邊界的路徑', async () => {
+    const outside = outsideDir()
+    fs.writeFileSync(path.join(outside, 'secret.txt'), 'SECRET')
+    fs.symlinkSync(path.join(outside, 'secret.txt'), path.join(repo, 'escape'))
+
+    await rejectsWithCode(writeFile(okFolder(), 'f1', '../outside/secret.txt', 'x'), 'ESCAPES_ROOT')
+    await rejectsWithCode(writeFile(okFolder(), 'f1', 'escape', 'x'), 'ESCAPES_ROOT')
+    assert.equal(fs.readFileSync(path.join(outside, 'secret.txt'), 'utf8'), 'SECRET')
+  })
+
+  // design D5：就地寫入。「暫存檔 + 改名」會讓這條失敗。
+  it('寫入 folder 內的 symlink 時保留連結，更新其目標', async () => {
+    await writeFile(okFolder(), 'f1', 'a-link', 'through-link')
+    assert.equal(fs.lstatSync(path.join(repo, 'a-link')).isSymbolicLink(), true)
+    assert.equal(fs.readFileSync(path.join(repo, 'a-file.txt'), 'utf8'), 'through-link')
+  })
+
+  it('mtime 與基準不符時回報 CONFLICT 並附上磁碟的 mtime', async () => {
+    const target = path.join(repo, 'a-file.txt')
+    fs.writeFileSync(target, 'from-agent')
+    fs.utimesSync(target, new Date(1_000), new Date(2_000))
+
+    await assert.rejects(writeFile(okFolder(), 'f1', 'a-file.txt', 'mine', 1_234), (error) => {
+      assert.ok(error instanceof FsServiceError)
+      assert.equal(error.code, 'CONFLICT')
+      assert.equal(error.detail?.diskMtimeMs, 2_000)
+      return true
+    })
+  })
+
+  // 不帶 O_TRUNC 的理由：被拒絕的寫入不得先把檔案清空。
+  it('CONFLICT 時檔案內容原封不動', async () => {
+    const target = path.join(repo, 'a-file.txt')
+    fs.writeFileSync(target, 'from-agent')
+    fs.utimesSync(target, new Date(1_000), new Date(2_000))
+
+    await rejectsWithCode(writeFile(okFolder(), 'f1', 'a-file.txt', 'mine', 1_234), 'CONFLICT')
+    assert.equal(fs.readFileSync(target, 'utf8'), 'from-agent')
+  })
+
+  it('基準相符時寫入', async () => {
+    const target = path.join(repo, 'a-file.txt')
+    const { mtimeMs } = fs.statSync(target)
+    await writeFile(okFolder(), 'f1', 'a-file.txt', 'mine', mtimeMs)
+    assert.equal(fs.readFileSync(target, 'utf8'), 'mine')
+  })
+
+  it('省略基準時直接覆寫', async () => {
+    const target = path.join(repo, 'a-file.txt')
+    fs.utimesSync(target, new Date(1_000), new Date(2_000))
+    await writeFile(okFolder(), 'f1', 'a-file.txt', 'forced')
+    assert.equal(fs.readFileSync(target, 'utf8'), 'forced')
+  })
+})
+
+describe('createFile', () => {
+  it('建立空的普通檔案', async () => {
+    await createFile(okFolder(), 'f1', 'sub/new.txt')
+    assert.equal(fs.readFileSync(path.join(repo, 'sub', 'new.txt'), 'utf8'), '')
+  })
+
+  it('目標已存在時拒絕', async () => {
+    await rejectsWithCode(createFile(okFolder(), 'f1', 'a-file.txt'), 'ALREADY_EXISTS')
+    assert.equal(fs.readFileSync(path.join(repo, 'a-file.txt'), 'utf8'), 'x')
+  })
+
+  // O_EXCL 的存在性判定看連結本身，因此不會寫穿它（design D6）。
+  it('目標是既有的 symlink 時拒絕，不觸碰其目標', async () => {
+    await rejectsWithCode(createFile(okFolder(), 'f1', 'a-link'), 'ALREADY_EXISTS')
+    assert.equal(fs.lstatSync(path.join(repo, 'a-link')).isSymbolicLink(), true)
+    assert.equal(fs.readFileSync(path.join(repo, 'a-file.txt'), 'utf8'), 'x')
+  })
+
+  it('父目錄不存在時拒絕，不自動建立中間目錄', async () => {
+    await rejectsWithCode(createFile(okFolder(), 'f1', 'deep/nested/x.txt'), 'NOT_FOUND')
+    assert.equal(fs.existsSync(path.join(repo, 'deep')), false)
+  })
+
+  it('名稱不合法時拒絕', async () => {
+    await rejectsWithCode(createFile(okFolder(), 'f1', 'sub/CON'), 'INVALID_NAME')
+    await rejectsWithCode(createFile(okFolder(), 'f1', 'sub/bad:name'), 'INVALID_NAME')
+  })
+
+  it('拒絕逃逸出邊界的路徑', async () => {
+    outsideDir()
+    await rejectsWithCode(createFile(okFolder(), 'f1', '../outside/new.txt'), 'ESCAPES_ROOT')
+    assert.equal(fs.existsSync(path.join(base, 'outside', 'new.txt')), false)
+  })
+})
+
+describe('createDirectory', () => {
+  it('建立目錄', async () => {
+    await createDirectory(okFolder(), 'f1', 'sub/deep')
+    assert.equal(fs.statSync(path.join(repo, 'sub', 'deep')).isDirectory(), true)
+  })
+
+  it('目標已存在時拒絕', async () => {
+    await rejectsWithCode(createDirectory(okFolder(), 'f1', 'sub'), 'ALREADY_EXISTS')
+  })
+
+  it('父目錄不存在時拒絕', async () => {
+    await rejectsWithCode(createDirectory(okFolder(), 'f1', 'deep/nested'), 'NOT_FOUND')
+  })
+})
+
+describe('deleteEntry', () => {
+  it('刪除檔案', async () => {
+    await deleteEntry(okFolder(), 'f1', 'a-file.txt')
+    assert.equal(fs.existsSync(path.join(repo, 'a-file.txt')), false)
+  })
+
+  it('遞迴刪除非空目錄', async () => {
+    await deleteEntry(okFolder(), 'f1', 'sub')
+    assert.equal(fs.existsSync(path.join(repo, 'sub')), false)
+  })
+
+  // 拿 realPath 去刪，這裡刪掉的會是 a-file.txt 而不是 a-link。
+  it('刪除 symlink 時刪的是連結本身，不是它的目標', async () => {
+    await deleteEntry(okFolder(), 'f1', 'a-link')
+    assert.equal(fs.existsSync(path.join(repo, 'a-link')), false)
+    assert.equal(fs.readFileSync(path.join(repo, 'a-file.txt'), 'utf8'), 'x')
+  })
+
+  it('遞迴刪除不跟隨其中的 symlink', async () => {
+    const outside = outsideDir()
+    fs.writeFileSync(path.join(outside, 'keep.txt'), 'KEEP')
+    fs.symlinkSync(outside, path.join(repo, 'sub', 'link-out'))
+
+    await deleteEntry(okFolder(), 'f1', 'sub')
+    assert.equal(fs.existsSync(path.join(repo, 'sub')), false)
+    assert.equal(fs.readFileSync(path.join(outside, 'keep.txt'), 'utf8'), 'KEEP')
+  })
+
+  it('拒絕刪除指向邊界外的 symlink', async () => {
+    const outside = outsideDir()
+    fs.writeFileSync(path.join(outside, 'secret.txt'), 'SECRET')
+    fs.symlinkSync(path.join(outside, 'secret.txt'), path.join(repo, 'escape'))
+
+    await rejectsWithCode(deleteEntry(okFolder(), 'f1', 'escape'), 'ESCAPES_ROOT')
+    assert.equal(fs.lstatSync(path.join(repo, 'escape')).isSymbolicLink(), true)
+  })
+
+  it('拒絕刪除 folder 根目錄自身', async () => {
+    await rejectsWithCode(deleteEntry(okFolder(), 'f1', '.'), 'PROTECTED_ROOT')
+    assert.equal(fs.existsSync(repo), true)
+  })
+})
+
+describe('rename', () => {
+  it('變更檔案名稱', async () => {
+    await rename(okFolder(), 'f1', 'a-file.txt', 'renamed.txt')
+    assert.equal(fs.existsSync(path.join(repo, 'a-file.txt')), false)
+    assert.equal(fs.readFileSync(path.join(repo, 'renamed.txt'), 'utf8'), 'x')
+  })
+
+  it('移動至另一個目錄', async () => {
+    await rename(okFolder(), 'f1', 'a-file.txt', 'sub/moved.txt')
+    assert.equal(fs.readFileSync(path.join(repo, 'sub', 'moved.txt'), 'utf8'), 'x')
+  })
+
+  // rename 會無聲覆蓋既有目標（已實測）。這條測試釘住那道事前檢查。
+  it('目標已存在時拒絕，且既有目標不被覆蓋', async () => {
+    fs.writeFileSync(path.join(repo, 'other.txt'), 'OTHER')
+    await rejectsWithCode(rename(okFolder(), 'f1', 'a-file.txt', 'other.txt'), 'ALREADY_EXISTS')
+    assert.equal(fs.readFileSync(path.join(repo, 'other.txt'), 'utf8'), 'OTHER')
+    assert.equal(fs.existsSync(path.join(repo, 'a-file.txt')), true)
+  })
+
+  it('搬動 symlink 時搬的是連結本身', async () => {
+    await rename(okFolder(), 'f1', 'a-link', 'moved-link')
+    assert.equal(fs.lstatSync(path.join(repo, 'moved-link')).isSymbolicLink(), true)
+    assert.equal(fs.existsSync(path.join(repo, 'a-file.txt')), true)
+  })
+
+  it('拒絕來源為指向邊界外的 symlink', async () => {
+    const outside = outsideDir()
+    fs.writeFileSync(path.join(outside, 'secret.txt'), 'SECRET')
+    fs.symlinkSync(path.join(outside, 'secret.txt'), path.join(repo, 'escape'))
+
+    await rejectsWithCode(rename(okFolder(), 'f1', 'escape', 'docs'), 'ESCAPES_ROOT')
+    assert.equal(fs.existsSync(path.join(repo, 'docs')), false)
+  })
+
+  it('拒絕目標逃逸出邊界', async () => {
+    outsideDir()
+    await rejectsWithCode(rename(okFolder(), 'f1', 'a-file.txt', '../outside/x.txt'), 'ESCAPES_ROOT')
+    assert.equal(fs.existsSync(path.join(repo, 'a-file.txt')), true)
+  })
+
+  it('拒絕不合法的目標名稱', async () => {
+    await rejectsWithCode(rename(okFolder(), 'f1', 'a-file.txt', 'NUL'), 'INVALID_NAME')
+  })
+
+  it('拒絕改名 folder 根目錄自身', async () => {
+    await rejectsWithCode(rename(okFolder(), 'f1', '.', 'newname'), 'PROTECTED_ROOT')
   })
 })

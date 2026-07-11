@@ -1,11 +1,14 @@
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { app, BrowserWindow } from 'electron'
+import { DirtyStateStore } from './dirty-state'
+import { registerAppHandlers } from './ipc/app'
 import { registerFsHandlers } from './ipc/fs'
 import { registerFolderHandlers } from './ipc/folders'
 import { registerShellHandlers } from './ipc/shell'
 import { applyNavigationGuards } from './navigation'
 import { formatScanSummary, scanRepo } from './openspec'
+import { guardUnsavedChanges } from './unsaved-changes'
 import { WorkspaceStore } from './workspace-store'
 
 const currentDir = dirname(fileURLToPath(import.meta.url))
@@ -20,7 +23,7 @@ const trustModel = {
   sandbox: false,
 } as const
 
-function createWindow(): BrowserWindow {
+function createWindow(dirty: DirtyStateStore): BrowserWindow {
   const window = new BrowserWindow({
     width: 1280,
     height: 800,
@@ -35,6 +38,13 @@ function createWindow(): BrowserWindow {
 
   // 在載入任何內容之前掛上。renderer 從第一幀起就會渲染使用者 repo 裡的不受信任內容。
   applyNavigationGuards(window.webContents)
+  guardUnsavedChanges(window, dirty)
+
+  const contentsId = window.webContents.id
+  // 重新載入不會銷毀 webContents，但新頁面沒有任何未存的變更 —— 舊快照必須作廢，
+  // 否則關閉時會對著一份不存在的 dirty 集合發問（與 watcher 的釋放同源）。
+  window.webContents.on('did-navigate', () => dirty.release(contentsId))
+  window.webContents.once('destroyed', () => dirty.release(contentsId))
 
   window.on('ready-to-show', () => {
     window.show()
@@ -79,11 +89,14 @@ void app.whenReady().then(() => {
   const store = new WorkspaceStore(join(app.getPath('userData'), 'workspace.json'))
   store.load()
 
+  const dirty = new DirtyStateStore()
+
   registerFolderHandlers(store)
   registerFsHandlers(store)
   registerShellHandlers()
+  registerAppHandlers(dirty)
 
-  createWindow()
+  createWindow(dirty)
 
   // 未打包的執行一律視為開發模式（`electron-vite dev` 與直接 `electron .` 皆涵蓋）。
   if (!app.isPackaged) {
@@ -92,7 +105,7 @@ void app.whenReady().then(() => {
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
-      createWindow()
+      createWindow(dirty)
     }
   })
 })

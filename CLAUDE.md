@@ -8,12 +8,15 @@ spek workspace 是一個以 agent 為核心的本地開發工作台 —— 獨�
 把多個「一個 repo／資料夾各自一個 `claude` session」的 terminal 包在一個殼裡，
 並加上一塊懂 OpenSpec 結構的側欄，讓使用者不必另外開 IDE 就能一邊駕駛 agent、一邊看著 spec 上下文。
 
-**現況：Phase 2（`file-explorer-readonly-view`）實作中。** Phase 0、Phase 1 已封存：Electron 骨架、
+**現況：Phase 3（`file-editing-and-crud`）實作中。** Phase 0–2 已封存：Electron 骨架、
 PRD §12 信任模型、`node-pty` spawn 真 pty、主行程以 `@spekjs/core` 直接掃描 OpenSpec 結構、
-多 folder 工作區（清單持久化於 userData）、活動列 + rail + 三欄版面、受邊界約束的 `listDir`，
-皆已實測驗證。Phase 2 加上 side panel 的 `[◈ OpenSpec │ ▤ Files]` 身分切換、遞迴檔案樹
-（lazy load + chokidar 監控）、面板內的檔案唯讀檢視（markdown 渲染／Monaco 高亮），以及
-**renderer 的導航防護**。尚未開始：寫檔、terminal UI、OpenSpec 側欄的內容、handoff。
+多 folder 工作區（清單持久化於 userData）、活動列 + rail + 三欄版面、受邊界約束的 `listDir`、
+side panel 的 `[◈ OpenSpec │ ▤ Files]` 身分切換、遞迴檔案樹（lazy load + chokidar 監控）、
+面板內的檔案檢視（markdown 渲染／Monaco 高亮）與 renderer 導航防護，皆已實測驗證。Phase 3
+加上 renderer **首次的寫入能力**：完整 CRUD（`writeFile` 就地覆寫、`createFile`、
+`createDirectory`、`deleteEntry`、`rename`）、markdown 的預覽／原始碼切換後可編輯、dirty
+狀態與 dirty buffer（跨換頁與跨 folder 存活）、`Cmd/Ctrl+S` 存檔、mtime 樂觀鎖的衝突處理、
+watcher 的自寫事件抑制、關閉視窗時的未存提示。尚未開始：terminal UI、OpenSpec 側欄的內容、handoff。
 
 ### 開發指令
 
@@ -24,7 +27,7 @@ npm run typecheck       # tsc：main / preload（node）+ renderer（web）
 npm test                # node:test 單元測試（fs 邊界、workspace store、listDir/readFile、watcher、外部 URL）
 npm run probe:shell     # 驗收 workspace-app-shell（開視窗 + 信任模型 + preload 白名單，走 CDP）
 npm run probe:workspace # 驗收 workspace-folders / filesystem-access / workspace-layout
-npm run probe:files     # 驗收 file-explorer / file-viewer / 身分切換 / 導航防護 / 編輯器 worker（dev + build 兩模式）
+npm run probe:files     # 驗收 file-explorer / file-viewer / 編輯 / 存檔 / 衝突 / CRUD / 導航防護 / 編輯器 worker（dev + build 兩模式）
 npm run probe:native    # 驗收 native-module-toolchain（Electron 主行程載入 node-pty + spawn pty）
 npm run probe:core      # 驗收 spek-core-integration（主行程掃描 OpenSpec，且不開 TCP 埠）
 npm run measure:bundle  # renderer bundle 體積報告（依編輯器核心／worker／語言分類歸因）
@@ -37,6 +40,26 @@ npm run measure:bundle  # renderer bundle 體積報告（依編輯器核心／wo
 
 `probe:workspace` 以 `--user-data-dir` 指向暫存 profile，因此可以反覆重啟 app、餵它一份
 損毀的設定檔，而不會污染你真實的 workspace 設定。
+
+**收尾殺行程時，殺 wrapper 殺不到它 spawn 的真行程。** `node_modules/.bin/electron` 是個
+node wrapper，它自己再 spawn 真正的 electron 二進位；`npx electron-vite dev` 的 vite 也是孫
+行程。對 wrapper 送 SIGTERM／SIGKILL，底下的真行程會變孤兒，繼續佔著 debugging port（9224）
+或 dev port，讓下一輪 probe 連到殭屍而讀到空樹（實測：一連串失敗看起來像 regression，其實是
+殭屍）。**兩種收法**：electron 以獨一無二的 `--user-data-dir=<profile>` 用 `pkill -9 -f <profile>`
+連根拔除整棵樹（每個子行程的 argv 都帶著它）；dev server 以 `detached: true` spawn 成 group
+leader，再 `process.kill(-pid)` 殺整組。**另外，面板留有未存變更時關閉會觸發原生對話框
+（design D15），它會擋住主行程訊息迴圈使 SIGTERM 失效** —— 這也是必須連根拔除而非溫柔關閉
+的理由。`probe:files` 的每次探針失敗若伴隨「樹是空的」，先 `pgrep -f spek-files-profile` 檢查
+有無殭屍，別急著改產品程式碼。
+
+**驗互動時用真事件，不要用 `dispatchEvent(new MouseEvent(...))`。** 合成事件不等於真實
+輸入：它不走完整的 pointer/mouse/contextmenu 序列，也不觸發 React 19 對 trusted discrete
+事件的同步 effect flush。實測踩過：右鍵選單用合成 `contextmenu` 測「全綠」，但真右鍵完全開
+不起來 —— 開啟選單的那次事件冒泡到 window，被選單自己的 dismiss listener 當場關掉（React 19
+在同一次事件內就把 effect 掛上了）。而「用選擇器 `.click()` 選單項」會跳過定位，選單溢出
+viewport 也照樣通過。**右鍵 / 點擊要用 `Input.dispatchMouseEvent`（button:right/left），
+並斷言選單的 `getBoundingClientRect()` 完整落在 viewport 內。** overlay/選單類 UI 的定位與
+「開啟事件不可自我關閉」只有真事件測得出來。
 
 開發模式（未打包）啟動時，主行程會輸出一行掃描摘要。掃描目標預設為本 repo，
 以 `SPEK_SCAN_PATH` 覆寫：
@@ -92,10 +115,16 @@ node-pty 1.2.0-beta.14（釘死）、Monaco Editor、chokidar 5、react-markdown
   被 Node 與 Electron 載入（兩者 ABI 編號不同，但 N-API 版本相同）。版本必須釘 1.2.0-beta
   系列 —— npm `latest`（1.1.0）缺 Linux prebuild，會強迫本地編譯。
 - **編輯器採 Monaco，且只取語法高亮**（`basic-languages/*` 的 monarch tokenizer），
-  **不含任何 `language/*` 語言服務**。唯讀檢視不需要語意分析，而 `ts.worker` 單獨就佔
-  12.65 MB。實測：含語言服務 21.51 MB、不含 8.81 MB。`npm run measure:bundle` 會在建置
-  產物出現任何語言服務 worker 時以非零碼結束。退守 CodeMirror 6 的成本侷限於
-  `src/renderer/src/editor` 這個 wrapper 模組。
+  **不含任何 `language/*` 語言服務**。編輯器承擔的是語法高亮，深度改檔走 agent 或使用者自己的
+  IDE（PRD §6.2）；`ts.worker` 單獨就佔 12.65 MB。實測：含語言服務 21.51 MB、不含 8.81 MB。
+  `npm run measure:bundle` 會在建置產物出現任何語言服務 worker 時以非零碼結束。退守 CodeMirror 6
+  的成本侷限於 `src/renderer/src/editor` 這個 wrapper 模組。
+- **編輯器關閉 Monaco 的 native EditContext（`editContext: false`）**，改用經典的隱形 textarea
+  輸入路徑。理由是可驗收性：native EditContext 的 `ime-text-area` **恆為 `readonly`**，與編輯器
+  唯不唯讀無關 —— Phase 2 的 probe 曾以「textarea.readOnly === true」斷言唯讀，那條對可編輯的
+  編輯器**一樣會通過**，是假驗收（Phase 2 結論剛好正確才沒被發現）。關掉 EditContext 後，
+  textarea 的 `readonly` 正確反映狀態，且 CDP 的 `Input.insertText` 能真的打字。驗證編輯能力
+  **必須讓內容真的改變並回讀磁碟**，不能只看某個 textarea 的 `readonly`。
 - **`react-markdown` 的安全性來自預設值**：原始 HTML 被降級為純文字、URL 由
   `defaultUrlTransform` 過濾（只放行 `http(s)`/`mailto`/`xmpp`）。**絕不可加 `rehype-raw`、
   也不可覆寫 `urlTransform`** —— 檔案樹渲染的是使用者 repo 裡的任意 `.md`，那是不受信任的輸入。
@@ -125,10 +154,11 @@ node-pty 1.2.0-beta.14（釘死）、Monaco Editor、chokidar 5、react-markdown
 > `editor/`）。`file-explorer-readonly-view` 以 side panel 的檔案檢視為載體重新確立它們，並
 > 新增兩條：「不引入任何語言服務 worker」與「worker 於 dev 與 build 兩模式皆完成一次往返」。
 
-> **Phase 3 必須償還的債**：Phase 1 與 Phase 2 都只讀不寫，因此沿用「先 `realpath` 檢查、
-> 再以該真實路徑開啟」。**引入 `writeFile` 時必須重新評估 TOCTOU 與 hard link**（`O_NOFOLLOW`、
-> 以 dirfd 相對開啟）—— 屆時 renderer 擁有建立檔案的能力，race 的兩端它都碰得到，
-> Phase 2 `design.md` D10 的論證明文指出**不得**被 Phase 3 引用。
+> **Phase 3 已償還 Phase 1/2 欠下的寫入邊界債**（`file-editing-and-crud`）：讀取的「先
+> `realpath` 檢查、再依原路徑開啟」**不被寫入沿用**（已實測會逸出邊界）；寫入改為解析與開啟
+> 不可分割、帶 `O_NOFOLLOW`。中間目錄段的 TOCTOU 因 Node 無 `openat` 無法機制性防護，改以
+> 「白名單不暴露 `symlink()`、寫入 leaf 一律 `realpath`」的威脅模型承擔 —— 詳見上文「檔案系統
+> 邊界」段與 design D1–D8。**此結論有前提，暴露 `symlink()` 或改用 `lstat` 語意即失效。**
 
 ## Conventions
 
@@ -202,14 +232,24 @@ workspace 之外的位置。邊界檢查一律在**主行程**執行；preload �
   為了讓這個寫法必定失敗；不要「簡化」掉它。
 - **symlink 必須在比對之前解析**（root 與 target 兩端都要 `realpath`）。只看字面路徑會漏掉
   「folder 內的 symlink 指向 folder 外」。
-- **TOCTOU 與 hard link 尚未防護。** Phase 2 加上 `readFile` 後，越界的後果從「看到不該看的
-  檔名」升級為「讀到不該讀的內容」。這道邊界防的是**被入侵或有 bug 的 renderer**，不是已經
-  拿到本機寫入權的攻擊者 —— renderer 沒有任何建立檔案或 symlink 的能力，因此無法自己製造
-  那個 race。**Phase 3 引入 `writeFile` 時此論證不再成立**（`O_NOFOLLOW`、以 dirfd 相對開啟），
-  不可沿用。完整論證見 Phase 2 `design.md` D10。
+- **讀取路徑（`resolveWithinRoot`）與寫入路徑（`openExistingForWrite` / `resolveNewWithin`）
+  分家，不可混用。** 讀取回傳一個路徑，呼叫端拿去 `open`；寫入若沿用這個「檢查完再依原路徑
+  開啟」，已實測會逸出邊界（check 與 open 之間 leaf 被換成越界 symlink）。寫入必須解析與開啟
+  不可分割：對 `realpath` 的結果、帶 `O_NOFOLLOW` 開啟。
+- **TOCTOU 與 hard link：Phase 3 起以威脅模型承擔，不是機制性防護。** Node 沒有 `openat`，
+  `O_NOFOLLOW` 只約束路徑最後一段，中間目錄段的 race 防不住。關鍵在**白名單不暴露 `symlink()`、
+  寫入的 leaf 檢查一律用 `realpath`（不是 `lstat`）** —— 於是 renderer 既造不出、也操縱不到
+  race 所需的 symlink。這道邊界防的仍是**被入侵或有 bug 的 renderer**，不是已拿到本機寫入權的
+  攻擊者。**此結論有前提**：任何後續 change 若要暴露 `symlink()`、或把寫入 leaf 檢查改為 `lstat`
+  語意，本論證即失效，必須重新論證。完整論證見 `file-editing-and-crud` 的 `design.md` D1–D8
+  （`O_NOFOLLOW` 為 POSIX-only，Windows 退為 `lstat` 二次確認，且本 repo 無 Windows 實測，
+  列為 Phase 6 打包驗收前必須確認的項目）。
+- **原地寫入，不做「暫存檔 + 改名」。** 後者會把 folder 內的 symlink 取代成普通檔案、斷開
+  hard link，並讓一次存檔在 watcher 上呈現為「刪除後新增」（已實測）。取捨見 design D5。
 - **watcher 也受同一道邊界約束**：`followSymlinks: false`，且事件的絕對路徑轉成
   `(folderId, relPath)` 之前必須再過一次 `isWithin`。推給 renderer 的每一個路徑，
-  都必須是 renderer 有詞彙表達的路徑。
+  都必須是 renderer 有詞彙表達的路徑。**且 app 自身的寫入不得回推為外部變更事件** —— 否則
+  每次存檔都會警告使用者磁碟被改動（自寫抑制見 design D12）。
 
 驗證「某段邏輯沒有 spawn 外部程式」時，**不要用行程樹取樣** —— 開發模式的掃描摘要本來就會
 spawn 一次 `git log`（core 的 `getTimestamps`），會混淆歸屬；而 `git` 是毫秒級行程，取樣容易

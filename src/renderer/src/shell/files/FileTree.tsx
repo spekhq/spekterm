@@ -14,10 +14,12 @@ function glyphFor(row: TreeRow): string {
 interface FileRowProps {
   row: TreeRow
   now: number
+  dirty: boolean
   onActivate: (row: TreeRow) => void
+  onContextMenu: (row: TreeRow, x: number, y: number) => void
 }
 
-function FileRow({ row, now, onActivate }: FileRowProps): React.JSX.Element {
+function FileRow({ row, now, dirty, onActivate, onContextMenu }: FileRowProps): React.JSX.Element {
   const isDirectory = row.kind === 'directory'
 
   return (
@@ -29,6 +31,10 @@ function FileRow({ row, now, onActivate }: FileRowProps): React.JSX.Element {
       tabIndex={0}
       title={row.error ?? row.relPath}
       onClick={() => onActivate(row)}
+      onContextMenu={(event) => {
+        event.preventDefault()
+        onContextMenu(row, event.clientX, event.clientY)
+      }}
       onKeyDown={(event) => {
         if (event.key === 'Enter' || event.key === ' ') {
           event.preventDefault()
@@ -47,6 +53,12 @@ function FileRow({ row, now, onActivate }: FileRowProps): React.JSX.Element {
         {row.name}
         {isDirectory ? '/' : ''}
       </span>
+      {/* side panel 沒有分頁列。少了這個點，使用者無從得知自己還有未存的變更。 */}
+      {dirty && (
+        <span aria-label="有未存的變更" title="有未存的變更" className="shrink-0 text-accent">
+          ●
+        </span>
+      )}
       {row.error ? (
         <span className="shrink-0 text-[10px] text-danger">{row.error}</span>
       ) : (
@@ -61,14 +73,30 @@ function FileRow({ row, now, onActivate }: FileRowProps): React.JSX.Element {
 interface FileTreeProps {
   rows: TreeRow[]
   now: number
+  /** 有未存變更的檔案路徑。 */
+  dirtyPaths: ReadonlySet<string>
   onActivate: (row: TreeRow) => void
+  onContextMenu: (row: TreeRow, x: number, y: number) => void
 }
 
-export function FileTree({ rows, now, onActivate }: FileTreeProps): React.JSX.Element {
+export function FileTree({
+  rows,
+  now,
+  dirtyPaths,
+  onActivate,
+  onContextMenu,
+}: FileTreeProps): React.JSX.Element {
   return (
     <div role="tree" aria-label="檔案樹" className="flex flex-col font-mono">
       {rows.map((row) => (
-        <FileRow key={row.relPath} row={row} now={now} onActivate={onActivate} />
+        <FileRow
+          key={row.relPath}
+          row={row}
+          now={now}
+          dirty={dirtyPaths.has(row.relPath)}
+          onActivate={onActivate}
+          onContextMenu={onContextMenu}
+        />
       ))}
     </div>
   )

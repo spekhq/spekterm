@@ -148,7 +148,7 @@ Electron，目標產出 macOS / Windows / Linux 三平台安裝檔。
 |---|---|---|---|
 | F1 | 多 folder 工作區 | 加入／移除多個 folder，清單與狀態持久化 | Phase 1 |
 | F2 | File Explorer | 多 folder 檔案樹、子目錄 lazy load、chokidar 監控外部變更 | Phase 2 |
-| F3 | 檔案檢視／編輯 | 於 side panel 內開檔（markdown 渲染、其餘 Monaco 唯讀高亮）；dirty 狀態與 `Cmd/Ctrl+S` 存檔屬 Phase 3 | Phase 2–3 |
+| F3 | 檔案檢視／編輯 | 於 side panel 內開檔（markdown 渲染／原始碼切換、其餘 Monaco 語法高亮）；編輯、dirty 狀態（跨換頁與跨 folder 存活）、`Cmd/Ctrl+S` 存檔、完整 CRUD 屬 Phase 3 | Phase 2–3 |
 | F4 | 多 session terminal | 底部 dock，`node-pty` 多 session，跑 agent 主場，預設 cwd = 選中 folder | Phase 4 |
 | F5 | OpenSpec 側欄 | Dashboard / Specs / Changes / Graph，透過 `IpcAdapter` 重用 spek 前端；自動跟隨當前 session 的 change | Phase 5 |
 | F6 | 交叉導覽 | spec/change ↔ 底層檔案互跳 | Phase 5 |
@@ -440,9 +440,11 @@ spek 可重用 React 元件目前住在 `@spek/web`、未對外輸出。抽出�
   preload 白名單交給遠端頁面。
 
 ### Phase 3 — 編輯能力
-- 多語言 syntax highlight、dirty 狀態、`Cmd/Ctrl+S` 存檔、關閉未存提示。
-- IPC：`fs.writeFile`（限制在已加入的 workspace folders 內 → 信任模型）。
-- 存檔與外部變更衝突處理。
+- 多語言 syntax highlight、dirty 狀態、`Cmd/Ctrl+S` 存檔、**關閉視窗 / 結束 app 時的未存提示**。
+- markdown 加 `[預覽 │ 原始碼]` 切換後可編輯；dirty buffer **跨換頁與跨 folder 存活**，樹上標記未存的檔案。
+- IPC：完整 CRUD —— `fs.writeFile`（就地覆寫）、`createFile`、`createDirectory`、`deleteEntry`、`rename`，全部限制在已加入的 workspace folders 內。
+- 存檔與外部變更衝突處理（mtime 樂觀鎖）。
+- **寫入的邊界不得沿用讀取的論證**：Node 無 `openat`、`O_NOFOLLOW` 為 POSIX-only，中間目錄段的 TOCTOU 靠「renderer 拿不到 symlink」承擔（白名單不暴露 `symlink()`）。詳見 `file-editing-and-crud` 的 `design.md` D1–D8。
 
 ### Phase 4 — Terminal（agent 主場）
 - 主行程：`node-pty` 多 session 管理；IPC 雙向串流。

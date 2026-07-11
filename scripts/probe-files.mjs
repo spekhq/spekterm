@@ -12,10 +12,12 @@
  * 用法：npm run probe:files
  * 結束碼 0 表示全部 scenario 通過。
  */
-import { spawn } from 'node:child_process'
+import { execFileSync, spawn } from 'node:child_process'
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   realpathSync,
   rmSync,
   symlinkSync,
@@ -127,9 +129,13 @@ const stripAnsi = (text) => text.replace(ANSI_PATTERN, '')
  * `ELECTRON_RENDERER_URL` 就會 `loadURL(http://…)`，worker 走 dev server 而非 `file://`。
  */
 async function startRendererDevServer() {
+  // `detached: true` 讓 npx 成為新的 process group leader —— `npx` 會 spawn `node`、
+  // `node` 再 spawn vite，殺 npx（SIGTERM）殺不到底下的 vite（同 `.bin/electron` 的孫行程
+  // 問題）。整組同一個 pgid 之後，收尾時 `process.kill(-pid)` 就能連根拔除。
   const child = spawn('npx', ['electron-vite', 'dev', '--rendererOnly'], {
     stdio: ['ignore', 'pipe', 'pipe'],
     env: process.env,
+    detached: true,
   })
 
   const url = await new Promise((resolve, reject) => {
@@ -175,7 +181,18 @@ async function launch({ port, profileDir, rendererUrl }) {
     async close() {
       client.close()
       child.kill('SIGTERM')
-      await sleep(600)
+      await sleep(400)
+      // `node_modules/.bin/electron` 是個 node wrapper，它自己再 spawn 真正的 electron
+      // 二進位。殺掉 wrapper 不會帶走那個真 electron —— 它會變孤兒，繼續佔著 debugging
+      // port（尤其面板留有未存變更時，關閉會觸發原生對話框 design D15，擋住 SIGTERM）。
+      // 以獨一無二的 profile 路徑把整棵行程樹（wrapper + 真 electron + renderer + gpu）
+      // 連根拔除 —— 每個子行程的 argv 都帶著 `--user-data-dir=<profileDir>`。
+      try {
+        execFileSync('pkill', ['-9', '-f', profileDir], { stdio: 'ignore' })
+      } catch {
+        // pkill 找不到符合的行程時回非零碼，那正是我們要的結果（已經沒了）。
+      }
+      await sleep(200)
     },
   }
 }
@@ -285,10 +302,74 @@ const EXPAND_THEN_COLLAPSE = (relPath) => `(async () => {
 // Monaco 以 &nbsp; 渲染空白，直接比對字串會被 U+00A0 騙過去
 const EDITOR_TEXT = `document.querySelector('.monaco-editor .view-lines')?.innerText.replace(/\\u00a0/g, ' ') ?? null`
 
-const EDITOR_TEXTAREA_READONLY = `(() => {
-  const textarea = document.querySelector('.monaco-editor textarea')
-  return textarea ? textarea.readOnly : null
+/** 隱形輸入區的 readonly 屬性。editContext 關閉後（見 editor wrapper），它會正確反映唯讀狀態。 */
+const INPUT_AREA_READONLY = `(() => {
+  const ta = document.querySelector('.monaco-editor textarea')
+  return ta ? ta.readOnly : null
 })()`
+
+/** side panel 內文，用來偵測衝突／過期橫幅之類的文字提示。 */
+const SIDE_PANEL_TEXT = `document.querySelector('section[aria-label="Side panel"]')?.innerText ?? ''`
+
+/** 某一列樹節點是否帶著未存變更的標記。 */
+const ROW_IS_DIRTY = (relPath) => `(() => {
+  const row = [...document.querySelectorAll('[role="treeitem"]')].find((r) => r.getAttribute('title') === ${JSON.stringify(relPath)})
+  return row ? Boolean(row.querySelector('[aria-label="有未存的變更"]')) : null
+})()`
+
+/** 點面板 header 的「‹ 返回」，自檔案檢視換頁回檔案樹。 */
+const BACK_TO_TREE = `(() => {
+  const btn = [...document.querySelectorAll('section[aria-label="Files"] header button')].find((b) => b.textContent.includes('返回'))
+  if (!btn) return false
+  btn.click()
+  return true
+})()`
+
+/** 點某個選單項（依文字）。選單已開啟且定位正確時，用選擇器點可見的項目即可。 */
+const CLICK_MENU_ITEM = (label) => `(() => {
+  const item = [...document.querySelectorAll('[role="menuitem"]')].find((el) => el.textContent.trim() === ${JSON.stringify(label)})
+  if (!item) return false
+  item.click()
+  return true
+})()`
+
+/** 對話框輸入名稱並確定。 */
+const SUBMIT_NAME_DIALOG = (name) => `(() => {
+  const input = document.querySelector('[role="dialog"] input, section[aria-label="Files"] input')
+  if (!input) return false
+  const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set
+  setter.call(input, ${JSON.stringify(name)})
+  input.dispatchEvent(new Event('input', { bubbles: true }))
+  input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+  return true
+})()`
+
+/** 點確認刪除對話框裡的「刪除」。 */
+const CONFIRM_DELETE = `(() => {
+  const btn = [...document.querySelectorAll('button')].find((b) => b.textContent.trim() === '刪除' && b.closest('.absolute'))
+  if (!btn) return false
+  btn.click()
+  return true
+})()`
+
+/** 點 markdown 檢視的 [預覽│原始碼] 切換鈕（帶 aria-pressed 的才是模式鈕）。 */
+const CLICK_MODE = (label) => `(() => {
+  const btn = [...document.querySelectorAll('section[aria-label="Files"] button[aria-pressed]')]
+    .find((b) => b.textContent.trim() === ${JSON.stringify(label)})
+  if (!btn) return false
+  btn.click()
+  return true
+})()`
+
+/** 某個模式鈕當前是否為選定（aria-pressed）。 */
+const MODE_PRESSED = (label) => `(() => {
+  const btn = [...document.querySelectorAll('section[aria-label="Files"] button[aria-pressed]')]
+    .find((b) => b.textContent.trim() === ${JSON.stringify(label)})
+  return btn ? btn.getAttribute('aria-pressed') === 'true' : null
+})()`
+
+/** markdown 預覽區（渲染後）的純文字。 */
+const PREVIEW_TEXT = `document.querySelector('.markdown')?.innerText ?? null`
 
 const FOCUS_EDITOR = `(() => {
   const textarea = document.querySelector('.monaco-editor textarea')
@@ -298,6 +379,66 @@ const FOCUS_EDITOR = `(() => {
 })()`
 
 const RELOAD = `(() => { location.reload(); return true })()`
+
+/** 輪詢磁碟上的一個條件（存檔、CRUD 都以磁碟為最終真相，而非 UI 時序）。 */
+async function pollDisk(predicate, { timeoutMs = 4000 } = {}) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if (predicate()) return true
+    await sleep(100)
+  }
+  return false
+}
+
+/**
+ * 送**真的**滑鼠按鍵（trusted event），而非 `element.dispatchEvent(new MouseEvent(...))`。
+ *
+ * 兩者不等價：合成 contextmenu 不會走完整的 pointer/mouse/contextmenu 序列，也不觸發
+ * React 19 對 trusted discrete 事件的同步 effect flush —— 用合成事件測選單，會漏掉
+ * 「開啟選單的事件冒泡到 window 把自己關掉」這類只在真實輸入下發生的 bug。
+ */
+async function realMouse(client, x, y, button) {
+  const buttons = button === 'right' ? 2 : button === 'left' ? 1 : 0
+  await client.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y, button: 'none', buttons: 0 })
+  await client.send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button, buttons, clickCount: 1 })
+  await client.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button, buttons, clickCount: 1 })
+}
+
+/** 取某元素的 viewport 座標（供 realMouse）。回傳 `null` 代表元素不存在。 */
+async function coordsOf(client, expression) {
+  return client.evaluate(`(() => {
+    const el = ${expression}
+    if (!el) return null
+    const r = el.getBoundingClientRect()
+    return { x: Math.round(r.left + 8), y: Math.round(r.top + r.height / 2) }
+  })()`)
+}
+
+const ROW_EL = (relPath) =>
+  `[...document.querySelectorAll('[role="treeitem"]')].find((r) => r.getAttribute('title') === ${JSON.stringify(relPath)})`
+const PLUS_BTN = `document.querySelector('section[aria-label="Files"] header button[aria-label="在根目錄新增"]')`
+
+/** 選單是否存在且完整落在 viewport 內。'missing' / 'in' / 'out'。 */
+const MENU_PLACEMENT = `(() => {
+  const m = document.querySelector('[role="menu"]')
+  if (!m) return 'missing'
+  const r = m.getBoundingClientRect()
+  return (r.left >= 0 && r.top >= 0 && r.right <= window.innerWidth && r.bottom <= window.innerHeight) ? 'in' : 'out'
+})()`
+
+/** 送 Ctrl+S。editContext 關閉後，按鍵經隱形 textarea 交給 Monaco 的存檔命令。 */
+async function sendCtrlS(client) {
+  const ctrl = { modifiers: 2 } // Ctrl
+  await client.send('Input.dispatchKeyEvent', {
+    type: 'keyDown',
+    ...ctrl,
+    key: 's',
+    code: 'KeyS',
+    windowsVirtualKeyCode: 83,
+    nativeVirtualKeyCode: 83,
+  })
+  await client.send('Input.dispatchKeyEvent', { type: 'keyUp', ...ctrl, key: 's', code: 'KeyS' })
+}
 
 const PANEL_TEXT = `document.querySelector('section[aria-label="Side panel"]')?.innerText ?? ''`
 
@@ -554,8 +695,8 @@ async function probeBuild(fixture, profile) {
     const binaryText = await pollUntil(app.client, PANEL_TEXT, (text) => /二進位/.test(text))
     check(results, 'UI 呈現「二進位檔案」', /二進位/.test(binaryText))
 
-    // ── file-viewer：未知副檔名與唯讀 ───────────────────────────────────────
-    console.log('\n檔案檢視：未知副檔名與唯讀')
+    // ── file-viewer：未知副檔名 ─────────────────────────────────────────────
+    console.log('\n檔案檢視：未知副檔名')
     await app.client.evaluate(`document.querySelector('section[aria-label="Files"] header button')?.click()`)
     await pollUntil(app.client, ROW_PATHS, (paths) => paths.includes('notes.unknownext'))
     await app.client.evaluate(CLICK_ROW('notes.unknownext'))
@@ -566,18 +707,149 @@ async function probeBuild(fixture, profile) {
     const plainTokens = await app.client.evaluate(TOKEN_CLASSES)
     check(results, '純文字只有單一 token 樣式（未套用任何語言）', plainTokens === 1, `${plainTokens} 種`)
 
-    check(results, '編輯器的輸入區為唯讀', (await app.client.evaluate(EDITOR_TEXTAREA_READONLY)) === true)
-    check(results, '編輯器可取得焦點', (await app.client.evaluate(FOCUS_EDITOR)) === true)
-    const beforeTyping = await app.client.evaluate(EDITOR_TEXT)
-    await app.client.send('Input.insertText', { text: 'INJECTED' })
-    await sleep(300)
-    const afterTyping = await app.client.evaluate(EDITOR_TEXT)
-    check(results, '嘗試輸入時內容不因此改變', beforeTyping === afterTyping && !/INJECTED/.test(afterTyping ?? ''),
-      afterTyping === beforeTyping ? '' : `內容被改成 ${afterTyping}`)
+    // ── file-editing：編輯 → dirty → 存檔 ───────────────────────────────────
+    // 過去這一段斷言「輸入區唯讀」，但 Monaco 的 native EditContext 讓那個 textarea
+    // 恆為 readonly —— 對可編輯的編輯器一樣會通過，是假驗收。改以「真的打字、真的存檔、
+    // 回讀磁碟」驗證，這是只有可編輯的編輯器才過得了的觀測。
+    console.log('\n檔案編輯：dirty 狀態與存檔')
+    check(results, '編輯器的輸入區可編輯（非唯讀）',
+      (await app.client.evaluate(INPUT_AREA_READONLY)) === false)
 
-    // ── file-viewer：markdown ───────────────────────────────────────────────
-    console.log('\n檔案檢視：markdown 的渲染與安全性')
+    await app.client.evaluate(FOCUS_EDITOR)
+    const beforeEdit = await app.client.evaluate(EDITOR_TEXT)
+    await app.client.send('Input.insertText', { text: 'EDIT ' })
+    const afterEdit = await pollUntil(app.client, EDITOR_TEXT, (text) => /EDIT /.test(text ?? ''))
+    check(results, '於編輯器輸入時內容隨之改變', beforeEdit !== afterEdit && /EDIT /.test(afterEdit ?? ''))
+
+    // 返回檔案樹 —— 未存的變更必須活過這次換頁，且該列要標記出來（file-explorer / D9）。
+    await app.client.evaluate(BACK_TO_TREE)
+    const rowDirty = await pollUntil(app.client, ROW_IS_DIRTY('notes.unknownext'), (v) => v === true)
+    check(results, '未存的變更返回樹後於該列標記', rowDirty === true)
+
+    // 再次開啟，內容應是未存的 buffer 而非磁碟原文 —— 證明變更跨換頁存活。
+    await app.client.evaluate(CLICK_ROW('notes.unknownext'))
+    const reopened = await pollUntil(app.client, EDITOR_TEXT, (text) => Boolean(text))
+    check(results, '再次開啟仍呈現未存的內容', /EDIT /.test(reopened ?? ''))
+
+    await app.client.evaluate(FOCUS_EDITOR)
+    await sendCtrlS(app.client)
+    const savedDisk = await pollDisk(() =>
+      /EDIT /.test(readFileSync(join(fixture.repo, 'notes.unknownext'), 'utf8')))
+    check(results, '存檔後磁碟上的內容確實被寫入', savedDisk,
+      savedDisk ? '' : readFileSync(join(fixture.repo, 'notes.unknownext'), 'utf8').slice(0, 20))
+
+    // 自寫事件的抑制：我們剛存的檔不該回頭警告「檔案已在磁碟上變更」。
+    await sleep(400)
+    const panelAfterSave = await app.client.evaluate(SIDE_PANEL_TEXT)
+    check(results, '存檔不觸發自身的外部變更提示',
+      !/檔案已在磁碟上變更/.test(panelAfterSave))
+
+    // 回到樹，存檔後標記應消失。
+    await app.client.evaluate(BACK_TO_TREE)
+    const rowClean = await pollUntil(app.client, ROW_IS_DIRTY('notes.unknownext'), (v) => v === false)
+    check(results, '存檔後該列的未存標記消失', rowClean === false)
+
+    // ── file-editing：存檔與外部變更的衝突 ─────────────────────────────────
+    console.log('\n檔案編輯：存檔衝突')
+    await app.client.evaluate(CLICK_ROW('notes.unknownext'))
+    await pollUntil(app.client, EDITOR_TEXT, (text) => Boolean(text))
+    await app.client.evaluate(FOCUS_EDITOR)
+    await app.client.send('Input.insertText', { text: 'MINE ' })
+    await pollUntil(app.client, EDITOR_TEXT, (text) => /MINE /.test(text ?? ''))
+    // agent 在使用者存檔之前改了同一個檔（新的 mtime）
+    const externalContent = 'changed-by-agent\n'
+    writeFileSync(join(fixture.repo, 'notes.unknownext'), externalContent)
+    await sleep(50)
+    await app.client.evaluate(FOCUS_EDITOR)
+    await sendCtrlS(app.client)
+    const conflictShown = await pollUntil(app.client, SIDE_PANEL_TEXT, (text) => /在你編輯期間已被外部改動/.test(text))
+    check(results, '存檔時偵測到外部改動並呈現衝突', /在你編輯期間已被外部改動/.test(conflictShown))
+    check(results, '衝突時未以我的內容覆寫磁碟',
+      readFileSync(join(fixture.repo, 'notes.unknownext'), 'utf8') === externalContent)
+
+    // ── file-operations：新增 / 刪除 ────────────────────────────────────────
+    console.log('\n檔案操作：新增與刪除')
     await app.client.evaluate(`document.querySelector('section[aria-label="Files"] header button')?.click()`)
+    await pollUntil(app.client, ROW_PATHS, (paths) => paths.length > 0)
+
+    // 真的點「＋」（右上角）—— 這個位置正是會讓選單溢出 viewport 的邊角案例。
+    const plusPos = await coordsOf(app.client, PLUS_BTN)
+    check(results, '面板 header 提供根目錄的新增入口', plusPos !== null)
+    await realMouse(app.client, plusPos.x, plusPos.y, 'left')
+    await pollUntil(app.client, `document.querySelectorAll('[role="menuitem"]').length`, (n) => n > 0)
+    check(results, '根目錄新增選單落在 viewport 內（不溢出右緣）',
+      (await app.client.evaluate(MENU_PLACEMENT)) === 'in')
+    await app.client.evaluate(CLICK_MENU_ITEM('新增檔案'))
+    await pollUntil(app.client, `Boolean(document.querySelector('section[aria-label="Files"] input'))`, (v) => v)
+    await app.client.evaluate(SUBMIT_NAME_DIALOG('probe-new.txt'))
+    const created = await pollDisk(() => existsSync(join(fixture.repo, 'probe-new.txt')))
+    check(results, '新增的檔案出現在磁碟上', created)
+    check(results, '新增的檔案出現在樹上',
+      (await pollUntil(app.client, ROW_PATHS, (paths) => paths.includes('probe-new.txt'))).includes('probe-new.txt'))
+
+    // 刪除：**真的右鍵** → 刪除 → 確認。合成 contextmenu 測不出「右鍵選單被自己開啟的
+    // 事件冒泡關掉」這個 bug —— 必須用 trusted 事件。
+    const newRowPos = await coordsOf(app.client, ROW_EL('probe-new.txt'))
+    await realMouse(app.client, newRowPos.x, newRowPos.y, 'right')
+    await pollUntil(app.client, `document.querySelectorAll('[role="menuitem"]').length`, (n) => n > 0)
+    check(results, '右鍵樹列的選單出現且落在 viewport 內',
+      (await app.client.evaluate(MENU_PLACEMENT)) === 'in')
+    await app.client.evaluate(CLICK_MENU_ITEM('刪除'))
+    const confirmVisible = await pollUntil(app.client, SIDE_PANEL_TEXT, (text) => /這個動作無法復原/.test(text))
+    check(results, '刪除前呈現確認', /這個動作無法復原/.test(confirmVisible))
+    await app.client.evaluate(CONFIRM_DELETE)
+    const deleted = await pollDisk(() => !existsSync(join(fixture.repo, 'probe-new.txt')))
+    check(results, '確認後檔案自磁碟移除', deleted)
+
+    // ── file-operations：對有未存變更的檔案改名 / 刪除 ─────────────────────
+    // 建一個檔並編輯使其 dirty，改名時 buffer 要跟著新路徑走，刪除時要先警告未存變更。
+    console.log('\n檔案操作：有未存變更時的改名與刪除')
+    const plusPos2 = await coordsOf(app.client, PLUS_BTN)
+    await realMouse(app.client, plusPos2.x, plusPos2.y, 'left')
+    await pollUntil(app.client, `document.querySelectorAll('[role="menuitem"]').length`, (n) => n > 0)
+    await app.client.evaluate(CLICK_MENU_ITEM('新增檔案'))
+    await pollUntil(app.client, `Boolean(document.querySelector('section[aria-label="Files"] input'))`, (v) => v)
+    await app.client.evaluate(SUBMIT_NAME_DIALOG('w2.txt'))
+    await pollUntil(app.client, ROW_PATHS, (paths) => paths.includes('w2.txt'))
+
+    await app.client.evaluate(CLICK_ROW('w2.txt'))
+    await pollUntil(app.client, EDITOR_TEXT, (text) => text !== null)
+    await app.client.evaluate(FOCUS_EDITOR)
+    await app.client.send('Input.insertText', { text: 'DIRTY-W2' })
+    await pollUntil(app.client, EDITOR_TEXT, (text) => /DIRTY-W2/.test(text ?? ''))
+    await app.client.evaluate(BACK_TO_TREE)
+    const w2Dirty = await pollUntil(app.client, ROW_IS_DIRTY('w2.txt'), (v) => v === true)
+    check(results, '有未存變更的檔案於樹上標記', w2Dirty === true)
+
+    // 改名 → 未存的變更跟著新路徑
+    const w2Pos = await coordsOf(app.client, ROW_EL('w2.txt'))
+    await realMouse(app.client, w2Pos.x, w2Pos.y, 'right')
+    await pollUntil(app.client, `document.querySelectorAll('[role="menuitem"]').length`, (n) => n > 0)
+    await app.client.evaluate(CLICK_MENU_ITEM('重新命名'))
+    await pollUntil(app.client, `Boolean(document.querySelector('section[aria-label="Files"] input'))`, (v) => v)
+    await app.client.evaluate(SUBMIT_NAME_DIALOG('w2-renamed.txt'))
+    const renamed = await pollDisk(() =>
+      existsSync(join(fixture.repo, 'w2-renamed.txt')) && !existsSync(join(fixture.repo, 'w2.txt')))
+    check(results, '改名後磁碟上為新名稱、舊名稱消失', renamed)
+    const movedDirty = await pollUntil(app.client, ROW_IS_DIRTY('w2-renamed.txt'), (v) => v === true)
+    check(results, '未存的變更跟隨改名後的新路徑', movedDirty === true)
+
+    // 刪除有未存變更的檔案 → 確認訊息要指出未存變更
+    const w2rPos = await coordsOf(app.client, ROW_EL('w2-renamed.txt'))
+    await realMouse(app.client, w2rPos.x, w2rPos.y, 'right')
+    await pollUntil(app.client, `document.querySelectorAll('[role="menuitem"]').length`, (n) => n > 0)
+    await app.client.evaluate(CLICK_MENU_ITEM('刪除'))
+    const unsavedWarn = await pollUntil(app.client, SIDE_PANEL_TEXT, (text) => /其中有未存的變更/.test(text))
+    check(results, '刪除有未存變更的檔案時確認訊息指出未存變更', /其中有未存的變更/.test(unsavedWarn))
+    await app.client.evaluate(CONFIRM_DELETE)
+    const removedDirty = await pollDisk(() => !existsSync(join(fixture.repo, 'w2-renamed.txt')))
+    check(results, '確認後有未存變更的檔案自磁碟移除', removedDirty)
+    const bufferGone = await pollUntil(app.client, ROW_IS_DIRTY('w2-renamed.txt'), (v) => v === null)
+    check(results, '刪除後其未存的變更一併消失', bufferGone === null)
+
+    // ── file-viewer：markdown 渲染、安全性、預覽/原始碼切換 ─────────────────
+    console.log('\n檔案檢視：markdown 的渲染、安全性與模式切換')
+    await app.client.evaluate(BACK_TO_TREE) // 正在看檔案則回到樹；已在樹則無作用
     await pollUntil(app.client, ROW_PATHS, (paths) => paths.includes('README.md'))
     await app.client.evaluate(CLICK_ROW('README.md'))
     const md = await pollUntil(app.client, MARKDOWN, (value) => value !== null)
@@ -589,6 +861,24 @@ async function probeBuild(fixture, profile) {
     check(results, 'javascript: 連結不可點（未渲染為 anchor）',
       !(md?.anchors ?? []).some((href) => /^javascript:/i.test(href ?? '')), (md?.anchors ?? []).join(' '))
     check(results, '外部連結保留為 anchor', (md?.anchors ?? []).includes('https://example.com/docs'))
+
+    // 預設為預覽模式（渲染後的樣貌）
+    check(results, 'markdown 預設呈現預覽模式', (await app.client.evaluate(MODE_PRESSED('預覽'))) === true)
+
+    // 切換至原始碼 → 呈現可編輯的原始 markdown 文字，預覽區退場
+    await app.client.evaluate(CLICK_MODE('原始碼'))
+    const source = await pollUntil(app.client, EDITOR_TEXT, (text) => /# 標題/.test(text ?? ''))
+    check(results, '切換至原始碼模式呈現原始 markdown', /# 標題/.test(source ?? ''))
+    check(results, '原始碼模式為可編輯的編輯器（非唯讀）',
+      (await app.client.evaluate(INPUT_AREA_READONLY)) === false)
+
+    // 於原始碼模式編輯 → 切回預覽，修改要反映在預覽中
+    await app.client.evaluate(FOCUS_EDITOR)
+    await app.client.send('Input.insertText', { text: 'MDEDIT ' })
+    await pollUntil(app.client, EDITOR_TEXT, (text) => /MDEDIT /.test(text ?? ''))
+    await app.client.evaluate(CLICK_MODE('預覽'))
+    const previewText = await pollUntil(app.client, PREVIEW_TEXT, (text) => /MDEDIT/.test(text ?? ''))
+    check(results, '原始碼模式的修改反映於預覽', /MDEDIT/.test(previewText ?? ''))
 
     // ── workspace-app-shell：導航防護 ───────────────────────────────────────
     console.log('\n導航防護（preload 白名單不得落入遠端頁面）')
@@ -607,7 +897,7 @@ async function probeBuild(fixture, profile) {
     // 隨後取消它。曾經以 did-start-navigation 當「重新載入」的訊號 —— 於是一次被擋掉的
     // 導航就讓所有 watcher 靜默消失，檔案樹與檢視器從此不再更新。
     // 導航測試期間面板停在 README.md 的檢視上，先回到樹才看得到列
-    await app.client.evaluate(`document.querySelector('section[aria-label="Files"] header button')?.click()`)
+    await app.client.evaluate(BACK_TO_TREE)
     await pollUntil(app.client, ROW_PATHS, (paths) => paths.includes('README.md'))
 
     writeFileSync(join(fixture.repo, 'watch-after-nav.txt'), 'x')
@@ -671,8 +961,13 @@ async function probeDev(fixture, profile) {
     check(results, '開發模式下 worker 完成一次往返', links > 0, `${links} 個 .detected-link`)
   } finally {
     if (app) await app.close()
-    server.child.kill('SIGTERM')
-    await sleep(800)
+    // 殺整個 process group（npx → node → vite），而非只殺 npx wrapper。負號 = 整組。
+    try {
+      process.kill(-server.child.pid, 'SIGKILL')
+    } catch {
+      // 已經結束就會 ESRCH，那正是要的結果。
+    }
+    await sleep(300)
   }
 }
 

@@ -1,7 +1,21 @@
-import type { Dirent } from 'node:fs'
-import { lstat, readFile as readFileRaw, readdir, stat } from 'node:fs/promises'
+import { type Dirent, constants } from 'node:fs'
+import {
+  lstat,
+  mkdir,
+  open,
+  readFile as readFileRaw,
+  readdir,
+  rename as renameRaw,
+  rm,
+  stat,
+} from 'node:fs/promises'
 import path from 'node:path'
-import { resolveWithinRoot } from './fs-boundary'
+import {
+  openExistingForWrite,
+  resolveExistingWithin,
+  resolveNewWithin,
+  resolveWithinRoot,
+} from './fs-boundary'
 import type { FolderLookup, WorkspaceFolder } from './workspace-store'
 
 export type DirEntryKind = 'file' | 'directory' | 'symlink' | 'other'
@@ -41,6 +55,13 @@ export type FsServiceCode =
   | 'NOT_A_FILE'
   | 'TOO_LARGE'
   | 'BINARY'
+  /** 磁碟上的檔案自開啟以來已被改動，寫入未執行。 */
+  | 'CONFLICT'
+  /** 建立或改名的目標已存在。既有的 symlink 亦視為已存在。 */
+  | 'ALREADY_EXISTS'
+  | 'INVALID_NAME'
+  /** 不得刪除或改名 workspace folder 自身。 */
+  | 'PROTECTED_ROOT'
 
 export class FsServiceError extends Error {
   constructor(
@@ -175,4 +196,213 @@ export async function readFile(
   }
 
   return { text: decodeUtf8(buffer), mtimeMs: stats.mtimeMs, size: stats.size }
+}
+
+/** Windows 的保留裝置名稱。`CON.txt` 一樣開不了 —— 判定看第一個 `.` 之前的部分。 */
+const WINDOWS_RESERVED = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])$/i
+
+/** Windows 不允許的字元。POSIX 本身只擋 `/` 與 NUL。空白與 `-` 不在其中。 */
+const FORBIDDEN_CHARS = /[<>:"|?*]/
+
+/** NUL 與其餘控制字元（含 DEL）。逐字元比對，勝過一個需要 lint 例外的字元類。 */
+function hasControlChar(name: string): boolean {
+  for (const character of name) {
+    const code = character.codePointAt(0) ?? 0
+    if (code < 0x20 || code === 0x7f) return true
+  }
+  return false
+}
+
+/**
+ * 驗證一個新項目的名稱。
+ *
+ * 規則取**三個目標平台的交集**，而不是當下執行平台的規則。在 Linux 上放行一個
+ * Windows 開不了的名稱（`aux`、`a:b`、`x.`），等於製造一個只在部分機器上損壞的 repo。
+ */
+export function validateName(name: string): void {
+  if (name.length === 0) {
+    throw new FsServiceError('INVALID_NAME', 'name must not be empty')
+  }
+  if (name === '.' || name === '..') {
+    throw new FsServiceError('INVALID_NAME', `name must not be "${name}"`)
+  }
+  if (name.includes('/') || name.includes('\\')) {
+    throw new FsServiceError('INVALID_NAME', `name must not contain a path separator: ${name}`)
+  }
+  if (FORBIDDEN_CHARS.test(name) || hasControlChar(name)) {
+    throw new FsServiceError('INVALID_NAME', `name contains a forbidden character: ${name}`)
+  }
+  // Windows 會靜默地把結尾的空白與句點吃掉，於是建立出的檔案叫別的名字。
+  if (/[ .]$/.test(name)) {
+    throw new FsServiceError('INVALID_NAME', `name must not end with a space or a period: ${name}`)
+  }
+  if (WINDOWS_RESERVED.test(name.split('.')[0] ?? '')) {
+    throw new FsServiceError('INVALID_NAME', `name is a reserved device name: ${name}`)
+  }
+}
+
+export interface WriteResult {
+  /** 寫入之後磁碟上的修改時間。呼叫端以它作為下一次樂觀鎖的基準，並抑制自寫事件。 */
+  mtimeMs: number
+  size: number
+  /**
+   * 實際被寫入的那個檔案的真實絕對路徑（目標是 symlink 時，即其目標）。
+   *
+   * **僅供主行程內部使用** —— IPC 接縫必須在回應 renderer 之前把它剝除。
+   */
+  realPath: string
+}
+
+/**
+ * 覆寫 workspace folder 內一個既有檔案的內容。
+ *
+ * **就地寫入**，不以「暫存檔 + 改名」實作 —— 後者會把 folder 內的 symlink 取代為普通檔案、
+ * 斷開 hard link，並讓一次存檔在 watcher 上呈現為「刪除後新增」（design D5，已實測）。
+ *
+ * 樂觀鎖的比對與截斷都發生在**同一個 fd** 上，因此路徑只被解析一次：`open` 之後就沒有
+ * 任何一步需要再走一遍路徑查找。這比「先 stat 路徑、再 open 路徑」少掉一個窗口。
+ *
+ * 不帶 `O_TRUNC`：截斷必須等比對通過之後才做，否則一次被拒絕的寫入已經先清空了檔案。
+ */
+export async function writeFile(
+  store: FolderLookup,
+  folderId: string,
+  relPath: string,
+  text: string,
+  baseMtimeMs?: number,
+): Promise<WriteResult> {
+  const folder = requireFolder(store, folderId)
+
+  let opened: Awaited<ReturnType<typeof openExistingForWrite>>
+  try {
+    opened = await openExistingForWrite(folder.path, relPath)
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'EISDIR') {
+      throw new FsServiceError('NOT_A_FILE', `not a file: ${relPath}`)
+    }
+    throw error
+  }
+
+  const { handle, realPath } = opened
+  try {
+    const before = await handle.stat()
+    if (!before.isFile()) {
+      throw new FsServiceError('NOT_A_FILE', `not a file: ${relPath}`)
+    }
+
+    if (baseMtimeMs !== undefined && before.mtimeMs !== baseMtimeMs) {
+      throw new FsServiceError('CONFLICT', `file changed on disk: ${relPath}`, {
+        diskMtimeMs: before.mtimeMs,
+      })
+    }
+
+    const buffer = Buffer.from(text, 'utf8')
+    await handle.truncate(0)
+    await handle.write(buffer, 0, buffer.length, 0)
+
+    const after = await handle.stat()
+    return { mtimeMs: after.mtimeMs, size: after.size, realPath }
+  } finally {
+    await handle.close()
+  }
+}
+
+/**
+ * 建立一個空的普通檔案。
+ *
+ * `O_CREAT | O_EXCL` 一次擋下兩件事：目標已存在、以及目標是一個既存的 symlink ——
+ * `O_EXCL` 的存在性判定看連結本身而非其目標，因此不會寫穿它（design D6，已實測回 `EEXIST`）。
+ */
+export async function createFile(
+  store: FolderLookup,
+  folderId: string,
+  relPath: string,
+): Promise<void> {
+  const folder = requireFolder(store, folderId)
+  validateName(path.basename(relPath))
+
+  const target = await resolveNewWithin(folder.path, relPath)
+  try {
+    const handle = await open(target, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL)
+    await handle.close()
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
+      throw new FsServiceError('ALREADY_EXISTS', `already exists: ${relPath}`)
+    }
+    throw error
+  }
+}
+
+/** 建立一個目錄。非遞迴 —— 父目錄不存在時由 `resolveNewWithin` 回報 `NOT_FOUND`。 */
+export async function createDirectory(
+  store: FolderLookup,
+  folderId: string,
+  relPath: string,
+): Promise<void> {
+  const folder = requireFolder(store, folderId)
+  validateName(path.basename(relPath))
+
+  const target = await resolveNewWithin(folder.path, relPath)
+  try {
+    await mkdir(target)
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
+      throw new FsServiceError('ALREADY_EXISTS', `already exists: ${relPath}`)
+    }
+    throw error
+  }
+}
+
+/**
+ * 刪除一個檔案或目錄（目錄為遞迴）。
+ *
+ * 以 **`lexicalPath`** 執行而非 `realPath`：`rm` 不跟隨最後一段，因此刪的是連結本身。
+ * 拿 `realPath` 去刪，使用者點「刪除這個 symlink」會刪掉它指向的那個檔案。
+ *
+ * 遞迴刪除**不跟隨**其中的 symlink（已實測），因此 folder 外的內容不會因此消失。
+ */
+export async function deleteEntry(
+  store: FolderLookup,
+  folderId: string,
+  relPath: string,
+): Promise<void> {
+  const folder = requireFolder(store, folderId)
+  const { lexicalPath, realPath, realRoot } = await resolveExistingWithin(folder.path, relPath)
+
+  if (realPath === realRoot) {
+    throw new FsServiceError('PROTECTED_ROOT', 'cannot delete the workspace folder itself')
+  }
+
+  await rm(lexicalPath, { recursive: true })
+}
+
+/**
+ * 變更一個項目的名稱或位置。來源與目標兩端都受邊界約束。
+ *
+ * **改名前必須先確認目標不存在** —— `rename` 會無聲覆蓋既有的目標（已實測）。此檢查與
+ * `rename` 之間仍有窗口（Node 沒有 `renameat2(RENAME_NOREPLACE)`），其後果是覆蓋而非
+ * 逸出邊界，落在威脅模型之外（design D8）。
+ *
+ * 來源以 `lexicalPath` 搬動：`rename` 不跟隨最後一段，搬的是連結本身。
+ */
+export async function rename(
+  store: FolderLookup,
+  folderId: string,
+  fromRelPath: string,
+  toRelPath: string,
+): Promise<void> {
+  const folder = requireFolder(store, folderId)
+  validateName(path.basename(toRelPath))
+
+  const from = await resolveExistingWithin(folder.path, fromRelPath)
+  if (from.realPath === from.realRoot) {
+    throw new FsServiceError('PROTECTED_ROOT', 'cannot rename the workspace folder itself')
+  }
+
+  const to = await resolveNewWithin(folder.path, toRelPath)
+  if (await lstat(to).catch(() => null)) {
+    throw new FsServiceError('ALREADY_EXISTS', `already exists: ${toRelPath}`)
+  }
+
+  await renameRaw(from.lexicalPath, to)
 }
