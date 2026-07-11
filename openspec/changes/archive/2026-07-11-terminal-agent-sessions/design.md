@@ -70,6 +70,8 @@
 
 **代價**：`display:none` 的元素不佈局，`FitAddon` 量到 0——因此**每次由隱藏轉為顯示時要重新 `fit()` 一次**（見 D8）。N 個 session＝N 個常駐實例，但每 repo 的 session 數本就少，且 xterm scrollback 有上限（預設 1000 行）。若未來變成問題，再做「閒置 session 卸載 + 主行程保存 scrollback」——本 change 不做。
 
+**常駐的範圍是「所有 folder 的所有 session」，不只當前 folder（實作時修正）。** 主舞台只*顯示*當前 repo 的 session，但若只*掛載*當前 folder 的，切走再切回時 xterm 實例已被卸載，先前的 scrollback 就沒了 —— backlog（D16）只補得回「未顯示期間的新輸出」，補不回已經卸載的歷史。因此 `MainStage` 掛載 `sessions.all()`，由 `active` 決定顯示。
+
 **替代**：單一 Terminal 實例，切換時清空重寫。**否決**——要主行程保存每個 session 的完整 scrollback 並在切換時重放，慢且複雜，違背「terminal 純淨、低延遲」。
 
 ### D8. fit 與 pty resize：`ResizeObserver` → `fit()` → 同步 rows/cols 回 pty
@@ -121,10 +123,27 @@ onExit(listener: (sessionId, exitCode) => void): () => void               // 同
 
 terminal 與分頁的可識別性用 role/aria（`section aria-label="Terminal"` 已存在；分頁列與分頁加 `role="tablist"`/`role="tab"` + `aria-selected`）——**不掛 `data-*`**。
 
+**撰寫探針時實測補正的兩點（兩者都會製造假綠或假紅）**：
+
+- **Enter 必須是一次真的 keyEvent。** 把 `\r` 併進 `Input.insertText` 的文字裡送出，字元確實抵達 pty（終端上看得到回顯），但 shell **從未執行那一行** —— xterm 的換行是在 keydown 上判讀的，不是從 textarea 的內容剖析出來的。只看「終端上出現了我打的字」會誤判成功。
+- **斷言必須能區分「回顯」與「執行」。** tty 會回顯輸入行，所以 `echo COLS=$(stty size ...)` 這種命令，畫面上在**執行之前**就已經有 `COLS=` 了 —— 等它出現會讀到還沒產生的值（實測 build 模式因此讀到 0）。斷言要等的是「marker 後面跟著數字」，或用 `echo OUT_$((6*7))` 這種**回顯不含答案、只有真的執行才會產出 `OUT_42`** 的形式；驗 cwd 同理用 `echo CWD=$(pwd)`（`$(pwd)` 在回顯裡不展開）。
+
 ### D15. spawn 失敗的兩種形態
 
 - **shell 本身起不來**（`$SHELL` 路徑錯）：`pty.spawn` 在 Linux 會 throw，`create` 以 `try/catch → toResult` 回 `SPAWN_FAILED`。
 - **claude 找不到**：shell 起得來、`claude` 命令失敗——呈現為 session 極快 `exit` + terminal 顯示 shell 的 `command not found`。這其實是**好的 UX**（使用者看到真實的 shell 錯誤），不需特別攔截。design 明記這個差異，避免有人日後「修」掉它。
+
+### D16. 輸出的 backlog：訂閱必須早於 `create`（實作時發現）
+
+`create` 回傳 sessionId 的那一刻，pty 已經開始吐出 shell 的第一個 prompt；而 `TerminalView` 要等 React 完成渲染才 attach。中間這段**沒有接收者的輸出會直接消失**。
+
+因此 `SessionsProvider` 在**任何一次 `create` 之前**就掛好唯一的 `onData` listener：尚未被終端 attach 的 session，其 chunk 先進 backlog；終端掛載時先 flush backlog、再接上 live sink。這同時讓「未 focused 的 session 其輸出不遺失」（spec）成立 —— detach 之後的輸出一樣落進 backlog。
+
+與 Phase 2 的「**先訂閱、再列目錄**」同源：訂閱要早於**那個會產生事件的動作**，而不是早於「你想開始看事件的時刻」。
+
+### D17. session 序號單調遞增（實作時發現）
+
+分頁標籤用「該 folder 內第幾個 session」。若以「當前 session 數 + 1」計算，關掉一個之後新開的會**撞號**（實測：關掉 `shell 1` 後開的 claude 被標成 `claude 2`，與現存的 `shell 2` 同號）。改用每個 folder 各自單調遞增的計數器。
 
 ## Risks / Trade-offs
 

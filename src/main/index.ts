@@ -6,6 +6,7 @@ import { registerAppHandlers } from './ipc/app'
 import { registerFsHandlers } from './ipc/fs'
 import { registerFolderHandlers } from './ipc/folders'
 import { registerShellHandlers } from './ipc/shell'
+import { registerTerminalHandlers } from './ipc/terminal'
 import { applyNavigationGuards } from './navigation'
 import { formatScanSummary, scanRepo } from './openspec'
 import { guardUnsavedChanges } from './unsaved-changes'
@@ -95,6 +96,7 @@ void app.whenReady().then(() => {
   registerFsHandlers(store)
   registerShellHandlers()
   registerAppHandlers(dirty)
+  registerTerminalHandlers(store)
 
   createWindow(dirty)
 

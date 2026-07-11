@@ -29,3 +29,8 @@ export type WatchEvent = WatchBatch['events'][number]
 
 /** side panel 的兩個同層互斥身分。 */
 export type PanelIdentity = 'openspec' | 'files'
+
+type WorkspaceTerminal = Window['workspace']['terminal']
+
+/** 新 session 的 spawn 目標。同樣由白名單回推 —— renderer 不 import 主行程模組。 */
+export type SpawnTarget = Parameters<WorkspaceTerminal['create']>[1]

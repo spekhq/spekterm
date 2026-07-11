@@ -8,15 +8,19 @@ spek workspace 是一個以 agent 為核心的本地開發工作台 —— 獨�
 把多個「一個 repo／資料夾各自一個 `claude` session」的 terminal 包在一個殼裡，
 並加上一塊懂 OpenSpec 結構的側欄，讓使用者不必另外開 IDE 就能一邊駕駛 agent、一邊看著 spec 上下文。
 
-**現況：Phase 3（`file-editing-and-crud`）實作中。** Phase 0–2 已封存：Electron 骨架、
-PRD §12 信任模型、`node-pty` spawn 真 pty、主行程以 `@spekjs/core` 直接掃描 OpenSpec 結構、
-多 folder 工作區（清單持久化於 userData）、活動列 + rail + 三欄版面、受邊界約束的 `listDir`、
-side panel 的 `[◈ OpenSpec │ ▤ Files]` 身分切換、遞迴檔案樹（lazy load + chokidar 監控）、
-面板內的檔案檢視（markdown 渲染／Monaco 高亮）與 renderer 導航防護，皆已實測驗證。Phase 3
-加上 renderer **首次的寫入能力**：完整 CRUD（`writeFile` 就地覆寫、`createFile`、
-`createDirectory`、`deleteEntry`、`rename`）、markdown 的預覽／原始碼切換後可編輯、dirty
-狀態與 dirty buffer（跨換頁與跨 folder 存活）、`Cmd/Ctrl+S` 存檔、mtime 樂觀鎖的衝突處理、
-watcher 的自寫事件抑制、關閉視窗時的未存提示。尚未開始：terminal UI、OpenSpec 側欄的內容、handoff。
+**現況：Phase 4（`terminal-agent-sessions`）實作完成，待封存。** Phase 0–3 已封存：Electron
+骨架、PRD §12 信任模型、`node-pty` spawn 真 pty、主行程以 `@spekjs/core` 直接掃描 OpenSpec
+結構、多 folder 工作區（清單持久化於 userData）、活動列 + rail + 三欄版面、受邊界約束的
+`listDir`、side panel 的 `[◈ OpenSpec │ ▤ Files]` 身分切換、遞迴檔案樹（lazy load + chokidar
+監控）、面板內的檔案檢視與編輯、完整 CRUD、dirty buffer（跨換頁與跨 folder 存活）、mtime
+樂觀鎖、watcher 的自寫事件抑制、關閉視窗時的未存提示。
+
+Phase 4 讓主舞台**首次能駕駛 agent**：`node-pty` 多 session 管理器（每個 `webContents` 一份、
+以擁有者生命週期釋放）、IPC 雙向串流（輸出不 debounce、嚴格保序）、xterm + fit（封裝於單一
+wrapper 模組）、頂部 session 分頁 + rail 的 repo→session 子列、**spawn 目標可選 `claude` 或
+login shell**、cwd = 選中的 folder、resize 時 pty 尺寸同步、以及關分頁／reload／關視窗三種
+路徑皆**不留孤兒行程**（`probe:terminal` 38/38，dev 與 build 兩模式）。尚未開始：OpenSpec
+側欄的內容（Phase 5）、打包（Phase 6）、handoff（Phase 7+）。
 
 ### 開發指令
 
@@ -24,10 +28,11 @@ watcher 的自寫事件抑制、關閉視窗時的未存提示。尚未開始：
 npm run dev             # electron-vite dev（開發模式）
 npm run build           # 建置至 out/
 npm run typecheck       # tsc：main / preload（node）+ renderer（web）
-npm test                # node:test 單元測試（fs 邊界、workspace store、listDir/readFile、watcher、外部 URL）
+npm test                # node:test 單元測試（fs 邊界、workspace store、listDir/readFile、watcher、外部 URL、pty 管理器）
 npm run probe:shell     # 驗收 workspace-app-shell（開視窗 + 信任模型 + preload 白名單，走 CDP）
 npm run probe:workspace # 驗收 workspace-folders / filesystem-access / workspace-layout
 npm run probe:files     # 驗收 file-explorer / file-viewer / 編輯 / 存檔 / 衝突 / CRUD / 導航防護 / 編輯器 worker（dev + build 兩模式）
+npm run probe:terminal  # 驗收 terminal-sessions（pty 雙向／cwd／resize／多開／關分頁・reload・關窗皆不留孤兒，dev + build 兩模式）
 npm run probe:native    # 驗收 native-module-toolchain（Electron 主行程載入 node-pty + spawn pty）
 npm run probe:core      # 驗收 spek-core-integration（主行程掃描 OpenSpec，且不開 TCP 埠）
 npm run measure:bundle  # renderer bundle 體積報告（依編輯器核心／worker／語言分類歸因）
@@ -107,7 +112,7 @@ repo 自己的 change 承載（OpenSpec change 是 repo-local 的）。
 
 Electron 43.1.0（釘死）+ electron-vite、TypeScript、React 19 + Tailwind CSS v4、
 node-pty 1.2.0-beta.14（釘死）、Monaco Editor、chokidar 5、react-markdown + remark-gfm、
-@xterm/xterm（terminal UI，Phase 4）、electron-builder（打包，Phase 6）。
+@xterm/xterm 6 + addon-fit / addon-web-links（terminal UI）、electron-builder（打包，Phase 6）。
 
 完整技術選型與理由見 `docs/PRD.md` §8.3。幾個容易踩的點：
 
@@ -128,6 +133,10 @@ node-pty 1.2.0-beta.14（釘死）、Monaco Editor、chokidar 5、react-markdown
 - **`react-markdown` 的安全性來自預設值**：原始 HTML 被降級為純文字、URL 由
   `defaultUrlTransform` 過濾（只放行 `http(s)`/`mailto`/`xmpp`）。**絕不可加 `rehype-raw`、
   也不可覆寫 `urlTransform`** —— 檔案樹渲染的是使用者 repo 裡的任意 `.md`，那是不受信任的輸入。
+- **終端封裝於單一 wrapper 模組**（`src/renderer/src/shell/terminal/xterm.ts`），與編輯器同一
+  條約束：renderer 的其他模組不直接 import `@xterm/*`。**web-links addon 的開啟 handler 必須
+  覆寫為走主行程的 `shell.openExternal`** —— pty 的輸出同樣是不受信任的內容（使用者 repo 裡
+  任何東西都可能印出一個 URL），不得讓 xterm 自行導航或開窗。
 
 ## Workflow
 
@@ -145,9 +154,14 @@ node-pty 1.2.0-beta.14（釘死）、Monaco Editor、chokidar 5、react-markdown
   除 PRD 列的三項外，另納入 core 套件的跨 repo 分發（`@spekjs/core`）。
 - **Phase 1** — `multi-folder-workspace-shell`（已封存）：folder 清單持久化、活動列 + rail +
   三欄版面、受邊界約束的 `listDir`。
-- **Phase 2** — `file-explorer-readonly-view`（實作中）：side panel 的身分切換、檔案樹
+- **Phase 2** — `file-explorer-readonly-view`（已封存）：side panel 的身分切換、檔案樹
   （lazy load + chokidar）、`readFile` / `watch`、面板內的唯讀檢視、導航防護。
-- Phase 3–6 建立工作台本體，Phase 7+ 建立護城河（handoff）。
+- **Phase 3** — `file-editing-and-crud`（已封存）：編輯能力、完整 CRUD、dirty buffer、
+  mtime 樂觀鎖、寫入路徑的邊界。
+- **Phase 4** — `terminal-agent-sessions`（實作完成，待封存）：node-pty 多 session 管理、
+  IPC 雙向串流、xterm + fit、session 分頁 + rail 的 repo→session 子列、spawn 目標可選
+  （claude／login shell）、生命週期不留孤兒行程。
+- Phase 5–6 建立工作台其餘部分，Phase 7+ 建立護城河（handoff）。
 
 > **Phase 1 欠下的 Monaco 債，已於 Phase 2 償還。** `multi-folder-workspace-shell` 曾把
 > `workspace-app-shell` 的兩條 Monaco requirement 標為 `REMOVED`（診斷頁退場後沒有模組引用
@@ -220,6 +234,44 @@ provider 驗證：它為 `language: '*'` 註冊，呼叫 worker 端的 `$compute
 與 renderer 跑在各自的 network namespace，主行程那張表看不到它們。`probe:core` 因此用兩道互補
 判準：逐 pid 取「該 pid 的 socket inode ∩ 該 pid 所屬 netns 的 LISTEN 表」，外加「app 存活期間
 本 netns 是否新增 LISTEN socket」—— 後者不需要讀任何 pid 的 fd，可繞過 sandbox 造成的權限死角。
+
+## Phase 4 的實測與踩雷（terminal）
+
+- **`did-navigate` 不只要清 watcher，也必須殺光 pty。** reload 不銷毀 `webContents`，只掛
+  `'destroyed'` 的清理不會觸發 —— 舊 pty 會變成孤兒行程，且新頁面的 xterm **永遠收不到它們
+  的輸出**（listener 綁在已消失的舊 renderer 上）。`probe:terminal` 真的 reload、再回查行程表。
+- **`node-pty` 的 spawn 對 execvp 失敗「不會」同步拋錯 —— 原假設是錯的。** 實測
+  `spawn('/nonexistent', ['-l'])` → 不 throw、pty 以 exit code 1 結束、`execvp(3) failed.` 由
+  `onData` 送出。於是「shell 路徑無效」與「claude 找不到」殊途同歸，都經 `onExit`（非零）+
+  終端上的錯誤訊息呈現，而**不是** `create` 回一個錯誤碼。`create` 的 try/catch 只防罕見的
+  「底層 pty 配置不出來」。
+- **GUI app 常缺使用者 shell 的 PATH**（從桌面啟動不會繼承 `.zprofile` / `.bashrc`），直接
+  `spawn('claude')` 會 ENOENT。兩種 spawn 目標因此都經 login shell：shell 模式 `$SHELL -l`、
+  claude 模式 `$SHELL -l -c claude`。**這道緩解的真正驗證點在 Phase 6 打包後從桌面啟動** ——
+  `npm run dev` 是從終端起的，env 本來就是完整的，測不出這個問題。
+- **terminal 的 cwd 邊界不是沙箱。** `create` **只收 `folderId`、不收任何路徑**（renderer 在
+  語彙上無從指定 workspace 外的 cwd），但這只約束**初始** cwd —— pty 起來之後使用者可以 `cd`
+  到任何地方、執行任何命令，那正是終端的用途。**不要把它與 `fs.*` 白名單的沙箱語意混為一談**
+  （日後評估 handoff auto-spawn 的信任邊界時，這個區別很要命）。
+- **輸出的訂閱必須早於 `create`。** pty 在 `create` 回傳的那一刻就開始吐第一個 prompt，而
+  `TerminalView` 要等 React 渲染完才 attach —— 中間沒有接收者的輸出會**直接消失**。
+  `SessionsProvider` 因此在任何一次 create 之前就掛好唯一的 `onData`，尚未 attach 的 session
+  其輸出先進 backlog，終端掛上時先 flush 再接 live。與 Phase 2 的「**先訂閱、再列目錄**」同源。
+- **終端必須跨「切換 folder」常駐。** 若只掛載當前 folder 的 session，切走再切回時 xterm 實例
+  已被卸載，先前的 scrollback 就沒了（backlog 補得回未顯示期間的新輸出，補不回已卸載的歷史）。
+  因此掛載 `sessions.all()`、以 `display:none` 決定顯示 —— 代價是隱藏時 `FitAddon` 量到 0，
+  由隱藏轉為顯示時必須重新 `fit()` 一次。
+
+### 驗 terminal 的兩個假綠陷阱
+
+- **Enter 必須是一次真的 keyEvent。** 把 `\r` 併進 `Input.insertText` 的文字裡送出，字元確實
+  抵達 pty（**終端上看得到回顯**），但 shell **從未執行那一行** —— xterm 的換行是在 keydown 上
+  判讀的，不是從 textarea 的內容剖析出來的。只斷言「終端出現了我打的字」會誤判成功。
+- **斷言要能區分「回顯」與「執行」。** tty 會回顯輸入行，因此 `echo COLS=$(stty size ...)` 這
+  種命令，畫面上在**執行之前**就已經有 `COLS=` 了 —— 等它出現會讀到還沒產生的值（實測 build
+  模式因此讀到 0，dev 模式僥倖通過，是典型的 flaky）。要用「回顯不含答案」的形式：
+  `echo OUT_$((6*7))` 只有真的執行才會出現 `OUT_42`；驗 cwd 用 `echo CWD=$(pwd)`（`$(pwd)`
+  在回顯裡不會展開）。
 
 ## 檔案系統邊界（`multi-folder-workspace-shell` 起）
 

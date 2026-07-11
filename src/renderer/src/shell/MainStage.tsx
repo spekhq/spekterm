@@ -2,7 +2,10 @@ import { useCallback, useState } from 'react'
 import { Group, Panel, Separator, usePanelRef } from 'react-resizable-panels'
 import { PanelSwitch } from './side-panel/PanelSwitch'
 import { SidePanel } from './side-panel/SidePanel'
-import type { PanelIdentity, WorkspaceFolder } from './types'
+import { SessionTabs } from './terminal/SessionTabs'
+import { TerminalView } from './terminal/TerminalView'
+import { useSessions } from './terminal/sessions'
+import type { PanelIdentity, SpawnTarget, WorkspaceFolder } from './types'
 
 interface MainStageProps {
   folder: WorkspaceFolder | null
@@ -12,6 +15,9 @@ export function MainStage({ folder }: MainStageProps): React.JSX.Element {
   const sidePanelRef = usePanelRef()
   const [collapsed, setCollapsed] = useState(false)
   const [identity, setIdentity] = useState<PanelIdentity>('files')
+  const [sessionError, setSessionError] = useState<string | null>(null)
+
+  const sessions = useSessions()
 
   const openSpecEnabled = folder?.hasOpenSpec ?? false
   // 選中的 repo 若沒有 openspec/，OpenSpec 身分不可用 —— 由衍生值退回 Files，
@@ -45,6 +51,28 @@ export function MainStage({ folder }: MainStageProps): React.JSX.Element {
     [expandSidePanel],
   )
 
+  const createSession = useCallback(
+    (spawnTarget: SpawnTarget) => {
+      if (!folder) return
+      setSessionError(null)
+      void sessions.create(folder.id, spawnTarget).then((outcome) => {
+        if (outcome.status === 'failed') setSessionError(outcome.failure.message)
+      })
+    },
+    [folder, sessions],
+  )
+
+  const focusSession = useCallback(
+    (sessionId: string) => {
+      if (!folder) return
+      sessions.focus(folder.id, sessionId)
+    },
+    [folder, sessions],
+  )
+
+  const folderSessions = folder ? sessions.forFolder(folder.id) : []
+  const focusedId = folder ? sessions.focusedIdFor(folder.id) : null
+
   return (
     <main aria-label="主舞台" className="flex h-full flex-col bg-stage">
       <header className="flex items-center gap-3 border-b border-hairline px-4 py-2 text-sm">
@@ -73,13 +101,39 @@ export function MainStage({ folder }: MainStageProps): React.JSX.Element {
         </button>
       </header>
 
+      {/* 分頁列只屬於當前選中的 repo（mockup 的 .session-tabs）。 */}
+      {folder && (
+        <SessionTabs
+          sessions={folderSessions}
+          focusedId={focusedId}
+          onFocus={focusSession}
+          onClose={sessions.close}
+          onCreate={createSession}
+          error={sessionError}
+        />
+      )}
+
       <Group orientation="horizontal" className="flex-1">
         <Panel minSize="240px">
-          <section
-            aria-label="Terminal"
-            className="flex h-full items-center justify-center text-xs text-ink-faint"
-          >
-            terminal（Phase 4）
+          <section aria-label="Terminal" className="relative h-full bg-shell">
+            {/*
+              **掛載所有 folder 的所有 session**，只讓當前 folder 的 focused 那一個顯示。
+              若只掛載當前 folder 的，切走再切回時 xterm 實例已被卸載，scrollback 就沒了
+              （design D7）。
+            */}
+            {sessions.all().map((session) => (
+              <TerminalView
+                key={session.id}
+                sessionId={session.id}
+                active={session.folderId === folder?.id && session.id === focusedId}
+              />
+            ))}
+
+            {!focusedId && (
+              <div className="flex h-full items-center justify-center text-xs text-ink-faint">
+                {folder ? '以 + session 開一個終端' : '尚未選擇 repo'}
+              </div>
+            )}
           </section>
         </Panel>
 

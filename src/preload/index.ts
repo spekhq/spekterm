@@ -2,6 +2,7 @@ import { type IpcRendererEvent, contextBridge, ipcRenderer } from 'electron'
 import type { DirtyEntry } from '../main/dirty-state'
 import type { FsResult, WriteResponse } from '../main/ipc/fs'
 import type { DirEntry, FileContent } from '../main/fs-service'
+import type { SpawnTarget } from '../main/terminal'
 import type { WatchBatch } from '../main/watch-service'
 import type { WorkspaceFolder } from '../main/workspace-store'
 
@@ -87,6 +88,49 @@ const workspaceApi = {
     /** 協定的驗證在主行程。此處只是把 URL 交過去。 */
     openExternal: (url: string): Promise<void> =>
       ipcRenderer.invoke('workspace:shell:openExternal', url),
+  },
+  /**
+   * terminal 的邊界要求見 `terminal-agent-sessions` 的 `design.md` D5：`create` **只收
+   * folderId、不收路徑**，cwd 恆為該 folder 的根目錄 —— renderer 在語彙上無從把初始 cwd
+   * 指向 workspace 之外。
+   *
+   * **此邊界只約束「初始 cwd」。** session 一旦啟動即為真實 shell，其內執行的命令不受此
+   * 邊界限制（使用者可以 `cd` 到任何地方 —— 那正是終端的用途）。這與 `fs` 白名單的沙箱
+   * 語意**不同**，不要把它當成沙箱來推論。
+   */
+  terminal: {
+    create: (folderId: string, spawnTarget: SpawnTarget): Promise<FsResult<{ sessionId: string }>> =>
+      ipcRenderer.invoke('workspace:terminal:create', folderId, spawnTarget),
+    /** renderer → pty，單向 fire-and-forget：逐鍵輸入不必等一次 round-trip 的回應。 */
+    write: (sessionId: string, data: string): void => {
+      ipcRenderer.send('workspace:terminal:write', sessionId, data)
+    },
+    resize: (sessionId: string, cols: number, rows: number): void => {
+      ipcRenderer.send('workspace:terminal:resize', sessionId, cols, rows)
+    },
+    kill: (sessionId: string): void => {
+      ipcRenderer.send('workspace:terminal:kill', sessionId)
+    },
+    /** pty → renderer 的輸出。回傳取消訂閱的函式。 */
+    onData: (listener: (sessionId: string, chunk: string) => void): (() => void) => {
+      const handler = (_event: IpcRendererEvent, sessionId: string, chunk: string): void => {
+        listener(sessionId, chunk)
+      }
+      ipcRenderer.on('workspace:terminal:data', handler)
+      return () => {
+        ipcRenderer.off('workspace:terminal:data', handler)
+      }
+    },
+    /** pty 結束。回傳取消訂閱的函式。 */
+    onExit: (listener: (sessionId: string, exitCode: number) => void): (() => void) => {
+      const handler = (_event: IpcRendererEvent, sessionId: string, exitCode: number): void => {
+        listener(sessionId, exitCode)
+      }
+      ipcRenderer.on('workspace:terminal:exit', handler)
+      return () => {
+        ipcRenderer.off('workspace:terminal:exit', handler)
+      }
+    },
   },
 } as const
 
