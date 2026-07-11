@@ -1,4 +1,4 @@
-# spek workspace — Product Requirements Document
+# spekterm — Product Requirements Document
 
 > 狀態：整合定案（consolidated draft）
 > 更新：2026-07-08
@@ -31,7 +31,7 @@
 
 ## 1. 產品概述
 
-**spek workspace** 是一個**以 agent 為核心的本地開發工作台**——一個獨立的 Electron 桌面 app（私有、專有授權），把多個「一個 repo／資料夾各自一個 `claude` session」的 terminal 包在一個殼裡，並加上一塊**懂 OpenSpec 結構的側欄**，讓使用者不必另外開 IDE 就能一邊駕駛 agent、一邊看著 spec 上下文。
+**spekterm** 是一個**以 agent 為核心的本地開發工作台**——一個獨立的 Electron 桌面 app（私有、專有授權），把多個「一個 repo／資料夾各自一個 `claude` session」的 terminal 包在一個殼裡，並加上一塊**懂 OpenSpec 結構的側欄**，讓使用者不必另外開 IDE 就能一邊駕駛 agent、一邊看著 spec 上下文。
 
 core 邏輯重用開源的 [`@spekjs/core`](https://github.com/kewang/spek)（MIT）；app 本身封閉、商業授權。
 
@@ -56,7 +56,7 @@ core 邏輯重用開源的 [`@spekjs/core`](https://github.com/kewang/spek)（MI
 
 這是三個不同的 job：
 
-| 軸 | claude-view | cmux | **spek workspace** |
+| 軸 | claude-view | cmux | **spekterm** |
 |---|---|---|---|
 | 主要用途 | **監看**艦隊（observability） | **駕駛** agent（終端機本體） | **駕駛 + spec 上下文並排** |
 | 真 pty terminal | 無 | 有（libghostty） | 有（跑真 `claude`，吃訂閱不吃 API key） |
@@ -82,7 +82,7 @@ core 邏輯重用開源的 [`@spekjs/core`](https://github.com/kewang/spek)（MI
 
 （各競品的完整 feature／平台／商業模式／traction 見 [附錄 A](#附錄-a競品詳細檔案)。）
 
-### 2.4 SWOT（以 spek workspace 為主體）
+### 2.4 SWOT（以 spekterm 為主體）
 
 **Strengths**
 - **唯一 spec-aware 工作台**：OpenSpec 側欄自動跟隨當前 change（deltas / BDD / tasks / graph），兩對手都沒有、也沒宣示要做。這是 workflow 綁定，不是 feature——用 OpenSpec 的人切換成本高。
@@ -234,7 +234,7 @@ OpenSpec 與 Files 是 side panel 的**兩個同層級、互斥的身分**，用
 
 ## 7. 護城河：跨 agent、磁碟狀態驗證的 Handoff
 
-> 定位：這是 spek workspace 的**護城河層**，不是行銷 headline。headline 維持簡單好懂（「spec-driven 的多 agent 開發工作台」）；handoff 是往下證明 moat 的深水區，也是對「為什麼 cmux 抄不走我」的答案。
+> 定位：這是 spekterm 的**護城河層**，不是行銷 headline。headline 維持簡單好懂（「spec-driven 的多 agent 開發工作台」）；handoff 是往下證明 moat 的深水區，也是對「為什麼 cmux 抄不走我」的答案。
 
 > **Handoff 是一級功能，不綁 OpenSpec。** spek 以 OpenSpec 為核心沒錯，但 handoff 的守護價值來自「**磁碟狀態驗證**」——讀 git diff／檔案這種每個 repo 都有的 ground truth，任何 repo（含沒有 `openspec/` 的）都能收送 handoff。OpenSpec change 錨定是**選配的增強層**：當這一棒的工作剛好對應到一個 change 時，額外綁上 change slug、讀 tasks.md 打勾、對齊 spec deltas，讓上下文更濃。沒有 change（ad-hoc、或非 OpenSpec repo）時，handoff 退為「git diff 快照 + 自由文字意圖」，仍然是一級、仍然誠實。mockup 已同時畫出兩種：OpenSpec 錨定的 H1／H3，與 ad-hoc 的 H2。
 
@@ -339,7 +339,7 @@ spek 背景 router 主動 probe → 比對 to 命中的 repo-B
 ### 8.2 三層結構
 
 ```
-@spek/workspace
+spekterm
 ├── main/        # Electron 主行程（Node）
 │   ├── window.ts          # 視窗 / 選單 / 生命週期
 │   ├── ipc/               # IPC handlers
@@ -452,7 +452,7 @@ spek 背景 router 主動 probe → 比對 to 命中的 repo-B
 每個 Phase 對應一個（或數個）OpenSpec change，依 CLAUDE.md 工作流 proposal → design → tasks → 實作 → verify → archive。Phase 0–6 建立工作台本體，Phase 7+ 建立護城河（handoff）。
 
 ### Phase 0 — 基礎建設與技術驗證（spike）
-`@spek/workspace` 能開視窗、renderer 跑起來，並驗證高風險相依。
+`spekterm` 能開視窗、renderer 跑起來，並驗證高風險相依。
 - 建 package 骨架：electron-vite + React + Tailwind v4 + TypeScript。
 - 主行程 import `@spekjs/core` 成功（印出某 repo 掃描結果）。
 - **技術驗證**：node-pty 能在 Electron 主行程 spawn 真 pty（Node-API，免 `electron-rebuild`）；Monaco 能在 renderer 載入並高亮，且 worker 於 dev 與 build 兩種模式皆正常。

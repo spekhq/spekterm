@@ -109,7 +109,7 @@ function changeMeta(dir, created) {
 }
 
 function makeFixture() {
-  const base = mkTemp('spek-openspec-fixture-')
+  const base = mkTemp('spekterm-openspec-fixture-')
 
   // 兩個 active change —— 建立 session 時**不該**自動錨定（多個候選之間不猜）。
   const many = join(base, 'repo-many')
@@ -164,7 +164,7 @@ function makeFixture() {
 }
 
 function seedProfile(folders) {
-  const profile = mkTemp('spek-openspec-profile-')
+  const profile = mkTemp('spekterm-openspec-profile-')
   writeFileSync(
     join(profile, 'workspace.json'),
     JSON.stringify({

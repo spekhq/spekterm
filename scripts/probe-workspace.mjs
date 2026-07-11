@@ -31,7 +31,7 @@ function mkTemp(prefix) {
 
 /** 三種 folder 狀態 + 一個指向 workspace 之外的 symlink（供越界測試）。 */
 function makeFixture() {
-  const base = mkTemp('spek-fixture-')
+  const base = mkTemp('spekterm-workspace-fixture-')
 
   const withOpenSpec = join(base, 'repo-openspec')
   mkdirSync(join(withOpenSpec, 'openspec'), { recursive: true })
@@ -56,7 +56,7 @@ function makeFixture() {
 }
 
 function seedProfile(folders) {
-  const profile = mkTemp('spek-profile-')
+  const profile = mkTemp('spekterm-workspace-profile-')
   writeFileSync(
     join(profile, 'workspace.json'),
     JSON.stringify(
@@ -333,7 +333,7 @@ try {
 
   // ── workspace-folders：設定檔損毀 ────────────────────────────────────────
   console.log('\n設定檔損毀降級')
-  const corruptProfile = mkTemp('spek-corrupt-')
+  const corruptProfile = mkTemp('spekterm-corrupt-')
   writeFileSync(join(corruptProfile, 'workspace.json'), '{ this is not json')
   app = await launch(corruptProfile)
   check(results, '損毀時應用程式仍正常啟動', app.mounted === true)

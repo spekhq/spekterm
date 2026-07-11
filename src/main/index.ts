@@ -65,10 +65,10 @@ function createWindow(dirty: DirtyStateStore): BrowserWindow {
 
 /**
  * 開發模式的掃描目標。預設掃描 repo 自身 —— 它就是一個含 `openspec/` 的 repo。
- * `SPEK_SCAN_PATH` 可指向任意 repo，供實測其他專案。
+ * `SPEKTERM_SCAN_PATH` 可指向任意 repo，供實測其他專案。
  */
 function resolveScanTarget(): string {
-  return process.env.SPEK_SCAN_PATH ?? app.getAppPath()
+  return process.env.SPEKTERM_SCAN_PATH ?? app.getAppPath()
 }
 
 /**

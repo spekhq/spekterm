@@ -1,13 +1,13 @@
 ## Purpose
 
-`spek-workspace` 以合法套件依賴取得已發佈的 `@spekjs/core`，主行程可直接 `import` 並呼叫其掃描 API 取得
+`spekterm` 以合法套件依賴取得已發佈的 `@spekjs/core`，主行程可直接 `import` 並呼叫其掃描 API 取得
 OpenSpec 結構，無需 HTTP 或 IPC 中介。這是 PRD §9「重用而非重造」的地基。
 
 ## Requirements
 
 ### Requirement: 以已發佈的 npm 套件取得 core
 
-`spek-workspace` SHALL 透過已發佈於 npm public registry 的 `@spekjs/core` 套件取得 OpenSpec 解析能力。版控中的依賴宣告 SHALL NOT 使用 `file:`、`link:`、`portal:` 或其他指向本機路徑的協定 —— 這類宣告會讓 CI 與 `electron-builder` 打包看到與開發者機器不同的依賴。
+`spekterm` SHALL 透過已發佈於 npm public registry 的 `@spekjs/core` 套件取得 OpenSpec 解析能力。版控中的依賴宣告 SHALL NOT 使用 `file:`、`link:`、`portal:` 或其他指向本機路徑的協定 —— 這類宣告會讓 CI 與 `electron-builder` 打包看到與開發者機器不同的依賴。
 
 #### Scenario: 依賴宣告為已發佈的版本
 

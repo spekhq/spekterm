@@ -1,7 +1,7 @@
 schema: spec-driven
 
 context: |
-  Project: spek workspace — agent 開發工作台（Electron 桌面 app，私有、專有授權）
+  Project: spekterm — agent 開發工作台（Electron 桌面 app，私有、專有授權）
   Purpose: 把多個「一個 repo／資料夾各自一個 claude session」的 terminal 包在一個殼裡，
            並加上一塊懂 OpenSpec 結構的側欄
   Tech stack（已安裝）: Electron 43.1.0（釘死）, electron-vite, TypeScript,

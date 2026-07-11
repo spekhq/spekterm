@@ -97,7 +97,7 @@ const PROBE_EXPRESSION = `(async () => {
   }
 })()`
 
-const profileDir = mkdtempSync(join(tmpdir(), 'spek-probe-shell-'))
+const profileDir = mkdtempSync(join(tmpdir(), 'spekterm-probe-shell-'))
 
 const electron = spawn(
   process.platform === 'win32' ? 'electron.cmd' : 'electron',

@@ -1,4 +1,4 @@
-# spek workspace
+# spekterm
 
 商業版 spek —— 一個以 agent 為核心的本地開發工作台，獨立的 Electron app（私有、專有授權）。
 

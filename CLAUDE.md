@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-spek workspace 是一個以 agent 為核心的本地開發工作台 —— 獨立的 Electron 桌面 app（私有、專有授權），
+spekterm 是一個以 agent 為核心的本地開發工作台 —— 獨立的 Electron 桌面 app（私有、專有授權），
 把多個「一個 repo／資料夾各自一個 `claude` session」的 terminal 包在一個殼裡，
 並加上一塊懂 OpenSpec 結構的側欄，讓使用者不必另外開 IDE 就能一邊駕駛 agent、一邊看著 spec 上下文。
 
@@ -41,8 +41,13 @@ npm run probe:terminal  # 驗收 terminal-sessions（pty 雙向／cwd／resize�
 npm run probe:openspec  # 驗收 openspec-data-access / openspec-panel（兩個視圖／兩棵樹／artifact 分頁／agent 改檔即更新／錨定／交叉導覽／Graph・Timeline 的 overlay，dev + build 兩模式）
 npm run probe:native    # 驗收 native-module-toolchain（Electron 主行程載入 node-pty + spawn pty）
 npm run probe:core      # 驗收 spek-core-integration（主行程掃描 OpenSpec，且不開 TCP 埠）
+npm run probe:identity  # 驗收 app-identity（productName／appId／userData 路徑／視窗標題）
 npm run measure:bundle  # renderer bundle 體積報告（依編輯器核心／worker／語言分類歸因）
 ```
+
+`probe:identity` **不傳 `--user-data-dir`** —— 它要驗的正是 `app.getPath('userData')` 實際解析出來
+的路徑，而那個旗標會把待驗的對象本身覆寫掉。其他 probe 用暫存 profile 隔離自己的手法在這裡不適用，
+因此它像 `probe:native` 一樣「自己就是一個 Electron 主行程」。
 
 `probe:files` 的開發模式**自己起 renderer dev server（`--rendererOnly`）再自己 spawn electron**，
 不用 `electron-vite dev` 直接拉起 electron —— 後者產生的 electron 是孫行程，殺 `npx` 殺不到它
@@ -60,8 +65,14 @@ node wrapper，它自己再 spawn 真正的 electron 二進位；`npx electron-v
 連根拔除整棵樹（每個子行程的 argv 都帶著它）；dev server 以 `detached: true` spawn 成 group
 leader，再 `process.kill(-pid)` 殺整組。**另外，面板留有未存變更時關閉會觸發原生對話框
 （design D15），它會擋住主行程訊息迴圈使 SIGTERM 失效** —— 這也是必須連根拔除而非溫柔關閉
-的理由。`probe:files` 的每次探針失敗若伴隨「樹是空的」，先 `pgrep -f spek-files-profile` 檢查
+的理由。`probe:files` 的每次探針失敗若伴隨「樹是空的」，先 `pgrep -f spekterm-files-profile` 檢查
 有無殭屍，別急著改產品程式碼。
+
+> **`pkill -f` / `pgrep -f` 會匹配到你自己那條命令。** pattern 寫在 command line 上，而
+> `-f` 比對的是整條 command line —— 於是 `pkill -9 -f spekterm-files-profile` 會把執行它的
+> 那個 shell 一起殺掉（實測：指令中途死亡、後面的清理不再執行，看起來像「殺完就沒事了」，
+> 其實一個殭屍都沒殺到）。把 `-` 包成字元類別即可自我豁免：`pkill -9 -f 'spekterm[-]files-profile'`
+> —— regex 仍匹配真正的 profile 名，但你自己那條命令的字面不匹配。
 
 **驗互動時用真事件，不要用 `dispatchEvent(new MouseEvent(...))`。** 合成事件不等於真實
 輸入：它不走完整的 pointer/mouse/contextmenu 序列，也不觸發 React 19 對 trusted discrete
@@ -73,10 +84,10 @@ viewport 也照樣通過。**右鍵 / 點擊要用 `Input.dispatchMouseEvent`（
 「開啟事件不可自我關閉」只有真事件測得出來。
 
 開發模式（未打包）啟動時，主行程會輸出一行掃描摘要。掃描目標預設為本 repo，
-以 `SPEK_SCAN_PATH` 覆寫：
+以 `SPEKTERM_SCAN_PATH` 覆寫：
 
 ```bash
-SPEK_SCAN_PATH=../spek npm run dev
+SPEKTERM_SCAN_PATH=../spek npm run dev
 # [openspec] scan /home/me/git/spek specs=43 activeChanges=1 archivedChanges=67 defaultSchema=spec-driven
 ```
 

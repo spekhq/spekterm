@@ -58,7 +58,7 @@ const README = `# 標題
 `
 
 function makeFixture() {
-  const base = mkTemp('spek-files-fixture-')
+  const base = mkTemp('spekterm-files-fixture-')
 
   const repo = join(base, 'repo-openspec')
   mkdirSync(join(repo, 'openspec'), { recursive: true })
@@ -94,7 +94,7 @@ function makeFixture() {
 }
 
 function seedProfile(folders) {
-  const profile = mkTemp('spek-files-profile-')
+  const profile = mkTemp('spekterm-files-profile-')
   writeFileSync(
     join(profile, 'workspace.json'),
     JSON.stringify({

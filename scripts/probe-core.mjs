@@ -73,7 +73,7 @@ function expectedSchema(repoPath) {
  * 另埋兩個誘餌驗證 core 的過濾規則：沒有 spec.md 的 spec 目錄、dotfile 目錄，兩者都不該被計入。
  */
 function makeFixtureRepo() {
-  const root = realpathSync(mkdtempSync(join(tmpdir(), 'spek-fixture-')))
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'spekterm-fixture-')))
   const openspec = join(root, 'openspec')
 
   mkdirSync(openspec, { recursive: true })
@@ -216,7 +216,7 @@ async function runApp(scanPath) {
   const child = spawn('electron', ['.'], {
     cwd: PROJECT_ROOT,
     stdio: ['ignore', 'pipe', 'pipe'],
-    env: { ...process.env, SPEK_SCAN_PATH: scanPath },
+    env: { ...process.env, SPEKTERM_SCAN_PATH: scanPath },
   })
 
   let stdout = ''
@@ -383,7 +383,7 @@ if (!onLinux) {
 
 // Scenario: 掃描不含 openspec 目錄的路徑
 console.log('\n掃描不含 openspec 目錄的路徑')
-const emptyDir = realpathSync(mkdtempSync(join(tmpdir(), 'spek-noopenspec-')))
+const emptyDir = realpathSync(mkdtempSync(join(tmpdir(), 'spekterm-noopenspec-')))
 tempDirs.push(emptyDir)
 const withoutSpec = await runApp(emptyDir)
 check('回傳空結構而非拋出例外', withoutSpec.summary !== null && !withoutSpec.scanFailed, withoutSpec.scanFailed ? '主行程回報 scan failed' : '')
