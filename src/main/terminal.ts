@@ -90,9 +90,12 @@ export class TerminalService {
         env: { ...process.env, TERM: 'xterm-256color' },
       })
     } catch (error) {
-      // shell 本身起不來（路徑錯等）。claude 找不到不會走到這裡——那是 shell 起得來、
-      // 命令失敗，呈現為極快 exit + terminal 顯示 command not found（design D15）。
-      throw new TerminalError('SPAWN_FAILED', `failed to spawn shell: ${String(error)}`)
+      // 罕見：底層 pty 配置不出來時 node-pty 才會同步拋錯。
+      //
+      // **shell 路徑無效不走這裡。** 實測：node-pty 對 execvp 失敗不同步拋錯 —— 它成功
+      // 回傳一個 pty，該 pty 隨即以非零碼 exit，`execvp(3) failed.` 由 onData 送出。
+      // 於是「shell 路徑錯」與「claude 找不到」殊途同歸，都經 onExit 呈現。
+      throw new TerminalError('SPAWN_FAILED', `failed to allocate pty: ${String(error)}`)
     }
 
     this.#sessions.set(sessionId, pty)

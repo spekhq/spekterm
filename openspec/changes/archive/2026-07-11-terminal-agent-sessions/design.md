@@ -128,10 +128,20 @@ terminal 與分頁的可識別性用 role/aria（`section aria-label="Terminal"`
 - **Enter 必須是一次真的 keyEvent。** 把 `\r` 併進 `Input.insertText` 的文字裡送出，字元確實抵達 pty（終端上看得到回顯），但 shell **從未執行那一行** —— xterm 的換行是在 keydown 上判讀的，不是從 textarea 的內容剖析出來的。只看「終端上出現了我打的字」會誤判成功。
 - **斷言必須能區分「回顯」與「執行」。** tty 會回顯輸入行，所以 `echo COLS=$(stty size ...)` 這種命令，畫面上在**執行之前**就已經有 `COLS=` 了 —— 等它出現會讀到還沒產生的值（實測 build 模式因此讀到 0）。斷言要等的是「marker 後面跟著數字」，或用 `echo OUT_$((6*7))` 這種**回顯不含答案、只有真的執行才會產出 `OUT_42`** 的形式；驗 cwd 同理用 `echo CWD=$(pwd)`（`$(pwd)` 在回顯裡不展開）。
 
-### D15. spawn 失敗的兩種形態
+### D15. 啟動失敗一律走 onExit，不走 create 的同步拋錯（**原假設已被實測推翻**）
 
-- **shell 本身起不來**（`$SHELL` 路徑錯）：`pty.spawn` 在 Linux 會 throw，`create` 以 `try/catch → toResult` 回 `SPAWN_FAILED`。
-- **claude 找不到**：shell 起得來、`claude` 命令失敗——呈現為 session 極快 `exit` + terminal 顯示 shell 的 `command not found`。這其實是**好的 UX**（使用者看到真實的 shell 錯誤），不需特別攔截。design 明記這個差異，避免有人日後「修」掉它。
+原本寫的是「`pty.spawn` 對無效 shell 會同步 throw，`create` 以 `try/catch` 回 `SPAWN_FAILED`」。**那是錯的。**
+
+實測（node-pty 1.2.0-beta.14）：`spawn('/nonexistent', ['-l'])` **不拋錯** —— 它成功回傳一個 `IPty`，該 pty 隨即以 **exit code 1** 結束，且 `execvp(3) failed.: No such file or directory` 由 `onData` 送出。
+
+於是**兩種啟動失敗殊途同歸**，都經 `onExit`（非零）+ 終端上的錯誤訊息呈現：
+
+- **shell 路徑無效**（`$SHELL` 壞）：exit 1 + `execvp failed`。
+- **claude 找不到**：shell 起得來、`claude` 命令失敗 → 極快 exit + shell 的 `command not found`。
+
+這其實是**好的 UX**（使用者看到真實的錯誤），renderer 只需把該 session 標為 exited。`create` 的 `try/catch → SPAWN_FAILED` 仍保留，但只防罕見的**底層 pty 無法配置**（那才會同步拋錯），不是 execvp 失敗的主路徑。
+
+`src/main/terminal.test.ts` 有一條測試釘住這個結論（`create` 不拋錯、pty 以非零碼結束、輸出含 `execvp`），以免它被悄悄改回去。
 
 ### D16. 輸出的 backlog：訂閱必須早於 `create`（實作時發現）
 

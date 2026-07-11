@@ -129,14 +129,28 @@ session 的 pty 自行結束（例如使用者於 shell 執行 `exit`、或 `cla
 - **WHEN** 使用者關閉一個已結束的 session
 - **THEN** 該 session 自清單移除，此時無 pty 需要終止
 
-### Requirement: spawn 失敗被回報且不使應用程式崩潰
+### Requirement: 啟動失敗以 session 結束與終端訊息呈現，不使應用程式崩潰
 
-底層 shell 本身無法啟動時，建立 session 的呼叫 SHALL 以錯誤回報，應用程式 SHALL NOT 崩潰。
+所選的 shell 或命令無法執行時（shell 路徑無效、或 `claude` 不存在），該 session SHALL 以其行程的非零結束呈現，且失敗訊息 SHALL 顯示於終端；應用程式 SHALL NOT 因此崩潰。
 
-#### Scenario: 底層 shell 無法啟動
+**建立 session 的呼叫本身 SHALL NOT 因此失敗** —— 實測（node-pty 1.2.0-beta.14）：`spawn` 對 execvp 失敗**不同步拋錯**，它成功回傳一個 pty，該 pty 隨即以非零碼結束，並由輸出串流送出 `execvp(3) failed.` 這類訊息。於是 shell 路徑無效與 `claude` 找不到**殊途同歸**，都走「非零結束 + 終端訊息」這條路徑，而不是回一個錯誤碼。
 
-- **WHEN** 建立 session 時底層 shell 行程無法被啟動
-- **THEN** 該呼叫以錯誤碼回報失敗，應用程式維持運作
+建立呼叫的錯誤碼只留給**底層 pty 無法配置**這種罕見情形（那才會同步拋錯）。
+
+#### Scenario: shell 或命令無法執行
+
+- **WHEN** 建立 session 後，所選的 shell 或命令無法被執行
+- **THEN** 該 session 以非零碼結束，終端顯示失敗訊息，應用程式維持運作
+
+#### Scenario: 建立呼叫不因命令不存在而失敗
+
+- **WHEN** 建立 session 時所指定的 shell 路徑無效
+- **THEN** 建立呼叫仍成功回傳 session 識別碼，失敗改以該 session 的非零結束呈現
+
+#### Scenario: 底層 pty 無法配置
+
+- **WHEN** 建立 session 時底層 pty 無法被配置
+- **THEN** 建立呼叫以錯誤碼回報失敗，應用程式維持運作
 
 ### Requirement: session 的標籤反映 pty 設定的終端標題
 
