@@ -149,6 +149,8 @@ side panel 處於收合狀態時，觸發任一身分的入口 SHALL 重新展�
 
 主舞台 SHALL 在 repo header 與 terminal／side panel 版面之間，為**當前選中的 repo** 呈現其 session 的分頁列。此分頁列 SHALL 標示當前 focused 的 session、SHALL 提供在 session 之間切換的方式、SHALL 提供建立新 session 的入口（該入口 SHALL 讓使用者選擇 spawn 目標），且每個分頁 SHALL 可關閉。
 
+建立新 session 的入口 SHALL 緊鄰最後一個分頁之後，SHALL NOT 被推離分頁而置於分頁列的另一端 —— 它是分頁的延伸，使用者剛看完分頁就會伸手去點它。
+
 當前 repo 尚無任何 session 時，該區域 SHALL 呈現空狀態，並提供明顯的建立 session 入口。
 
 分頁列僅呈現當前選中 repo 的 session —— 主舞台只屬於當前選中的 repo。
@@ -168,6 +170,11 @@ side panel 處於收合狀態時，觸發任一身分的入口 SHALL 重新展�
 - **WHEN** 使用者觸發建立新 session 的入口
 - **THEN** 使用者可選擇 spawn 目標為 `claude` 或 login shell
 
+#### Scenario: 建立入口緊鄰最後一個分頁
+
+- **WHEN** 分頁列中已有一或多個分頁
+- **THEN** 建立新 session 的入口緊接於最後一個分頁之後，而非位於分頁列的另一端
+
 #### Scenario: 關閉分頁
 
 - **WHEN** 使用者關閉分頁列中的一個 session
@@ -182,6 +189,10 @@ side panel 處於收合狀態時，觸發任一身分的入口 SHALL 重新展�
 
 workspace rail 的每個 folder 列之下 SHALL 呈現該 folder 的 session 子列，反映該 folder 的所有 session（不限於當前選中的 repo）。子列 SHALL 可被點選以聚焦該 session，點選時 SHALL 選中其所屬的 folder 並將該 session 設為 focused。folder 的 session 子列 SHALL 可展開與收合。
 
+rail 的每個 folder 列 SHALL 提供建立 session 的入口，該入口 SHALL 讓使用者選擇 spawn 目標，且 SHALL 選中該 folder 並聚焦新建立的 session —— 使用者在 rail 上看得到 session，就應當能在原地開一個，不必先切換到主舞台。
+
+rail 的每個 session 子列 SHALL 提供關閉該 session 的入口，其效果與自分頁列關閉相同。
+
 #### Scenario: folder 之下呈現其 session
 
 - **WHEN** 一個 folder 有一或多個 session
@@ -191,6 +202,16 @@ workspace rail 的每個 folder 列之下 SHALL 呈現該 folder 的 session 子
 
 - **WHEN** 使用者點選一個 folder 的某個 session 子列
 - **THEN** 該 folder 被選中，且該 session 成為其 focused session
+
+#### Scenario: 自 rail 建立 session
+
+- **WHEN** 使用者於 rail 的某個 folder 列觸發建立 session 的入口並選擇 spawn 目標
+- **THEN** 該 folder 之下新增一個 session，該 folder 被選中，且新 session 成為 focused
+
+#### Scenario: 自 rail 關閉 session
+
+- **WHEN** 使用者於 rail 的某個 session 子列觸發關閉入口
+- **THEN** 該 session 被關閉並自 rail 與分頁列一併移除
 
 #### Scenario: 收合與展開 session 子列
 

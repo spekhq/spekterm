@@ -209,6 +209,36 @@ const RAIL_CARET_RECT = `(() => {
 
 const RAIL_SESSION_COUNT = `document.querySelectorAll('aside[aria-label="工作區"] ul[aria-label$="的 session"] li').length`
 
+/** rail 上 folder 列的「＋」建立入口（hover 才顯示，但 opacity 不影響 rect 與點擊）。 */
+const RAIL_NEW_SESSION_RECT = `(() => {
+  const btn = document.querySelector('aside[aria-label="工作區"] [aria-label^="新增 session —"]')
+  if (!btn) return null
+  const r = btn.getBoundingClientRect()
+  return { x: r.x, y: r.y, width: r.width, height: r.height }
+})()`
+
+/** rail 上第 n 個 session 子列的關閉鈕。 */
+const RAIL_CLOSE_SESSION_RECT = (index) => `(() => {
+  const rows = [...document.querySelectorAll('aside[aria-label="工作區"] ul[aria-label$="的 session"] li')]
+  const btn = rows[${index}]?.querySelector('[aria-label^="關閉 session"]')
+  if (!btn) return null
+  const r = btn.getBoundingClientRect()
+  return { x: r.x, y: r.y, width: r.width, height: r.height }
+})()`
+
+/**
+ * 主舞台的「+ session」與最後一個分頁之間的水平間距。
+ *
+ * 先前它被 flex 推到分頁列的另一端（間距數百 px），開第二個分頁後滑鼠得橫越整條列。
+ */
+const NEW_BUTTON_GAP = `(() => {
+  const tabs = [...document.querySelectorAll('[aria-label="Session 分頁"] [role="tab"]')]
+  const last = tabs[tabs.length - 1]
+  const plus = document.querySelector('[aria-label="新增 session"]')
+  if (!last || !plus) return null
+  return Math.round(plus.getBoundingClientRect().left - last.getBoundingClientRect().right)
+})()`
+
 const RECT_OF = (selector) => `(() => {
   const el = document.querySelector(${JSON.stringify(selector)})
   if (!el) return null
@@ -299,6 +329,20 @@ async function typeLine(client, text) {
 async function waitForOutput(client, needle, timeoutMs = 8000) {
   const text = await pollUntil(client, TERMINAL_TEXT, (value) => String(value).includes(needle), timeoutMs)
   return String(text)
+}
+
+/** 自 rail 的 folder 列建立 session（該入口 hover 才顯示，但 rect 與點擊不受 opacity 影響）。 */
+async function openSessionViaRail(client, itemLabel) {
+  const btn = await pollUntil(client, RAIL_NEW_SESSION_RECT, (value) => value !== null, 8000)
+  if (!btn) throw new Error('找不到 rail 上的建立 session 入口')
+  await realClick(client, btn)
+
+  const menu = await pollUntil(client, MENU_IN_VIEWPORT, (value) => value !== null, 3000)
+  const itemRect = await client.evaluate(MENU_ITEM_RECT(itemLabel))
+  if (!itemRect) throw new Error(`rail 的選單中找不到「${itemLabel}」`)
+
+  await realClick(client, itemRect)
+  return menu
 }
 
 async function openSessionViaMenu(client, itemLabel) {
@@ -398,6 +442,36 @@ async function runMode(label, { port, rendererUrl }) {
       `期待 ${cwdNeedle}；實得 …${String(afterPwd).replace(/\s+/g, ' ').slice(-90)}`,
     )
 
+    // ── session 的標籤跟隨 pty 以 OSC 序列宣告的終端標題
+    // 這正是 `claude` 讓終端模擬器的分頁自動改名的機制；我們接的是同一個訊號。
+    await typeLine(app.client, "printf '\\033]0;spek-osc-title\\007'")
+
+    const titledTabs = await pollUntil(
+      app.client,
+      TABS,
+      (value) => value.some((tab) => tab.label.includes('spek-osc-title')),
+      8000,
+    )
+    check(
+      results,
+      `${label}：分頁標籤跟隨 pty 設定的終端標題`,
+      titledTabs.some((tab) => tab.label.includes('spek-osc-title')),
+      JSON.stringify(titledTabs.map((t) => t.label)),
+    )
+
+    const titledRail = await pollUntil(
+      app.client,
+      RAIL_SESSION_ROWS,
+      (value) => value.some((row) => row.includes('spek-osc-title')),
+      6000,
+    )
+    check(
+      results,
+      `${label}：rail 子列的標籤同步跟隨終端標題`,
+      titledRail.some((row) => row.includes('spek-osc-title')),
+      JSON.stringify(titledRail),
+    )
+
     // ── resize：pty 必須收到新的欄數
     //
     // 兩次量測用**不同的 marker**，且等的是「marker 後面跟著數字」。命令列本身就含
@@ -431,10 +505,27 @@ async function runMode(label, { port, rendererUrl }) {
     // ── 第二個 session（多開）
     await openSessionViaMenu(app.client, '進 login shell')
     const tabs2 = await pollUntil(app.client, TABS, (value) => value.length === 2, 8000)
-    check(results, `${label}：可多開 session`, tabs2.length === 2, JSON.stringify(tabs2))
+    check(results, `${label}：可多開 session`, tabs2.length === 2, JSON.stringify(tabs2.map((t) => t.label)))
 
     const pids2 = await waitForPtyCount(marker, 2)
     check(results, `${label}：兩個 pty 行程並存`, pids2.length === 2, `pids=${pids2.join(',')}`)
+
+    // 新 session 尚未宣告標題 → 退回本地標籤；先前那個仍保有它宣告的標題
+    check(
+      results,
+      `${label}：未宣告標題的 session 退回本地標籤`,
+      tabs2[1]?.label.includes('shell 2') && tabs2[0]?.label.includes('spek-osc-title'),
+      JSON.stringify(tabs2.map((t) => t.label)),
+    )
+
+    // ── 「+ session」必須緊鄰最後一個分頁（先前被 flex 推到分頁列的另一端）
+    const gap = await app.client.evaluate(NEW_BUTTON_GAP)
+    check(
+      results,
+      `${label}：「+ session」緊鄰最後一個分頁`,
+      typeof gap === 'number' && gap >= 0 && gap < 40,
+      `與最後一個分頁的間距 ${gap}px`,
+    )
 
     // ── 切回第一個 session：先前的輸出仍在（scrollback 未因切換而遺失）
     const firstTabRect = await app.client.evaluate(`(() => {
@@ -494,6 +585,31 @@ async function runMode(label, { port, rendererUrl }) {
       `tabs=${tabs3.length} pids=${pids3.length}`,
     )
 
+    // ── 自 rail 的 folder 列建立 session（不必先切到主舞台）
+    await openSessionViaRail(app.client, '進 login shell')
+    const tabsAfterRailCreate = await pollUntil(app.client, TABS, (value) => value.length === 2, 8000)
+    const pidsAfterRailCreate = await waitForPtyCount(marker, 2)
+    check(
+      results,
+      `${label}：自 rail 的 folder 列建立 session`,
+      tabsAfterRailCreate.length === 2 &&
+        tabsAfterRailCreate[1]?.selected === true &&
+        pidsAfterRailCreate.length === 2,
+      `tabs=${tabsAfterRailCreate.length} focused=${tabsAfterRailCreate[1]?.selected} pids=${pidsAfterRailCreate.length}`,
+    )
+
+    // ── 自 rail 的 session 子列關閉 session
+    const railClose = await app.client.evaluate(RAIL_CLOSE_SESSION_RECT(1))
+    await realClick(app.client, railClose)
+    const tabsAfterRailClose = await pollUntil(app.client, TABS, (value) => value.length === 1, 8000)
+    const pidsAfterRailClose = await waitForPtyCount(marker, 1)
+    check(
+      results,
+      `${label}：自 rail 的 session 子列關閉 session 並終止其 pty`,
+      tabsAfterRailClose.length === 1 && pidsAfterRailClose.length === 1,
+      `tabs=${tabsAfterRailClose.length} pids=${pidsAfterRailClose.length}`,
+    )
+
     // ── pty 自行結束：標示為已結束，但**不從清單消失**（使用者要讀得到最後的輸出）
     await realClick(app.client, await app.client.evaluate(TERMINAL_RECT))
     await sleep(200)
@@ -524,18 +640,15 @@ async function runMode(label, { port, rendererUrl }) {
     )
 
     // ── claude 模式：能被建立；環境沒有 claude 時應呈現為已結束，而非崩潰
+    // 標籤不比對 `claude` 字樣 —— 若環境中的 claude 起得來，它會用 OSC 宣告自己的標題，
+    // 標籤就不再是本地的 `claude N` 了。這裡驗的是「session 建得起來」。
     await openSessionViaMenu(app.client, '跑 claude')
-    const tabsClaude = await pollUntil(
-      app.client,
-      TABS,
-      (value) => value.some((tab) => tab.label.includes('claude')),
-      8000,
-    )
+    const tabsClaude = await pollUntil(app.client, TABS, (value) => value.length === 1, 8000)
     check(
       results,
       `${label}：claude 模式可建立 session（不論環境是否有 claude）`,
-      tabsClaude.some((tab) => tab.label.includes('claude')),
-      JSON.stringify(tabsClaude),
+      tabsClaude.length === 1,
+      JSON.stringify(tabsClaude.map((t) => t.label)),
     )
     check(results, `${label}：建立 claude session 後 app 仍運作`, (await app.client.evaluate(MOUNTED)) === true)
 

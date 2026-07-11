@@ -262,6 +262,13 @@ provider 驗證：它為 `language: '*'` 註冊，呼叫 worker 端的 `$compute
   因此掛載 `sessions.all()`、以 `display:none` 決定顯示 —— 代價是隱藏時 `FitAddon` 量到 0，
   由隱藏轉為顯示時必須重新 `fit()` 一次。
 
+- **session 的身分由 pty 自己宣告，不是我們給的流水號**（`session-titles-and-controls`）。
+  pty 內的程式以 OSC 序列（`ESC ] 0 ; <title> BEL`）設定終端標題 —— `claude` 正是這樣讓終端
+  模擬器的分頁自動改名的。xterm 的 `onTitleChange` 直接把這個事件交給我們：**不必輪詢
+  node-pty 的 `pty.process`（那是近似值），也不需要任何主行程改動或 IPC**。分頁列與 rail
+  子列共用同一個標籤；pty 沒宣告時才退回 `claude 1` 這種本地標籤。截斷只是呈現，完整標題
+  留在 tooltip。
+
 ### 驗 terminal 的兩個假綠陷阱
 
 - **Enter 必須是一次真的 keyEvent。** 把 `\r` 併進 `Input.insertText` 的文字裡送出，字元確實

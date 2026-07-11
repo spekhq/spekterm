@@ -29,6 +29,13 @@ export interface XtermHandle {
   write(data: string): void
   /** 使用者鍵入的出口。回傳解除訂閱的函式。 */
   onInput(listener: (data: string) => void): () => void
+  /**
+   * pty 內的程式以 OSC 序列（`ESC ] 0 ; <title> BEL`）設定的終端標題。
+   *
+   * 這是程式**主動宣告的身分**（`claude` 就是這樣讓終端模擬器的分頁自動改名的），
+   * 不是我們去猜的。回傳解除訂閱的函式。
+   */
+  onTitle(listener: (title: string) => void): () => void
   focus(): void
   dispose(): void
 }
@@ -89,6 +96,10 @@ export function createXterm(openLink: (uri: string) => void): XtermHandle {
     },
     onInput(listener) {
       const disposable = term.onData(listener)
+      return () => disposable.dispose()
+    },
+    onTitle(listener) {
+      const disposable = term.onTitleChange(listener)
       return () => disposable.dispose()
     },
     focus() {

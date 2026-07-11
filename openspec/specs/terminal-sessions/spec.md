@@ -12,9 +12,7 @@ renderer 雙向串流（低延遲且嚴格保序）、隨終端可用尺寸同�
 **cwd 的邊界只約束「初始」工作目錄，它不是沙箱。** session 一旦啟動即為真實 shell，pty 內執行
 的命令不受此邊界限制（使用者可以 `cd` 到任何地方 —— 那正是終端的用途）。這與 `filesystem-access`
 的「renderer 只能觸及 workspace」是**不同**的語意，不可據此推論。
-
 ## Requirements
-
 ### Requirement: 於選中的 folder 建立終端 session
 
 renderer SHALL 能在一個已加入且可用的 workspace folder 建立一個終端 session；建立成功時主行程 SHALL 回傳一個 session 識別碼。session 的 pty 初始工作目錄 SHALL 為該 folder 的根目錄。
@@ -139,4 +137,29 @@ session 的 pty 自行結束（例如使用者於 shell 執行 `exit`、或 `cla
 
 - **WHEN** 建立 session 時底層 shell 行程無法被啟動
 - **THEN** 該呼叫以錯誤碼回報失敗，應用程式維持運作
+
+### Requirement: session 的標籤反映 pty 設定的終端標題
+
+pty 內執行的程式 SHALL 能決定其 session 的標籤：程式送出設定終端標題的序列（OSC）時，該 session 在 UI 上的每一處呈現（分頁與 rail 子列）SHALL 以該標題為標籤。
+
+session 的身分因此由**跑在裡面的東西**宣告，而不是由本應用程式的流水號決定 —— 這正是終端模擬器讓分頁自動改名的同一個機制。
+
+pty 從未設定標題（或設定為空）時，標籤 SHALL 退回一個由 spawn 目標與序號組成的本地標籤。
+
+標籤過長時 SHALL 截斷呈現，且**完整標題 SHALL 仍可自該元素的提示取得** —— 截斷是呈現上的取捨，不是資料的遺失。
+
+#### Scenario: pty 設定標題後標籤隨之更新
+
+- **WHEN** 一個 session 的 pty 內的程式送出設定終端標題的序列
+- **THEN** 該 session 於分頁與 rail 子列的標籤更新為該標題
+
+#### Scenario: pty 未設定標題時退回本地標籤
+
+- **WHEN** 一個 session 的 pty 從未設定終端標題
+- **THEN** 該 session 的標籤為由其 spawn 目標與序號組成的本地標籤
+
+#### Scenario: 過長的標題被截斷但不遺失
+
+- **WHEN** pty 設定了一個超出可呈現長度的標題
+- **THEN** 標籤以截斷後的形式呈現，且完整標題可自該元素的提示取得
 

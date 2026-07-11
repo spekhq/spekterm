@@ -12,9 +12,9 @@ interface TerminalViewProps {
 const RESIZE_DEBOUNCE_MS = 60
 
 export function TerminalView({ sessionId, active }: TerminalViewProps): React.JSX.Element {
-  // 解構出 attach —— 它是穩定的 callback。若依賴整個 api 物件，session 清單一變動就會
-  // 重建 xterm（連同 scrollback 一起消失）。
-  const { attach } = useSessions()
+  // 解構出穩定的 callback。若依賴整個 api 物件，session 清單一變動就會重建 xterm
+  // （連同 scrollback 一起消失）。
+  const { attach, setTitle } = useSessions()
   const hostRef = useRef<HTMLDivElement | null>(null)
   const handleRef = useRef<XtermHandle | null>(null)
 
@@ -35,14 +35,17 @@ export function TerminalView({ sessionId, active }: TerminalViewProps): React.JS
     const stopInput = handle.onInput((data) => {
       window.workspace.terminal.write(sessionId, data)
     })
+    // pty 裡的程式（如 claude）以 OSC 序列宣告自己是誰 —— 那就是這個 session 的名字。
+    const stopTitle = handle.onTitle((title) => setTitle(sessionId, title))
 
     return () => {
+      stopTitle()
       stopInput()
       detach()
       handle.dispose()
       handleRef.current = null
     }
-  }, [sessionId, attach])
+  }, [sessionId, attach, setTitle])
 
   // 尺寸同步。不同步的後果：agent 以為終端是 80 欄、實際更寬，輸出會在錯的位置換行。
   useEffect(() => {

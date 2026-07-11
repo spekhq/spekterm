@@ -1,7 +1,8 @@
 import { useCallback, useState } from 'react'
-import { StatusDot, sessionLabel, statusTitle } from './terminal/session-badge'
+import { StatusDot, sessionLabel, sessionTitle, statusTitle } from './terminal/session-badge'
 import { type SessionState, useSessions } from './terminal/sessions'
-import type { WorkspaceFolder } from './types'
+import { useSpawnMenu } from './terminal/useSpawnMenu'
+import type { SpawnTarget, WorkspaceFolder } from './types'
 
 interface WorkspaceRailProps {
   folders: WorkspaceFolder[]
@@ -10,6 +11,9 @@ interface WorkspaceRailProps {
   onAdd: () => void
   onRemove: (id: string) => void
 }
+
+const ICON_BUTTON_CLASS =
+  'shrink-0 rounded px-1.5 py-0.5 text-xs opacity-0 group-hover:opacity-100'
 
 function FolderIcon(): React.JSX.Element {
   return (
@@ -35,6 +39,8 @@ function FolderRow({
   onToggle,
   onSelect,
   onSelectSession,
+  onCloseSession,
+  onCreateSession,
   onRemove,
 }: {
   folder: WorkspaceFolder
@@ -45,14 +51,18 @@ function FolderRow({
   onToggle: () => void
   onSelect: () => void
   onSelectSession: (sessionId: string) => void
+  onCloseSession: (sessionId: string) => void
+  onCreateSession: (spawnTarget: SpawnTarget) => void
   onRemove: () => void
 }): React.JSX.Element {
+  // 每個 folder 各持有自己的選單狀態 —— rail 上有很多列，共用一份會錨錯位置。
+  const spawn = useSpawnMenu(onCreateSession)
+
   const openSpecTitle = folder.hasOpenSpec
     ? `${folder.name} — 以 OpenSpec 身分開啟`
     : `${folder.name} — 沒有 openspec/，只能用 Files 身分`
 
   return (
-    // 巢狀形狀沿用雛型：repo 列之下容納 session 子列（mockup 的 .ws-sessions）
     <li className="group">
       <div
         role="button"
@@ -113,6 +123,20 @@ function FolderRow({
           </span>
         )}
 
+        {/* 在 rail 上看得到 session，就該能在原地開一個 —— 不必先切到主舞台。 */}
+        <button
+          type="button"
+          disabled={folder.status !== 'ok'}
+          aria-label={`新增 session — ${folder.name}`}
+          title={folder.status === 'ok' ? '新增 session' : '路徑失效，無法開啟 session'}
+          onClick={spawn.open}
+          className={`${ICON_BUTTON_CLASS} ${
+            folder.status === 'ok' ? 'text-ink-faint hover:text-accent' : 'text-ink-faint opacity-40'
+          }`}
+        >
+          ＋
+        </button>
+
         <button
           type="button"
           disabled={!folder.hasOpenSpec}
@@ -135,7 +159,7 @@ function FolderRow({
             event.stopPropagation()
             onRemove()
           }}
-          className="shrink-0 rounded px-1.5 py-0.5 text-xs text-ink-faint opacity-0 hover:text-danger group-hover:opacity-100"
+          className={`${ICON_BUTTON_CLASS} text-ink-faint hover:text-danger`}
         >
           ✕
         </button>
@@ -146,9 +170,10 @@ function FolderRow({
           {sessions.map((session) => {
             const isFocused = session.id === focusedSessionId
             const label = sessionLabel(session)
+            const full = sessionTitle(session)
 
             return (
-              <li key={session.id}>
+              <li key={session.id} className="group/session">
                 <div
                   role="button"
                   tabIndex={0}
@@ -156,21 +181,36 @@ function FolderRow({
                   onKeyDown={(event) => {
                     if (event.key === 'Enter' || event.key === ' ') onSelectSession(session.id)
                   }}
-                  title={`${label} — ${statusTitle(session)}`}
+                  title={`${full} — ${statusTitle(session)}`}
                   className={
                     // 縮排造出樹狀層次（mockup 的 .ws-session-row）
-                    'flex cursor-pointer items-center gap-2 py-1.5 pr-3 pl-9 text-[11px] ' +
+                    'flex cursor-pointer items-center gap-2 py-1.5 pr-1 pl-9 text-[11px] ' +
                     (isFocused ? 'bg-stage text-ink' : 'text-ink-dim hover:bg-hover/60')
                   }
                 >
                   <StatusDot session={session} />
-                  <span className="truncate font-mono">{label}</span>
+                  <span className="min-w-0 flex-1 truncate font-mono">{label}</span>
+
+                  <button
+                    type="button"
+                    aria-label={`關閉 session ${label}`}
+                    title={`關閉 session ${full}`}
+                    onClick={(event) => {
+                      event.stopPropagation()
+                      onCloseSession(session.id)
+                    }}
+                    className="shrink-0 rounded px-1 text-ink-faint opacity-0 group-hover/session:opacity-100 hover:text-danger"
+                  >
+                    ✕
+                  </button>
                 </div>
               </li>
             )
           })}
         </ul>
       )}
+
+      {spawn.menu}
     </li>
   )
 }
@@ -204,6 +244,15 @@ export function WorkspaceRail({
     [onSelect, sessions],
   )
 
+  // 自 rail 建立 session：必然要看到它，因此也選中該 folder（create 內部會聚焦新 session）。
+  const createSession = useCallback(
+    (folderId: string, spawnTarget: SpawnTarget) => {
+      onSelect(folderId)
+      void sessions.create(folderId, spawnTarget)
+    },
+    [onSelect, sessions],
+  )
+
   return (
     <aside aria-label="工作區" className="flex h-full flex-col border-r border-hairline bg-rail">
       <h2 className="px-3 pt-3 pb-2 text-[11px] tracking-widest text-ink-faint">WORKSPACE</h2>
@@ -223,6 +272,8 @@ export function WorkspaceRail({
               onToggle={() => toggle(folder.id)}
               onSelect={() => onSelect(folder.id)}
               onSelectSession={(sessionId) => selectSession(folder.id, sessionId)}
+              onCloseSession={sessions.close}
+              onCreateSession={(spawnTarget) => createSession(folder.id, spawnTarget)}
               onRemove={() => onRemove(folder.id)}
             />
           ))

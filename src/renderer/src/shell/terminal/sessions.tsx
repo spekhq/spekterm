@@ -9,8 +9,15 @@ export interface SessionState {
   spawnTarget: SpawnTarget
   status: SessionStatus
   exitCode?: number
-  /** 該 folder 內的建立序號（自 1 起）。分頁標籤用得上 —— 本 phase 還沒有 branch 資訊。 */
+  /** 該 folder 內的建立序號（自 1 起）。pty 未宣告標題時，標籤的退路。 */
   ordinal: number
+  /**
+   * pty 以 OSC 序列設定的終端標題。
+   *
+   * session 的身分由**跑在裡面的東西**宣告（`claude` 會主動送這個），而不是由我們的流水號
+   * 決定。未設定時為 `undefined`，標籤退回 `${spawnTarget} ${ordinal}`。
+   */
+  title?: string
 }
 
 export type CreateOutcome =
@@ -33,6 +40,8 @@ export interface SessionsApi {
   focus(folderId: string, sessionId: string): void
   create(folderId: string, spawnTarget: SpawnTarget): Promise<CreateOutcome>
   close(sessionId: string): void
+  /** pty 宣告的終端標題。空字串視為未設定。 */
+  setTitle(sessionId: string, title: string): void
   /**
    * 把一個終端接上它的 session：先補回 attach 之前累積的輸出，再接續 live 串流。
    * 回傳解除接續的函式。
@@ -149,6 +158,20 @@ export function SessionsProvider({ children }: { children: React.ReactNode }): R
     setFocused((previous) => new Map(previous).set(folderId, sessionId))
   }, [])
 
+  const setTitle = useCallback((sessionId: string, title: string) => {
+    const trimmed = title.trim()
+    const next = trimmed === '' ? undefined : trimmed
+
+    setSessions((previous) => {
+      const target = previous.find((session) => session.id === sessionId)
+      // agent 可能反覆送同一個標題 —— 值沒變就不要製造新的陣列（否則每次都重繪整棵樹）。
+      if (!target || target.title === next) return previous
+      return previous.map((session) =>
+        session.id === sessionId ? { ...session, title: next } : session,
+      )
+    })
+  }, [])
+
   const attach = useCallback((sessionId: string, write: (chunk: string) => void) => {
     const pending = backlog.current.get(sessionId)
     if (pending) {
@@ -176,9 +199,10 @@ export function SessionsProvider({ children }: { children: React.ReactNode }): R
       focus,
       create,
       close,
+      setTitle,
       attach,
     }),
-    [sessions, focused, focus, create, close, attach],
+    [sessions, focused, focus, create, close, setTitle, attach],
   )
 
   return <SessionsContext.Provider value={api}>{children}</SessionsContext.Provider>
