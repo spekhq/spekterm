@@ -150,7 +150,7 @@ Electron，目標產出 macOS / Windows / Linux 三平台安裝檔。
 | F2 | File Explorer | 多 folder 檔案樹、子目錄 lazy load、chokidar 監控外部變更 | Phase 2 |
 | F3 | 檔案檢視／編輯 | 於 side panel 內開檔（markdown 渲染／原始碼切換、其餘 Monaco 語法高亮）；編輯、dirty 狀態（跨換頁與跨 folder 存活）、`Cmd/Ctrl+S` 存檔、完整 CRUD 屬 Phase 3 | Phase 2–3 |
 | F4 | 多 session terminal | 底部 dock，`node-pty` 多 session，跑 agent 主場，預設 cwd = 選中 folder | Phase 4 |
-| F5 | OpenSpec 側欄 | Dashboard / Specs / Changes / Graph，透過 `IpcAdapter` 重用 spek 前端；自動跟隨當前 session 的 change | Phase 5 |
+| F5 | OpenSpec 側欄 | **本 change**（每個 artifact 一個分頁）＋ **瀏覽**（Specs / Changes 兩棵樹），經 `IpcAdapter` 取自主行程；跟隨 focused session 錨定的 change。Graph 與 Timeline 另在全視窗 overlay，來自 `@spekjs/ui` | Phase 5 ✅ |
 | F6 | 交叉導覽 | spec/change ↔ 底層檔案互跳 | Phase 5 |
 | F7 | 打包發佈 | electron-builder 三平台安裝檔、主題、持久化 layout | Phase 6 |
 | F8 | Handoff（本機免費） | 寫 handoff → daemon probe → 同機自動開 session + context 注入 | Phase 7（moat）|

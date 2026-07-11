@@ -8,7 +8,7 @@ spek workspace 是一個以 agent 為核心的本地開發工作台 —— 獨�
 把多個「一個 repo／資料夾各自一個 `claude` session」的 terminal 包在一個殼裡，
 並加上一塊懂 OpenSpec 結構的側欄，讓使用者不必另外開 IDE 就能一邊駕駛 agent、一邊看著 spec 上下文。
 
-**現況：Phase 5（`openspec-side-panel`）實作完成，待封存。** Phase 0–4 已封存：Electron
+**現況：Phase 5（`openspec-side-panel`）已封存。** Phase 0–4 亦已封存：Electron
 骨架、PRD §12 信任模型、`node-pty` spawn 真 pty、主行程以 `@spekjs/core` 直接掃描 OpenSpec
 結構、多 folder 工作區（清單持久化於 userData）、活動列 + rail + 三欄版面、受邊界約束的
 `listDir`、side panel 的 `[◈ OpenSpec │ ▤ Files]` 身分切換、遞迴檔案樹（lazy load + chokidar
@@ -168,7 +168,7 @@ node-pty 1.2.0-beta.14（釘死）、Monaco Editor、chokidar 5、react-markdown
   xterm + fit、session 分頁 + rail 的 repo→session 子列、spawn 目標可選（claude／login shell）、
   生命週期不留孤兒行程。後續三個 change 亦已封存：`session-titles-and-controls`（pty 宣告的
   OSC 標題）、`terminal-clipboard`（複製貼上）、`session-rename-and-reorder`（命名權與拖曳排序）。
-- **Phase 5** — `openspec-side-panel`（實作完成，待封存）：主行程的 per-folder OpenSpec 資料
+- **Phase 5** — `openspec-side-panel`（已封存）：主行程的 per-folder OpenSpec 資料
   供應層（快取 + watch）、`openspec.*` IPC、renderer 的 `IpcAdapter`、side panel 的兩個視圖
   （本 change 的 artifact 分頁 / 瀏覽的兩棵樹）、tasks 進度與 spec deltas、交叉導覽、
   session 的錨定 change、Graph 與 Timeline 的全視窗 overlay。
@@ -451,10 +451,11 @@ Phase 5 把清單補齊，並補上兩條它本來就該守的：**`fs.symlink` 
 都一樣，於是它對「頁面沒被換掉」完全無感，給了我一個假綠。可靠的作法是**先把狀態改成非預設值**
 （例如切到 Files 身分），reload 之後看它有沒有回到預設。
 
-### 現在有三個 `role="tablist"`
+### 現在有四到五個 `role="tablist"`
 
-身分切換（`side panel 身分切換`）、OpenSpec 的四個視圖（`OpenSpec 視圖`）、session 分頁列
-（`Session 分頁`）。**探針裡全域的 `[role="tablist"] button[role="tab"]` 會把它們混在一起**
+身分切換（`side panel 身分切換`）、OpenSpec 的視圖（`OpenSpec 視圖`）、**本 change 的 artifact
+分頁**（`Change artifact`）、session 分頁列（`Session 分頁`），overlay 開著時還有第五個
+（`視覺化`）。**探針裡全域的 `[role="tablist"] button[role="tab"]` 會把它們混在一起**
 （`probe:files` 因此一度數到 6 個分頁）。選取時一律連 `aria-label` 一起指名。
 
 ## 檔案系統邊界（`multi-folder-workspace-shell` 起）

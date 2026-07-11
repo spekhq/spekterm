@@ -1,43 +1,75 @@
 # spek workspace
 
-商業版 spek —— 一個 agent 開發工作台的獨立 Electron app（私有、專有授權）。
+商業版 spek —— 一個以 agent 為核心的本地開發工作台，獨立的 Electron app（私有、專有授權）。
 
-把多個「一個 repo / 資料夾各自一個 `claude` session」的 terminal 包在一個殼裡，
-加上看得懂 OpenSpec 結構與檔案的輕量瀏覽器。core 邏輯重用開源的
-[`@spekjs/core`](https://github.com/kewang/spek)（MIT）。
+把多個「一個 repo／資料夾各自一個 `claude` session」的 terminal 包在一個殼裡，
+再加上一塊**懂 OpenSpec 結構**的側欄 —— 讓你不必另開 IDE，就能一邊駕駛 agent、一邊看著
+它正在改的那個 change。
+
+core 邏輯與視覺化元件重用開源的
+[`@spekjs/core`](https://www.npmjs.com/package/@spekjs/core) 與
+[`@spekjs/ui`](https://www.npmjs.com/package/@spekjs/ui)（皆 MIT，來自
+[`spek`](https://github.com/kewang/spek)）。
 
 ## 現況
 
-**Phase 2（`file-explorer-readonly-view`）實作中** —— 可以把 repo 加進 workspace、
-瀏覽它的檔案樹並開檔檢視了。terminal 與 OpenSpec 側欄的內容尚未開始。
+**Phase 5（`openspec-side-panel`）已封存。** 主舞台能駕駛 agent、側欄能看懂 OpenSpec，
+而且兩者已經對上 —— 這正是這個 app 相對於「開四個終端機分頁」的增量價值。
 
-已驗證可用：
+尚未開始：**打包與發佈（Phase 6）**、**handoff（Phase 7+，護城河）**。
 
-- Electron 43 主行程開視窗、renderer 掛載 React 19 + Tailwind CSS v4
-- 信任模型：`contextIsolation` 啟用、`nodeIntegration` 停用，能力只走 preload 白名單；
-  renderer 無法導航離開 app、無法開新視窗，外部連結交系統瀏覽器（協定於主行程驗證）
-- `node-pty` 在主行程 spawn 出真 pty（Node-API，免 `electron-rebuild`）
-- 主行程直接 `import` `@spekjs/core` 掃描 OpenSpec 結構，全程不開任何 TCP 埠
-- 多 folder 工作區：原生對話框加入、清單持久化於 `userData`、重啟還原；
-  設定檔損毀時以空 workspace 啟動並保留原檔，不讓 app 開不起來
+### 已經可以用的
+
+**多 folder 工作區**
+
+- 原生對話框加入 folder、清單持久化於 `userData`、重啟還原；設定檔損毀時以空 workspace 啟動
+  並保留原檔，不讓 app 開不起來
 - 活動列 + workspace rail + 主舞台三欄版面，分界可拖動與鍵盤操作，side panel 可收合
-- side panel 的 `[◈ OpenSpec │ ▤ Files]` 身分切換；repo 沒有 `openspec/` 時 OpenSpec 停用
-- 檔案樹：子目錄展開時才載入、相對修改時間、目錄優先排序，並隨磁碟的外部變更即時更新
-  （chokidar，監看集合恆等於展開的目錄集合）
-- 檔案檢視：markdown 渲染、其餘以 Monaco 唯讀高亮；過大（> 2 MiB）與二進位檔案明確拒絕；
-  檢視中的檔案被外部改動時提示重載
-- `listDir` / `readFile` / `watch` 皆受 workspace folder 邊界約束：絕對路徑、`..` 逃逸、
-  symlink 越界一律拒絕；watcher 不跟隨 symlink，推送的事件不含絕對路徑
 
-尚未開始：寫檔與存檔、terminal UI、OpenSpec 側欄的內容、handoff。
+**Terminal（agent 的主場）**
 
-### 文件
+- `node-pty` 多 session、IPC 雙向串流、xterm + fit
+- session 分頁列 + rail 的 repo→session 子列；**spawn 目標可選 `claude` 或 login shell**，
+  cwd = 選中的 folder
+- session 的標籤由 **pty 自己宣告**（OSC 序列 —— `claude` 正是這樣讓終端分頁改名的）；
+  使用者可接管命名權，此後 pty 想改名須經他裁決；分頁可拖曳排序
+- 複製貼上（`Ctrl+Shift+C` / `Ctrl+Shift+V`；**`Ctrl+C` 維持 SIGINT** —— agent 跑失控時
+  要中斷得了它，不能因為畫面上剛好有一段選取就失靈）
+- 關分頁／reload／關視窗三種路徑皆**不留孤兒行程**
 
-- **`docs/PRD.md`** — **整合定案的產品需求文件（單一權威來源，之後照這份開發）**
-  已收斂原本散落的 roadmap／競品分析／handoff 概念與設計，含競品詳細檔案與 SWOT 附錄。
-- `docs/workspace-mockup.html` — 定案的多 session layout 互動雛型
-  （純 terminal + OpenSpec / Files 同層級並存側欄；OpenSpec 自動跟隨當前 session 的 change）
-- `openspec/changes/` — 各 Phase 的 OpenSpec change（proposal / design / specs / tasks）
+**OpenSpec 側欄**
+
+- **本 change**：每個 artifact 一個分頁（Proposal │ Design │ Tasks │ Specs，依 schema 排序），
+  tasks 進度條**恆常可見、不進分頁**；tasks 依 section 分組；spec deltas 標示 `ADDED` /
+  `MODIFIED` 並高亮 BDD 關鍵字
+- **瀏覽**：Specs（`topic → heading`）與 Changes（`Active / Archived → change`，帶進度）兩棵樹
+- **Graph 與 Timeline**：全視窗 overlay（`Esc` 關閉），來自 `@spekjs/ui` —— 與 spek web
+  **同一份** d3 力導向圖與 Gantt 時間軸
+- **agent 改檔，側欄自己更新** —— 不必重新整理。這個 app 的前提就是旁邊有 agent 一直在寫檔
+- **session 的錨定 change**：側欄跟隨當前 focused session 正在做的那個 change
+- **交叉導覽**：spec / change ↔ 底層 `.md` 互跳
+
+**檔案瀏覽與編輯**
+
+- 遞迴檔案樹（子目錄 lazy load、隨磁碟的外部變更即時更新）
+- markdown 渲染、其餘以 Monaco 高亮（只取語法高亮，不含任何語言服務 worker）
+- 完整 CRUD、dirty buffer（跨換頁、跨 folder、跨身分存活）、mtime 樂觀鎖、關窗前的未存提示
+
+**信任模型**
+
+- `contextIsolation` 啟用、`nodeIntegration` 停用，能力只走 preload 白名單
+- renderer 無法導航離開 app、無法開新視窗，外部連結交系統瀏覽器（協定於主行程驗證）
+- 檔案系統的每一次存取都受 workspace folder 邊界約束：renderer 以 `(folderId, relPath)` 定址，
+  **它沒有詞彙可以表達 workspace 之外的位置**
+- 主行程直接 `import` `@spekjs/core` 掃描 OpenSpec，全程不開任何 TCP 埠
+
+## 文件
+
+- **`docs/PRD.md`** — 產品需求的**單一權威來源**（範圍、路線圖、架構決策）
+- **`docs/workspace-mockup.html`** — 定案的高保真 UI 互動雛型。**UI 版面與行為以它為權威**
+- **`CLAUDE.md`** — 給 agent 的工作指引，含歷次 Phase 的**實測與踩雷**（那些憑直覺還會再犯一次的錯）
+- `openspec/specs/` — 各 capability 的規格
+- `openspec/changes/archive/` — 歷次 change 的完整論證（proposal / design / specs / tasks）
 
 ## 開發
 
@@ -48,14 +80,39 @@ npm install
 npm run dev             # 開發模式
 npm run build           # 建置至 out/
 npm run typecheck       # 型別檢查
-npm test                # 單元測試：fs 邊界、workspace store、listDir/readFile、watcher、外部 URL
-npm run probe:shell     # 驗收：開視窗 + 信任模型 + preload 白名單
-npm run probe:workspace # 驗收：folder 清單持久化、fs 邊界、三欄版面
-npm run probe:files     # 驗收：檔案樹、檔案檢視、身分切換、導航防護、編輯器 worker（dev + build）
-npm run probe:native    # 驗收：主行程載入 node-pty 並 spawn 真 pty
-npm run probe:core      # 驗收：主行程掃描 OpenSpec，且不開 TCP 埠
+npm run lint
+npm test                # 單元測試（fs 邊界、workspace store、watcher、pty 管理器、OpenSpec 供應層…）
+```
+
+驗收一律走**探針**：以 CDP 連進真正執行中的 app 驗收，**不在產品程式碼裡塞測試分支**，
+也不為驗收在 UI 上掛 `data-*`（一律以 `role` / `aria-label` 定位）。
+
+```bash
+npm run probe:shell     # 開視窗 + 信任模型 + preload 白名單
+npm run probe:workspace # folder 清單持久化、fs 邊界、三欄版面
+npm run probe:files     # 檔案樹、檢視、編輯、CRUD、導航防護、編輯器 worker（dev + build）
+npm run probe:terminal  # pty 雙向／cwd／resize／多開／不留孤兒行程（dev + build）
+npm run probe:openspec  # 側欄兩視圖、兩棵樹、artifact 分頁、agent 改檔即更新、錨定、
+                        #   交叉導覽、Graph・Timeline 的 overlay（dev + build）
+npm run probe:native    # 主行程載入 node-pty 並 spawn 真 pty
+npm run probe:core      # 主行程掃描 OpenSpec，且不開 TCP 埠
 npm run measure:bundle  # renderer bundle 體積報告（依編輯器核心／worker／語言歸因）
 ```
+
+## 與 `spek` 的關係
+
+開源的 [`spek`](https://github.com/kewang/spek)（MIT）是 OpenSpec 的內容檢視器。
+本 repo 是**獨立的私有 repo**、不是它的 npm workspace 成員，透過 npm 消費它的兩個套件：
+
+- **`@spekjs/core`** — scanner / tasks / git-cache / worktrees / types。主行程直接 `import`
+  （純 Node 模組，行程內函式呼叫，不需要 HTTP server）。
+- **`@spekjs/ui`** — `SpecGraph`（d3 力導向圖）與 `ChangeTimeline`（Gantt）。**純呈現層**：
+  沒有 router、沒有 adapter、沒有 CSS 框架。顏色是一份 8 個 CSS 變數的契約，我們在 `index.css`
+  覆寫它們，接上自己的深色主題。
+
+**spek 的整頁視圖（Dashboard / SpecDetail / ChangeDetail）不重用** —— 它們為全寬瀏覽器設計、
+自帶 `Layout` + `Sidebar`，而我們的側欄是 320–620px 的窄欄。**不是同一個東西。**
+可重用的是「不綁版面」的那種元件（Graph / Timeline）與介面契約。詳見 `docs/PRD.md` §9.2。
 
 ## 授權
 
