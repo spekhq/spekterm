@@ -149,6 +149,8 @@ side panel 處於收合狀態時，觸發任一身分的入口 SHALL 重新展�
 
 主舞台 SHALL 在 repo header 與 terminal／side panel 版面之間，為**當前選中的 repo** 呈現其 session 的分頁列。此分頁列 SHALL 標示當前 focused 的 session、SHALL 提供在 session 之間切換的方式、SHALL 提供建立新 session 的入口（該入口 SHALL 讓使用者選擇 spawn 目標），且每個分頁 SHALL 可關閉。
 
+每個分頁 SHALL 提供右鍵選單，其中 SHALL 至少包含**重新命名**與**關閉**。
+
 建立新 session 的入口 SHALL 緊鄰最後一個分頁之後，SHALL NOT 被推離分頁而置於分頁列的另一端 —— 它是分頁的延伸，使用者剛看完分頁就會伸手去點它。
 
 當前 repo 尚無任何 session 時，該區域 SHALL 呈現空狀態，並提供明顯的建立 session 入口。
@@ -175,6 +177,11 @@ side panel 處於收合狀態時，觸發任一身分的入口 SHALL 重新展�
 - **WHEN** 分頁列中已有一或多個分頁
 - **THEN** 建立新 session 的入口緊接於最後一個分頁之後，而非位於分頁列的另一端
 
+#### Scenario: 分頁的右鍵選單
+
+- **WHEN** 使用者於一個分頁按下右鍵
+- **THEN** 出現包含重新命名與關閉的選單，且該選單完整落在可視範圍內
+
 #### Scenario: 關閉分頁
 
 - **WHEN** 使用者關閉分頁列中的一個 session
@@ -191,7 +198,7 @@ workspace rail 的每個 folder 列之下 SHALL 呈現該 folder 的 session 子
 
 rail 的每個 folder 列 SHALL 提供建立 session 的入口，該入口 SHALL 讓使用者選擇 spawn 目標，且 SHALL 選中該 folder 並聚焦新建立的 session —— 使用者在 rail 上看得到 session，就應當能在原地開一個，不必先切換到主舞台。
 
-rail 的每個 session 子列 SHALL 提供關閉該 session 的入口，其效果與自分頁列關閉相同。
+rail 的每個 session 子列 SHALL 提供關閉該 session 的入口，其效果與自分頁列關閉相同，並 SHALL 提供右鍵選單，其中 SHALL 至少包含**重新命名**與**關閉**。
 
 #### Scenario: folder 之下呈現其 session
 
@@ -213,8 +220,43 @@ rail 的每個 session 子列 SHALL 提供關閉該 session 的入口，其效�
 - **WHEN** 使用者於 rail 的某個 session 子列觸發關閉入口
 - **THEN** 該 session 被關閉並自 rail 與分頁列一併移除
 
+#### Scenario: rail 子列的右鍵選單
+
+- **WHEN** 使用者於 rail 的一個 session 子列按下右鍵
+- **THEN** 出現包含重新命名與關閉的選單，且該選單完整落在可視範圍內
+
 #### Scenario: 收合與展開 session 子列
 
 - **WHEN** 使用者收合一個 folder，其後再展開
 - **THEN** 收合時其 session 子列隱藏，展開時還原呈現
+
+### Requirement: session 的順序可由使用者拖曳調整，且兩個視圖共用同一順序
+
+使用者 SHALL 能以滑鼠拖曳調整同一 repo 之下 session 的順序，於**分頁列**與 **rail 的 session 子列**兩處皆可。
+
+兩處 SHALL 反映**同一個順序** —— 它是 session 在該 repo 內的次序，不是某個視圖的裝飾。於一處調整順序後，另一處 SHALL 隨之呈現相同的次序。
+
+拖曳 SHALL 僅在同一個 repo 之內進行。session 的工作目錄於其 pty 啟動時即已決定，將它移到另一個 repo 之下在語意上不成立。
+
+拖曳與點擊 SHALL 被區分：未產生實際位移的按下與放開 SHALL 被視為一次點擊（切換 focused session），SHALL NOT 被當作拖曳。
+
+#### Scenario: 拖曳分頁改變順序
+
+- **WHEN** 使用者將分頁列中的一個 session 拖曳至另一個位置
+- **THEN** 分頁列以新的順序呈現該 repo 的 session
+
+#### Scenario: 兩個視圖的順序一致
+
+- **WHEN** 使用者於分頁列調整了 session 的順序
+- **THEN** rail 的 session 子列以相同的順序呈現
+
+#### Scenario: 自 rail 拖曳亦改變順序
+
+- **WHEN** 使用者於 rail 的 session 子列拖曳一個 session 至另一個位置
+- **THEN** 該 repo 的 session 順序改變，且分頁列以相同的新順序呈現
+
+#### Scenario: 未位移的按下視為點擊
+
+- **WHEN** 使用者於一個 session 上按下並放開滑鼠，期間未產生實際位移
+- **THEN** 該 session 成為 focused，順序不變
 

@@ -4,6 +4,7 @@ import { PanelSwitch } from './side-panel/PanelSwitch'
 import { SidePanel } from './side-panel/SidePanel'
 import { SessionTabs } from './terminal/SessionTabs'
 import { TerminalView } from './terminal/TerminalView'
+import { TitleConflictDialog } from './terminal/TitleConflictDialog'
 import { useSessions } from './terminal/sessions'
 import type { PanelIdentity, SpawnTarget, WorkspaceFolder } from './types'
 
@@ -72,6 +73,8 @@ export function MainStage({ folder }: MainStageProps): React.JSX.Element {
 
   const folderSessions = folder ? sessions.forFolder(folder.id) : []
   const focusedId = folder ? sessions.focusedIdFor(folder.id) : null
+  // 使用者取了名字、而 pty 想改成別的 —— 由他裁決。同時至多一個（design D2）。
+  const pending = folder ? sessions.pendingFor(folder.id) : null
 
   return (
     <main aria-label="主舞台" className="flex h-full flex-col bg-stage">
@@ -109,6 +112,8 @@ export function MainStage({ folder }: MainStageProps): React.JSX.Element {
           onFocus={focusSession}
           onClose={sessions.close}
           onCreate={createSession}
+          onRename={sessions.rename}
+          onReorder={(fromIndex, toIndex) => sessions.reorder(folder.id, fromIndex, toIndex)}
           error={sessionError}
         />
       )}
@@ -120,19 +125,35 @@ export function MainStage({ folder }: MainStageProps): React.JSX.Element {
               **掛載所有 folder 的所有 session**，只讓當前 folder 的 focused 那一個顯示。
               若只掛載當前 folder 的，切走再切回時 xterm 實例已被卸載，scrollback 就沒了
               （design D7）。
+
+              **掛載順序刻意與「顯示順序」脫鉤**（以 id 穩定排序）。終端是疊在一起的、只有
+              focused 的那個可見，DOM 的先後本來就沒有意義；但若讓它跟著拖曳排序走，React 會
+              用 insertBefore **搬動 xterm 的 DOM 節點**，而 xterm 一旦被移動，畫面就會空掉
+              （直到有新輸出或 resize 才重繪）—— 實測：拖曳後點回某個 session 是一片空白，
+              隨便打個字才冒出來。
             */}
-            {sessions.all().map((session) => (
-              <TerminalView
-                key={session.id}
-                sessionId={session.id}
-                active={session.folderId === folder?.id && session.id === focusedId}
-              />
-            ))}
+            {[...sessions.all()]
+              .sort((a, b) => a.id.localeCompare(b.id))
+              .map((session) => (
+                <TerminalView
+                  key={session.id}
+                  sessionId={session.id}
+                  active={session.folderId === folder?.id && session.id === focusedId}
+                />
+              ))}
 
             {!focusedId && (
               <div className="flex h-full items-center justify-center text-xs text-ink-faint">
                 {folder ? '以 + session 開一個終端' : '尚未選擇 repo'}
               </div>
+            )}
+
+            {pending && (
+              <TitleConflictDialog
+                session={pending}
+                onAccept={() => sessions.acceptPendingTitle(pending.id)}
+                onKeep={() => sessions.keepCustomTitle(pending.id)}
+              />
             )}
           </section>
         </Panel>

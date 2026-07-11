@@ -1,6 +1,10 @@
+import { useCallback, useRef, useState } from 'react'
+import { ContextMenu, type MenuItem } from '../files/dialogs'
 import type { SpawnTarget } from '../types'
+import { SessionNameDialog } from './SessionNameDialog'
 import { StatusDot, sessionLabel, sessionTitle, statusTitle } from './session-badge'
 import type { SessionState } from './sessions'
+import { useDragReorder } from './useDragReorder'
 import { useSpawnMenu } from './useSpawnMenu'
 
 interface SessionTabsProps {
@@ -9,6 +13,8 @@ interface SessionTabsProps {
   onFocus: (sessionId: string) => void
   onClose: (sessionId: string) => void
   onCreate: (spawnTarget: SpawnTarget) => void
+  onRename: (sessionId: string, name: string) => void
+  onReorder: (fromIndex: number, toIndex: number) => void
   /** 建立失敗的訊息（folder 失效、pty 配置不出來等）。 */
   error: string | null
 }
@@ -22,9 +28,40 @@ export function SessionTabs({
   onFocus,
   onClose,
   onCreate,
+  onRename,
+  onReorder,
   error,
 }: SessionTabsProps): React.JSX.Element {
   const spawn = useSpawnMenu(onCreate)
+  const [menu, setMenu] = useState<{ x: number; y: number; session: SessionState } | null>(null)
+  const [renaming, setRenaming] = useState<SessionState | null>(null)
+  const tabRefs = useRef(new Map<number, HTMLDivElement>())
+
+  const rectOf = useCallback((index: number) => {
+    return tabRefs.current.get(index)?.getBoundingClientRect() ?? null
+  }, [])
+
+  const reorder = useDragReorder(sessions.length, 'horizontal', rectOf, onReorder)
+
+  const items: MenuItem[] = menu
+    ? [
+        {
+          label: '重新命名',
+          onSelect: () => {
+            setRenaming(menu.session)
+            setMenu(null)
+          },
+        },
+        {
+          label: '關閉',
+          tone: 'danger',
+          onSelect: () => {
+            onClose(menu.session.id)
+            setMenu(null)
+          },
+        },
+      ]
+    : []
 
   if (sessions.length === 0) {
     return (
@@ -48,25 +85,39 @@ export function SessionTabs({
     <div className="flex items-stretch border-b border-hairline bg-panel">
       {/*
         `tablist` 不佔 flex-1 —— 否則它會把建立入口一路推到分頁列的另一端，開第二個分頁之後
-        滑鼠得橫越整條列才點得到。剩餘空間交給後面的 spacer 吸收，`+ session` 因此緊貼最後
-        一個分頁（像瀏覽器分頁旁的那顆鈕）。分頁多到溢出時 tablist 自己捲動，按鈕仍在可視區。
+        滑鼠得橫越整條列才點得到。剩餘空間交給後面的 spacer 吸收。
       */}
       <div
         role="tablist"
         aria-label="Session 分頁"
         className="flex min-w-0 items-stretch overflow-x-auto"
       >
-        {sessions.map((session) => {
+        {sessions.map((session, index) => {
           const selected = session.id === focusedId
           const label = sessionLabel(session)
           const full = sessionTitle(session)
+          const dragging = reorder.drag?.fromIndex === index
 
           return (
             <div
               key={session.id}
               role="presentation"
+              ref={(el) => {
+                if (el) tabRefs.current.set(index, el)
+                else tabRefs.current.delete(index)
+              }}
+              onMouseDown={(event) => reorder.onMouseDown(index, event)}
+              onContextMenu={(event) => {
+                event.preventDefault()
+                setMenu({ x: event.clientX, y: event.clientY, session })
+              }}
               className={
-                'group flex shrink-0 items-center gap-1 border-b-2 pr-1 ' +
+                // select-none：拖曳時不該把分頁的文字反白選起來。
+                'group flex shrink-0 items-center gap-1 border-b-2 pr-1 select-none ' +
+                (reorder.dragging ? 'cursor-grabbing ' : 'cursor-grab ') +
+                // 插入指示：拖到這個位置放開，就會插在它前面
+                (reorder.isDropTarget(index) ? 'border-l-2 border-l-accent ' : '') +
+                (dragging ? 'opacity-40 ' : '') +
                 (selected
                   ? 'border-accent bg-stage text-ink'
                   : 'border-transparent text-ink-dim hover:bg-hover')
@@ -121,6 +172,19 @@ export function SessionTabs({
       )}
 
       {spawn.menu}
+      {menu && (
+        <ContextMenu x={menu.x} y={menu.y} items={items} onClose={() => setMenu(null)} />
+      )}
+      {renaming && (
+        <SessionNameDialog
+          initialValue={sessionTitle(renaming)}
+          onCancel={() => setRenaming(null)}
+          onSubmit={(name) => {
+            onRename(renaming.id, name)
+            setRenaming(null)
+          }}
+        />
+      )}
     </div>
   )
 }

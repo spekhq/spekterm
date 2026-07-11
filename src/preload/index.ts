@@ -90,6 +90,26 @@ const workspaceApi = {
       ipcRenderer.invoke('workspace:shell:openExternal', url),
   },
   /**
+   * 系統剪貼簿的文字讀寫。終端的複製貼上沒有它就不成立。
+   *
+   * **這道能力沒有 workspace 邊界可言** —— 剪貼簿裡可能是使用者剛複製的密碼。它與 `fs.*`
+   * 那種「只能碰已加入的 folder」是**不同性質**的東西，不要照著 fs 的直覺去推論它的安全性。
+   *
+   * 可接受性建立在兩道前提上（`terminal-clipboard` 的 design D2）：
+   *
+   * 1. **renderer 不會變成別人的頁面** —— `navigation.ts` 的導航防護是這道能力的**前提**。
+   *    少了它，使用者 repo 裡一個 markdown 連結就能把遠端頁面帶進這個 renderer，而那個
+   *    頁面會拿到 `readText`。
+   * 2. **只在使用者明確要求貼上時讀取**（右鍵選單／快捷鍵／中鍵）—— 不主動讀、不背景輪詢、
+   *    不在啟動時讀。
+   */
+  clipboard: {
+    readText: (): Promise<string> => ipcRenderer.invoke('workspace:clipboard:readText'),
+    writeText: (text: string): void => {
+      ipcRenderer.send('workspace:clipboard:writeText', text)
+    },
+  },
+  /**
    * terminal 的邊界要求見 `terminal-agent-sessions` 的 `design.md` D5：`create` **只收
    * folderId、不收路徑**，cwd 恆為該 folder 的根目錄 —— renderer 在語彙上無從把初始 cwd
    * 指向 workspace 之外。

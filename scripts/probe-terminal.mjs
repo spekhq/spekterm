@@ -231,6 +231,56 @@ const RAIL_CLOSE_SESSION_RECT = (index) => `(() => {
  *
  * 先前它被 flex 推到分頁列的另一端（間距數百 px），開第二個分頁後滑鼠得橫越整條列。
  */
+/** 選單項是否為停用狀態（無選取內容時的「複製」）。 */
+const MENU_ITEM_DISABLED = (label) => `(() => {
+  const menu = document.querySelector('[role="menu"]')
+  if (!menu) return null
+  const item = [...menu.querySelectorAll('button')].find((b) => b.innerText.includes(${JSON.stringify(label)}))
+  return item ? item.disabled : null
+})()`
+
+const CLIPBOARD_WRITE = (text) =>
+  `window.workspace.clipboard.writeText(${JSON.stringify(text)})`
+const CLIPBOARD_READ = `window.workspace.clipboard.readText()`
+
+/** 第 n 個分頁的 rect（用於真右鍵與拖曳）。 */
+const TAB_RECT = (index) => `(() => {
+  const tabs = [...document.querySelectorAll('[aria-label="Session 分頁"] [role="tab"]')]
+  const tab = tabs[${index}]
+  if (!tab) return null
+  const r = tab.getBoundingClientRect()
+  return { x: r.x, y: r.y, width: r.width, height: r.height }
+})()`
+
+/** 分頁的標籤依序。 */
+const TAB_LABELS = `[...document.querySelectorAll('[aria-label="Session 分頁"] [role="tab"]')]
+  .map((tab) => tab.innerText.replace(/\\s+/g, ' ').trim())`
+
+/** rail 子列的標籤依序（去掉尾巴的 ✕）。 */
+const RAIL_LABELS = `[...document.querySelectorAll('aside[aria-label="工作區"] ul[aria-label$="的 session"] li')]
+  .map((li) => li.innerText.replace(/✕/g, '').replace(/\\s+/g, ' ').trim())`
+
+/** 重新命名對話框的輸入框。 */
+const RENAME_INPUT_RECT = `(() => {
+  const el = document.querySelector('[aria-label="session 名稱"]')
+  if (!el) return null
+  const r = el.getBoundingClientRect()
+  return { x: r.x, y: r.y, width: r.width, height: r.height }
+})()`
+
+/** 改名確認對話框是否開著。 */
+const CONFLICT_OPEN = `Boolean(document.querySelector('[aria-label="session 改名確認"]'))`
+
+/** 確認對話框中的按鈕 rect。 */
+const CONFLICT_BUTTON_RECT = (label) => `(() => {
+  const dialog = document.querySelector('[aria-label="session 改名確認"]')
+  if (!dialog) return null
+  const btn = [...dialog.querySelectorAll('button')].find((b) => b.innerText.includes(${JSON.stringify(label)}))
+  if (!btn) return null
+  const r = btn.getBoundingClientRect()
+  return { x: r.x, y: r.y, width: r.width, height: r.height }
+})()`
+
 const NEW_BUTTON_GAP = `(() => {
   const tabs = [...document.querySelectorAll('[aria-label="Session 分頁"] [role="tab"]')]
   const last = tabs[tabs.length - 1]
@@ -297,13 +347,23 @@ const center = (rect) => ({
   y: Math.round(rect.y + rect.height / 2),
 })
 
-/** 真滑鼠事件。合成的 MouseEvent 不走完整序列，測不出 overlay 的自我關閉與定位問題。 */
+/**
+ * 送**真的**滑鼠按鍵（trusted event），而非 `element.dispatchEvent(new MouseEvent(...))`。
+ *
+ * 合成的 contextmenu 不走完整的 pointer/mouse/contextmenu 序列，也不觸發 React 19 對
+ * trusted discrete 事件的同步 effect flush —— 用它測選單會漏掉「開啟選單的事件冒泡到
+ * window 把自己關掉」這類只在真實輸入下發生的 bug。
+ */
+async function realMouse(client, x, y, button = 'left') {
+  const buttons = button === 'right' ? 2 : button === 'left' ? 1 : 0
+  await client.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y, button: 'none', buttons: 0 })
+  await client.send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button, buttons, clickCount: 1 })
+  await client.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button, buttons, clickCount: 1 })
+}
+
 async function realClick(client, rect) {
   const at = center(rect)
-  const base = { ...at, button: 'left', buttons: 1, clickCount: 1 }
-  await client.send('Input.dispatchMouseEvent', { type: 'mouseMoved', ...at, button: 'none', buttons: 0 })
-  await client.send('Input.dispatchMouseEvent', { type: 'mousePressed', ...base })
-  await client.send('Input.dispatchMouseEvent', { type: 'mouseReleased', ...base, buttons: 0 })
+  await realMouse(client, at.x, at.y, 'left')
 }
 
 /**
@@ -442,6 +502,93 @@ async function runMode(label, { port, rendererUrl }) {
       `期待 ${cwdNeedle}；實得 …${String(afterPwd).replace(/\s+/g, ' ').slice(-90)}`,
     )
 
+    // ── 複製與貼上（終端不能複製貼上，等於不能用）
+    //
+    // 右鍵一律送**真事件**：合成的 contextmenu 測不出「開啟選單的事件冒泡到 window 把自己
+    // 關掉」這個只在真實輸入下發生的 bug（CLAUDE.md 已記載）。
+    const termAt = center(terminalRect)
+
+    // 貼上：先把一段命令放進系統剪貼簿。回顯是字面的 `echo PASTED_$((3*4))`（不含 12），
+    // 只有它真的被送進 pty 並執行，輸出才會有 `PASTED_12`。
+    await app.client.evaluate(CLIPBOARD_WRITE('echo PASTED_$((3*4))'))
+
+    await realMouse(app.client, termAt.x, termAt.y, 'right')
+    const termMenu = await pollUntil(app.client, MENU_IN_VIEWPORT, (value) => value !== null, 4000)
+    check(
+      results,
+      `${label}：終端的右鍵選單開得起來且完整落在 viewport 內`,
+      termMenu?.inside === true,
+      termMenu ? JSON.stringify(termMenu.rect) : '選單未開啟',
+    )
+
+    // 此刻沒有選取內容 —— 「複製」應為停用（停用而非隱藏）
+    const copyDisabled = await app.client.evaluate(MENU_ITEM_DISABLED('複製'))
+    check(
+      results,
+      `${label}：無選取內容時右鍵選單的「複製」為停用`,
+      copyDisabled === true,
+      `disabled=${copyDisabled}`,
+    )
+
+    const pasteRect = await app.client.evaluate(MENU_ITEM_RECT('貼上'))
+    await realClick(app.client, pasteRect)
+
+    // 貼上只是把文字送進 pty 的輸入，還要按下 Enter 才會執行。
+    await sleep(300)
+    await app.client.send('Input.dispatchKeyEvent', {
+      type: 'keyDown',
+      key: 'Enter',
+      code: 'Enter',
+      windowsVirtualKeyCode: 13,
+      nativeVirtualKeyCode: 13,
+      text: '\r',
+    })
+    await app.client.send('Input.dispatchKeyEvent', {
+      type: 'keyUp',
+      key: 'Enter',
+      code: 'Enter',
+      windowsVirtualKeyCode: 13,
+      nativeVirtualKeyCode: 13,
+    })
+
+    const pasted = await waitForOutput(app.client, 'PASTED_12')
+    check(
+      results,
+      `${label}：自右鍵選單貼上，內容送達 pty 並被執行`,
+      pasted.includes('PASTED_12'),
+      pasted.replace(/\s+/g, ' ').slice(-60),
+    )
+
+    // 複製：拖曳選取終端內容 → 右鍵 → 複製 → 自系統剪貼簿讀回
+    await app.client.evaluate(CLIPBOARD_WRITE('__not-yet-copied__'))
+    await dragMouse(
+      app.client,
+      { x: terminalRect.x + 10, y: terminalRect.y + 10 },
+      { x: terminalRect.x + terminalRect.width - 20, y: terminalRect.y + terminalRect.height - 20 },
+    )
+    await sleep(200)
+
+    await realMouse(app.client, termAt.x, termAt.y, 'right')
+    await pollUntil(app.client, MENU_IN_VIEWPORT, (value) => value !== null, 4000)
+
+    const copyEnabled = await app.client.evaluate(MENU_ITEM_DISABLED('複製'))
+    const copyRect = await app.client.evaluate(MENU_ITEM_RECT('複製'))
+    await realClick(app.client, copyRect)
+    await sleep(300)
+
+    // 斷言用 `OUT_42` —— 它是稍早就確定在畫面上的內容，不依賴貼上那一步是否成功。
+    const clipboardText = await app.client.evaluate(CLIPBOARD_READ)
+    check(
+      results,
+      `${label}：選取終端內容後複製，其內容寫入系統剪貼簿`,
+      copyEnabled === false && typeof clipboardText === 'string' && clipboardText.includes('OUT_42'),
+      `複製項 disabled=${copyEnabled}；剪貼簿＝…${String(clipboardText).replace(/\s+/g, ' ').slice(-50)}`,
+    )
+
+    // 清掉選取，免得干擾後續的輸入
+    await realMouse(app.client, termAt.x, termAt.y, 'left')
+    await sleep(150)
+
     // ── session 的標籤跟隨 pty 以 OSC 序列宣告的終端標題
     // 這正是 `claude` 讓終端模擬器的分頁自動改名的機制；我們接的是同一個訊號。
     await typeLine(app.client, "printf '\\033]0;spek-osc-title\\007'")
@@ -572,6 +719,208 @@ async function runMode(label, { port, rendererUrl }) {
       `${label}：rail 的 session 子列可收合與展開`,
       collapsed === 0 && expanded === 2,
       `收合後=${collapsed} 展開後=${expanded}`,
+    )
+
+    // ── 重新命名：使用者接管 session 的命名權
+    //
+    // 先聚焦第一個 session（後面要對它送 OSC 標題）。
+    await realClick(app.client, await app.client.evaluate(TAB_RECT(0)))
+    await sleep(200)
+
+    const tab0 = await app.client.evaluate(TAB_RECT(0))
+    const tab0At = center(tab0)
+    await realMouse(app.client, tab0At.x, tab0At.y, 'right')
+
+    const tabMenu = await pollUntil(app.client, MENU_IN_VIEWPORT, (value) => value !== null, 4000)
+    check(
+      results,
+      `${label}：分頁的右鍵選單開得起來且完整落在 viewport 內`,
+      tabMenu?.inside === true,
+      tabMenu ? JSON.stringify(tabMenu.rect) : '選單未開啟',
+    )
+
+    await realClick(app.client, await app.client.evaluate(MENU_ITEM_RECT('重新命名')))
+    await pollUntil(app.client, RENAME_INPUT_RECT, (value) => value !== null, 4000)
+
+    // 對話框開啟時輸入框已 focus 且全選 —— 直接打字即取代。
+    await app.client.send('Input.insertText', { text: 'my-session' })
+    await app.client.send('Input.dispatchKeyEvent', {
+      type: 'keyDown',
+      key: 'Enter',
+      code: 'Enter',
+      windowsVirtualKeyCode: 13,
+      nativeVirtualKeyCode: 13,
+      text: '\r',
+    })
+    await app.client.send('Input.dispatchKeyEvent', {
+      type: 'keyUp',
+      key: 'Enter',
+      code: 'Enter',
+      windowsVirtualKeyCode: 13,
+      nativeVirtualKeyCode: 13,
+    })
+
+    const renamedTabs = await pollUntil(
+      app.client,
+      TAB_LABELS,
+      (value) => value[0]?.includes('my-session'),
+      6000,
+    )
+    const renamedRail = await pollUntil(
+      app.client,
+      RAIL_LABELS,
+      (value) => value[0]?.includes('my-session'),
+      6000,
+    )
+    check(
+      results,
+      `${label}：重新命名後分頁與 rail 兩處的標籤都更新`,
+      renamedTabs[0]?.includes('my-session') && renamedRail[0]?.includes('my-session'),
+      `分頁=${JSON.stringify(renamedTabs)} rail=${JSON.stringify(renamedRail)}`,
+    )
+
+    // ── 命名之後，pty 想改名必須先問過
+    await realClick(app.client, terminalRect)
+    await sleep(200)
+    await typeLine(app.client, "printf '\\033]0;pty-wants-this\\007'")
+
+    const conflictOpened = await pollUntil(app.client, CONFLICT_OPEN, (value) => value === true, 8000)
+    const labelDuringConflict = await app.client.evaluate(TAB_LABELS)
+    check(
+      results,
+      `${label}：手動命名後 pty 改名會跳確認，且標籤尚未被覆蓋`,
+      conflictOpened === true && labelDuringConflict[0]?.includes('my-session'),
+      `對話框=${conflictOpened} 標籤=${JSON.stringify(labelDuringConflict)}`,
+    )
+
+    // 保留我的名字 → 標籤不動
+    await realClick(app.client, await app.client.evaluate(CONFLICT_BUTTON_RECT('保留我的名字')))
+    await pollUntil(app.client, CONFLICT_OPEN, (value) => value === false, 4000)
+    const afterKeep = await app.client.evaluate(TAB_LABELS)
+    check(
+      results,
+      `${label}：選「保留我的名字」後標籤維持使用者取的名字`,
+      afterKeep[0]?.includes('my-session'),
+      JSON.stringify(afterKeep),
+    )
+
+    // 再送一次不同的標題 → 應該**再問一次**（使用者要的就是每次都確認）
+    await realClick(app.client, terminalRect)
+    await sleep(200)
+    await typeLine(app.client, "printf '\\033]0;pty-again\\007'")
+    const conflictAgain = await pollUntil(app.client, CONFLICT_OPEN, (value) => value === true, 8000)
+    check(results, `${label}：pty 再次改名時再次請求確認`, conflictAgain === true)
+
+    // 採用它的名稱 → 命名權交還 pty
+    await realClick(app.client, await app.client.evaluate(CONFLICT_BUTTON_RECT('採用它的名稱')))
+    const afterAccept = await pollUntil(
+      app.client,
+      TAB_LABELS,
+      (value) => value[0]?.includes('pty-again'),
+      6000,
+    )
+    check(
+      results,
+      `${label}：選「採用它的名稱」後標籤改為 pty 的標題`,
+      afterAccept[0]?.includes('pty-again'),
+      JSON.stringify(afterAccept),
+    )
+
+    // 命名權已交還 —— 此後 pty 改名不該再跳確認
+    await realClick(app.client, terminalRect)
+    await sleep(200)
+    await typeLine(app.client, "printf '\\033]0;pty-third\\007'")
+    const afterHandback = await pollUntil(
+      app.client,
+      TAB_LABELS,
+      (value) => value[0]?.includes('pty-third'),
+      8000,
+    )
+    const stillNoDialog = await app.client.evaluate(CONFLICT_OPEN)
+    check(
+      results,
+      `${label}：命名權交還後 pty 的改名不再需要確認`,
+      afterHandback[0]?.includes('pty-third') && stillNoDialog === false,
+      `標籤=${JSON.stringify(afterHandback)} 對話框=${stillNoDialog}`,
+    )
+
+    // ── 拖曳排序：分頁與 rail 共用同一個順序
+    const before = await app.client.evaluate(TAB_LABELS)
+    const firstTab = await app.client.evaluate(TAB_RECT(0))
+    const secondTab = await app.client.evaluate(TAB_RECT(1))
+
+    // 把第一個分頁拖到第二個的右半邊 → 它應該落到第二個之後
+    await dragMouse(
+      app.client,
+      center(firstTab),
+      { x: Math.round(secondTab.x + secondTab.width - 4), y: center(secondTab).y },
+    )
+    await sleep(400)
+
+    const afterDrag = await app.client.evaluate(TAB_LABELS)
+    const railAfterDrag = await app.client.evaluate(RAIL_LABELS)
+    check(
+      results,
+      `${label}：拖曳分頁改變順序，且 rail 同步呈現相同順序`,
+      afterDrag[0] === before[1] &&
+        afterDrag[1] === before[0] &&
+        railAfterDrag[0]?.includes(afterDrag[0]?.split(' ')[0] ?? '__none__'),
+      `拖曳前=${JSON.stringify(before)} 拖曳後=${JSON.stringify(afterDrag)} rail=${JSON.stringify(railAfterDrag)}`,
+    )
+
+    // ── 自 rail 拖曳，順序同樣改變，分頁列同步
+    const railBefore = await app.client.evaluate(RAIL_LABELS)
+    const railRow0 = await app.client.evaluate(RAIL_SESSION_RECT(0))
+    const railRow1 = await app.client.evaluate(RAIL_SESSION_RECT(1))
+
+    // 把第一列往下拖過第二列的中線
+    await dragMouse(app.client, center(railRow0), {
+      x: center(railRow1).x,
+      y: Math.round(railRow1.y + railRow1.height - 2),
+    })
+    await sleep(400)
+
+    const railAfterDragFromRail = await app.client.evaluate(RAIL_LABELS)
+    const tabsAfterRailDrag = await app.client.evaluate(TAB_LABELS)
+    check(
+      results,
+      `${label}：自 rail 拖曳改變順序，且分頁列同步呈現相同順序`,
+      railAfterDragFromRail[0] === railBefore[1] &&
+        railAfterDragFromRail[1] === railBefore[0] &&
+        JSON.stringify(tabsAfterRailDrag) === JSON.stringify(railAfterDragFromRail),
+      `rail 前=${JSON.stringify(railBefore)} rail 後=${JSON.stringify(railAfterDragFromRail)} 分頁=${JSON.stringify(tabsAfterRailDrag)}`,
+    )
+
+    // ── 拖曳排序不得毀掉終端的畫面
+    //
+    // 若終端的**掛載順序**跟著拖曳排序走，React 會用 insertBefore 搬動 xterm 的 DOM 節點，
+    // 而 xterm 被移動後畫面會空掉 —— 直到有新輸出或 resize 才重繪（實測：拖曳後點回某個
+    // session 是一片空白，隨便打個字才冒出來）。切走再切回，斷言它的歷史內容還在。
+    await realClick(app.client, await app.client.evaluate(TAB_RECT(1)))
+    await sleep(400)
+    await realClick(app.client, await app.client.evaluate(TAB_RECT(0)))
+    await sleep(600)
+
+    const textAfterReorder = await app.client.evaluate(TERMINAL_TEXT)
+    check(
+      results,
+      `${label}：拖曳排序後切回 session，其終端內容仍在（未變空白）`,
+      String(textAfterReorder).includes('OUT_42'),
+      `…${String(textAfterReorder).replace(/\s+/g, ' ').slice(-70)}`,
+    )
+
+    // ── 未位移的按下放開仍是點擊（切換 focus，順序不變）
+    const orderBeforeClick = await app.client.evaluate(TAB_LABELS)
+    await realClick(app.client, await app.client.evaluate(TAB_RECT(1)))
+    await sleep(300)
+    const orderAfterClick = await app.client.evaluate(TAB_LABELS)
+    const tabsAfterClick = await app.client.evaluate(TABS)
+    check(
+      results,
+      `${label}：未位移的按下放開是點擊（切換 focus，順序不變）`,
+      JSON.stringify(orderBeforeClick) === JSON.stringify(orderAfterClick) &&
+        tabsAfterClick[1]?.selected === true,
+      `順序不變=${JSON.stringify(orderBeforeClick) === JSON.stringify(orderAfterClick)} focused=${tabsAfterClick[1]?.selected}`,
     )
 
     // ── 關閉一個分頁 → 該 pty 被清掉

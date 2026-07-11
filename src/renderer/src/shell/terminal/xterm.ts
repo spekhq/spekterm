@@ -36,15 +36,48 @@ export interface XtermHandle {
    * 不是我們去猜的。回傳解除訂閱的函式。
    */
   onTitle(listener: (title: string) => void): () => void
+  /** 目前選取的內容（xterm 的選取不是 DOM selection，瀏覽器原生的複製抓不到它）。 */
+  getSelection(): string
+  hasSelection(): boolean
+  /** 把文字送進 pty。xterm 會處理 bracketed paste（程式若啟用了它）。 */
+  paste(text: string): void
   focus(): void
   dispose(): void
 }
 
 /**
- * 建立一個終端把手。`openLink` 由呼叫端注入 —— wrapper 不認得 `workspace.shell`，它只知道
- * 「點到連結就把 URI 交出去」，把信任決策（協定驗證在主行程）留在這道接縫之外。
+ * 複製／貼上的快捷鍵。
+ *
+ * **`Ctrl+C` 不在其中，而且不能在。** 終端裡的 `Ctrl+C` 是中斷訊號 —— agent 跑失控時要
+ * 中斷它的能力，不能因為畫面上剛好有一段選取就失靈。這正是終端模擬器普遍採用
+ * `Ctrl+Shift+C` 的理由。macOS 的 `Cmd+C` 不與中斷訊號衝突，故該平台用 `Cmd`（design D3）。
  */
-export function createXterm(openLink: (uri: string) => void): XtermHandle {
+function matchClipboardKey(event: KeyboardEvent): 'copy' | 'paste' | null {
+  const isMac = navigator.platform.toUpperCase().includes('MAC')
+  const modifier = isMac ? event.metaKey : event.ctrlKey && event.shiftKey
+  if (!modifier) return null
+
+  const key = event.key.toLowerCase()
+  if (key === 'c') return 'copy'
+  if (key === 'v') return 'paste'
+  return null
+}
+
+export interface XtermOptions {
+  /** 點到連結。wrapper 不認得 `workspace.shell` —— 它只把 URI 交出去。 */
+  openLink: (uri: string) => void
+  /** 使用者以快捷鍵要求複製。`text` 是當下的選取內容（非空才會呼叫）。 */
+  onCopy: (text: string) => void
+  /** 使用者以快捷鍵要求貼上。呼叫端負責讀剪貼簿，再呼叫 `paste()`。 */
+  onPaste: () => void
+}
+
+/**
+ * 建立一個終端把手。所有與外界的接觸（開連結、讀寫剪貼簿）都由呼叫端注入 —— wrapper 不認得
+ * `workspace.*`，信任決策留在這道接縫之外。
+ */
+export function createXterm(options: XtermOptions): XtermHandle {
+  const { openLink, onCopy, onPaste } = options
   const term = new Terminal({
     fontFamily: "'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace",
     fontSize: 13,
@@ -68,6 +101,23 @@ export function createXterm(openLink: (uri: string) => void): XtermHandle {
       openLink(uri)
     }),
   )
+
+  // 回傳 false＝「這個按鍵我們處理了，xterm 不要再送給 pty」。其餘按鍵一律放行 ——
+  // **包含 Ctrl+C**，它必須維持中斷訊號（design D3）。
+  term.attachCustomKeyEventHandler((event) => {
+    if (event.type !== 'keydown') return true
+
+    const action = matchClipboardKey(event)
+    if (!action) return true
+
+    if (action === 'copy') {
+      const selection = term.getSelection()
+      if (selection) onCopy(selection)
+    } else {
+      onPaste()
+    }
+    return false
+  })
 
   let lastCols = 0
   let lastRows = 0
@@ -101,6 +151,17 @@ export function createXterm(openLink: (uri: string) => void): XtermHandle {
     onTitle(listener) {
       const disposable = term.onTitleChange(listener)
       return () => disposable.dispose()
+    },
+    getSelection() {
+      return term.getSelection()
+    },
+    hasSelection() {
+      return term.hasSelection()
+    },
+    paste(text) {
+      // 原封不動送交 pty。xterm 會處理 bracketed paste（程式若啟用了它，shell 就知道
+      // 這是「貼上」而非逐鍵輸入）。
+      term.paste(text)
     },
     focus() {
       term.focus()

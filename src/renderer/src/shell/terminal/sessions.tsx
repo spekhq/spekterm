@@ -18,6 +18,21 @@ export interface SessionState {
    * 決定。未設定時為 `undefined`，標籤退回 `${spawnTarget} ${ordinal}`。
    */
   title?: string
+  /**
+   * 使用者親自取的名字。**優先於 pty 宣告的標題。**
+   *
+   * 一旦設定，就代表使用者**接管了這個 session 的命名權** —— 此後 pty 想改名必須先經過
+   * 確認（見 `pendingTitle`），不得靜默覆蓋。
+   */
+  customTitle?: string
+  /**
+   * pty 想改成、但**尚未被使用者裁決**的名字。
+   *
+   * 只有在使用者已接管命名權（`customTitle` 存在）時才會出現。**它是單一欄位而非佇列**：
+   * pty 在確認尚未裁決時又送新標題，只會取代它 —— `claude` 改標題很頻繁，堆疊出 N 個
+   * 對話框會把畫面淹掉，而使用者真正關心的只有「它現在想叫什麼」（design D2）。
+   */
+  pendingTitle?: string
 }
 
 export type CreateOutcome =
@@ -40,8 +55,18 @@ export interface SessionsApi {
   focus(folderId: string, sessionId: string): void
   create(folderId: string, spawnTarget: SpawnTarget): Promise<CreateOutcome>
   close(sessionId: string): void
-  /** pty 宣告的終端標題。空字串視為未設定。 */
+  /** pty 宣告的終端標題。空字串視為未設定。使用者已接管命名權時，改為待裁決而不覆蓋。 */
   setTitle(sessionId: string, title: string): void
+  /** 使用者親自命名。空字串＝放棄命名權，回到跟隨 pty。 */
+  rename(sessionId: string, name: string): void
+  /** 採用 pty 想改的名字 —— 命名權交還 pty，此後不再詢問。 */
+  acceptPendingTitle(sessionId: string): void
+  /** 保留使用者取的名字，忽略這次 pty 的標題（下次它再改名會再問一次）。 */
+  keepCustomTitle(sessionId: string): void
+  /** 該 folder 中有待裁決標題的 session（同時至多一個對話框）。 */
+  pendingFor(folderId: string): SessionState | null
+  /** 重排同一個 folder 之內的 session 順序。索引是該 folder 之內的序位。 */
+  reorder(folderId: string, fromIndex: number, toIndex: number): void
   /**
    * 把一個終端接上它的 session：先補回 attach 之前累積的輸出，再接續 live 串流。
    * 回傳解除接續的函式。
@@ -164,11 +189,86 @@ export function SessionsProvider({ children }: { children: React.ReactNode }): R
 
     setSessions((previous) => {
       const target = previous.find((session) => session.id === sessionId)
+      if (!target) return previous
+
+      // 使用者已接管命名權 —— pty 的標題**不得靜默覆蓋**，改為待裁決（design D2）。
+      if (target.customTitle !== undefined) {
+        // 與使用者取的名字相同、或與已在等待裁決的相同，就沒什麼好問的。
+        if (next === undefined || next === target.customTitle || next === target.pendingTitle) {
+          return previous
+        }
+        return previous.map((session) =>
+          session.id === sessionId ? { ...session, pendingTitle: next } : session,
+        )
+      }
+
       // agent 可能反覆送同一個標題 —— 值沒變就不要製造新的陣列（否則每次都重繪整棵樹）。
-      if (!target || target.title === next) return previous
+      if (target.title === next) return previous
       return previous.map((session) =>
         session.id === sessionId ? { ...session, title: next } : session,
       )
+    })
+  }, [])
+
+  const rename = useCallback((sessionId: string, name: string) => {
+    const trimmed = name.trim()
+    const next = trimmed === '' ? undefined : trimmed
+
+    setSessions((previous) =>
+      previous.map((session) =>
+        session.id === sessionId
+          ? // 清空＝放棄命名權，回到跟隨 pty；連帶把待裁決的也清掉（已無意義）。
+            { ...session, customTitle: next, pendingTitle: undefined }
+          : session,
+      ),
+    )
+  }, [])
+
+  const acceptPendingTitle = useCallback((sessionId: string) => {
+    setSessions((previous) =>
+      previous.map((session) =>
+        session.id === sessionId
+          ? // 命名權交還 pty —— customTitle 清掉之後，它之後的改名就不再需要確認。
+            {
+              ...session,
+              title: session.pendingTitle,
+              customTitle: undefined,
+              pendingTitle: undefined,
+            }
+          : session,
+      ),
+    )
+  }, [])
+
+  const keepCustomTitle = useCallback((sessionId: string) => {
+    setSessions((previous) =>
+      previous.map((session) =>
+        session.id === sessionId ? { ...session, pendingTitle: undefined } : session,
+      ),
+    )
+  }, [])
+
+  const reorder = useCallback((folderId: string, fromIndex: number, toIndex: number) => {
+    setSessions((previous) => {
+      // 只重排該 folder 佔據的那些位置，其餘 folder 的相對順序完全不動。
+      const slots = previous.reduce<number[]>((acc, session, index) => {
+        if (session.folderId === folderId) acc.push(index)
+        return acc
+      }, [])
+
+      if (fromIndex < 0 || fromIndex >= slots.length) return previous
+      if (toIndex < 0 || toIndex >= slots.length) return previous
+      if (fromIndex === toIndex) return previous
+
+      const group = slots.map((index) => previous[index])
+      const [moved] = group.splice(fromIndex, 1)
+      group.splice(toIndex, 0, moved)
+
+      const next = [...previous]
+      slots.forEach((index, position) => {
+        next[index] = group[position]
+      })
+      return next
     })
   }, [])
 
@@ -196,13 +296,33 @@ export function SessionsProvider({ children }: { children: React.ReactNode }): R
         if (explicit && sessions.some((session) => session.id === explicit)) return explicit
         return sessions.find((session) => session.folderId === folderId)?.id ?? null
       },
+      pendingFor: (folderId) =>
+        sessions.find(
+          (session) => session.folderId === folderId && session.pendingTitle !== undefined,
+        ) ?? null,
       focus,
       create,
       close,
       setTitle,
+      rename,
+      acceptPendingTitle,
+      keepCustomTitle,
+      reorder,
       attach,
     }),
-    [sessions, focused, focus, create, close, setTitle, attach],
+    [
+      sessions,
+      focused,
+      focus,
+      create,
+      close,
+      setTitle,
+      rename,
+      acceptPendingTitle,
+      keepCustomTitle,
+      reorder,
+      attach,
+    ],
   )
 
   return <SessionsContext.Provider value={api}>{children}</SessionsContext.Provider>

@@ -269,6 +269,37 @@ provider 驗證：它為 `language: '*'` 註冊，呼叫 worker 端的 `$compute
   子列共用同一個標籤；pty 沒宣告時才退回 `claude 1` 這種本地標籤。截斷只是呈現，完整標題
   留在 tooltip。
 
+- **終端的複製貼上不能靠瀏覽器原生的路徑**（`terminal-clipboard`）。xterm 的選取**不是 DOM
+  selection**（它自己畫），因此原生的「Ctrl+C 複製選取文字」對它完全無效。複製走
+  `term.getSelection()` + 主行程的 clipboard；貼上走 `clipboard.readText()` + `term.paste()`。
+  **不用 `navigator.clipboard`** —— 它的 `readText()` 在 Electron 中受 `clipboard-read` 權限
+  模型擺布，跨平台不一致。
+  - **`Ctrl+C` 必須維持 SIGINT，不可挪用為複製**：agent 跑失控時要中斷它的能力，不能因為畫面
+    上剛好有一段選取就失靈。複製用 `Ctrl+Shift+C`（macOS 的 `Cmd+C` 不衝突，故該平台用 Cmd）。
+  - **選單操作完要把焦點還給終端**。實測（探針抓到）：自右鍵選單貼上之後按 Enter **不會執行**
+    —— 焦點還在選單那邊，使用者得再點一次終端。`copy`／`paste` 之後都要 `focus()`。
+  - **`clipboard.readText()` 沒有 workspace 邊界可言**（剪貼簿裡可能是剛複製的密碼）。它可接受
+    的前提有二：導航防護確保 renderer 不會變成別人的頁面（少了它，一個 markdown 連結就能把這個
+    能力交給遠端頁面）；且只在使用者明確要求貼上時讀取，不主動、不輪詢。
+
+- **session 的命名權可以被使用者接管**（`session-rename-and-reorder`）。標籤三層優先序：
+  **使用者取的名字 > pty 宣告的 OSC 標題 > 本地流水號**。使用者一旦命名，pty 想改名就**不得
+  靜默覆蓋** —— 跳確認讓他裁決（採用 pty 的／保留我的）。「採用」＝命名權交還，此後不再問。
+  **待確認的標題是單一欄位而非佇列**：`claude` 改標題很頻繁，堆疊 N 個對話框會把畫面淹掉。
+- **拖曳排序用滑鼠事件實作，不用 HTML5 drag-and-drop** —— 後者在 CDP 下要走
+  `Input.setInterceptDrags` + `dispatchDragEvent`，與探針既有的 `dragMouse`（真滑鼠序列）
+  格格不入。自己做，驗收就能送真拖曳。
+
+### React 的 state updater 必須是純函式 —— StrictMode 會抓到你
+
+**副作用絕不可寫在 `setState` 的 updater 裡。** StrictMode（**只在 dev 生效**）會刻意
+double-invoke updater 來揪出不純的實作 —— 把 `onCommit` 寫在 `setDrag(current => {...})`
+裡面，排序就會被套用**兩次**（交換兩次＝回到原位，看起來像「拖曳完全沒反應」）。
+
+實測：**dev 模式拖曳失效、build 模式正常**。一邊過一邊不過，第一直覺會以為是時序 flaky，
+其實是 React 在告訴你「你的 updater 不純」。副作用要移到 event handler 裡（以 ref 保存要提交
+的值），updater 只回傳新 state。
+
 ### 驗 terminal 的兩個假綠陷阱
 
 - **Enter 必須是一次真的 keyEvent。** 把 `\r` 併進 `Input.insertText` 的文字裡送出，字元確實

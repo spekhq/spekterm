@@ -10,13 +10,17 @@ const SPAWN_LABEL: Record<SpawnTarget, string> = {
 const MAX_LABEL = 28
 
 /**
- * session 的**完整**身分，供 tooltip 使用。
+ * session 的**完整**身分，供 tooltip 使用。三層優先序：
  *
- * 優先採用 pty 以 OSC 序列宣告的終端標題 —— 跑在裡面的程式最清楚自己是誰（`claude` 會主動
- * 送這個，那正是終端模擬器的分頁會自動改名的機制）。pty 沒宣告時才退回本地流水號。
+ * 1. **使用者親自取的名字** —— 他接管了命名權，誰也不能蓋過去（pty 想改名要先經確認）。
+ * 2. **pty 以 OSC 序列宣告的標題** —— 跑在裡面的程式最清楚自己是誰（`claude` 會主動送這個，
+ *    那正是終端模擬器的分頁會自動改名的機制）。
+ * 3. **本地流水號** —— 兩者都沒有時的退路。
  */
 export function sessionTitle(session: SessionState): string {
-  return session.title ?? `${SPAWN_LABEL[session.spawnTarget]} ${session.ordinal}`
+  return (
+    session.customTitle ?? session.title ?? `${SPAWN_LABEL[session.spawnTarget]} ${session.ordinal}`
+  )
 }
 
 /** 呈現用的標籤：截斷是呈現上的取捨，完整標題仍可自 tooltip 取得（見 `sessionTitle`）。 */

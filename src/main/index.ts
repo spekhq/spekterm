@@ -3,6 +3,7 @@ import { fileURLToPath } from 'node:url'
 import { app, BrowserWindow } from 'electron'
 import { DirtyStateStore } from './dirty-state'
 import { registerAppHandlers } from './ipc/app'
+import { registerClipboardHandlers } from './ipc/clipboard'
 import { registerFsHandlers } from './ipc/fs'
 import { registerFolderHandlers } from './ipc/folders'
 import { registerShellHandlers } from './ipc/shell'
@@ -97,6 +98,7 @@ void app.whenReady().then(() => {
   registerShellHandlers()
   registerAppHandlers(dirty)
   registerTerminalHandlers(store)
+  registerClipboardHandlers()
 
   createWindow(dirty)
 

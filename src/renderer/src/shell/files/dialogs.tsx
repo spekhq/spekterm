@@ -136,6 +136,8 @@ export interface MenuItem {
   label: string
   onSelect: () => void
   tone?: 'danger'
+  /** 停用而非隱藏 —— 使用者要看得到這個操作存在，只是此刻不可用（例如沒有選取內容時的複製）。 */
+  disabled?: boolean
 }
 
 interface ContextMenuProps {
@@ -198,9 +200,12 @@ export function ContextMenu({ x, y, items, onClose }: ContextMenuProps): React.J
           key={item.label}
           type="button"
           role="menuitem"
+          disabled={item.disabled}
           onClick={item.onSelect}
-          className={`block w-full px-3 py-1 text-left hover:bg-hover ${
-            item.tone === 'danger' ? 'text-danger' : 'text-ink-dim'
+          className={`block w-full px-3 py-1 text-left ${
+            item.disabled
+              ? 'cursor-not-allowed text-ink-faint opacity-40'
+              : `hover:bg-hover ${item.tone === 'danger' ? 'text-danger' : 'text-ink-dim'}`
           }`}
         >
           {item.label}

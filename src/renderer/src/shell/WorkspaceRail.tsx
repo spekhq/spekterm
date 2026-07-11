@@ -1,6 +1,9 @@
-import { useCallback, useState } from 'react'
+import { useCallback, useRef, useState } from 'react'
+import { ContextMenu, type MenuItem } from './files/dialogs'
+import { SessionNameDialog } from './terminal/SessionNameDialog'
 import { StatusDot, sessionLabel, sessionTitle, statusTitle } from './terminal/session-badge'
 import { type SessionState, useSessions } from './terminal/sessions'
+import { useDragReorder } from './terminal/useDragReorder'
 import { useSpawnMenu } from './terminal/useSpawnMenu'
 import type { SpawnTarget, WorkspaceFolder } from './types'
 
@@ -12,8 +15,7 @@ interface WorkspaceRailProps {
   onRemove: (id: string) => void
 }
 
-const ICON_BUTTON_CLASS =
-  'shrink-0 rounded px-1.5 py-0.5 text-xs opacity-0 group-hover:opacity-100'
+const ICON_BUTTON_CLASS = 'shrink-0 rounded px-1.5 py-0.5 text-xs opacity-0 group-hover:opacity-100'
 
 function FolderIcon(): React.JSX.Element {
   return (
@@ -41,6 +43,8 @@ function FolderRow({
   onSelectSession,
   onCloseSession,
   onCreateSession,
+  onRenameSession,
+  onReorderSessions,
   onRemove,
 }: {
   folder: WorkspaceFolder
@@ -53,14 +57,45 @@ function FolderRow({
   onSelectSession: (sessionId: string) => void
   onCloseSession: (sessionId: string) => void
   onCreateSession: (spawnTarget: SpawnTarget) => void
+  onRenameSession: (sessionId: string, name: string) => void
+  onReorderSessions: (fromIndex: number, toIndex: number) => void
   onRemove: () => void
 }): React.JSX.Element {
   // 每個 folder 各持有自己的選單狀態 —— rail 上有很多列，共用一份會錨錯位置。
   const spawn = useSpawnMenu(onCreateSession)
+  const [menu, setMenu] = useState<{ x: number; y: number; session: SessionState } | null>(null)
+  const [renaming, setRenaming] = useState<SessionState | null>(null)
+  const rowRefs = useRef(new Map<number, HTMLDivElement>())
+
+  const rectOf = useCallback((index: number) => {
+    return rowRefs.current.get(index)?.getBoundingClientRect() ?? null
+  }, [])
+
+  const reorder = useDragReorder(sessions.length, 'vertical', rectOf, onReorderSessions)
 
   const openSpecTitle = folder.hasOpenSpec
     ? `${folder.name} — 以 OpenSpec 身分開啟`
     : `${folder.name} — 沒有 openspec/，只能用 Files 身分`
+
+  const items: MenuItem[] = menu
+    ? [
+        {
+          label: '重新命名',
+          onSelect: () => {
+            setRenaming(menu.session)
+            setMenu(null)
+          },
+        },
+        {
+          label: '關閉',
+          tone: 'danger',
+          onSelect: () => {
+            onCloseSession(menu.session.id)
+            setMenu(null)
+          },
+        },
+      ]
+    : []
 
   return (
     <li className="group">
@@ -167,24 +202,40 @@ function FolderRow({
 
       {expanded && sessions.length > 0 && (
         <ul aria-label={`${folder.name} 的 session`} className="pb-1">
-          {sessions.map((session) => {
+          {sessions.map((session, index) => {
             const isFocused = session.id === focusedSessionId
             const label = sessionLabel(session)
             const full = sessionTitle(session)
+            const dragging = reorder.drag?.fromIndex === index
 
             return (
               <li key={session.id} className="group/session">
                 <div
+                  ref={(el) => {
+                    if (el) rowRefs.current.set(index, el)
+                    else rowRefs.current.delete(index)
+                  }}
                   role="button"
                   tabIndex={0}
+                  onMouseDown={(event) => reorder.onMouseDown(index, event)}
                   onClick={() => onSelectSession(session.id)}
                   onKeyDown={(event) => {
                     if (event.key === 'Enter' || event.key === ' ') onSelectSession(session.id)
                   }}
+                  onContextMenu={(event) => {
+                    event.preventDefault()
+                    event.stopPropagation()
+                    setMenu({ x: event.clientX, y: event.clientY, session })
+                  }}
                   title={`${full} — ${statusTitle(session)}`}
                   className={
                     // 縮排造出樹狀層次（mockup 的 .ws-session-row）
-                    'flex cursor-pointer items-center gap-2 py-1.5 pr-1 pl-9 text-[11px] ' +
+                    // select-none：拖曳時不該把標籤的文字反白選起來（實測體感很差）。
+                    'flex items-center gap-2 py-1.5 pr-1 pl-9 text-[11px] select-none ' +
+                    (reorder.dragging ? 'cursor-grabbing ' : 'cursor-grab ') +
+                    // 插入指示：拖到這裡放開，就會插在它前面
+                    (reorder.isDropTarget(index) ? 'border-t-2 border-t-accent ' : '') +
+                    (dragging ? 'opacity-40 ' : '') +
                     (isFocused ? 'bg-stage text-ink' : 'text-ink-dim hover:bg-hover/60')
                   }
                 >
@@ -211,6 +262,17 @@ function FolderRow({
       )}
 
       {spawn.menu}
+      {menu && <ContextMenu x={menu.x} y={menu.y} items={items} onClose={() => setMenu(null)} />}
+      {renaming && (
+        <SessionNameDialog
+          initialValue={sessionTitle(renaming)}
+          onCancel={() => setRenaming(null)}
+          onSubmit={(name) => {
+            onRenameSession(renaming.id, name)
+            setRenaming(null)
+          }}
+        />
+      )}
     </li>
   )
 }
@@ -274,6 +336,10 @@ export function WorkspaceRail({
               onSelectSession={(sessionId) => selectSession(folder.id, sessionId)}
               onCloseSession={sessions.close}
               onCreateSession={(spawnTarget) => createSession(folder.id, spawnTarget)}
+              onRenameSession={sessions.rename}
+              onReorderSessions={(fromIndex, toIndex) =>
+                sessions.reorder(folder.id, fromIndex, toIndex)
+              }
               onRemove={() => onRemove(folder.id)}
             />
           ))
