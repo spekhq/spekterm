@@ -24,12 +24,22 @@ import test from 'node:test'
 import { fileURLToPath } from 'node:url'
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..')
+
 const ARCHIVE = 'openspec/changes/archive'
+
+/**
+ * 這條規則的**定義處**必須被排除 —— 它不可能不寫出舊名的字面：一份說「不得含有 X」的規格，
+ * 本身就得寫出 X。這是自我指涉，不是後門。
+ *
+ * 排除的只有規格檔本身；CLAUDE.md、README、產品程式碼**一律不排除**，它們漏改的代價太高。
+ * 那些文件若要談論正名的歷史，就得繞開舊名的字面（正名後的 CLAUDE.md 正是這樣寫的）。
+ */
+const RULE_DEFINITION = 'openspec/specs/app-identity/spec.md'
 
 // 以組合構造，使本檔案不含這些字面 —— 見上方說明 1。
 const OLD_PRODUCT_NAME = ['spek', 'workspace'].join(' ')
-// 舊的 repo／目錄名。與上面只差一個字元，卻是獨立的一條 —— 搜「spek workspace」搜不到它，
-// 而它確實殘留在 main spec 裡（實測抓到）。
+// 舊的 repo／目錄名：與上面只差一個分隔字元，卻是獨立的一條 —— 搜帶空格的那個搜不到它，
+// 而它確實殘留在一份 main spec 裡（實測抓到，且是 repo 目錄改名後才浮現的）。
 const OLD_REPO_NAME = ['spek', 'workspace'].join('-')
 const OLD_PACKAGE_NAME = ['@spek', 'workspace'].join('/')
 const OLD_SCAN_ENV = ['SPEK', 'SCAN', 'PATH'].join('_')
@@ -56,7 +66,7 @@ const FORBIDDEN = [
  * 也會上色**，於是回傳的檔名帶著 ANSI 逸出碼，任何 `startsWith` 之類的路徑比對都會靜默失準。
  */
 function trackedFilesContaining(needle, { includeArchive }) {
-  const pathspec = includeArchive ? [] : ['--', '.', `:!${ARCHIVE}`]
+  const pathspec = includeArchive ? [] : ['--', '.', `:!${ARCHIVE}`, `:!${RULE_DEFINITION}`]
   try {
     const out = execFileSync(
       'git',

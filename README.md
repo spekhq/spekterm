@@ -81,7 +81,8 @@ npm run dev             # 開發模式
 npm run build           # 建置至 out/
 npm run typecheck       # 型別檢查
 npm run lint
-npm test                # 單元測試（fs 邊界、workspace store、watcher、pty 管理器、OpenSpec 供應層…）
+npm test                # 單元測試（fs 邊界、workspace store、watcher、pty 管理器、OpenSpec 供應層、
+                        #   舊產品名不得殘留…）
 ```
 
 驗收一律走**探針**：以 CDP 連進真正執行中的 app 驗收，**不在產品程式碼裡塞測試分支**，
@@ -96,6 +97,7 @@ npm run probe:openspec  # 側欄兩視圖、兩棵樹、artifact 分頁、agent 
                         #   交叉導覽、Graph・Timeline 的 overlay（dev + build）
 npm run probe:native    # 主行程載入 node-pty 並 spawn 真 pty
 npm run probe:core      # 主行程掃描 OpenSpec，且不開 TCP 埠
+npm run probe:identity  # productName / appId / userData 路徑 / 視窗標題
 npm run measure:bundle  # renderer bundle 體積報告（依編輯器核心／worker／語言歸因）
 ```
 

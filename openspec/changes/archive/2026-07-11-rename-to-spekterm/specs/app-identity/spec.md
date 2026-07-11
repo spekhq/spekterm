@@ -70,8 +70,13 @@ renderer 的文件標題 SHALL 為 `spekterm`。
 ### Requirement: 版控內容不得殘留舊產品名
 
 除 `openspec/changes/archive/**` 之外，版控中的程式碼、設定、文件與驗收腳本 SHALL NOT 含有舊產品名
-（`spek workspace`）、舊 package 名（`@spek/workspace`）、舊環境變數名（`SPEK_SCAN_PATH`），或以
-`spek-` 為前綴的 probe `--user-data-dir` profile 名。
+（`spek workspace`）、舊 repo 名（`spek-workspace`）、舊 package 名（`@spek/workspace`）、舊環境
+變數名（`SPEK_SCAN_PATH`），或以 `spek-` 為前綴的 probe 暫存目錄名（`--user-data-dir` 的 profile
+與 fixture 皆屬之）。
+
+**舊 repo 名與 fixture 目錄是實作時才浮現的**：搜「spek workspace」（空格）搜不到 `spek-workspace`
+（連字號），而手動 grep `profile` 也看不到 `spek-fixture-` 那一類暫存目錄 —— 兩者都是被本條的
+自動化檢查揪出來的，正是它存在的理由。
 
 probe 的 profile 名不是無關痛癢的字串：驗收腳本靠「每個子行程的 argv 都帶著那個獨一無二的
 `--user-data-dir` 值」來連根拔除殭屍行程樹（`pkill -9 -f <profile>`）。腳本與文件若不同步更名，
@@ -80,13 +85,18 @@ probe 的 profile 名不是無關痛癢的字串：驗收腳本靠「每個子�
 `openspec/changes/archive/**` 是歷史紀錄，記載的是「在那個時間點這個專案叫什麼」，本身正確，
 SHALL 保持原樣。
 
+**本規格檔自身亦排除於此項檢查之外** —— 一份說「不得含有 X」的規格必須寫出 X，那是**自我指涉，
+不是殘留**。排除的僅止於此：`CLAUDE.md`、`README` 與產品程式碼**一律受檢**（它們漏改的代價太高）。
+那些文件若要談論正名的歷史，SHALL 繞開舊名的字面。
+
 #### Scenario: 舊識別字串不殘留
 
-- **WHEN** 在版控追蹤的檔案中搜尋 `spek workspace`、`@spek/workspace`、`SPEK_SCAN_PATH` 與
-  `spek-*-profile`，且排除 `openspec/changes/archive/**`
+- **WHEN** 在版控追蹤的檔案中搜尋 `spek workspace`、`spek-workspace`、`@spek/workspace`、
+  `SPEK_SCAN_PATH` 與 `spek-*` 的 probe 暫存目錄前綴，且排除 `openspec/changes/archive/**`
 - **THEN** 沒有任何命中
 
 #### Scenario: 歷史紀錄未被竄改
 
-- **WHEN** 檢視本次正名所產生的 diff
-- **THEN** `openspec/changes/archive/**` 之下沒有任何檔案被修改
+- **WHEN** 在**不排除** `openspec/changes/archive/**` 的情況下搜尋同一批舊識別字串
+- **THEN** archive 之下仍命中它們 —— 這同時證明搜尋確實有效（一支永遠零命中的檢查等於沒有檢查），
+  且 archive 未被正名改動

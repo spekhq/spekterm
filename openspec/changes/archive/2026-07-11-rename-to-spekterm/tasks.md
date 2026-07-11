@@ -50,18 +50,16 @@
       改的是內文的專案名、非 requirement 行為，因此不需要 delta spec。已把此形式加進 3.5 的
       forbidden 清單
 
-## 5. 命名空間（repo 外的動作）
+## 5. repo 的位置
 
-- [ ] 5.1 買下 `spekterm.com`（canonical）與 `spekterm.app`（301 導向）——
-      **⚠ 封存時仍未完成，作者決定延後。這是一筆已知的未結風險，不是漏掉的任務。**
-      `appId` = `com.spekterm.app` **已隨本 change 凍結**，但它反寫的那個 domain 還沒買下 ——
-      風險與緩解見 design 的 Risks 段（「appId 押在一個還沒買的 domain 上」）。**這個風險隨時間
-      單調上升，且無法事後以改 appId 化解**（改 appId 的作業系統語意是「發佈一個不同的 app」）。
-- [x] 5.2 GitHub repo 改名：`kewang/spek-workspace` → **`kewang/spekterm`**（以 `gh repo rename`
+> 買下 `spekterm.com` / `spekterm.app` **不列為任務** —— 它不動 codebase。它是一筆**已知的未結
+> 風險**（`appId` 已凍結，但它反寫的 domain 尚未買下），記於 design 的 Risks 段。
+
+- [x] 5.1 GitHub repo 改名：`kewang/spek-workspace` → **`kewang/spekterm`**（以 `gh repo rename`
       完成，本機 `git remote` 已同步更新）。舊 URL 的 redirect 實測有效（`git ls-remote` 舊網址仍
       列得出 ref），其他機器上的既有 clone 不會斷。**org 歸屬待 `spekjs` 申訴結果** —— 申訴成功後
       再 transfer 進 org，同樣自動 redirect，不阻塞本 change
-- [x] 5.3 本機工作目錄 `/home/me/git/spek-workspace` → `/home/me/git/spekterm`，並一併搬移
+- [x] 5.2 本機工作目錄 `/home/me/git/spek-workspace` → `/home/me/git/spekterm`，並一併搬移
       Claude Code 的 project 目錄（`~/.claude/projects/-home-me-git-spek-workspace` →
       `-home-me-git-spekterm`），否則既有 memory 會失聯 —— project 識別是綁 cwd 路徑的
 
@@ -72,5 +70,5 @@
 - [x] 6.3 `npm test` —— 165/165
 - [x] 6.4 **所有** probe（profile 更名觸及每一支）：`identity` 7/7、`native` 9/9、`shell` 13/13、
       `core` 17/17、`workspace` 35/35、`terminal` 88/88、`files` 94/94、`openspec` 142/142
-- [ ] 6.5 手動啟動一次：**folder 清單會是空的 —— 這是 D4 的預期行為，不是 regression**。重新加入
-      folder 後重啟，確認仍能還原（`workspace-folders` 的既有行為未被正名破壞）
+- [x] 6.5 手動啟動實測（作者親測）：**folder 清單是空的 —— D4 的預期行為，不是 regression**。
+      重新加入 folder 後重啟，`workspace-folders` 的還原行為未被正名破壞

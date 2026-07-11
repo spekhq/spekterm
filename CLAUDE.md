@@ -33,7 +33,7 @@ session 的**錨定 change**（側欄跟隨 focused session），以及 **Graph 
 npm run dev             # electron-vite dev（開發模式）
 npm run build           # 建置至 out/
 npm run typecheck       # tsc：main / preload（node）+ renderer（web）
-npm test                # node:test 單元測試（fs 邊界、workspace store、listDir/readFile、watcher、外部 URL、pty 管理器）
+npm test                # node:test 單元測試（fs 邊界、workspace store、listDir/readFile、watcher、外部 URL、pty 管理器、舊產品名不得殘留）
 npm run probe:shell     # 驗收 workspace-app-shell（開視窗 + 信任模型 + preload 白名單，走 CDP）
 npm run probe:workspace # 驗收 workspace-folders / filesystem-access / workspace-layout
 npm run probe:files     # 驗收 file-explorer / file-viewer / 編輯 / 存檔 / 衝突 / CRUD / 導航防護 / 編輯器 worker（dev + build 兩模式）
@@ -155,6 +155,37 @@ node-pty 1.2.0-beta.14（釘死）、Monaco Editor、chokidar 5、react-markdown
   覆寫為走主行程的 `shell.openExternal`** —— pty 的輸出同樣是不受信任的內容（使用者 repo 裡
   任何東西都可能印出一個 URL），不得讓 xterm 自行導航或開窗。
 
+## 產品身分（`rename-to-spekterm` 起 —— **已凍結，不要改**）
+
+| | |
+|---|---|
+| `package.json` 的 `name` | `spekterm`（unscoped —— 本 package 是 `private`、不發佈，不需要 scope） |
+| `productName` | `Spekterm` |
+| `build.appId` | `com.spekterm.app` |
+| userData | `~/.config/Spekterm` |
+| 視窗標題（`document.title`） | `spekterm` |
+
+**`appId` 與 `productName` 一旦隨安裝檔發佈就凍結。** `appId` 進 macOS 的 `CFBundleIdentifier`
+與 Windows 的 uninstall registry key —— 改動它的作業系統語意是「**發佈一個不同的 app**」：舊版不會
+自動更新過去，使用者手上會同時裝著兩個。`productName` 同理（它決定 userData 的落點，改了＝所有人的
+設定失聯）。**Phase 6 之後，這兩個值不可再動。**
+
+- **`app.getName()` 優先讀 `productName`、缺才退回 `name`** —— 所以 `productName` 不只是顯示名稱，
+  它同時決定使用者設定存在哪。正名前沒有 `productName`，於是退回當時那個 **scoped** 的 `name`，
+  而 scope 名直接成了路徑的一層，造出一個帶 `@` 的巢狀 userData 目錄。
+- **品牌書寫全小寫（`spekterm`），但 `productName` 首字大寫（`Spekterm`）** —— 後者是作業系統的
+  顯示名稱（Dock、安裝檔名），那些位置的慣例是專有名詞。兩者不同源，不需一致。
+- **`npm test` 有一條守衛**（`scripts/naming.test.mjs`）：版控中不得殘留舊名，`archive/` 除外。
+  它的對照組要求「**不排除** archive 時必須命中舊名」—— 少了這條，`git grep` 的 ANSI 顏色碼曾讓
+  路徑比對靜默失準而全綠（實測）。
+- **`probe:identity` 不能傳 `--user-data-dir`**（那會覆寫掉待驗的對象），**也不能寫成 Electron 主
+  行程腳本**（`electron <script>` 不讀 repo 的 `package.json`，只會量到 Electron 的預設值 `Electron`）。
+  它啟動真正的 `electron .`，再從**子行程的 argv** 讀出解析後的 userData。
+
+> **已知未結風險：`spekterm.com` 尚未購買**，而 `appId` 正是反寫它。若該 domain 被他人註冊，這個
+> **已凍結**的 appId 就變成在宣告別人的命名空間 —— 而且事後無法以改 appId 化解。**Phase 6 打包發佈
+> 前必須買下它**；這個窗口只會變窄，不會變寬。
+
 ## Workflow
 
 - **所有變更都必須使用 OpenSpec 工作流程**：每個功能、修復或修改都要先建立 OpenSpec change，
@@ -184,6 +215,10 @@ node-pty 1.2.0-beta.14（釘死）、Monaco Editor、chokidar 5、react-markdown
   （本 change 的 artifact 分頁 / 瀏覽的兩棵樹）、tasks 進度與 spec deltas、交叉導覽、
   session 的錨定 change、Graph 與 Timeline 的全視窗 overlay。
   跨 repo：`spek` 的 `extract-ui-package` 抽出並發佈 **`@spekjs/ui@1.0.0`**。
+- **正名** — `rename-to-spekterm`（已封存，**不屬於任何 Phase**）：產品從一個描述性的佔位名
+  （開源專案名 + 泛用詞，見該 change 的 proposal）正名為 **spekterm**，並定下會隨打包凍結的作業
+  系統身分（見上文「產品身分」）。**它必須排在 Phase 6 之前** —— `appId` 一旦隨安裝檔發佈就改不了，
+  正名的成本從打包起單調上升。
 - Phase 6 打包與發佈，Phase 7+ 建立護城河（handoff）。
 
 > **Phase 5 對 PRD 的「抽出 `@spekjs/ui`」做了對半的裁決**（PRD §9.2 已回寫）：整頁視圖**不抽**

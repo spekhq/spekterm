@@ -153,8 +153,8 @@ profile 名不是無關痛癢的字串：CLAUDE.md 記載的殭屍行程收屍�
 ## Risks / Trade-offs
 
 - **`appId` 押在一個還沒買的 domain 上 —— 封存時此風險仍未結。** `com.spekterm.app` 假設作者確實
-  買下 `spekterm.com`。**實際上封存時 domain 尚未購買**（tasks 5.1，作者決定延後），而 `appId`
-  已隨本 change 凍結。
+  買下 `spekterm.com`。**實際上封存時 domain 尚未購買**（作者決定延後），而 `appId` 已隨本 change
+  凍結。買 domain 不動 codebase，因此不列為任務 —— 它是這裡的一筆未結風險。
 
   這個 appId 仍可運作（appId 從不做 DNS 查詢，只是一個唯一字串），但兩件事已經成立：「反寫自己
   擁有的 domain」這個慣例的正當性沒了；且**若 `spekterm.com` 被他人註冊，這個 appId 就變成在宣告
