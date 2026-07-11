@@ -74,9 +74,9 @@
   .traffic { display: flex; gap: 8px; }
   .traffic i { width: 12px; height: 12px; border-radius: 50%; display: block; }
   .traffic .r { background: #ff5f57; } .traffic .y { background: #febc2e; } .traffic .g { background: #28c840; }
-  .title { flex: 1; text-align: center; font-size: 12px; color: var(--text-faint); letter-spacing: 0.04em; font-weight: 500; }
+  .title { flex: 1; text-align: center; font-size: 13px; color: var(--text-faint); letter-spacing: 0.04em; font-weight: 500; }
   .title b { color: var(--accent); font-weight: 700; }
-  .title .proto { color: var(--blue); font-family: "JetBrains Mono", monospace; font-size: 11px; }
+  .title .proto { color: var(--blue); font-family: "JetBrains Mono", monospace; font-size: 12px; }
 
   .body { flex: 1; display: flex; min-height: 0; }
 
@@ -99,7 +99,7 @@
   /* statusbar */
   .statusbar {
     height: 26px; flex: 0 0 26px; background: var(--bg-0); border-top: 1px solid var(--border-soft);
-    display: flex; align-items: center; padding: 0 12px; font-size: 11.5px; color: var(--text-faint);
+    display: flex; align-items: center; padding: 0 12px; font-size: 12.5px; color: var(--text-faint);
     gap: 16px; font-family: "JetBrains Mono", monospace;
   }
   .statusbar .git { color: var(--accent); } .statusbar .sp { flex: 1; }
@@ -116,14 +116,14 @@
   .sdot.idle  { background: var(--text-faint); }
   @keyframes pulse { 0%,100% { opacity: .4; } 50% { opacity: 1; } }
 
-  .badge { font-size: 10px; font-weight: 700; padding: 3px 8px; border-radius: 5px; letter-spacing: .04em; }
+  .badge { font-size: 11px; font-weight: 700; padding: 3px 8px; border-radius: 5px; letter-spacing: .04em; }
   .badge.active { background: rgba(52,211,153,0.14); color: var(--green); }
   .badge.arch { background: rgba(100,116,139,0.16); color: var(--gray); }
   .badge.spec { background: rgba(96,165,250,0.14); color: var(--blue); }
   .badge.wait { background: rgba(245,158,11,0.16); color: var(--accent); }
   .badge.err  { background: rgba(248,113,113,0.16); color: var(--red); }
 
-  .diffstat { font-family: "JetBrains Mono", monospace; font-size: 11.5px; }
+  .diffstat { font-family: "JetBrains Mono", monospace; font-size: 12.5px; }
   .diffstat .a { color: var(--green); } .diffstat .d { color: var(--red); }
 
   .pbar { height: 6px; background: var(--bg-3); border-radius: 4px; overflow: hidden; }
@@ -131,7 +131,7 @@
 
   /* ===== terminal rendering (pty running `claude`) ===== */
   .cc-term {
-    font-family: "JetBrains Mono", monospace; font-size: 12.5px; line-height: 1.55;
+    font-family: "JetBrains Mono", monospace; font-size: 13.5px; line-height: 1.55;
     white-space: pre-wrap; word-break: break-word; color: var(--text-dim); background: var(--bg-0);
     overflow-y: auto; padding: 12px 14px;
   }
@@ -158,7 +158,7 @@
     display: flex; flex-direction: column; padding: 14px 0 10px; min-height: 0;
   }
   .ws-rail-title {
-    font-size: 10.5px; font-weight: 700; letter-spacing: .09em;
+    font-size: 11.5px; font-weight: 700; letter-spacing: .09em;
     color: var(--text-faint); padding: 0 16px 10px;
   }
   .ws-list { flex: 1; overflow-y: auto; }
@@ -169,23 +169,23 @@
   }
   .ws-repo-row:hover { background: var(--bg-hover); }
   .ws-repo.selected > .ws-repo-row { background: var(--accent-soft); border-left-color: var(--accent); }
-  .ws-repo-caret { flex: 0 0 11px; font-size: 9.5px; color: var(--text-faint); text-align: center; }
+  .ws-repo-caret { flex: 0 0 11px; font-size: 10.5px; color: var(--text-faint); text-align: center; }
   .ws-repo-icon { flex: 0 0 auto; color: var(--text-faint); display: flex; }
   .ws-repo.selected .ws-repo-icon { color: var(--accent); }
   .ws-repo-icon svg { width: 14px; height: 14px; }
   .ws-repo-meta { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
   .ws-repo-name {
-    font-size: 12.5px; font-weight: 700; color: var(--text);
+    font-size: 13.5px; font-weight: 700; color: var(--text);
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
   .ws-repo.selected .ws-repo-name { color: var(--accent); }
   .ws-repo-sub {
-    font-size: 10px; color: var(--text-faint);
+    font-size: 11px; color: var(--text-faint);
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
   .ws-repo-sub.no-os { color: #6b5637; } /* 沒有 openspec/ 的 repo：文字調暗一階，弱化提示 */
   .ws-repo-count {
-    flex: 0 0 auto; font-size: 10px; font-weight: 700; color: var(--text-dim);
+    flex: 0 0 auto; font-size: 11px; font-weight: 700; color: var(--text-dim);
     background: var(--bg-3); padding: 1px 6px; border-radius: 8px;
   }
 
@@ -197,13 +197,13 @@
   .ws-session-row:hover { background: var(--bg-hover); }
   .ws-session-row.focused { background: var(--bg-2); }
   .ws-session-label {
-    font-size: 11px; color: var(--text-dim);
+    font-size: 12px; color: var(--text-dim);
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
   .ws-session-row.focused .ws-session-label { color: var(--text); font-weight: 600; }
 
   .ws-add {
-    margin: 10px 16px 0; padding: 8px 10px; text-align: center; font-size: 11.5px;
+    margin: 10px 16px 0; padding: 8px 10px; text-align: center; font-size: 12.5px;
     color: var(--text-faint); border: 1px dashed var(--border); border-radius: 8px; cursor: pointer;
   }
   .ws-add:hover { color: var(--accent); border-color: var(--accent); }
@@ -219,8 +219,8 @@
     flex: 0 0 44px; display: flex; align-items: center; gap: 14px; padding: 0 16px;
     background: var(--bg-2); border-bottom: 1px solid var(--border-soft);
   }
-  .repo-header-name { font-size: 13.5px; font-weight: 700; color: var(--text); }
-  .repo-header-agg { font-size: 11px; color: var(--text-faint); }
+  .repo-header-name { font-size: 14.5px; font-weight: 700; color: var(--text); }
+  .repo-header-agg { font-size: 12px; color: var(--text-faint); }
   .repo-header .sp { flex: 1; }
 
   .repo-header-actions { display: flex; align-items: center; gap: 8px; }
@@ -233,9 +233,9 @@
   }
   .dtab {
     display: flex; align-items: center; gap: 6px; padding: 5px 12px; border-radius: 6px;
-    font-size: 12px; color: var(--text-dim); cursor: pointer; white-space: nowrap; user-select: none;
+    font-size: 13px; color: var(--text-dim); cursor: pointer; white-space: nowrap; user-select: none;
   }
-  .dtab .di { font-size: 12px; }
+  .dtab .di { font-size: 13px; }
   .dtab:hover { color: var(--text); background: var(--bg-hover); }
   .dtab.active { background: var(--accent-soft); color: var(--accent); font-weight: 700; }
   /* disabled：repo 沒有 openspec/ 時，OpenSpec 鈕會長這樣（此檔只用在示意 preview，不綁事件） */
@@ -243,7 +243,7 @@
   .dtab.disabled:hover { background: none; color: var(--text-dim); }
 
   .btn-new-session {
-    padding: 6px 12px; font-size: 11.5px; color: var(--text-dim);
+    padding: 6px 12px; font-size: 12.5px; color: var(--text-dim);
     border: 1px solid var(--border); border-radius: 7px; cursor: pointer; white-space: nowrap;
   }
   .btn-new-session:hover { border-color: var(--accent); color: var(--accent); }
@@ -252,13 +252,13 @@
   .btn-collapse-panel {
     width: 30px; height: 28px; display: flex; align-items: center; justify-content: center;
     border: 1px solid var(--border); border-radius: 7px; color: var(--text-dim);
-    cursor: pointer; font-size: 13px; user-select: none;
+    cursor: pointer; font-size: 14px; user-select: none;
   }
   .btn-collapse-panel:hover { border-color: var(--accent); color: var(--accent); }
 
   /* 主張說明 caption：常駐在 repo header 下方 */
   .hint-bar {
-    flex: 0 0 auto; padding: 7px 16px; font-size: 11.5px; color: var(--text-faint);
+    flex: 0 0 auto; padding: 7px 16px; font-size: 12.5px; color: var(--text-faint);
     border-bottom: 1px solid var(--border-soft); background: var(--bg-1);
   }
   .hint-bar b { color: var(--text-dim); font-weight: 600; }
@@ -266,11 +266,11 @@
   /* 第二行說明：OpenSpec 身分是條件式的，附一個不可互動的 segmented control 示意 disabled 樣式 */
   .hint-bar-sub {
     flex: 0 0 auto; display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
-    padding: 6px 16px 9px; font-size: 11px; color: var(--text-faint);
+    padding: 6px 16px 9px; font-size: 12px; color: var(--text-faint);
     border-bottom: 1px solid var(--border-soft); background: var(--bg-1);
   }
   .hint-bar-sub code {
-    font-family: "JetBrains Mono", monospace; font-size: 10.5px; color: var(--text-dim);
+    font-family: "JetBrains Mono", monospace; font-size: 11.5px; color: var(--text-dim);
     background: var(--bg-3); padding: 1px 5px; border-radius: 4px;
   }
   .mini-demo-label { color: var(--text-faint); }
@@ -285,7 +285,7 @@
   .stab {
     display: flex; align-items: center; gap: 8px; padding: 0 14px;
     border-bottom: 2px solid transparent; cursor: pointer; white-space: nowrap;
-    color: var(--text-dim); font-size: 12.5px;
+    color: var(--text-dim); font-size: 13.5px;
   }
   .stab:hover { background: var(--bg-hover); color: var(--text); }
   .stab.active { color: var(--text); background: var(--bg-1); border-bottom-color: var(--accent); }
@@ -322,12 +322,12 @@
     flex: 0 0 40px; display: flex; align-items: center; gap: 10px; padding: 0 14px;
     background: var(--bg-2); border-bottom: 1px solid var(--border-soft);
   }
-  .os-crumb { flex: 1; min-width: 0; font-size: 12px; color: var(--text-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .os-crumb { flex: 1; min-width: 0; font-size: 13px; color: var(--text-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .os-crumb .cur { color: var(--accent); font-weight: 700; }
-  .files-count { flex: 0 0 auto; font-size: 10.5px; color: var(--text-faint); }
+  .files-count { flex: 0 0 auto; font-size: 11.5px; color: var(--text-faint); }
   .os-collapse-btn {
     flex: 0 0 auto; width: 22px; height: 22px; display: flex; align-items: center; justify-content: center;
-    color: var(--text-faint); cursor: pointer; border-radius: 5px; font-size: 12px;
+    color: var(--text-faint); cursor: pointer; border-radius: 5px; font-size: 13px;
   }
   .os-collapse-btn:hover { background: var(--bg-hover); color: var(--accent); }
 
@@ -337,7 +337,7 @@
     background: var(--bg-3); border-bottom: 1px solid var(--border-soft);
   }
   .os-navtab {
-    padding: 5px 11px; border-radius: 6px; font-size: 11.5px; color: var(--text-dim);
+    padding: 5px 11px; border-radius: 6px; font-size: 12.5px; color: var(--text-dim);
     cursor: pointer; white-space: nowrap; user-select: none;
   }
   .os-navtab:hover { background: var(--bg-hover); color: var(--text); }
@@ -349,73 +349,73 @@
 
   .os-change-head { margin-bottom: 18px; }
   .os-change-title-row { display: flex; align-items: center; gap: 9px; margin-bottom: 6px; }
-  .os-change-slug { font-size: 15px; font-weight: 700; color: var(--text); }
-  .os-change-desc { font-size: 12px; color: var(--text-faint); line-height: 1.6; }
+  .os-change-slug { font-size: 16px; font-weight: 700; color: var(--text); }
+  .os-change-desc { font-size: 13px; color: var(--text-faint); line-height: 1.6; }
 
   .os-section-title {
-    font-size: 10.5px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase;
+    font-size: 11.5px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase;
     color: var(--text-faint); margin: 4px 0 8px;
   }
 
   .os-tasks { margin-bottom: 24px; }
   .os-tasks-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 6px; }
-  .os-tasks-head .lbl { font-size: 12.5px; font-weight: 700; color: var(--text); }
-  .os-tasks-head .cnt { font-size: 11.5px; color: var(--accent); font-family: "JetBrains Mono", monospace; }
+  .os-tasks-head .lbl { font-size: 13.5px; font-weight: 700; color: var(--text); }
+  .os-tasks-head .cnt { font-size: 12.5px; color: var(--accent); font-family: "JetBrains Mono", monospace; }
   .os-task-group-title {
-    font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase;
+    font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase;
     color: var(--text-faint); margin: 12px 0 4px;
   }
   .os-task-item {
     display: flex; align-items: flex-start; gap: 8px; padding: 3px 0;
-    font-size: 12px; color: var(--text-dim); line-height: 1.5;
+    font-size: 13px; color: var(--text-dim); line-height: 1.5;
   }
-  .os-task-item .chk { flex: 0 0 auto; color: var(--text-faint); font-size: 12.5px; }
+  .os-task-item .chk { flex: 0 0 auto; color: var(--text-faint); font-size: 13.5px; }
   .os-task-item.done { color: var(--text-faint); text-decoration: line-through; text-decoration-color: #3a4149; }
   .os-task-item.done .chk { color: var(--green); text-decoration: none; }
 
   /* ---- Spec deltas：BDD 呈現樣式，沿用 proto-9 ---- */
   .req-block { margin-bottom: 14px; }
-  .req-name { font-size: 12.5px; font-weight: 700; color: var(--text); margin-bottom: 6px; display: flex; align-items: center; gap: 8px; }
+  .req-name { font-size: 13.5px; font-weight: 700; color: var(--text); margin-bottom: 6px; display: flex; align-items: center; gap: 8px; }
   .req {
     background: var(--bg-2); border: 1px solid var(--border); border-radius: 10px;
-    padding: 12px 15px; font-family: "JetBrains Mono", monospace; font-size: 12px; line-height: 1.85;
+    padding: 12px 15px; font-family: "JetBrains Mono", monospace; font-size: 13px; line-height: 1.85;
     color: var(--text-dim);
   }
   .when { color: var(--blue); font-weight: 600; }
   .then { color: var(--green); font-weight: 600; }
   .and  { color: var(--text-faint); }
   .must { color: var(--red); font-weight: 600; }
-  .bdd-badge { font-size: 10px; font-weight: 700; padding: 2px 7px; border-radius: 5px; }
+  .bdd-badge { font-size: 11px; font-weight: 700; padding: 2px 7px; border-radius: 5px; }
   .bdd-badge.add { background: rgba(245,158,11,0.16); color: var(--accent); }
   .bdd-badge.mod { background: rgba(96,165,250,0.16); color: var(--blue); }
 
   /* ---- Specs／Changes／Graph 的 stub 內容 ---- */
-  .os-stub-note { font-size: 11.5px; color: var(--text-faint); margin-bottom: 12px; line-height: 1.6; }
+  .os-stub-note { font-size: 12.5px; color: var(--text-faint); margin-bottom: 12px; line-height: 1.6; }
   .os-stub-list { display: flex; flex-direction: column; gap: 6px; }
   .os-stub-row {
     display: flex; align-items: center; justify-content: space-between; gap: 10px;
     padding: 9px 11px; background: var(--bg-2); border: 1px solid var(--border-soft); border-radius: 8px;
-    font-size: 12px; color: var(--text-dim);
+    font-size: 13px; color: var(--text-dim);
   }
   .os-stub-row.highlight { border-color: var(--accent); background: var(--accent-soft); color: var(--text); }
-  .os-stub-row .dim-note { color: var(--text-faint); font-size: 11px; font-family: "JetBrains Mono", monospace; }
+  .os-stub-row .dim-note { color: var(--text-faint); font-size: 12px; font-family: "JetBrains Mono", monospace; }
   .os-stub-graph {
     margin-top: 30px; text-align: center; color: var(--text-faint);
-    font-family: "JetBrains Mono", monospace; font-size: 22px; letter-spacing: 4px;
+    font-family: "JetBrains Mono", monospace; font-size: 23px; letter-spacing: 4px;
   }
 
   /* ---- Files 身分：project-a 檔案樹（素材抄自 proto-8，壓成適合側欄寬度的縮排 tree）---- */
   .file-tree { display: flex; flex-direction: column; }
   .file-row {
     display: flex; align-items: center; gap: 7px; padding: 4px 5px; border-radius: 5px;
-    font-size: 12px; color: var(--text-dim); cursor: default;
+    font-size: 13px; color: var(--text-dim); cursor: default;
   }
   .file-row:hover { background: var(--bg-hover); }
-  .file-row .ico { flex: 0 0 13px; font-size: 10px; color: var(--text-faint); text-align: center; }
+  .file-row .ico { flex: 0 0 13px; font-size: 11px; color: var(--text-faint); text-align: center; }
   .file-row .nm { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .file-row.dir .nm { color: var(--text); font-weight: 600; }
   .file-row .mtime {
-    flex: 0 0 auto; font-size: 10px; color: var(--text-faint); font-family: "JetBrains Mono", monospace; opacity: .65;
+    flex: 0 0 auto; font-size: 11px; color: var(--text-faint); font-family: "JetBrains Mono", monospace; opacity: .65;
   }
   .file-row.d1 { padding-left: 22px; }
   .file-row.d2 { padding-left: 40px; }
@@ -423,7 +423,7 @@
   .file-row.highlight { background: var(--accent-soft); }
   .file-row.highlight .nm { color: var(--accent); }
   .git-tag {
-    flex: 0 0 auto; font-size: 9px; font-weight: 700; font-family: "JetBrains Mono", monospace;
+    flex: 0 0 auto; font-size: 10px; font-weight: 700; font-family: "JetBrains Mono", monospace;
     padding: 1px 5px; border-radius: 4px; letter-spacing: .02em;
   }
   .git-tag.M { background: rgba(96,165,250,0.16); color: var(--blue); }
@@ -920,7 +920,7 @@
               <span class="ho-field-label">錨定 Change（唯讀 · 自動帶入 focused session）</span>
               <div class="ho-readonly-box">
                 <div class="ho-anchor-readonly">
-                  <span class="os-change-slug mono" style="font-size:12.5px;">multi-folder-explorer</span>
+                  <span class="os-change-slug mono" style="font-size:13.5px;">multi-folder-explorer</span>
                   <span class="badge active">ACTIVE</span>
                 </div>
                 <div class="ho-progress">
@@ -1020,7 +1020,7 @@
   .act-badge {
     position: absolute; top: 2px; right: 2px; min-width: 14px; height: 14px; padding: 0 3px;
     border-radius: 7px; background: var(--accent); color: #1a1206;
-    font-size: 9px; font-weight: 800; line-height: 14px; text-align: center;
+    font-size: 10px; font-weight: 800; line-height: 14px; text-align: center;
   }
 
   /* ---- workspace view ⇄ handoff 收件匣 view：兩個都是 .stage 的直接子項，flex:1 填滿剩餘空間 ---- */
@@ -1031,7 +1031,7 @@
 
   /* ---- repo header 的「⤳ Handoff」鈕：沿用 btn-new-session 的邊框感，accent 微底區別於一般次要鈕 ---- */
   .btn-handoff {
-    padding: 6px 12px; font-size: 11.5px; color: var(--accent);
+    padding: 6px 12px; font-size: 12.5px; color: var(--accent);
     border: 1px solid rgba(245,158,11,0.4); background: var(--accent-soft);
     border-radius: 7px; cursor: pointer; white-space: nowrap;
   }
@@ -1042,20 +1042,20 @@
     flex: 0 0 auto; display: flex; align-items: center; gap: 12px; padding: 8px 16px;
     background: linear-gradient(90deg, rgba(248,113,113,0.14), rgba(245,158,11,0.07));
     border-bottom: 1px solid rgba(248,113,113,0.32);
-    font-size: 12.5px; color: var(--text);
+    font-size: 13.5px; color: var(--text);
   }
-  .ho-banner .ic { color: var(--red); font-size: 13px; flex: 0 0 auto; }
+  .ho-banner .ic { color: var(--red); font-size: 14px; flex: 0 0 auto; }
   .ho-banner .sp { flex: 1; }
   .ho-banner-text { line-height: 1.5; }
   .ho-banner-actions { display: flex; gap: 8px; flex: 0 0 auto; }
   .ho-banner-close {
-    flex: 0 0 auto; cursor: pointer; color: var(--text-faint); padding: 1px 6px; font-size: 14px; border-radius: 4px;
+    flex: 0 0 auto; cursor: pointer; color: var(--text-faint); padding: 1px 6px; font-size: 15px; border-radius: 4px;
   }
   .ho-banner-close:hover { color: var(--text); background: var(--bg-hover); }
 
   /* ---- 共用小按鈕（收件匣卡片動作、通知橫幅動作、modal 動作共用；沿用既有 border/accent token）---- */
   .ho-btn {
-    padding: 6px 12px; font-size: 11.5px; color: var(--text-dim);
+    padding: 6px 12px; font-size: 12.5px; color: var(--text-dim);
     border: 1px solid var(--border); border-radius: 7px; cursor: pointer; white-space: nowrap;
     background: var(--bg-2);
   }
@@ -1067,11 +1067,11 @@
   /* ---- Workspace rail 疊加：incoming badge / 接棒 tag / 待 ack tag ---- */
   .ho-rail-badge {
     flex: 0 0 auto; min-width: 15px; height: 15px; padding: 0 4px; border-radius: 8px;
-    background: var(--accent); color: #1a1206; font-size: 9.5px; font-weight: 800;
+    background: var(--accent); color: #1a1206; font-size: 10.5px; font-weight: 800;
     display: flex; align-items: center; justify-content: center;
   }
   .ho-tag-pickup, .ho-tag-ack {
-    flex: 0 0 auto; font-size: 9px; font-weight: 700; border-radius: 4px; padding: 1px 5px; margin-left: 2px;
+    flex: 0 0 auto; font-size: 10px; font-weight: 700; border-radius: 4px; padding: 1px 5px; margin-left: 2px;
   }
   .ho-tag-pickup { color: var(--blue); border: 1px solid rgba(96,165,250,0.4); background: rgba(96,165,250,0.1); }
   .ho-tag-ack { color: var(--accent); border: 1px solid rgba(245,158,11,0.4); background: rgba(245,158,11,0.1); }
@@ -1086,18 +1086,18 @@
     flex: 0 0 auto; display: flex; align-items: flex-end; justify-content: space-between; gap: 20px; flex-wrap: wrap;
     padding: 22px 28px 16px; background: var(--bg-2); border-bottom: 1px solid var(--border-soft);
   }
-  .ho-title { font-size: 19px; font-weight: 800; color: var(--text); }
-  .ho-subtitle { font-size: 12px; color: var(--text-faint); margin-top: 4px; }
+  .ho-title { font-size: 20px; font-weight: 800; color: var(--text); }
+  .ho-subtitle { font-size: 13px; color: var(--text-faint); margin-top: 4px; }
 
   .ho-chips { display: flex; gap: 8px; flex-wrap: wrap; }
   .ho-chip {
     display: flex; align-items: center; gap: 6px; padding: 6px 13px; border-radius: 8px;
-    background: var(--bg-3); border: 1px solid var(--border-soft); font-size: 12px; color: var(--text-dim); cursor: pointer;
+    background: var(--bg-3); border: 1px solid var(--border-soft); font-size: 13px; color: var(--text-dim); cursor: pointer;
   }
   .ho-chip:hover { border-color: var(--accent); color: var(--text); }
   .ho-chip.active { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); font-weight: 700; }
   .ho-chip-count {
-    font-family: "JetBrains Mono", monospace; font-size: 10.5px; background: var(--bg-hover);
+    font-family: "JetBrains Mono", monospace; font-size: 11.5px; background: var(--bg-hover);
     padding: 1px 6px; border-radius: 8px;
   }
   .ho-chip.active .ho-chip-count { background: rgba(245,158,11,0.2); }
@@ -1118,30 +1118,30 @@
   .ho-card-top .sp { flex: 1; }
 
   .ho-flag {
-    font-size: 10px; font-weight: 700; padding: 3px 8px; border-radius: 5px;
+    font-size: 11px; font-weight: 700; padding: 3px 8px; border-radius: 5px;
     display: inline-flex; align-items: center; gap: 4px; white-space: nowrap;
   }
   .ho-flag.cross { background: rgba(248,113,113,0.14); color: var(--red); border: 1px solid rgba(248,113,113,0.35); }
   .ho-flag.auto { background: rgba(96,165,250,0.14); color: var(--blue); }
 
-  .ho-meta { font-size: 10.5px; color: var(--text-faint); font-family: "JetBrains Mono", monospace; white-space: nowrap; }
+  .ho-meta { font-size: 11.5px; color: var(--text-faint); font-family: "JetBrains Mono", monospace; white-space: nowrap; }
 
-  .ho-route { display: flex; align-items: center; gap: 8px; font-size: 12.5px; font-weight: 600; color: var(--text); flex-wrap: wrap; }
+  .ho-route { display: flex; align-items: center; gap: 8px; font-size: 13.5px; font-weight: 600; color: var(--text); flex-wrap: wrap; }
   .ho-person { color: var(--purple); }
   .ho-arrow { color: var(--text-faint); font-weight: 400; }
   .ho-repo { display: flex; align-items: center; gap: 6px; color: var(--text); }
 
-  .ho-anchor { font-size: 12.5px; }
+  .ho-anchor { font-size: 13.5px; }
   .ho-anchor-link { color: var(--accent); font-weight: 600; cursor: pointer; }
   .ho-anchor-link:hover { text-decoration: underline; }
-  .ho-anchor.adhoc { color: var(--text-faint); font-style: italic; font-size: 12px; }
+  .ho-anchor.adhoc { color: var(--text-faint); font-style: italic; font-size: 13px; }
 
-  .ho-intent { font-size: 12px; color: var(--text-dim); line-height: 1.6; }
+  .ho-intent { font-size: 13px; color: var(--text-dim); line-height: 1.6; }
 
   .ho-progress { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
-  .ho-tasks { font-size: 11.5px; color: var(--text-dim); }
+  .ho-tasks { font-size: 12.5px; color: var(--text-dim); }
   .ho-tasks b { color: var(--accent); }
-  .ho-progress .lbl-note { font-size: 10px; color: var(--text-faint); }
+  .ho-progress .lbl-note { font-size: 11px; color: var(--text-faint); }
 
   .ho-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 2px; }
 
@@ -1162,22 +1162,22 @@
     flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between;
     padding: 14px 18px; border-bottom: 1px solid var(--border-soft);
   }
-  .ho-modal-title { font-size: 13.5px; font-weight: 700; color: var(--text); }
-  .ho-modal-close { cursor: pointer; color: var(--text-faint); font-size: 17px; line-height: 1; padding: 2px 6px; border-radius: 4px; }
+  .ho-modal-title { font-size: 14.5px; font-weight: 700; color: var(--text); }
+  .ho-modal-close { cursor: pointer; color: var(--text-faint); font-size: 18px; line-height: 1; padding: 2px 6px; border-radius: 4px; }
   .ho-modal-close:hover { color: var(--text); background: var(--bg-hover); }
 
   .ho-modal-body { padding: 18px; display: flex; flex-direction: column; gap: 16px; }
   .ho-field { display: flex; flex-direction: column; gap: 6px; }
-  .ho-field-label { font-size: 10.5px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; color: var(--text-faint); }
+  .ho-field-label { font-size: 11.5px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; color: var(--text-faint); }
 
   .ho-picker { position: relative; }
   .ho-picker-box {
     display: flex; align-items: center; justify-content: space-between; padding: 9px 12px;
     background: var(--bg-3); border: 1px solid var(--border); border-radius: 8px;
-    font-size: 12.5px; color: var(--text); cursor: pointer;
+    font-size: 13.5px; color: var(--text); cursor: pointer;
   }
   .ho-picker-box:hover { border-color: var(--accent); }
-  .ho-picker-box span:last-child { color: var(--text-faint); font-size: 10px; }
+  .ho-picker-box span:last-child { color: var(--text-faint); font-size: 11px; }
   .ho-picker-dropdown {
     position: absolute; top: calc(100% + 5px); left: 0; right: 0; z-index: 10;
     background: var(--bg-3); border: 1px solid var(--border); border-radius: 8px; padding: 6px;
@@ -1185,10 +1185,10 @@
   }
   .ho-picker-dropdown[hidden] { display: none; }
   .ho-picker-group-label {
-    font-size: 9.5px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase;
+    font-size: 10.5px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase;
     color: var(--text-faint); padding: 6px 8px 3px;
   }
-  .ho-picker-option { padding: 6px 8px; border-radius: 6px; font-size: 12px; color: var(--text-dim); cursor: pointer; }
+  .ho-picker-option { padding: 6px 8px; border-radius: 6px; font-size: 13px; color: var(--text-dim); cursor: pointer; }
   .ho-picker-option:hover { background: var(--bg-hover); color: var(--text); }
 
   .ho-readonly-box { background: var(--bg-3); border: 1px solid var(--border-soft); border-radius: 8px; padding: 11px 12px; display: flex; flex-direction: column; gap: 9px; }
@@ -1196,12 +1196,12 @@
 
   .ho-textarea {
     width: 100%; min-height: 74px; background: var(--bg-3); border: 1px solid var(--border); border-radius: 8px;
-    padding: 9px 11px; font-size: 12px; color: var(--text); font-family: inherit; line-height: 1.6; resize: vertical;
+    padding: 9px 11px; font-size: 13px; color: var(--text); font-family: inherit; line-height: 1.6; resize: vertical;
   }
   .ho-textarea::placeholder { color: var(--text-faint); }
   .ho-textarea:focus { outline: none; border-color: var(--accent); }
 
-  .ho-modal-footnote { font-size: 11px; color: var(--text-faint); line-height: 1.6; }
+  .ho-modal-footnote { font-size: 12px; color: var(--text-faint); line-height: 1.6; }
 
   .ho-modal-actions {
     flex: 0 0 auto; display: flex; justify-content: flex-end; gap: 8px; padding: 14px 18px;

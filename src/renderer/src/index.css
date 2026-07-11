@@ -24,6 +24,15 @@
   --color-accent-soft: rgba(245, 158, 11, 0.12);
   --color-blue: #60a5fa;
   --color-green: #34d399;
+
+  /*
+   * Tailwind 的兩個字級 token 各上調 1px（xs 12→13、sm 14→15）。
+   *
+   * line-height 的 token 不動 —— Tailwind 的 `--text-*--line-height` 是比值（calc(1/0.75)），
+   * 會跟著新的 font-size 一起長。
+   */
+  --text-xs: 0.8125rem;
+  --text-sm: 0.9375rem;
 }
 
 /*
@@ -44,6 +53,30 @@
   --spek-text-secondary: var(--color-ink-dim);
   --spek-text-muted: var(--color-ink-faint);
   --spek-accent: var(--color-accent);
+}
+
+/*
+ * `@spekjs/ui` 的字級 —— 套件只把顏色開成契約（`--spek-*`），字級是寫死的常數，
+ * 只能從宿主這邊覆寫。必須排在套件的 `styles.css` 之後（同 specificity，後者勝出）。
+ *
+ * 六個 selector 全部隨 app 上調一級，overlay 的字級才不會比它周圍的殼還小。
+ */
+.spekui-legend,
+.spekui-timeline-label,
+.spekui-tooltip {
+  font-size: 0.8125rem;
+}
+
+.spekui-timeline-empty {
+  font-size: 0.9375rem;
+}
+
+.spekui-timeline-section {
+  font-size: 12px;
+}
+
+.spekui-tooltip-status {
+  font-size: 11px;
 }
 
 html,

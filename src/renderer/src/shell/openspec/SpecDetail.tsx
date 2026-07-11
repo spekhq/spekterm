@@ -29,7 +29,7 @@ export function SpecDetail({
         <button
           type="button"
           onClick={onBack}
-          className="rounded border border-hairline px-2 py-[2px] text-[11px] text-ink-dim hover:text-accent"
+          className="rounded border border-hairline px-2 py-[2px] text-[12px] text-ink-dim hover:text-accent"
         >
           ‹ 返回
         </button>
@@ -40,7 +40,7 @@ export function SpecDetail({
             onClick={() => onOpenFile(data.relPath as string)}
             aria-label={`在 Files 中開啟 ${data.relPath}`}
             title={`在 Files 中開啟 ${data.relPath}`}
-            className="shrink-0 rounded border border-hairline px-[6px] py-[2px] text-[10px] text-ink-faint hover:border-accent hover:text-accent"
+            className="shrink-0 rounded border border-hairline px-[6px] py-[2px] text-[11px] text-ink-faint hover:border-accent hover:text-accent"
           >
             ▤
           </button>
@@ -56,7 +56,7 @@ export function SpecDetail({
           <>
             <MarkdownView text={data.content} />
             {data.relatedChanges.length > 0 && (
-              <p className="mt-4 border-t border-hairline pt-3 text-[11px] text-ink-faint">
+              <p className="mt-4 border-t border-hairline pt-3 text-[12px] text-ink-faint">
                 動到這份 spec 的 change：{data.relatedChanges.join('、')}
               </p>
             )}

@@ -123,7 +123,7 @@ function FolderRow({
               event.stopPropagation()
               onToggle()
             }}
-            className="w-3 shrink-0 text-[10px] text-ink-faint hover:text-ink"
+            className="w-3 shrink-0 text-[11px] text-ink-faint hover:text-ink"
           >
             {expanded ? '▾' : '▸'}
           </button>
@@ -135,7 +135,7 @@ function FolderRow({
 
         <div className="min-w-0 flex-1">
           <div className="truncate">{folder.name}</div>
-          <div className="truncate text-[11px] text-ink-faint">
+          <div className="truncate text-[12px] text-ink-faint">
             {folder.status === 'missing' ? '路徑失效' : folder.hasOpenSpec ? 'OpenSpec' : 'Files only'}
           </div>
         </div>
@@ -143,7 +143,7 @@ function FolderRow({
         {sessions.length > 0 && (
           <span
             title={`${sessions.length} 個 session`}
-            className="shrink-0 rounded bg-hover px-1 text-[10px] text-ink-faint"
+            className="shrink-0 rounded bg-hover px-1 text-[11px] text-ink-faint"
           >
             {sessions.length}
           </span>
@@ -152,7 +152,7 @@ function FolderRow({
         {folder.status === 'missing' && (
           <span
             title={`路徑已不存在或不是目錄：${folder.path}`}
-            className="shrink-0 rounded border border-danger/40 px-1 text-[10px] text-danger"
+            className="shrink-0 rounded border border-danger/40 px-1 text-[11px] text-danger"
           >
             失效
           </span>
@@ -231,7 +231,7 @@ function FolderRow({
                   className={
                     // 縮排造出樹狀層次（mockup 的 .ws-session-row）
                     // select-none：拖曳時不該把標籤的文字反白選起來（實測體感很差）。
-                    'flex items-center gap-2 py-1.5 pr-1 pl-9 text-[11px] select-none ' +
+                    'flex items-center gap-2 py-1.5 pr-1 pl-9 text-[12px] select-none ' +
                     (reorder.dragging ? 'cursor-grabbing ' : 'cursor-grab ') +
                     // 插入指示：拖到這裡放開，就會插在它前面
                     (reorder.isDropTarget(index) ? 'border-t-2 border-t-accent ' : '') +
@@ -317,7 +317,7 @@ export function WorkspaceRail({
 
   return (
     <aside aria-label="工作區" className="flex h-full flex-col border-r border-hairline bg-rail">
-      <h2 className="px-3 pt-3 pb-2 text-[11px] tracking-widest text-ink-faint">WORKSPACE</h2>
+      <h2 className="px-3 pt-3 pb-2 text-[12px] tracking-widest text-ink-faint">WORKSPACE</h2>
 
       <ul className="flex-1 overflow-y-auto">
         {folders.length === 0 ? (

@@ -75,7 +75,7 @@ export function VizOverlay({
               role="tab"
               aria-selected={kind === id}
               onClick={() => onChangeKind(id)}
-              className={`rounded px-3 py-1 text-[11px] transition-colors ${
+              className={`rounded px-3 py-1 text-[12px] transition-colors ${
                 kind === id
                   ? 'bg-accent-soft font-bold text-accent'
                   : 'text-ink-dim hover:bg-hover hover:text-ink'
@@ -93,7 +93,7 @@ export function VizOverlay({
           onClick={onClose}
           aria-label="關閉"
           title="關閉（Esc）"
-          className="rounded border border-hairline px-2 py-1 text-[11px] text-ink-dim hover:border-accent hover:text-accent"
+          className="rounded border border-hairline px-2 py-1 text-[12px] text-ink-dim hover:border-accent hover:text-accent"
         >
           ✕ Esc
         </button>
@@ -207,7 +207,7 @@ function TimelinePane({
       {/* 沒有 createdDate 的 change 放不上時間軸 —— 它們不該就這樣消失。 */}
       {unknownCreated.length > 0 && (
         <section aria-label="沒有建立日期的 change">
-          <h3 className="mb-1 text-[11px] font-bold text-ink-dim">
+          <h3 className="mb-1 text-[12px] font-bold text-ink-dim">
             沒有建立日期（{unknownCreated.length}）
           </h3>
           <ul className="flex flex-col gap-[2px]">
@@ -216,7 +216,7 @@ function TimelinePane({
                 <button
                   type="button"
                   onClick={() => onSelectChange(change.slug)}
-                  className="font-mono text-[11px] text-ink-faint hover:text-accent"
+                  className="font-mono text-[12px] text-ink-faint hover:text-accent"
                   title={change.description}
                 >
                   {change.slug}
@@ -244,7 +244,7 @@ function Chip({
       type="button"
       onClick={onClick}
       aria-pressed={active}
-      className={`rounded border px-2 py-[3px] text-[11px] transition-colors ${
+      className={`rounded border px-2 py-[3px] text-[12px] transition-colors ${
         active
           ? 'border-accent bg-accent-soft text-accent'
           : 'border-hairline text-ink-dim hover:text-ink'

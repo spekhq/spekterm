@@ -111,7 +111,7 @@ export function OpenSpecPanel({
               setTab(id)
               if (id === 'browse') setOpenSpec(null)
             }}
-            className={`rounded px-2 py-[3px] text-[11px] transition-colors ${
+            className={`rounded px-2 py-[3px] text-[12px] transition-colors ${
               tab === id
                 ? 'bg-accent-soft font-bold text-accent'
                 : 'text-ink-dim hover:bg-hover hover:text-ink'
@@ -132,7 +132,7 @@ export function OpenSpecPanel({
           onClick={() => onOpenViz('graph')}
           aria-label="開啟 Graph"
           title="Graph —— spec 與 change 的關聯"
-          className="rounded px-2 py-[3px] text-[11px] text-ink-dim hover:bg-hover hover:text-accent"
+          className="rounded px-2 py-[3px] text-[12px] text-ink-dim hover:bg-hover hover:text-accent"
         >
           ◈
         </button>
@@ -141,7 +141,7 @@ export function OpenSpecPanel({
           onClick={() => onOpenViz('timeline')}
           aria-label="開啟 Timeline"
           title="Timeline —— change 的生命週期"
-          className="rounded px-2 py-[3px] text-[11px] text-ink-dim hover:bg-hover hover:text-accent"
+          className="rounded px-2 py-[3px] text-[12px] text-ink-dim hover:bg-hover hover:text-accent"
         >
           ▤
         </button>

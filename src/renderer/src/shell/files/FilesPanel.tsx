@@ -256,14 +256,14 @@ export function FilesPanel({
 
         {/* 未存的檔案可能藏在一個尚未展開的目錄裡，樹上的標記那時看不到。 */}
         {dirtyCount > 0 && (
-          <span className="shrink-0 text-[10px] text-accent" title="未存的變更">
+          <span className="shrink-0 text-[11px] text-accent" title="未存的變更">
             ● {dirtyCount}
           </span>
         )}
 
         {openPath === null ? (
           <>
-            <span className="shrink-0 font-mono text-[10px] text-ink-faint">
+            <span className="shrink-0 font-mono text-[11px] text-ink-faint">
               {tree.visibleCount} 個項目
             </span>
             {/* 根目錄在樹上沒有列可以右鍵，因此入口在這裡。 */}
@@ -275,7 +275,7 @@ export function FilesPanel({
                 event.stopPropagation()
                 setMenu({ row: null, x: event.clientX, y: event.clientY })
               }}
-              className="shrink-0 rounded border border-hairline px-2 py-[2px] text-[11px] text-ink-dim hover:text-accent"
+              className="shrink-0 rounded border border-hairline px-2 py-[2px] text-[12px] text-ink-dim hover:text-accent"
             >
               ＋
             </button>
@@ -293,7 +293,7 @@ export function FilesPanel({
                     onClick={() => onViewInOpenSpec(target)}
                     aria-label="在 OpenSpec 中檢視"
                     title="在 OpenSpec 中檢視"
-                    className="shrink-0 rounded border border-hairline px-2 py-[2px] text-[11px] text-ink-dim hover:border-accent hover:text-accent"
+                    className="shrink-0 rounded border border-hairline px-2 py-[2px] text-[12px] text-ink-dim hover:border-accent hover:text-accent"
                   >
                     ◈
                   </button>
@@ -303,7 +303,7 @@ export function FilesPanel({
             <button
               type="button"
               onClick={() => setOpenPath(null)}
-              className="shrink-0 rounded border border-hairline px-2 py-[2px] text-[11px] text-ink-dim hover:text-accent"
+              className="shrink-0 rounded border border-hairline px-2 py-[2px] text-[12px] text-ink-dim hover:text-accent"
             >
               ‹ 返回
             </button>
@@ -366,7 +366,7 @@ export function FilesPanel({
       )}
 
       {serverError && !dialog && (
-        <p className="border-t border-hairline px-3 py-2 text-[11px] text-danger">{serverError}</p>
+        <p className="border-t border-hairline px-3 py-2 text-[12px] text-danger">{serverError}</p>
       )}
     </section>
   )

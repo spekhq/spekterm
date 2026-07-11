@@ -51,7 +51,7 @@ export function ChangeView({
         <button
           type="button"
           onClick={onGoToChanges}
-          className="rounded border border-hairline px-3 py-1 text-[11px] text-ink-dim hover:border-accent hover:text-accent"
+          className="rounded border border-hairline px-3 py-1 text-[12px] text-ink-dim hover:border-accent hover:text-accent"
         >
           到 Changes 選一個
         </button>
@@ -79,7 +79,7 @@ export function ChangeView({
       <div className="shrink-0 px-4 pt-4">
         <div className="flex items-center gap-2">
           <h2
-            className="min-w-0 truncate font-mono text-[15px] font-bold text-ink"
+            className="min-w-0 truncate font-mono text-[16px] font-bold text-ink"
             title={data.slug}
           >
             {data.slug}
@@ -113,7 +113,7 @@ export function ChangeView({
               role="tab"
               aria-selected={selected}
               onClick={() => setActiveId(artifact.id)}
-              className={`-mb-px shrink-0 border-b-2 px-3 py-[6px] text-[11px] transition-colors ${
+              className={`-mb-px shrink-0 border-b-2 px-3 py-[6px] text-[12px] transition-colors ${
                 selected
                   ? 'border-accent font-bold text-accent'
                   : 'border-transparent text-ink-dim hover:text-ink'
@@ -180,12 +180,12 @@ function TaskList({ tasks }: { tasks: ParsedTasks }): React.JSX.Element {
     <section aria-label="Tasks" className="flex flex-col gap-3">
       {tasks.sections.map((section) => (
         <div key={section.title}>
-          <h4 className="mb-1 text-[11px] font-bold text-ink-dim">{section.title}</h4>
+          <h4 className="mb-1 text-[12px] font-bold text-ink-dim">{section.title}</h4>
           <ul className="flex flex-col gap-[2px]">
             {section.tasks.map((task) => (
               <li
                 key={task.text}
-                className={`flex gap-2 text-[12px] leading-snug ${
+                className={`flex gap-2 text-[13px] leading-snug ${
                   task.completed ? 'text-ink-faint line-through' : 'text-ink-dim'
                 }`}
               >
@@ -234,7 +234,7 @@ function DeltaList({
                   className="rounded border border-hairline bg-stage px-3 py-2"
                 >
                   <div className="mb-1 flex items-start gap-2">
-                    <span className="min-w-0 flex-1 text-[12px] font-bold text-ink">
+                    <span className="min-w-0 flex-1 text-[13px] font-bold text-ink">
                       {requirement.name}
                     </span>
                     <DeltaBadge verb={requirement.verb} />
@@ -266,7 +266,7 @@ function OpenFileButton({
       onClick={() => onOpenFile(relPath)}
       aria-label={`在 Files 中開啟 ${relPath}`}
       title={`在 Files 中開啟 ${relPath}`}
-      className="shrink-0 rounded border border-hairline px-[6px] py-[1px] text-[10px] text-ink-faint hover:border-accent hover:text-accent"
+      className="shrink-0 rounded border border-hairline px-[6px] py-[1px] text-[11px] text-ink-faint hover:border-accent hover:text-accent"
     >
       ▤
     </button>

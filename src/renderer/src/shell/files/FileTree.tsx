@@ -44,7 +44,7 @@ function FileRow({ row, now, dirty, onActivate, onContextMenu }: FileRowProps): 
       style={{ paddingLeft: 5 + row.depth * INDENT_PX }}
       className="flex cursor-default items-center gap-[7px] rounded-[5px] py-[4px] pr-[5px] text-xs text-ink-dim hover:bg-hover focus:outline-none focus-visible:bg-hover"
     >
-      <span className="w-[13px] shrink-0 text-center text-[10px] text-ink-faint">
+      <span className="w-[13px] shrink-0 text-center text-[11px] text-ink-faint">
         {glyphFor(row)}
       </span>
       <span
@@ -60,9 +60,9 @@ function FileRow({ row, now, dirty, onActivate, onContextMenu }: FileRowProps): 
         </span>
       )}
       {row.error ? (
-        <span className="shrink-0 text-[10px] text-danger">{row.error}</span>
+        <span className="shrink-0 text-[11px] text-danger">{row.error}</span>
       ) : (
-        <span className="shrink-0 font-mono text-[10px] text-ink-faint opacity-65">
+        <span className="shrink-0 font-mono text-[11px] text-ink-faint opacity-65">
           {formatRelativeTime(row.mtimeMs, now)}
         </span>
       )}

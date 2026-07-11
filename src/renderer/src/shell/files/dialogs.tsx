@@ -4,7 +4,7 @@ import { validateName } from './names'
 const OVERLAY_CLASS =
   'absolute inset-0 z-20 flex items-center justify-center bg-black/50 px-4 text-xs'
 const CARD_CLASS = 'w-full rounded border border-hairline bg-panel p-3 shadow-lg'
-const BUTTON_CLASS = 'rounded border border-hairline px-2 py-[3px] text-[11px] hover:bg-stage'
+const BUTTON_CLASS = 'rounded border border-hairline px-2 py-[3px] text-[12px] hover:bg-stage'
 
 interface NameDialogProps {
   title: string
@@ -60,7 +60,7 @@ export function NameDialog({
           }}
           className="mt-2 w-full rounded border border-hairline bg-stage px-2 py-1 font-mono text-xs text-ink outline-none focus:border-accent"
         />
-        {error && <p className="mt-1 text-[11px] text-danger">{error}</p>}
+        {error && <p className="mt-1 text-[12px] text-danger">{error}</p>}
         <div className="mt-3 flex justify-end gap-2">
           <button type="button" onClick={onCancel} className={`${BUTTON_CLASS} text-ink-faint`}>
             取消
@@ -104,12 +104,12 @@ export function ConfirmDelete({
       <div className={CARD_CLASS}>
         <p className="text-ink">刪除「{relPath}」？</p>
         {isDirectory && (
-          <p className="mt-1 text-[11px] text-ink-faint">
+          <p className="mt-1 text-[12px] text-ink-faint">
             這個目錄與其下的所有項目都會被移除。
           </p>
         )}
-        {hasUnsaved && <p className="mt-1 text-[11px] text-danger">其中有未存的變更，會一併消失。</p>}
-        <p className="mt-1 text-[11px] text-ink-faint">這個動作無法復原。</p>
+        {hasUnsaved && <p className="mt-1 text-[12px] text-danger">其中有未存的變更，會一併消失。</p>}
+        <p className="mt-1 text-[12px] text-ink-faint">這個動作無法復原。</p>
 
         <div className="mt-3 flex justify-end gap-2">
           <button type="button" onClick={onCancel} className={`${BUTTON_CLASS} text-ink-faint`}>

@@ -61,11 +61,11 @@ function TreeSection({
         className="flex w-full items-center gap-1 rounded px-1 py-[3px] hover:bg-hover"
       >
         <Chevron open={open} />
-        <span className="flex-1 text-left text-[10px] font-bold uppercase tracking-wider text-ink-faint">
+        <span className="flex-1 text-left text-[11px] font-bold uppercase tracking-wider text-ink-faint">
           {label}
         </span>
         {count !== null && (
-          <span className="shrink-0 font-mono text-[10px] text-ink-faint">{count}</span>
+          <span className="shrink-0 font-mono text-[11px] text-ink-faint">{count}</span>
         )}
       </button>
 
@@ -75,7 +75,7 @@ function TreeSection({
 }
 
 function Chevron({ open }: { open: boolean }): React.JSX.Element {
-  return <span className="w-[10px] shrink-0 text-[9px] text-ink-faint">{open ? '▾' : '▸'}</span>
+  return <span className="w-[10px] shrink-0 text-[10px] text-ink-faint">{open ? '▾' : '▸'}</span>
 }
 
 /** 樹上的一列。`depth` 決定縮排，`role="treeitem"` 讓探針以角色定位。 */
@@ -159,7 +159,7 @@ function SpecsTree({
       ) : loading || !data ? (
         <Loading />
       ) : data.length === 0 ? (
-        <p className="px-3 py-1 text-[11px] text-ink-faint">還沒有 spec。</p>
+        <p className="px-3 py-1 text-[12px] text-ink-faint">還沒有 spec。</p>
       ) : (
         data.map((spec) => (
           <div key={spec.topic}>
@@ -171,10 +171,10 @@ function SpecsTree({
               onActivate={() => onOpenSpec(spec.topic)}
               title={spec.topic}
             >
-              <span className="min-w-0 flex-1 truncate font-mono text-[12px] text-ink">
+              <span className="min-w-0 flex-1 truncate font-mono text-[13px] text-ink">
                 {spec.topic}
               </span>
-              <span className="shrink-0 text-[10px] text-ink-faint">
+              <span className="shrink-0 text-[11px] text-ink-faint">
                 {spec.relatedChangeCount}
               </span>
             </Row>
@@ -217,9 +217,9 @@ function SpecHeadings({
   )
 
   if (error) return <ErrorNote message={error} />
-  if (loading || !data) return <p className="py-1 pl-8 text-[11px] text-ink-faint">載入中…</p>
+  if (loading || !data) return <p className="py-1 pl-8 text-[12px] text-ink-faint">載入中…</p>
   if (headings.length === 0) {
-    return <p className="py-1 pl-8 text-[11px] text-ink-faint">沒有標題。</p>
+    return <p className="py-1 pl-8 text-[12px] text-ink-faint">沒有標題。</p>
   }
 
   return (
@@ -231,9 +231,9 @@ function SpecHeadings({
           onActivate={onOpenSpec}
           title={heading.text}
         >
-          <span className="min-w-0 flex-1 truncate text-[11px] text-ink-dim">{heading.text}</span>
+          <span className="min-w-0 flex-1 truncate text-[12px] text-ink-dim">{heading.text}</span>
           {heading.level === 3 && (
-            <span className="shrink-0 font-mono text-[9px] text-ink-faint">h3</span>
+            <span className="shrink-0 font-mono text-[10px] text-ink-faint">h3</span>
           )}
         </Row>
       ))}
@@ -261,7 +261,7 @@ function ChangesTree({
       ) : loading || !data ? (
         <Loading />
       ) : total === 0 ? (
-        <p className="px-3 py-1 text-[11px] text-ink-faint">還沒有 change。</p>
+        <p className="px-3 py-1 text-[12px] text-ink-faint">還沒有 change。</p>
       ) : (
         <>
           <ChangeGroup
@@ -311,8 +311,8 @@ function ChangeGroup({
         onActivate={() => setOpen((previous) => !previous)}
         title={label}
       >
-        <span className="min-w-0 flex-1 truncate text-[11px] font-bold text-ink-dim">{label}</span>
-        <span className="shrink-0 font-mono text-[10px] text-ink-faint">{changes.length}</span>
+        <span className="min-w-0 flex-1 truncate text-[12px] font-bold text-ink-dim">{label}</span>
+        <span className="shrink-0 font-mono text-[11px] text-ink-faint">{changes.length}</span>
       </Row>
 
       {open &&
@@ -327,7 +327,7 @@ function ChangeGroup({
                 title={change.slug}
               >
                 <span
-                  className={`min-w-0 flex-1 truncate font-mono text-[11px] ${
+                  className={`min-w-0 flex-1 truncate font-mono text-[12px] ${
                     anchored ? 'text-accent' : 'text-ink'
                   }`}
                 >

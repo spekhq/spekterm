@@ -49,7 +49,7 @@ interface MarkdownViewProps {
  */
 export function MarkdownView({ text }: MarkdownViewProps): React.JSX.Element {
   return (
-    <div className="markdown px-1 py-1 text-[13px] leading-relaxed text-ink-dim">
+    <div className="markdown px-1 py-1 text-[14px] leading-relaxed text-ink-dim">
       <Markdown
         remarkPlugins={[remarkGfm]}
         components={{

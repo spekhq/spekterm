@@ -24,7 +24,7 @@ export function Empty({ children }: { children: React.ReactNode }): React.JSX.El
 
 export function SectionTitle({ children }: { children: React.ReactNode }): React.JSX.Element {
   return (
-    <h3 className="mb-2 text-[10px] font-bold uppercase tracking-wider text-ink-faint">
+    <h3 className="mb-2 text-[11px] font-bold uppercase tracking-wider text-ink-faint">
       {children}
     </h3>
   )
@@ -34,7 +34,7 @@ export function SectionTitle({ children }: { children: React.ReactNode }): React
 export function StatusBadge({ status }: { status: 'active' | 'archived' }): React.JSX.Element {
   return (
     <span
-      className={`shrink-0 rounded px-[6px] py-[1px] font-mono text-[9px] font-bold uppercase ${
+      className={`shrink-0 rounded px-[6px] py-[1px] font-mono text-[10px] font-bold uppercase ${
         status === 'active' ? 'bg-accent-soft text-accent' : 'bg-hover text-ink-faint'
       }`}
     >
@@ -56,7 +56,7 @@ export function DeltaBadge({ verb }: { verb: DeltaVerb }): React.JSX.Element {
 
   return (
     <span
-      className={`shrink-0 rounded px-[6px] py-[1px] font-mono text-[9px] font-bold uppercase ${tone}`}
+      className={`shrink-0 rounded px-[6px] py-[1px] font-mono text-[10px] font-bold uppercase ${tone}`}
     >
       {verb}
     </span>
@@ -96,7 +96,7 @@ export function TaskCount({
   total: number
 }): React.JSX.Element {
   return (
-    <span className="shrink-0 font-mono text-[11px] text-accent">
+    <span className="shrink-0 font-mono text-[12px] text-accent">
       {completed}/{total}
     </span>
   )

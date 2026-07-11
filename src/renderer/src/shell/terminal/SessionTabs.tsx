@@ -20,7 +20,7 @@ interface SessionTabsProps {
 }
 
 const NEW_BUTTON_CLASS =
-  'shrink-0 self-center rounded border border-hairline px-2 py-1 text-[11px] text-ink-dim hover:border-accent/40 hover:text-accent'
+  'shrink-0 self-center rounded border border-hairline px-2 py-1 text-[12px] text-ink-dim hover:border-accent/40 hover:text-accent'
 
 export function SessionTabs({
   sessions,
@@ -75,7 +75,7 @@ export function SessionTabs({
         >
           + session
         </button>
-        {error && <span className="truncate text-[11px] text-danger">{error}</span>}
+        {error && <span className="truncate text-[12px] text-danger">{error}</span>}
         {spawn.menu}
       </div>
     )
@@ -135,7 +135,7 @@ export function SessionTabs({
                 <StatusDot session={session} />
                 <span className="whitespace-nowrap font-mono">{label}</span>
                 {session.status === 'exited' && (
-                  <span className="text-[10px] text-ink-faint">已結束</span>
+                  <span className="text-[11px] text-ink-faint">已結束</span>
                 )}
               </button>
 
@@ -166,7 +166,7 @@ export function SessionTabs({
       <span className="flex-1" />
 
       {error && (
-        <span className="max-w-[240px] self-center truncate px-2 text-[11px] text-danger">
+        <span className="max-w-[240px] self-center truncate px-2 text-[12px] text-danger">
           {error}
         </span>
       )}

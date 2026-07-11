@@ -80,7 +80,7 @@ export function createXterm(options: XtermOptions): XtermHandle {
   const { openLink, onCopy, onPaste } = options
   const term = new Terminal({
     fontFamily: "'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace",
-    fontSize: 13,
+    fontSize: 14,
     lineHeight: 1.3,
     cursorBlink: true,
     // 換行由 pty 內的程式自理，不要 xterm 代為轉換。

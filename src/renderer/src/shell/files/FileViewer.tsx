@@ -203,7 +203,7 @@ export function FileViewer({ folderId, relPath }: FileViewerProps): React.JSX.El
   return (
     <div className="flex h-full flex-col">
       {markdown && (
-        <div className="flex items-center gap-1 border-b border-hairline px-3 py-1.5 text-[11px]">
+        <div className="flex items-center gap-1 border-b border-hairline px-3 py-1.5 text-[12px]">
           {(['preview', 'source'] as const).map((candidate) => (
             <button
               key={candidate}
@@ -229,21 +229,21 @@ export function FileViewer({ folderId, relPath }: FileViewerProps): React.JSX.El
             <button
               type="button"
               onClick={() => void save(true)}
-              className="rounded border border-hairline px-2 py-[2px] text-[11px] text-danger hover:bg-stage"
+              className="rounded border border-hairline px-2 py-[2px] text-[12px] text-danger hover:bg-stage"
             >
               以我的內容覆寫
             </button>
             <button
               type="button"
               onClick={discardAndReload}
-              className="rounded border border-hairline px-2 py-[2px] text-[11px] text-ink-dim hover:bg-stage"
+              className="rounded border border-hairline px-2 py-[2px] text-[12px] text-ink-dim hover:bg-stage"
             >
               捨棄我的變更並重載
             </button>
             <button
               type="button"
               onClick={() => setConflict(false)}
-              className="rounded border border-hairline px-2 py-[2px] text-[11px] text-ink-faint hover:bg-stage"
+              className="rounded border border-hairline px-2 py-[2px] text-[12px] text-ink-faint hover:bg-stage"
             >
               取消
             </button>
@@ -266,7 +266,7 @@ export function FileViewer({ folderId, relPath }: FileViewerProps): React.JSX.El
           <button
             type="button"
             onClick={isDirty ? discardAndReload : reload}
-            className="rounded border border-hairline px-2 py-[2px] text-[11px] text-accent hover:bg-stage"
+            className="rounded border border-hairline px-2 py-[2px] text-[12px] text-accent hover:bg-stage"
           >
             重新載入
           </button>
