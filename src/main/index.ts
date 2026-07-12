@@ -1,6 +1,7 @@
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { app, BrowserWindow } from 'electron'
+import { app, BrowserWindow, session } from 'electron'
+import { applyContentSecurityPolicy } from './content-security-policy'
 import { DirtyStateStore } from './dirty-state'
 import { registerAppHandlers } from './ipc/app'
 import { registerClipboardHandlers } from './ipc/clipboard'
@@ -93,6 +94,13 @@ void app.whenReady().then(() => {
   store.load()
 
   const dirty = new DirtyStateStore()
+
+  // 在建立視窗、載入任何 renderer 內容之前施加 CSP —— renderer 從第一幀起就會渲染使用者
+  // repo 裡的不受信任內容（與 applyNavigationGuards 同屬信任模型的前置防護）。
+  // dev／production 政策的切換依「是否載入 Vite dev server」（ELECTRON_RENDERER_URL），**不是**
+  // app.isPackaged —— 未打包但載入 file:// build 產物（如 probe 的建置模式）應拿 production 政策，
+  // 否則 production 政策永遠不會被任何 probe 覆蓋（見 content-security-policy.ts）。
+  applyContentSecurityPolicy(session.defaultSession, Boolean(process.env.ELECTRON_RENDERER_URL))
 
   registerFolderHandlers(store)
   registerFsHandlers(store)

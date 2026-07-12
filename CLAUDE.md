@@ -1,5 +1,7 @@
 # CLAUDE.md
 
+![x](https://example.com/image.webp)
+
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Project Overview
@@ -33,6 +35,14 @@ session 的**錨定 change**（側欄跟隨 focused session），以及 **Graph 
 （那串 `使用者@主機:/路徑` 零資訊量，且它晚一秒多才到、抵達時把「+ session」入口往右推 150px）。
 `probe:keyboard` 64/64、`probe:terminal` 112/112。
 
+`renderer-security-hardening`（不屬於任何 Phase）是一次資安掃描後補上的三項**縱深防禦**——
+主行程施加的 **CSP**（inline script 不執行、鎖死 script／object／iframe／base-uri，為 XSS 立足點
+設第二層防線；**放行遠端 https 圖片**——那是 markdown 的正常內容；dev／production 切換依
+`ELECTRON_RENDERER_URL`，不是 `app.isPackaged`）、`clipboard:writeText` 的**型別 guard**
+（非字串輸入不再使主行程拋未捕捉例外）、xterm 的 **OSC 8 `linkHandler`**（OSC 8 超連結改走
+`openExternal`，不落入 xterm 內建的 confirm＋window.open）。`probe:files` 101/101、`probe:terminal`
+114/114。
+
 尚未開始：打包（Phase 6）、handoff（Phase 7+）。
 
 ### 開發指令
@@ -44,8 +54,8 @@ npm run typecheck       # tsc：main / preload（node）+ renderer（web）
 npm test                # node:test 單元測試（fs 邊界、workspace store、listDir/readFile、watcher、外部 URL、pty 管理器、舊產品名不得殘留）
 npm run probe:shell     # 驗收 workspace-app-shell（開視窗 + 信任模型 + preload 白名單，走 CDP）
 npm run probe:workspace # 驗收 workspace-folders / filesystem-access / workspace-layout
-npm run probe:files     # 驗收 file-explorer / file-viewer / 編輯 / 存檔 / 衝突 / CRUD / 導航防護 / 編輯器 worker（dev + build 兩模式）
-npm run probe:terminal  # 驗收 terminal-sessions（pty 雙向／cwd／resize／多開／關分頁・reload・關窗皆不留孤兒；OSC 標題與命名權衝突以 PATH 上的 stub claude 承載，dev + build 兩模式）
+npm run probe:files     # 驗收 file-explorer / file-viewer / 編輯 / 存檔 / 衝突 / CRUD / 導航防護 / 編輯器 worker / CSP（遠端圖片可載入、script-src 僅 self、注入點對 file:// 生效，dev + build 兩模式）
+npm run probe:terminal  # 驗收 terminal-sessions（pty 雙向／cwd／resize／多開／關分頁・reload・關窗皆不留孤兒；剪貼簿畸形輸入防禦；OSC 標題與命名權衝突以 PATH 上的 stub claude 承載，dev + build 兩模式）
 npm run probe:keyboard  # 驗收 keyboard-navigation（Ctrl+Tab 切 session／Ctrl+↑↓ 切 repo／位置序非 MRU／按鍵不流進 pty／編輯器與對話框的行為，dev + build 兩模式）
 npm run probe:openspec  # 驗收 openspec-data-access / openspec-panel（兩個視圖／兩棵樹／artifact 分頁／agent 改檔即更新／錨定／交叉導覽／Graph・Timeline 的 overlay，dev + build 兩模式）
 npm run probe:native    # 驗收 native-module-toolchain（Electron 主行程載入 node-pty + spawn pty）
@@ -249,6 +259,13 @@ node-pty 1.2.0-beta.14（釘死）、Monaco Editor、chokidar 5、react-markdown
   連帶：`ContextMenu` 加上鍵盤導覽、`files/dialogs.tsx` 補上 `role="dialog"`、新增 `probe:keyboard`，
   並把 `probe:terminal` 的 OSC 標題驗收換到**由探針控制的 stub `claude`** 上（不換就是假綠 —— 那些
   測試會繼續通過，但測的已經不是它們自稱在測的東西）。
+- **renderer 安全硬化** — `renderer-security-hardening`（已封存，**不屬於任何 Phase**）：一次資安
+  掃描後補上的三項縱深防禦 —— 主行程施加的 **CSP**（inline script 不執行、鎖死
+  script／object／iframe／base-uri；**放行遠端 https 圖片**——markdown 的正常內容；dev／production
+  切換依 `ELECTRON_RENDERER_URL` 而非 `app.isPackaged`）、`clipboard:writeText` 的**型別 guard**
+  （非字串不再使主行程拋未捕捉例外）、xterm 的 **OSC 8 `linkHandler`**（OSC 8 超連結改走
+  `openExternal`，不落入 xterm 內建的 confirm＋window.open）。詳見上文「renderer 安全硬化的實測與
+  踩雷」——含 CSP 切換依據、CDP 繞過 script-src、OSC 8 probe 假綠三個踩雷。
 - Phase 6 打包與發佈，Phase 7+ 建立護城河（handoff）。
 
 > **Phase 5 對 PRD 的「抽出 `@spekjs/ui`」做了對半的裁決**（PRD §9.2 已回寫）：整頁視圖**不抽**
@@ -639,6 +656,65 @@ Phase 5 把清單補齊，並補上兩條它本來就該守的：**`fs.symlink` 
 分頁**（`Change artifact`）、session 分頁列（`Session 分頁`），overlay 開著時還有第五個
 （`視覺化`）。**探針裡全域的 `[role="tablist"] button[role="tab"]` 會把它們混在一起**
 （`probe:files` 因此一度數到 6 個分頁）。選取時一律連 `aria-label` 一起指名。
+
+## renderer 安全硬化的實測與踩雷（`renderer-security-hardening`）
+
+一次資安掃描後補上的三項縱深防禦（都在既有邊界之上，補既有硬化未收攏的邊角）：renderer 的
+**CSP**、`clipboard:writeText` 的**型別 guard**、xterm 的 **OSC 8 `linkHandler`**。
+
+### CSP 的切換依據是「有沒有 dev server」，不是 `app.isPackaged`
+
+CSP 由**主行程**施加（`session.defaultSession.webRequest.onHeadersReceived`），不是 renderer
+自宣告的 `<meta>` —— 與 fs 邊界同哲學：renderer 渲染不受信任內容，它自己宣告的約束不構成防護。
+已實測 **`onHeadersReceived` 對 `file://` response 確實觸發且 CSP 生效**，build 模式不必退回 meta。
+
+dev 政策要放行 Vite HMR（inline preamble 的 `'unsafe-inline'` script、HMR 的 `ws:`），production
+一律收回。**切換依 `ELECTRON_RENDERER_URL` 的存在，不是 `app.isPackaged`** —— 這是探針抓到的：
+`app.isPackaged` 只有真正打包後才為 true，於是「未打包但載入 `file://` build 產物」（probe 的建置
+模式、或開發者 `npm run build` 後直接 `electron .`）會**誤發 dev 政策**，更糟的是 **production 政策
+從此沒有任何 probe 覆蓋**（probe 永遠 `isPackaged === false`）—— 一個經典的假綠。以 dev server 的
+存在為準，`file://` 一律拿到緊政策，probe 的建置模式驗的就是 production 政策。
+
+`style-src` 的 `'unsafe-inline'` 無法避免（Monaco／xterm／Tailwind v4 都在執行期注入 inline
+`<style>`）；`script-src` 維持 `'self'`（建置產物無 `eval`，連 `'unsafe-eval'` 都不需要）；
+`img-src` **放行 `https:`**。一度是擋掉遠端圖片（防追蹤 beacon），但使用者判定「markdown 本就該能
+載入遠端圖片」—— 而且那 beacon 是低嚴重度（洩漏「開了這個檔」＋ IP，無程式執行／憑證竊取／邊界
+逸出），使用者本就在這些 repo 裡跑 agent 與 shell，擋圖片划不來，改為放行。`http:` 不放行（近乎所有
+真實圖片是 https，且擋 `http:` 同時擋掉惡意 markdown 對 `http://localhost` 的 image-GET 探測）。
+
+### 驗 CSP 的 inline-script 阻擋，不能用 CDP 動態插入 script —— 它繞過 script-src
+
+`probe:files` 起初用「CDP evaluate 動態插入一段 inline script，斷言它沒執行」驗 `script-src`。
+**錯**：`Runtime.evaluate` 注入的程式碼繞過頁面 CSP 的 script-src（DevTools 的設計，否則無法在
+嚴格 CSP 頁面除錯），那段 inline script **會**執行 —— 不管政策對不對都給假結果。改從
+`securitypolicyviolation` 事件的 `originalPolicy` 端到端讀出**實際施加的政策**，斷言 `script-src`
+僅 `'self'`。**擷取 `originalPolicy` 需要一個一定被擋的請求去觸發違規** —— 圖片放行後不再是觸發源，
+改用 `fetch` 一個遠端主機（`connect-src 'self'` 擋下 → connect-src 違規 → originalPolicy）。遠端
+圖片則反過來驗「**不**引發 `img-src` violation」（放行），這條也擋得住「又改回封鎖圖片」的 regression。
+
+### OSC 8 連結的行為驗不進 probe —— 對照組證明了假綠
+
+xterm 的 OSC 8 超連結走 `Terminal.linkHandler`（與 WebLinksAddon 的純文字連結是**兩套**）。未設它
+會落入 xterm 內建預設：`confirm()`（文字由不受信任的 pty 輸出控制）+ `window.open()`。設
+`linkHandler.activate → openLink` 讓兩套連結都匯到 `openExternal`（design D4）。
+
+`probe:terminal` 曾有一條「真滑鼠 hover+click 一個 OSC 8 連結，斷言不彈 confirm／window.open」。
+**對照組證明它是假綠**：把產品的 `linkHandler` 整個移除、重跑，斷言**仍然全綠** —— 那個 hover+click
+根本沒觸發 xterm 的 OSC 8 連結激活（DOM renderer 下的 hit-test 與 Linkifier2 的 hover 追蹤，注入式
+滑鼠事件驅動不了），confirm 於是恆為 false，與 linkHandler 設沒設無關。且即使觸發得了，正向「走了
+openExternal」仍不可觀察（fire-and-forget、交主行程開系統瀏覽器）。**這條缺口由 code review +
+design D4 補**，比照「探針證明不了真實鍵盤」。移除假綠斷言、把理由留在 probe 與此處，好過留一盞
+測不到自己宣稱在測的東西的綠燈。
+
+### clipboard 的 guard：probe 驗得到「主行程存活」，驗不到「無 uncaught exception」
+
+`clipboard:writeText` 是 fire-and-forget 的 `ipcMain.on`、無回應通道；非字串會讓
+`clipboard.writeText` 拋 `TypeError` → 主行程未捕捉例外（實測：真實 Electron 行程會跳原生錯誤
+對話框）。guard 是一行 `typeof text !== 'string'` 的丟棄。`probe:terminal` 送幾個非字串、再確認
+主行程仍服務後續 IPC、合法字串仍寫得進剪貼簿。**headless 侷限**：主行程有無 uncaught exception
+不傳到 renderer，且 headless 下它拋了也不整個崩潰 —— 此斷言驗的是「畸形輸入後主行程與 clipboard
+通道仍健康」（可觀察、真實發生），區分不了「有 guard 靜默丟棄」與「無 guard 拋例外但存活」。guard
+本身由 code review + design D3 承擔。
 
 ## 檔案系統邊界（`multi-folder-workspace-shell` 起）
 

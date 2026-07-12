@@ -672,6 +672,38 @@ async function runMode(label, { port, rendererUrl }) {
     await realMouse(app.client, termAt.x, termAt.y, 'left')
     await sleep(150)
 
+    // ── clipboard：主行程對畸形輸入防禦，不因非字串而崩潰 ────────────────────
+    // `writeText` 是 fire-and-forget 的 ipcMain.on、無回應通道；非字串會讓 clipboard.writeText
+    // 拋 TypeError → 主行程未捕捉例外。送幾個非字串，再確認主行程仍正常服務後續 IPC、合法字串
+    // 仍寫得進剪貼簿。
+    //
+    // **headless 侷限**：主行程有無 uncaught exception 不傳到 renderer，此處無法直接觀察；驗證的
+    // 是可觀察的保證 —— 畸形輸入後主行程存活、clipboard 通道與其他 IPC 仍正常（其餘由 design D3 承擔）。
+    await app.client.evaluate('window.workspace.clipboard.writeText({ evil: true })')
+    await app.client.evaluate('window.workspace.clipboard.writeText([1, 2, 3])')
+    await app.client.evaluate('window.workspace.clipboard.writeText(undefined)')
+    await app.client.evaluate(CLIPBOARD_WRITE('legit-after-malformed'))
+    const afterMalformed = await app.client.evaluate(CLIPBOARD_READ)
+    const foldersAlive = await app.client.evaluate('window.workspace.folders.list()')
+    check(
+      results,
+      `${label}：非字串的剪貼簿寫入被丟棄，主行程仍正常運作`,
+      afterMalformed === 'legit-after-malformed' && Array.isArray(foldersAlive),
+      `讀回=${JSON.stringify(afterMalformed)} folders=${Array.isArray(foldersAlive) ? foldersAlive.length : 'N/A'}`,
+    )
+
+    // ── 終端連結：OSC 8 超連結經受控接縫（linkHandler → openExternal）**不在此 probe** ──────
+    //
+    // 這裡曾有一條「以真滑鼠 hover+click 一個 OSC 8 連結，斷言不彈 xterm 內建 confirm／window.open」
+    // 的驗收。**對照組證明它是假綠**：把產品的 linkHandler 整個移除、重跑，斷言**仍然全綠** ——
+    // 也就是那個 hover+click 根本沒觸發 xterm 的 OSC 8 連結激活（DOM renderer 下連結的 hit-test 與
+    // Linkifier2 的 hover 追蹤，注入式滑鼠事件驅動不了），confirm 於是恆為 false，與 linkHandler
+    // 設沒設無關。留著它只會給一條「測不到自己宣稱在測的東西」的綠燈。
+    //
+    // 且即使觸發得了，正向「走了 openExternal」仍不可觀察：openExternal 是 fire-and-forget、且
+    // 交由主行程開系統瀏覽器。OSC 8 的行為因此由 code review（linkHandler.activate → openLink →
+    // openExternal）+ design D4 保證，比照「探針證明不了真實鍵盤」那道由人補的缺口。
+
     // ── login shell 的 session **不採用** pty 宣告的標題
     //
     // shell 送的是它預設的 prompt 標題（`使用者@主機:/路徑`），對使用者零識別意義，而且它比

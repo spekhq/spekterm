@@ -24,6 +24,11 @@ export function registerClipboardHandlers(): void {
   ipcMain.handle(CLIPBOARD_CHANNELS.readText, () => clipboard.readText())
 
   ipcMain.on(CLIPBOARD_CHANNELS.writeText, (_event, text: string) => {
+    // `text: string` 只是編譯期標註 —— 一個被入侵或有 bug 的 renderer 可送出任意型別，而
+    // `clipboard.writeText(非字串)` 會拋 TypeError。這是 fire-and-forget 的 `ipcMain.on`、
+    // 無回應通道，拋出即成為**主行程**的未捕捉例外（實測會跳原生錯誤對話框、可被洗版）。
+    // 單向 send 沒有告知 renderer 的管道，畸形輸入唯一合理的處置就是丟棄。
+    if (typeof text !== 'string') return
     clipboard.writeText(text)
   })
 }

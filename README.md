@@ -59,6 +59,9 @@ core 邏輯與視覺化元件重用開源的
 
 - `contextIsolation` 啟用、`nodeIntegration` 停用，能力只走 preload 白名單
 - renderer 無法導航離開 app、無法開新視窗，外部連結交系統瀏覽器（協定於主行程驗證）
+- 主行程對 renderer 施加 **Content-Security-Policy**（`onHeadersReceived`）：inline script 一律
+  不執行、鎖死 script／object／iframe／base-uri，為 XSS 立足點設第二層防線（遠端 https 圖片照常
+  放行 —— 那是 markdown 的正常內容）
 - 檔案系統的每一次存取都受 workspace folder 邊界約束：renderer 以 `(folderId, relPath)` 定址，
   **它沒有詞彙可以表達 workspace 之外的位置**
 - 主行程直接 `import` `@spekjs/core` 掃描 OpenSpec，全程不開任何 TCP 埠
@@ -91,8 +94,8 @@ npm test                # 單元測試（fs 邊界、workspace store、watcher�
 ```bash
 npm run probe:shell     # 開視窗 + 信任模型 + preload 白名單
 npm run probe:workspace # folder 清單持久化、fs 邊界、三欄版面
-npm run probe:files     # 檔案樹、檢視、編輯、CRUD、導航防護、編輯器 worker（dev + build）
-npm run probe:terminal  # pty 雙向／cwd／resize／多開／不留孤兒行程（dev + build）
+npm run probe:files     # 檔案樹、檢視、編輯、CRUD、導航防護、編輯器 worker、CSP（dev + build）
+npm run probe:terminal  # pty 雙向／cwd／resize／多開／不留孤兒行程、剪貼簿防禦（dev + build）
 npm run probe:openspec  # 側欄兩視圖、兩棵樹、artifact 分頁、agent 改檔即更新、錨定、
                         #   交叉導覽、Graph・Timeline 的 overlay（dev + build）
 npm run probe:native    # 主行程載入 node-pty 並 spawn 真 pty

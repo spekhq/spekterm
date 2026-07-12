@@ -87,6 +87,14 @@ export function createXterm(options: XtermOptions): XtermHandle {
     convertEol: false,
     scrollback: 5000,
     theme: { ...THEME },
+    // OSC 8 escape-sequence 超連結由 xterm 核心的 OscLinkProvider 處理，走 `Terminal.linkHandler`
+    // —— 與 WebLinksAddon（純文字 URL）是**兩套**機制。未設 linkHandler 會落入 xterm 內建預設：
+    // 一個 `confirm()`（其 URL 文字由不受信任的 pty 輸出控制）+ `window.open()`。導向 `openLink`，
+    // 讓兩套連結都匯到同一條 `openExternal`（主行程驗協定）。不設 `allowNonHttpProtocols`
+    // （預設 false）：非 http／https 的 URI 根本不會被 OscLinkProvider 建成可點連結（design D4）。
+    linkHandler: {
+      activate: (_event, uri) => openLink(uri),
+    },
   })
 
   const fitAddon = new FitAddon()

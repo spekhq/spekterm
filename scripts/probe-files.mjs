@@ -50,6 +50,8 @@ const README = `# 標題
 
 危險連結：[xss](javascript:alert(1))
 
+遠端圖片（CSP 放行 https —— markdown 的正常內容，應能載入而不觸發 img-src 違規）：![img](https://example.com/img.png)
+
 <script>window.__pwned = true</script>
 
 | 欄 A | 欄 B |
@@ -477,6 +479,41 @@ const MARKDOWN = `(() => {
   }
 })()`
 
+/**
+ * CSP violation 收集器 —— 必須在會觸發違規的請求**之前**注入（它只捕捉其後派送的違規）。違規
+ * 事件的 `originalPolicy` 即**實際施加到這個 renderer 的**完整政策字串 —— 據此端到端驗證政策，
+ * 而非只驗政策生成函式。
+ */
+const CSP_ARM = `(() => {
+  window.__csp = []
+  window.__cspPolicy = ''
+  document.addEventListener('securitypolicyviolation', (e) => {
+    window.__csp.push(e.violatedDirective)
+    window.__cspPolicy = e.originalPolicy || window.__cspPolicy
+  })
+  return true
+})()`
+
+const CSP_VIOLATIONS = `window.__csp ?? []`
+const CSP_POLICY = `window.__cspPolicy ?? ''`
+
+/**
+ * 觸發一個**一定被擋**的請求以捕捉 `originalPolicy` —— fetch 一個遠端主機，`connect-src 'self'`
+ * （dev 為 `'self' ws:`）擋下它並派送 connect-src 違規。圖片現在放行（`img-src https:`），不再是
+ * 政策的觸發源，故改由這個一定被擋的 fetch 擷取實際政策。
+ */
+const TRIGGER_CSP = `fetch('https://example.com/csp-probe').catch(() => {})`
+
+/** 動態插入一張遠端 https 圖片，回報是否引發 `img-src` 違規（現在應為 false —— 圖片放行）。 */
+const TRY_REMOTE_IMAGE = `(async () => {
+  const img = document.createElement('img')
+  img.src = 'https://example.com/remote-probe.png'
+  document.body.appendChild(img)
+  await new Promise((r) => setTimeout(r, 400))
+  img.remove()
+  return (window.__csp ?? []).includes('img-src')
+})()`
+
 /** 直接試著導航。will-navigate 應阻止它，location 不變。 */
 const TRY_NAVIGATE = `(async () => {
   const before = location.href
@@ -857,6 +894,8 @@ async function probeBuild(fixture, profile) {
     console.log('\n檔案檢視：markdown 的渲染、安全性與模式切換')
     await app.client.evaluate(BACK_TO_TREE) // 正在看檔案則回到樹；已在樹則無作用
     await pollUntil(app.client, ROW_PATHS, (paths) => paths.includes('README.md'))
+    // README 含一張遠端圖片。在它渲染**之前** arm CSP 收集器 —— 收集器只捕捉其後派送的違規。
+    await app.client.evaluate(CSP_ARM)
     await app.client.evaluate(CLICK_ROW('README.md'))
     const md = await pollUntil(app.client, MARKDOWN, (value) => value !== null)
 
@@ -867,6 +906,25 @@ async function probeBuild(fixture, profile) {
     check(results, 'javascript: 連結不可點（未渲染為 anchor）',
       !(md?.anchors ?? []).some((href) => /^javascript:/i.test(href ?? '')), (md?.anchors ?? []).join(' '))
     check(results, '外部連結保留為 anchor', (md?.anchors ?? []).includes('https://example.com/docs'))
+
+    // ── workspace-app-shell：CSP 施加於 renderer（建置模式）──────────────────
+    // 圖片放行（img-src https:），不再引發違規，故改用一個一定被擋的 fetch（connect-src 'self'
+    // 擋下）捕捉實際施加的政策。inline script 的阻擋**不能**用 CDP 動態插入 script 驗 ——
+    // `Runtime.evaluate` 注入的程式碼繞過 script-src（DevTools 的設計），會給假陰性；改從 violation
+    // 的 originalPolicy 端到端讀出實際政策，斷言 script-src 僅 'self'。
+    await app.client.evaluate(TRIGGER_CSP)
+    const policy = await pollUntil(app.client, CSP_POLICY, (p) => p.length > 0, 3000)
+    check(results, 'CSP 確實施加於 renderer（connect-src 擋下遠端 fetch）', policy.length > 0,
+      policy ? policy.slice(0, 64) : '(未捕捉到政策)')
+    check(results, 'CSP 的 script-src 僅 self —— inline script 一律不執行',
+      /script-src 'self';/.test(policy) && !/script-src[^;]*unsafe-inline/.test(policy),
+      policy.match(/script-src[^;]*/)?.[0] ?? '(政策未捕捉)')
+    check(results, 'CSP 放行遠端 https 圖片（markdown 的正常內容可載入）', /img-src[^;]*https:/.test(policy),
+      policy.match(/img-src[^;]*/)?.[0] ?? '(政策未捕捉)')
+    // README 的遠端圖片不該引發 img-src 違規（放行）
+    const imgViolations = await app.client.evaluate(CSP_VIOLATIONS)
+    check(results, 'markdown 的遠端圖片未被 CSP 阻擋', !imgViolations.includes('img-src'),
+      imgViolations.length ? imgViolations.join(',') : '(無違規，正確)')
 
     // 預設為預覽模式（渲染後的樣貌）
     check(results, 'markdown 預設呈現預覽模式', (await app.client.evaluate(MODE_PRESSED('預覽'))) === true)
@@ -967,6 +1025,18 @@ async function probeDev(fixture, profile) {
 
     const links = await pollUntil(app.client, DETECTED_LINKS, (count) => count > 0)
     check(results, '開發模式下 worker 完成一次往返', links > 0, `${links} 個 .detected-link`)
+
+    // app 能掛載、worker 能往返，本身已證明 dev CSP 未擋掉 Vite 的 inline preamble 與 HMR
+    // websocket。這裡確認 dev 政策確實**施加了**，且與 production 一致地放行遠端 https 圖片。
+    await app.client.evaluate(CSP_ARM)
+    await app.client.evaluate(TRIGGER_CSP)
+    const devPolicy = await pollUntil(app.client, CSP_POLICY, (p) => p.length > 0, 3000)
+    check(results, '開發模式下 CSP 確實施加（connect-src 擋下遠端 fetch）', devPolicy.length > 0,
+      devPolicy ? devPolicy.slice(0, 64) : '(未捕捉到政策)')
+    check(results, '開發模式下 CSP 放行遠端 https 圖片', /img-src[^;]*https:/.test(devPolicy),
+      devPolicy.match(/img-src[^;]*/)?.[0] ?? '(政策未捕捉)')
+    check(results, '開發模式下遠端圖片未被 CSP 阻擋', (await app.client.evaluate(TRY_REMOTE_IMAGE)) === false,
+      'img-src 違規應為 false')
   } finally {
     if (app) await app.close()
     // 殺整個 process group（npx → node → vite），而非只殺 npx wrapper。負號 = 整組。
