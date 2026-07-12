@@ -14,8 +14,10 @@ const MAX_LABEL = 28
  *
  * 1. **使用者親自取的名字** —— 他接管了命名權，誰也不能蓋過去（pty 想改名要先經確認）。
  * 2. **pty 以 OSC 序列宣告的標題** —— 跑在裡面的程式最清楚自己是誰（`claude` 會主動送這個，
- *    那正是終端模擬器的分頁會自動改名的機制）。
- * 3. **本地流水號** —— 兩者都沒有時的退路。
+ *    那正是終端模擬器的分頁會自動改名的機制）。**僅 `claude` 目標**：login shell 宣告的是它
+ *    預設的 prompt 標題（`使用者@主機:/路徑`），對使用者零識別意義，且會讓分頁寬度在眼前
+ *    突變 —— 它在 `sessions.tsx` 的 `setTitle()` 就被丟棄，`title` 因此恆為 `undefined`。
+ * 3. **本地流水號** —— 兩者都沒有時的退路（login shell 恆走這條）。
  */
 export function sessionTitle(session: SessionState): string {
   return (

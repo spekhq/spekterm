@@ -17,7 +17,7 @@
  * 結束碼 0 表示全部 scenario 通過。
  */
 import { execFileSync, spawn } from 'node:child_process'
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
@@ -163,6 +163,31 @@ function makeFixture() {
   return { many, single, archivedOnly, plain }
 }
 
+/**
+ * 一支 stub `claude`，供「錨定不隨 pty 的輸出改變」那組驗收使用。
+ *
+ * 那組驗收的**成對斷言**要求「標題真的變了（證明測試不是空轉），而錨定沒有跟著變」。
+ * 本 change 之後 login shell **不再採用** pty 宣告的標題 —— 於是那個「標題真的變了」的前提在
+ * shell session 上永遠不成立，整條測試會空轉（守衛因此轉紅，正是它該做的事）。載體必須換成
+ * **claude 目標**的 session。
+ *
+ * 手法與 `probe-terminal.mjs` 的 `makeStubClaude` 相同：產品的 claude 模式是
+ * `$SHELL -l -c claude`（從 PATH 解析），pty 又整份繼承 Electron 的 env。**HOME 也要換掉** ——
+ * 否則 `~/.profile` 的 `PATH="$HOME/.local/bin:$PATH"` 會把本機真正的 claude 搶回前面。
+ * stub 直接 `exec /bin/sh -i`（不看 `$SHELL`）：`sh` 不會自己送 OSC 標題，標籤因此是確定的。
+ */
+function makeStubClaude() {
+  const home = mkTemp('spekterm-openspec-stubhome-')
+  const bin = join(home, '.local', 'bin')
+  mkdirSync(bin, { recursive: true })
+
+  const claude = join(bin, 'claude')
+  writeFileSync(claude, '#!/bin/sh\nexec /bin/sh -i\n')
+  chmodSync(claude, 0o755)
+
+  return { home, bin }
+}
+
 function seedProfile(folders) {
   const profile = mkTemp('spekterm-openspec-profile-')
   writeFileSync(
@@ -211,13 +236,22 @@ async function startRendererDevServer() {
   return { child, url }
 }
 
-async function launch({ port, profileDir, rendererUrl }) {
+async function launch({ port, profileDir, rendererUrl, stub }) {
   const child = spawn(
     'electron',
     [`--remote-debugging-port=${port}`, `--user-data-dir=${profileDir}`, '.'],
     {
       stdio: ['ignore', 'pipe', 'pipe'],
-      env: rendererUrl ? { ...process.env, ELECTRON_RENDERER_URL: rendererUrl } : process.env,
+      env: {
+        ...process.env,
+        // 釘死 shell：可預測、無 profile 雜訊，且**不會自己送 OSC 標題**（zsh 會，那會讓
+        // claude session 的標籤變成 `使用者@主機:/路徑`，測試就不確定了）。
+        SHELL: '/bin/sh',
+        // claude 模式從 PATH 解析 `claude` —— 前置 stub 的目錄，並換掉 HOME（見 makeStubClaude）。
+        HOME: stub.home,
+        PATH: `${stub.bin}:${process.env.PATH}`,
+        ...(rendererUrl ? { ELECTRON_RENDERER_URL: rendererUrl } : {}),
+      },
     },
   )
 
@@ -650,7 +684,7 @@ async function typeLine(client, text) {
 }
 
 /** 自分頁列的「+ session」建立一個 shell session。 */
-async function createSession(client) {
+async function createSession(client, target = 'shell') {
   //
   // **點完要確認選單真的開了，沒開就重量再點。** 對手是一個外部行程（pty）何時吐出標題，
   // 穩定判準只能把機率壓低、消不掉它。點空的那一下最多是點到隔壁分頁（把它 focus 起來），
@@ -660,14 +694,14 @@ async function createSession(client) {
     if (!btn) throw new Error('找不到「+ session」按鈕')
     await realClick(client, btn)
 
-    const item = await pollUntil(client, MENU_ITEM_RECT('shell'), (value) => value !== null, 2000)
+    const item = await pollUntil(client, MENU_ITEM_RECT(target), (value) => value !== null, 2000)
     if (item) {
       await realClick(client, item)
       return
     }
   }
 
-  throw new Error('選單中找不到 shell（重量再點 3 次仍未開啟）')
+  throw new Error(`選單中找不到 ${target}（重量再點 3 次仍未開啟）`)
 }
 
 // ── 主流程 ──────────────────────────────────────────────────────────────────
@@ -683,7 +717,8 @@ async function runMode(label, { port, rendererUrl }) {
     ['f-plain', plain],
   ])
 
-  const app = await launch({ port, profileDir: profile, rendererUrl })
+  const stub = makeStubClaude()
+  const app = await launch({ port, profileDir: profile, rendererUrl, stub })
   check(results, 'app 掛載', app.mounted === true)
 
   try {
@@ -991,8 +1026,12 @@ async function runMode(label, { port, rendererUrl }) {
     )
 
     // ── 錨定為 per-session，側欄跟隨 focused session ────────────────────────
+    //
+    // **第二個 session 用 claude 目標**：後面「錨定不隨 pty 的輸出改變」要在它身上驗「標題
+    // 真的變了、而錨定沒有跟著變」—— 而 login shell 已不再採用 pty 宣告的標題，那個前提在
+    // shell session 上永遠不成立（見 `makeStubClaude`）。
     console.log('\n側欄跟隨 focused session 的錨定')
-    await createSession(app.client)
+    await createSession(app.client, 'claude')
     const twoTabs = await pollUntil(app.client, SESSION_TABS, (list) => list.length === 2, 10_000)
     check(results, '該 folder 有兩個 session', twoTabs.length === 2)
 

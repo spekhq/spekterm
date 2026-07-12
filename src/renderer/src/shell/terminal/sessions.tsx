@@ -229,6 +229,21 @@ export function SessionsProvider({ children }: { children: React.ReactNode }): R
       const target = previous.find((session) => session.id === sessionId)
       if (!target) return previous
 
+      // **login shell 宣告的標題一律丟棄。**
+      //
+      // shell 送的是它預設的 prompt 標題（`使用者@主機:/路徑`），對使用者零識別意義 —— 那不
+      // 回答「這個 session 在幹嘛」。更糟的是它比 session 晚一秒多才到（shell 要先載完 rc、
+      // 畫出第一個 prompt），抵達時分頁的標籤由 `shell 1` 暴增為一長串，寬度從約 60px 撐到
+      // 約 210px，把緊鄰其後的「+ session」入口往右推 150px —— 使用者正要點下去時，按鈕從
+      // 游標底下跳走。`claude` 宣告的標題則相反：短、且正是我們要的身分。
+      //
+      // **擋在這裡，而不是擋在顯示層**（session-navigation-and-labels 的 design D4）：這是 OSC
+      // 標題進入 session 狀態的唯一入口，於是 `title` 恆為 undefined，標籤自然退回本地標籤，
+      // 而 `pendingTitle` 也永遠不會被設 —— 連帶讓「pty 想改名」的確認對話框對 shell session
+      // 失去觸發條件。若只改顯示層，使用者仍會被一個「pty 想把它改名為 kewang@host:/tmp/…，
+      // 要採用嗎？」的對話框打斷，而那個名字他根本永遠看不到。
+      if (target.spawnTarget === 'shell') return previous
+
       // 使用者已接管命名權 —— pty 的標題**不得靜默覆蓋**，改為待裁決（design D2）。
       if (target.customTitle !== undefined) {
         // 與使用者取的名字相同、或與已在等待裁決的相同，就沒什麼好問的。

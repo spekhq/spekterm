@@ -11,7 +11,16 @@
  * `/proc/<pid>/environ`），而非猜 cmdline。
  */
 import { execFileSync, spawn } from 'node:child_process'
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
@@ -38,6 +47,52 @@ function makeFixture() {
   mkdirSync(join(repo, 'openspec'), { recursive: true })
   writeFileSync(join(repo, 'README.md'), '# repo-a\n')
   return { repo }
+}
+
+/**
+ * stub `claude` 啟動時**在磁碟上留下的憑據** —— 用來斷言我們驅動的確實是自己這支，
+ * 不是本機真的 claude。
+ *
+ * **刻意不看終端畫面。** 「終端上有沒有出現某行字」對掛載時機、backlog 的 flush、以及捲動都
+ * 很敏感（dev 的 StrictMode 還會把元件重掛一次）—— 把「spawn 的是哪一支 claude」這個穩固的
+ * 事實綁在那種訊號上，只會換來一支時綠時紅的探針。檔案存不存在，是磁碟上的事實。
+ */
+const STUB_CLAUDE_RECEIPT = 'stub-claude-ran'
+
+/**
+ * 一支 stub `claude`，供「claude 目標的 session 會採用 pty 宣告的標題」這組驗收使用。
+ *
+ * **為什麼需要它。** 本 change 之後，OSC 標題只對 `claude` spawn 目標生效 —— 於是這組驗收
+ * 的載體必須是 claude 目標的 session。但我們無法叫真的 `claude` 去宣告一個**指定**的標題，
+ * 也不能要求每台機器都裝了它（一支在沒有 claude 的機器上宣稱驗過 OSC 標題的探針，是在說謊），
+ * 更不該讓一支探針真的去啟動一個 Claude Code session。
+ *
+ * **它為什麼是真實的產品路徑。** 產品的 claude 模式是 `$SHELL -l -c claude`：從 **PATH** 解析
+ * `claude`，而 pty 的 env 整份繼承 Electron 行程的 `process.env`。探針本來就自己 spawn Electron，
+ * 因此走的是產品**原本那條**路徑 —— 動的是環境，不是被出貨的那份程式碼。
+ *
+ * **`HOME` 也必須換掉，否則 stub 會被真的 claude 蓋過去（實測踩過）。** `-l` 是 login shell，
+ * 它會 source `~/.profile`，而 Ubuntu 的預設 `~/.profile` 裡有 `PATH="$HOME/.local/bin:$PATH"`
+ * —— 那一行會把**真** claude 的目錄搶到我們前面，於是探針真的把一個 Claude Code session 跑了
+ * 起來（分頁標籤變成它宣告的任務描述）。把 `HOME` 指向暫存目錄後：那裡沒有 `~/.profile` 可以
+ * source；而且 stub 就放在該 HOME 的 `.local/bin` 裡 —— **即使 profile 真的 prepend
+ * `$HOME/.local/bin`，它指的也是我們這個目錄**。兩道保險。
+ *
+ * stub 本身就是一個互動 shell（`exec "$SHELL" -i`）：於是 claude 目標的 session 行為與 shell
+ * session 完全相同，既有的 `typeLine(printf '\\033]0;…')` 一個字都不用改就能驅動它宣告標題。
+ * `SHELL` 是 `/bin/sh`（見 `SHELL_PATH`），它**不會**自己送 OSC 標題 —— 標籤因此是確定的。
+ */
+function makeStubClaude() {
+  const home = mkTemp('spekterm-terminal-stubhome-')
+  const bin = join(home, '.local', 'bin')
+  mkdirSync(bin, { recursive: true })
+
+  const receipt = join(home, STUB_CLAUDE_RECEIPT)
+  const claude = join(bin, 'claude')
+  writeFileSync(claude, `#!/bin/sh\n: > "${receipt}"\nexec "$SHELL" -i\n`)
+  chmodSync(claude, 0o755)
+
+  return { home, bin, receipt }
 }
 
 function seedProfile(folders) {
@@ -123,7 +178,7 @@ async function startRendererDevServer() {
   return { child, url }
 }
 
-async function launch({ port, profileDir, rendererUrl, marker }) {
+async function launch({ port, profileDir, rendererUrl, marker, stub }) {
   const child = spawn(
     'electron',
     [`--remote-debugging-port=${port}`, `--user-data-dir=${profileDir}`, '.'],
@@ -134,6 +189,10 @@ async function launch({ port, profileDir, rendererUrl, marker }) {
         // pty 自主行程繼承 env：SHELL 決定 spawn 什麼，marker 讓我們清點得出它的行程。
         SHELL: SHELL_PATH,
         SPEK_PROBE_MARKER: marker,
+        // claude 模式是 `$SHELL -l -c claude` —— 從 PATH 解析。前置放著 stub `claude` 的目錄，
+        // 並把 HOME 一起換掉（否則 `~/.profile` 會把真 claude 搶回前面 —— 見 `makeStubClaude`）。
+        HOME: stub.home,
+        PATH: `${stub.bin}:${process.env.PATH}`,
         ...(rendererUrl ? { ELECTRON_RENDERER_URL: rendererUrl } : {}),
       },
     },
@@ -375,6 +434,29 @@ async function realClick(client, rect) {
  */
 async function typeLine(client, text) {
   await client.send('Input.insertText', { text })
+  await pressEnter(client)
+}
+
+/**
+ * 送一顆帶修飾鍵的按鍵。`modifiers` 是 CDP 的位元遮罩：Alt=1、Ctrl=2、Meta=4、Shift=8。
+ *
+ * **`rawKeyDown` 而非 `keyDown`**：帶修飾鍵而不產生文字的按鍵走的是 raw 事件；用 `keyDown`
+ * 並附 `text` 會多出一個 char 事件（在終端上就是多打了一個字）。
+ */
+async function pressKeyWithModifiers(client, spec, modifiers) {
+  const base = {
+    key: spec.key,
+    code: spec.code,
+    windowsVirtualKeyCode: spec.vk,
+    nativeVirtualKeyCode: spec.vk,
+    modifiers,
+  }
+  await client.send('Input.dispatchKeyEvent', { type: 'rawKeyDown', ...base })
+  await client.send('Input.dispatchKeyEvent', { type: 'keyUp', ...base })
+}
+
+/** Enter 必須是一次真的按鍵事件（見 `typeLine` 的註解）。對話框的送出也走這裡。 */
+async function pressEnter(client) {
   const key = {
     key: 'Enter',
     code: 'Enter',
@@ -429,7 +511,8 @@ async function runMode(label, { port, rendererUrl }) {
   const marker = `spek-term-marker-${process.pid}-${Date.now()}`
   const { repo } = makeFixture()
   const profile = seedProfile([['f1', repo]])
-  const app = await launch({ port, profileDir: profile, rendererUrl, marker })
+  const stub = makeStubClaude()
+  const app = await launch({ port, profileDir: profile, rendererUrl, marker, stub })
 
   try {
     check(results, `${label}：app 掛載`, app.mounted === true)
@@ -589,34 +672,46 @@ async function runMode(label, { port, rendererUrl }) {
     await realMouse(app.client, termAt.x, termAt.y, 'left')
     await sleep(150)
 
-    // ── session 的標籤跟隨 pty 以 OSC 序列宣告的終端標題
-    // 這正是 `claude` 讓終端模擬器的分頁自動改名的機制；我們接的是同一個訊號。
-    await typeLine(app.client, "printf '\\033]0;spek-osc-title\\007'")
+    // ── login shell 的 session **不採用** pty 宣告的標題
+    //
+    // shell 送的是它預設的 prompt 標題（`使用者@主機:/路徑`），對使用者零識別意義，而且它比
+    // session 晚一秒多才到 —— 抵達時分頁的寬度會在眼前暴增，把緊鄰其後的「+ session」入口
+    // 往右推走。標籤因此一律停在本地的 `shell N`（session-navigation-and-labels 的 design D4）。
+    //
+    // **斷言必須成對**：光看「標籤沒變」證明不了什麼（它本來就可能什麼都沒發生）。先確認那串
+    // OSC 序列**真的抵達了 pty**（`cat -v` 會把它以可見形式印出來），再斷言標籤沒被它改動。
+    await typeLine(app.client, "printf '\\033]0;shell-osc-title\\007' | cat -v")
 
-    const titledTabs = await pollUntil(
+    const echoed = await pollUntil(
       app.client,
-      TABS,
-      (value) => value.some((tab) => tab.label.includes('spek-osc-title')),
+      TERMINAL_TEXT,
+      (value) => String(value).includes('^[]0;shell-osc-title^G'),
       8000,
     )
     check(
       results,
-      `${label}：分頁標籤跟隨 pty 設定的終端標題`,
-      titledTabs.some((tab) => tab.label.includes('spek-osc-title')),
-      JSON.stringify(titledTabs.map((t) => t.label)),
+      `${label}：OSC 序列確實抵達 pty（否則此測試空轉）`,
+      String(echoed).includes('^[]0;shell-osc-title^G'),
     )
 
-    const titledRail = await pollUntil(
-      app.client,
-      RAIL_SESSION_ROWS,
-      (value) => value.some((row) => row.includes('spek-osc-title')),
-      6000,
-    )
+    await typeLine(app.client, "printf '\\033]0;shell-osc-title\\007'")
+    await sleep(1200) // 給它足夠的時間「改壞」—— 沒有這段等待，「沒變」只是還沒輪到它變
+
+    const shellTabs = await app.client.evaluate(TABS)
     check(
       results,
-      `${label}：rail 子列的標籤同步跟隨終端標題`,
-      titledRail.some((row) => row.includes('spek-osc-title')),
-      JSON.stringify(titledRail),
+      `${label}：login shell 的 session 不採用 pty 宣告的標題，標籤維持本地標籤`,
+      shellTabs.every((tab) => !tab.label.includes('shell-osc-title')) &&
+        shellTabs[0]?.label.includes('shell 1'),
+      JSON.stringify(shellTabs.map((t) => t.label)),
+    )
+
+    const shellRail = await app.client.evaluate(RAIL_SESSION_ROWS)
+    check(
+      results,
+      `${label}：rail 子列同樣維持本地標籤`,
+      shellRail.every((row) => !row.includes('shell-osc-title')),
+      JSON.stringify(shellRail),
     )
 
     // ── resize：pty 必須收到新的欄數
@@ -657,11 +752,14 @@ async function runMode(label, { port, rendererUrl }) {
     const pids2 = await waitForPtyCount(marker, 2)
     check(results, `${label}：兩個 pty 行程並存`, pids2.length === 2, `pids=${pids2.join(',')}`)
 
-    // 新 session 尚未宣告標題 → 退回本地標籤；先前那個仍保有它宣告的標題
+    // 兩個 login shell 的 session 都停在本地標籤，且**序號各自不同** —— 序號是 folder 內遞增的。
+    //
+    // 「pty 宣告的標題被採用」的對照組不在這裡（shell 一律不採用），而在後面 claude 目標的那一段：
+    // 那邊有一個由 pty 宣告標題的 session，與這裡的本地標籤形成真正的對比。
     check(
       results,
       `${label}：未宣告標題的 session 退回本地標籤`,
-      tabs2[1]?.label.includes('shell 2') && tabs2[0]?.label.includes('spek-osc-title'),
+      tabs2[0]?.label.includes('shell 1') && tabs2[1]?.label.includes('shell 2'),
       JSON.stringify(tabs2.map((t) => t.label)),
     )
 
@@ -779,69 +877,24 @@ async function runMode(label, { port, rendererUrl }) {
       `分頁=${JSON.stringify(renamedTabs)} rail=${JSON.stringify(renamedRail)}`,
     )
 
-    // ── 命名之後，pty 想改名必須先問過
+    // ── 已命名的 login shell session：pty 送出標題時**不該**跳確認
+    //
+    // shell 根本不採用 pty 的標題（見上），因此「pty 想改名」這個情境對它不存在 —— 使用者不該
+    // 被一個「pty 想把它改名為 kewang@host:/tmp/…，要採用嗎？」的對話框打斷，而那個名字他永遠
+    // 看不到。**這是 design D4「擋在 setTitle() 而非顯示層」唯一測得出來的後果**：若只改顯示層，
+    // 標籤會是對的，但這個對話框照跳不誤。
     await realClick(app.client, terminalRect)
     await sleep(200)
     await typeLine(app.client, "printf '\\033]0;pty-wants-this\\007'")
+    await sleep(1500) // 給對話框足夠的時間跳出來 —— 沒有這段等待，「沒跳」只是還沒跳
 
-    const conflictOpened = await pollUntil(app.client, CONFLICT_OPEN, (value) => value === true, 8000)
-    const labelDuringConflict = await app.client.evaluate(TAB_LABELS)
+    const noConflict = await app.client.evaluate(CONFLICT_OPEN)
+    const labelAfterOsc = await app.client.evaluate(TAB_LABELS)
     check(
       results,
-      `${label}：手動命名後 pty 改名會跳確認，且標籤尚未被覆蓋`,
-      conflictOpened === true && labelDuringConflict[0]?.includes('my-session'),
-      `對話框=${conflictOpened} 標籤=${JSON.stringify(labelDuringConflict)}`,
-    )
-
-    // 保留我的名字 → 標籤不動
-    await realClick(app.client, await app.client.evaluate(CONFLICT_BUTTON_RECT('保留我的名字')))
-    await pollUntil(app.client, CONFLICT_OPEN, (value) => value === false, 4000)
-    const afterKeep = await app.client.evaluate(TAB_LABELS)
-    check(
-      results,
-      `${label}：選「保留我的名字」後標籤維持使用者取的名字`,
-      afterKeep[0]?.includes('my-session'),
-      JSON.stringify(afterKeep),
-    )
-
-    // 再送一次不同的標題 → 應該**再問一次**（使用者要的就是每次都確認）
-    await realClick(app.client, terminalRect)
-    await sleep(200)
-    await typeLine(app.client, "printf '\\033]0;pty-again\\007'")
-    const conflictAgain = await pollUntil(app.client, CONFLICT_OPEN, (value) => value === true, 8000)
-    check(results, `${label}：pty 再次改名時再次請求確認`, conflictAgain === true)
-
-    // 採用它的名稱 → 命名權交還 pty
-    await realClick(app.client, await app.client.evaluate(CONFLICT_BUTTON_RECT('採用它的名稱')))
-    const afterAccept = await pollUntil(
-      app.client,
-      TAB_LABELS,
-      (value) => value[0]?.includes('pty-again'),
-      6000,
-    )
-    check(
-      results,
-      `${label}：選「採用它的名稱」後標籤改為 pty 的標題`,
-      afterAccept[0]?.includes('pty-again'),
-      JSON.stringify(afterAccept),
-    )
-
-    // 命名權已交還 —— 此後 pty 改名不該再跳確認
-    await realClick(app.client, terminalRect)
-    await sleep(200)
-    await typeLine(app.client, "printf '\\033]0;pty-third\\007'")
-    const afterHandback = await pollUntil(
-      app.client,
-      TAB_LABELS,
-      (value) => value[0]?.includes('pty-third'),
-      8000,
-    )
-    const stillNoDialog = await app.client.evaluate(CONFLICT_OPEN)
-    check(
-      results,
-      `${label}：命名權交還後 pty 的改名不再需要確認`,
-      afterHandback[0]?.includes('pty-third') && stillNoDialog === false,
-      `標籤=${JSON.stringify(afterHandback)} 對話框=${stillNoDialog}`,
+      `${label}：已命名的 login shell session，pty 送出標題時不跳確認`,
+      noConflict === false && labelAfterOsc[0]?.includes('my-session'),
+      `對話框=${noConflict} 標籤=${JSON.stringify(labelAfterOsc)}`,
     )
 
     // ── 拖曳排序：分頁與 rail 共用同一個順序
@@ -988,18 +1041,302 @@ async function runMode(label, { port, rendererUrl }) {
       `tabs=${tabsAfterCloseExited.length}`,
     )
 
-    // ── claude 模式：能被建立；環境沒有 claude 時應呈現為已結束，而非崩潰
-    // 標籤不比對 `claude` 字樣 —— 若環境中的 claude 起得來，它會用 OSC 宣告自己的標題，
-    // 標籤就不再是本地的 `claude N` 了。這裡驗的是「session 建得起來」。
+    // ── claude 目標的 session：pty 宣告的標題**會**被採用
+    //
+    // 這一整段的載體是 PATH 上的 stub `claude`（見 `makeStubClaude`）—— 產品從 PATH spawn
+    // `claude`，那正是它的正常行為，探針動的是環境而非產品程式碼。stub 是個互動 shell，
+    // 因此下面的 `printf '\033]0;…'` 就是「pty 內的程式宣告自己的身分」。
     await openSessionViaMenu(app.client, '跑 claude')
     const tabsClaude = await pollUntil(app.client, TABS, (value) => value.length === 1, 8000)
     check(
       results,
-      `${label}：claude 模式可建立 session（不論環境是否有 claude）`,
+      `${label}：claude 模式可建立 session`,
       tabsClaude.length === 1,
       JSON.stringify(tabsClaude.map((t) => t.label)),
     )
     check(results, `${label}：建立 claude session 後 app 仍運作`, (await app.client.evaluate(MOUNTED)) === true)
+
+    // 尚未宣告標題 → 本地標籤（序號承自 folder 內的計數）
+    check(
+      results,
+      `${label}：claude session 未宣告標題時為本地標籤`,
+      tabsClaude[0]?.label.includes('claude'),
+      JSON.stringify(tabsClaude.map((t) => t.label)),
+    )
+
+    const claudeTermRect = await pollUntil(app.client, TERMINAL_RECT, (value) => value !== null, 10_000)
+
+    // **正對照組：我們驅動的必須是自己那支 stub claude。**
+    //
+    // 少了這條斷言，一個很難察覺的錯誤會靜悄悄地發生：`~/.profile` 把 `$HOME/.local/bin`
+    // prepend 到 PATH，於是**真的 claude** 被 spawn 起來，探針真的開了一個 Claude Code session
+    // （實測踩過 —— 分頁標籤變成它宣告的任務描述，四條斷言以看不懂的方式失敗）。
+    let stubRan = false
+    for (let i = 0; i < 60 && !stubRan; i++) {
+      stubRan = existsSync(stub.receipt)
+      if (!stubRan) await sleep(250)
+    }
+    check(
+      results,
+      `${label}：claude 目標 spawn 的是探針的 stub（不是本機真的 claude）`,
+      stubRan === true,
+      stubRan ? '' : `未見憑據：${stub.receipt}`,
+    )
+
+    await sleep(1500) // 等 stub 的 shell 畫出它的第一個 prompt
+    await realClick(app.client, claudeTermRect)
+    await sleep(200)
+    await typeLine(app.client, "printf '\\033]0;claude-osc-title\\007'")
+
+    const claudeTitled = await pollUntil(
+      app.client,
+      TABS,
+      (value) => value.some((tab) => tab.label.includes('claude-osc-title')),
+      10_000,
+    )
+    check(
+      results,
+      `${label}：claude session 的分頁標籤跟隨 pty 宣告的終端標題`,
+      claudeTitled.some((tab) => tab.label.includes('claude-osc-title')),
+      JSON.stringify(claudeTitled.map((t) => t.label)),
+    )
+
+    const claudeRail = await pollUntil(
+      app.client,
+      RAIL_SESSION_ROWS,
+      (value) => value.some((row) => row.includes('claude-osc-title')),
+      6000,
+    )
+    check(
+      results,
+      `${label}：rail 子列同步跟隨 pty 宣告的標題`,
+      claudeRail.some((row) => row.includes('claude-osc-title')),
+      JSON.stringify(claudeRail),
+    )
+
+    // ── 命名權：使用者命名之後，pty 想改名必須先問過
+    const claudeTab0 = center(await app.client.evaluate(TAB_RECT(0)))
+    await realMouse(app.client, claudeTab0.x, claudeTab0.y, 'right')
+    await pollUntil(app.client, MENU_IN_VIEWPORT, (value) => value !== null, 4000)
+    await realClick(app.client, await app.client.evaluate(MENU_ITEM_RECT('重新命名')))
+    await sleep(300) // 對話框開啟時輸入框已 focus 且全選 —— 直接打字即取代
+    await app.client.send('Input.insertText', { text: 'my-claude' })
+    await pressEnter(app.client)
+
+    const claudeRenamed = await pollUntil(
+      app.client,
+      TAB_LABELS,
+      (value) => value[0]?.includes('my-claude'),
+      6000,
+    )
+    check(
+      results,
+      `${label}：claude session 可由使用者命名，且優先於 pty 的標題`,
+      claudeRenamed[0]?.includes('my-claude'),
+      JSON.stringify(claudeRenamed),
+    )
+
+    await realClick(app.client, claudeTermRect)
+    await sleep(200)
+
+    // **兩個標題，中間隔 3 秒 —— 一次打完。**
+    //
+    // 第二個標題必須在**對話框已經開著**的時候抵達，才驗得到「待確認的標題至多一個」。而對話框
+    // 是 modal overlay：它蓋在終端上面，這時候點終端會點到 overlay，`insertText` 也進不了 pty
+    // —— **對話框開著時根本打不了字**。但 pty 不受 UI 焦點影響，它會照自己的節奏把第二個標題吐
+    // 出來。所以要在對話框跳出**之前**就把整條命令送進去。
+    await typeLine(app.client, "printf '\\033]0;pty-wants-this\\007'; sleep 3; printf '\\033]0;pty-supersedes\\007'")
+
+    const claudeConflict = await pollUntil(app.client, CONFLICT_OPEN, (value) => value === true, 8000)
+    const claudeLabelDuring = await app.client.evaluate(TAB_LABELS)
+    check(
+      results,
+      `${label}：手動命名後 pty 改名會跳確認，且標籤尚未被覆蓋`,
+      claudeConflict === true && claudeLabelDuring[0]?.includes('my-claude'),
+      `對話框=${claudeConflict} 標籤=${JSON.stringify(claudeLabelDuring)}`,
+    )
+
+    // 待確認的標題**至多一個**：確認尚未裁決時 pty 又改名，新標題**取代**原本待確認的那個，
+    // 不堆出第二個對話框（`claude` 改標題很頻繁，堆疊 N 個會把畫面淹掉）。
+    //
+    // 斷言**成對**：對話框仍只有一個，**且它顯示的是新標題** —— 只數「一個」的話，一個「後來的
+    // 標題被整個丟掉」的實作也會通過。
+    const superseded = await pollUntil(
+      app.client,
+      `(() => {
+        const dialogs = [...document.querySelectorAll('[aria-label="session 改名確認"]')]
+        return { count: dialogs.length, text: dialogs.map((d) => d.innerText).join(' ') }
+      })()`,
+      (value) => value.text.includes('pty-supersedes'),
+      10_000,
+    )
+    check(
+      results,
+      `${label}：待確認的標題至多一個，且被最新的標題取代`,
+      superseded.count === 1 && superseded.text.includes('pty-supersedes'),
+      `對話框數=${superseded.count} 內容含新標題=${superseded.text.includes('pty-supersedes')}`,
+    )
+
+    // 標題衝突的對話框開著時，導航快捷鍵必須讓位 —— 它正在等使用者的鍵盤裁決。
+    //
+    // 這是第三種對話框（另兩種：session 命名、files 的對話框，由 probe:keyboard 涵蓋）。
+    // **三種都要驗**：抑制是以 `[role="dialog"]` 的存在判定的，而那條慣例只要有一種對話框漏掉
+    // 就會靜默失效 —— 只驗一種就宣稱涵蓋，等於沒驗。
+    await pressKeyWithModifiers(app.client, { key: 'Tab', code: 'Tab', vk: 9 }, 2 /* Ctrl */)
+    await sleep(400)
+    const conflictStillOpen = await app.client.evaluate(CONFLICT_OPEN)
+    const labelDuringSuppression = await app.client.evaluate(TAB_LABELS)
+    check(
+      results,
+      `${label}：標題衝突對話框開啟時，導航快捷鍵不生效`,
+      conflictStillOpen === true && labelDuringSuppression[0]?.includes('my-claude'),
+      `對話框=${conflictStillOpen} 標籤=${JSON.stringify(labelDuringSuppression)}`,
+    )
+
+    // 保留我的名字 → 標籤不動
+    await realClick(app.client, await app.client.evaluate(CONFLICT_BUTTON_RECT('保留我的名字')))
+    await pollUntil(app.client, CONFLICT_OPEN, (value) => value === false, 4000)
+    const claudeAfterKeep = await app.client.evaluate(TAB_LABELS)
+    check(
+      results,
+      `${label}：選「保留我的名字」後標籤維持使用者取的名字`,
+      claudeAfterKeep[0]?.includes('my-claude'),
+      JSON.stringify(claudeAfterKeep),
+    )
+
+    // 再送一次不同的標題 → 應該**再問一次**
+    await realClick(app.client, claudeTermRect)
+    await sleep(200)
+    await typeLine(app.client, "printf '\\033]0;pty-again\\007'")
+    const claudeConflictAgain = await pollUntil(app.client, CONFLICT_OPEN, (value) => value === true, 8000)
+    check(results, `${label}：pty 再次改名時再次請求確認`, claudeConflictAgain === true)
+
+    // 採用它的名稱 → 命名權交還 pty
+    await realClick(app.client, await app.client.evaluate(CONFLICT_BUTTON_RECT('採用它的名稱')))
+    const claudeAfterAccept = await pollUntil(
+      app.client,
+      TAB_LABELS,
+      (value) => value[0]?.includes('pty-again'),
+      6000,
+    )
+    check(
+      results,
+      `${label}：選「採用它的名稱」後標籤改為 pty 的標題`,
+      claudeAfterAccept[0]?.includes('pty-again'),
+      JSON.stringify(claudeAfterAccept),
+    )
+
+    // 命名權已交還 —— 此後 pty 改名不該再跳確認
+    await realClick(app.client, claudeTermRect)
+    await sleep(200)
+    await typeLine(app.client, "printf '\\033]0;pty-third\\007'")
+    const claudeHandback = await pollUntil(
+      app.client,
+      TAB_LABELS,
+      (value) => value[0]?.includes('pty-third'),
+      8000,
+    )
+    const claudeNoDialog = await app.client.evaluate(CONFLICT_OPEN)
+    check(
+      results,
+      `${label}：命名權交還後 pty 的改名不再需要確認`,
+      claudeHandback[0]?.includes('pty-third') && claudeNoDialog === false,
+      `標籤=${JSON.stringify(claudeHandback)} 對話框=${claudeNoDialog}`,
+    )
+
+    // ── 過長的標題被截斷，但完整標題不遺失（tooltip 拿得到）
+    //
+    // 截斷是**呈現上**的取捨，不是資料的遺失 —— 斷言必須成對：標籤真的被截短了，**而且**
+    // 完整標題仍可自該元素的提示取得。只驗前者，一個把標題直接砍掉的實作也會通過。
+    const longTitle = 'a-very-long-pty-title-that-definitely-exceeds-the-label-budget'
+    await realClick(app.client, claudeTermRect)
+    await sleep(200)
+    await typeLine(app.client, `printf '\\033]0;${longTitle}\\007'`)
+
+    const truncated = await pollUntil(
+      app.client,
+      `(() => {
+        const tab = document.querySelector('[aria-label="Session 分頁"] [role="tab"]')
+        if (!tab) return null
+        return { label: tab.innerText.replace(/\\s+/g, ' ').trim(), title: tab.getAttribute('title') ?? '' }
+      })()`,
+      (value) => value?.title?.includes('${longTitle}'.slice(0, 20)),
+      8000,
+    )
+    check(
+      results,
+      `${label}：過長的標題被截斷，但完整標題仍可自提示取得`,
+      truncated !== null &&
+        !truncated.label.includes(longTitle) &&
+        truncated.label.includes('…') &&
+        truncated.title.includes(longTitle),
+      `標籤=${truncated?.label} 提示=${String(truncated?.title).slice(0, 70)}`,
+    )
+
+    // ── 清空名稱 ＝ 放棄命名權
+    //
+    // claude session：回到**跟隨 pty 宣告的標題**（此刻是那個過長的標題）。
+    const claudeTab = center(await app.client.evaluate(TAB_RECT(0)))
+    await realMouse(app.client, claudeTab.x, claudeTab.y, 'right')
+    await pollUntil(app.client, MENU_IN_VIEWPORT, (value) => value !== null, 4000)
+    await realClick(app.client, await app.client.evaluate(MENU_ITEM_RECT('重新命名')))
+    await sleep(300)
+    await app.client.send('Input.insertText', { text: 'temp-name' })
+    await pressEnter(app.client)
+    await pollUntil(app.client, TAB_LABELS, (value) => value[0]?.includes('temp-name'), 6000)
+
+    await realMouse(app.client, claudeTab.x, claudeTab.y, 'right')
+    await pollUntil(app.client, MENU_IN_VIEWPORT, (value) => value !== null, 4000)
+    await realClick(app.client, await app.client.evaluate(MENU_ITEM_RECT('重新命名')))
+    await sleep(300)
+    await app.client.send('Input.insertText', { text: '' }) // 輸入框已全選 —— 送出空字串＝清空
+    await pressEnter(app.client)
+
+    const clearedClaude = await pollUntil(
+      app.client,
+      TAB_LABELS,
+      (value) => !value[0]?.includes('temp-name'),
+      6000,
+    )
+    check(
+      results,
+      `${label}：claude session 清空名稱後回到跟隨 pty 宣告的標題`,
+      !clearedClaude[0]?.includes('temp-name') && clearedClaude[0]?.includes('…'),
+      JSON.stringify(clearedClaude),
+    )
+
+    // login shell 的 session：回到**本地標籤**，即使它的 pty 曾宣告過標題（那些標題一律被丟棄）。
+    await openSessionViaMenu(app.client, '進 login shell')
+    await pollUntil(app.client, TABS, (value) => value.length === 2, 8000)
+
+    const shellTab = center(await app.client.evaluate(TAB_RECT(1)))
+    await realMouse(app.client, shellTab.x, shellTab.y, 'right')
+    await pollUntil(app.client, MENU_IN_VIEWPORT, (value) => value !== null, 4000)
+    await realClick(app.client, await app.client.evaluate(MENU_ITEM_RECT('重新命名')))
+    await sleep(300)
+    await app.client.send('Input.insertText', { text: 'named-shell' })
+    await pressEnter(app.client)
+    await pollUntil(app.client, TAB_LABELS, (value) => value[1]?.includes('named-shell'), 6000)
+
+    await realMouse(app.client, shellTab.x, shellTab.y, 'right')
+    await pollUntil(app.client, MENU_IN_VIEWPORT, (value) => value !== null, 4000)
+    await realClick(app.client, await app.client.evaluate(MENU_ITEM_RECT('重新命名')))
+    await sleep(300)
+    await app.client.send('Input.insertText', { text: '' })
+    await pressEnter(app.client)
+
+    const clearedShell = await pollUntil(
+      app.client,
+      TAB_LABELS,
+      (value) => !value[1]?.includes('named-shell'),
+      6000,
+    )
+    check(
+      results,
+      `${label}：login shell 的 session 清空名稱後回到本地標籤`,
+      clearedShell[1]?.includes('shell'),
+      JSON.stringify(clearedShell),
+    )
 
     // ── reload：舊 pty 必須全數釋放（design D2）
     // 這是最容易漏的一條：reload 不銷毀 webContents，只掛 'destroyed' 的清理不會觸發，

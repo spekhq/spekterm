@@ -25,7 +25,15 @@ Phase 5 讓側欄**首次真的懂 OpenSpec**（在此之前那格只是一塊 p
 Changes 兩棵樹）、tasks 進度與 spec deltas 的 BDD 高亮、spec/change ↔ 檔案的**交叉導覽**、
 session 的**錨定 change**（側欄跟隨 focused session），以及 **Graph 與 Timeline 的全視窗 overlay**
 —— 那兩個來自新抽出的 **`@spekjs/ui`**（發佈至 npm，與 spek web 共用同一份 d3 力導向圖與 Gantt）。
-`probe:openspec` 142/142，dev 與 build 兩模式。尚未開始：打包（Phase 6）、handoff（Phase 7+）。
+`probe:openspec` 142/142，dev 與 build 兩模式。
+
+`session-navigation-and-labels`（不屬於任何 Phase）再補上**鍵盤導航**——`Ctrl+Tab` 切 session、
+`Ctrl+↑↓` 切 repo、`Ctrl+T` 開 spawn 選單（選單可全鍵盤操作），攔截點在 window 的 **capture 階段**
+（早於 xterm 與 Monaco，被攔下的按鍵不會流進 pty）；以及 **login shell 不再採用 pty 宣告的 OSC 標題**
+（那串 `使用者@主機:/路徑` 零資訊量，且它晚一秒多才到、抵達時把「+ session」入口往右推 150px）。
+`probe:keyboard` 64/64、`probe:terminal` 112/112。
+
+尚未開始：打包（Phase 6）、handoff（Phase 7+）。
 
 ### 開發指令
 
@@ -37,7 +45,8 @@ npm test                # node:test 單元測試（fs 邊界、workspace store�
 npm run probe:shell     # 驗收 workspace-app-shell（開視窗 + 信任模型 + preload 白名單，走 CDP）
 npm run probe:workspace # 驗收 workspace-folders / filesystem-access / workspace-layout
 npm run probe:files     # 驗收 file-explorer / file-viewer / 編輯 / 存檔 / 衝突 / CRUD / 導航防護 / 編輯器 worker（dev + build 兩模式）
-npm run probe:terminal  # 驗收 terminal-sessions（pty 雙向／cwd／resize／多開／關分頁・reload・關窗皆不留孤兒，dev + build 兩模式）
+npm run probe:terminal  # 驗收 terminal-sessions（pty 雙向／cwd／resize／多開／關分頁・reload・關窗皆不留孤兒；OSC 標題與命名權衝突以 PATH 上的 stub claude 承載，dev + build 兩模式）
+npm run probe:keyboard  # 驗收 keyboard-navigation（Ctrl+Tab 切 session／Ctrl+↑↓ 切 repo／位置序非 MRU／按鍵不流進 pty／編輯器與對話框的行為，dev + build 兩模式）
 npm run probe:openspec  # 驗收 openspec-data-access / openspec-panel（兩個視圖／兩棵樹／artifact 分頁／agent 改檔即更新／錨定／交叉導覽／Graph・Timeline 的 overlay，dev + build 兩模式）
 npm run probe:native    # 驗收 native-module-toolchain（Electron 主行程載入 node-pty + spawn pty）
 npm run probe:core      # 驗收 spek-core-integration（主行程掃描 OpenSpec，且不開 TCP 埠）
@@ -234,6 +243,12 @@ node-pty 1.2.0-beta.14（釘死）、Monaco Editor、chokidar 5、react-markdown
   （開源專案名 + 泛用詞，見該 change 的 proposal）正名為 **spekterm**，並定下會隨打包凍結的作業
   系統身分（見上文「產品身分」）。**它必須排在 Phase 6 之前** —— `appId` 一旦隨安裝檔發佈就改不了，
   正名的成本從打包起單調上升。
+- **鍵盤導航與 session 標籤** — `session-navigation-and-labels`（已封存，**不屬於任何 Phase**）：
+  新能力 `keyboard-navigation`（`Ctrl+Tab` 切 session、`Ctrl+↑↓` 切 repo、`Ctrl+T` 開 spawn 選單，
+  選單可全鍵盤操作），以及 **login shell 不再採用 pty 宣告的 OSC 標題**（見上文兩節）。
+  連帶：`ContextMenu` 加上鍵盤導覽、`files/dialogs.tsx` 補上 `role="dialog"`、新增 `probe:keyboard`，
+  並把 `probe:terminal` 的 OSC 標題驗收換到**由探針控制的 stub `claude`** 上（不換就是假綠 —— 那些
+  測試會繼續通過，但測的已經不是它們自稱在測的東西）。
 - Phase 6 打包與發佈，Phase 7+ 建立護城河（handoff）。
 
 > **Phase 5 對 PRD 的「抽出 `@spekjs/ui`」做了對半的裁決**（PRD §9.2 已回寫）：整頁視圖**不抽**
@@ -367,6 +382,89 @@ provider 驗證：它為 `language: '*'` 註冊，呼叫 worker 端的 `$compute
   `Input.setInterceptDrags` + `dispatchDragEvent`，與探針既有的 `dragMouse`（真滑鼠序列）
   格格不入。自己做，驗收就能送真拖曳。
 
+- **login shell 的 session 不採用 pty 宣告的 OSC 標題**（`session-navigation-and-labels`）。
+  上面那條三層優先序，第二層**只對 `claude` 目標成立**。shell 送的是它預設的 prompt 標題
+  （`使用者@主機:/路徑`），對使用者零識別意義；而且它**比 session 晚一秒多才到**（shell 要先
+  載完 rc、畫出第一個 prompt），抵達時分頁從約 60px 暴增到約 210px，把緊鄰其後的「+ session」
+  入口**往右推 150px** —— 使用者正要點下去時，按鈕從游標底下跳走（`probe:openspec` 就是這樣
+  點空的，症狀看起來卻像「產品的選單壞了」）。**分頁不限寬** —— 根因是標籤內容突變，不是缺少
+  寬度上限。
+  - **擋在 `sessions.tsx` 的 `setTitle()`，不是顯示層。** 那是 OSC 標題進入狀態的唯一入口：
+    擋在那裡，`title` 恆為 `undefined`（標籤自然退回本地標籤），`pendingTitle` 也永遠不會被設
+    —— **確認對話框一起失去觸發條件**。只改顯示層的話，標籤是對了，但使用者仍會被一個「pty 想
+    把它改名為 `kewang@host:/tmp/…`，要採用嗎？」的對話框打斷，而那個名字他根本永遠看不到。
+
+## 快捷鍵（`session-navigation-and-labels` 起）
+
+| | |
+|---|---|
+| `Ctrl+Tab` / `Ctrl+Shift+Tab` | 當前 repo 內的下／上一個 session（**分頁位置序**，可循環） |
+| `Ctrl+↓` / `Ctrl+↑` | rail 上的下／上一個 repo（可循環） |
+| `Ctrl+T` | 開啟建立 session 的入口（spawn 選單，可全鍵盤操作） |
+| `Ctrl+Shift+C` / `Ctrl+Shift+V` | 終端的複製貼上（macOS 用 `Cmd`） |
+| `Cmd/Ctrl+S` | 存檔 |
+| `Esc` | 關閉 overlay／對話框／選單 |
+
+**`docs/workspace-mockup.html` 對快捷鍵沉默** —— 這組綁定由該 change 定義，不是偏離雛型。
+
+**選單必須能全鍵盤操作，這不是加分項而是前提。** `Ctrl+T` 跳出的是選單（spawn 目標要選），而原本的
+`ContextMenu` 只處理 `Esc` —— **用快捷鍵叫出一個只能用滑鼠點的選單，等於沒做這個快捷鍵**。因此它加上了
+「開啟時焦點落在第一項 / `↑↓` 循環 / `Enter` 觸發」，並且**必須有 `focus:` 的視覺樣式**（少了它，使用者
+不知道 Enter 會按到什麼）。`ContextMenu` 是共用元件（分頁右鍵、檔案樹右鍵、spawn 選單都是它）——
+動它要跑 `probe:terminal` 與 `probe:files` 回歸。
+
+**`Ctrl+T` 的觸發走「啟動既有的建立入口」**（找到 `[aria-label="新增 session"]` 並觸發它），不自己算座標
+—— 於是鍵盤叫出的選單與滑鼠點出來的**錨定在同一個地方**（`useSpawnMenu` 是從 `event.currentTarget` 的
+rect 算位置的），spawn 選單的狀態也不必從 `SessionTabs` 搬出來，**鍵盤的接縫仍然只有一處**。
+
+### 攔截點是 window 的 **capture 階段** —— 「`Ctrl+S` 必須寫進 Monaco」的教訓被誤讀了
+
+終端幾乎永遠持有焦點，xterm 會把按鍵直接寫進 pty，Monaco 也會吃鍵。但這**不代表 window
+listener 沒用** —— 既有的 `Ctrl+S` 之所以被迫註冊在 Monaco 內部（`editor/index.tsx`），是因為
+它註冊在 **bubble 階段**：Monaco 攔下該鍵並停止傳播，它永遠冒不到 window。**capture 由 window
+往下傳，早於 xterm 與 Monaco 綁在各自 DOM 節點上的 listener** —— `stopPropagation()` 一下，
+兩者都收不到，被攔下的按鍵也就不會流進 agent。**階段選對就沒有這個問題**（design D1）。
+
+「對話框開著時抑制快捷鍵」以 **`[role="dialog"]` 的存在**判定 —— 任何遵守這個無障礙慣例的新
+對話框都自動被尊重，不必記得去某份清單註冊。代價是**漏掉 `role` 的對話框會靜默失效**，因此
+`probe:keyboard` 與 `probe:terminal` 對**三種**對話框（session 命名、標題衝突、files 的）各驗
+一次抑制 —— 只驗一種就宣稱涵蓋，等於沒驗。
+
+### 三顆鍵，三種代價 —— 不要混為一談
+
+- **`Ctrl+Tab` 是白撿的。** 它在標準終端編碼下**送不出去**（`Tab` 就是 `Ctrl+I`＝`0x09`）——
+  沒有任何 shell 或 agent 綁得了它。拿走它，pty 內**零損失**。這正是 GNOME Terminal、iTerm2
+  敢拿它切分頁的原因。
+- **`Ctrl+↑/↓` 送得出去**（`CSI 1;5A` / `CSI 1;5B`）—— 攔截它等於從 pty 裡的程式手上**永久
+  沒收**這顆鍵，而且沒有逃生口（本 change 不做鍵位設定）。實測：zsh 與 bash 預設皆未綁定；
+  **唯一的犧牲者是 tmux**（`prefix + C-Up/C-Down` 的 pane resize、copy-mode 的捲動）—— 而這個
+  app 本身就是要取代那個用途。
+- **`Ctrl+T` 的代價最貴，採用它有兩個前提。** 實測 **zsh 與 bash readline 都把它綁成
+  `transpose-chars`**。它之所以仍然可以拿：(1) 使用者的 GNOME Terminal **本來就把 `Ctrl+T` 拿去
+  開新分頁了**（`new-tab = <Primary>t`），所以那個 `transpose-chars` 他早就沒有；(2) **`claude`
+  沒有使用 `Ctrl+T`**（使用者確認）—— 後者是關鍵，claude session 是這個 app 的主場。
+  > **此結論有前提。** 日後若 `claude`（或其他常駐 pty 的 agent）開始使用 `Ctrl+T`，本裁決即失效。
+  > 退路是 **`Ctrl+Shift+T`**，成本為零（`Ctrl+Shift+字母` 在終端協定裡編碼不出來 —— 這正是複製
+  > 貼上用 `Ctrl+Shift+C/V` 的理由）。
+- **`Ctrl+Alt+↑/↓` 不能用** —— Linux 上被 GNOME 拿去切工作區，按鍵到不了我們。（被 WM 拿走的是
+  `Ctrl+**Alt**+方向鍵`，不是 `Ctrl+方向鍵`。）
+- **`Ctrl+C` 絕不挪用** —— 它必須維持中斷訊號。
+
+> **探針送 `Enter` 必須用 `keyDown` + `text`，不能用 `rawKeyDown`。** `<button>` 是靠 Enter 的
+> **預設動作**被觸發的，而 `rawKeyDown` 刻意跳過預設動作 —— 用它送 Enter，按鈕完全沒反應（實測：
+> 選單裡按 Enter 建不出 session）。其餘帶修飾鍵的按鍵則相反，要用 `rawKeyDown`，否則 `keyDown`
+> 附帶的 `text` 會在終端上多打一個字。
+
+### 探針證明不了「真實鍵盤」—— 這道缺口只能由人補
+
+CDP 的 `Input.dispatchKeyEvent` 是把事件**注入 Chromium 的輸入管線**，它**繞過**作業系統與瀏覽器
+的 accelerator 層。因此 `probe:keyboard` 能證明 handler 正確、被攔下的按鍵沒流進 pty，**但不能
+證明一顆真的 `Ctrl+Tab` 抵達得了 renderer**（若 Chromium 把它保留給分頁切換，探針照樣全綠）。
+
+> **X11 的 XTEST 合成注入在本機被環境擋掉了** —— 自我檢驗：開一個自己的 X 視窗、確認焦點落在
+> 它身上、`fake_input` 送一顆 `a`，**收到 0 個 KeyPress**。所以「用 xdotool 代替真人」這條路
+> 在這台機器上不通。
+
 ### React 的 state updater 必須是純函式 —— StrictMode 會抓到你
 
 **副作用絕不可寫在 `setState` 的 updater 裡。** StrictMode（**只在 dev 生效**）會刻意
@@ -490,6 +588,29 @@ setX(...) }`）。但**渲染期間只能改自己的 state**，不能呼叫父�
 
 反過來，**key 變了（切 folder、換 change）就必須把資料清掉**：沿用上一份的話，畫面會有一瞬間
 顯示**上一個 folder 的 change** —— 那比 loading 更糟，因為它看起來像是真的。
+
+### 驗「pty 宣告的標題」不能用真的 claude —— 用 PATH 上的一支 stub
+
+OSC 標題只對 `claude` spawn 目標生效，於是那組驗收的載體必須是 claude 目標的 session。但我們
+**叫不動真的 `claude` 去宣告一個指定的標題**，也不能要求每台機器都裝了它，更不該讓一支探針真的
+去啟動一個 Claude Code session。
+
+產品的 claude 模式是 `$SHELL -l -c claude` —— **從 PATH 解析**，而 pty 的 env 整份繼承 Electron
+行程的 `process.env`。探針本來就自己 spawn Electron，因此把一個放著 stub `claude` 的目錄前置到
+`PATH`，走的就是**產品原本那條路徑**：動的是環境，不是被出貨的程式碼。stub 本身是個互動 shell
+（`exec /bin/sh -i`），既有的 `typeLine(printf '\033]0;…')` 一個字都不用改就能驅動它宣告標題。
+
+- **`HOME` 也必須換掉，否則 stub 會被真的 claude 蓋過去（實測踩過）。** `-l` 是 login shell，
+  它 source `~/.profile`，而 Ubuntu 的預設 `~/.profile` 裡有 `PATH="$HOME/.local/bin:$PATH"`
+  —— 那一行把**真** claude 的目錄搶到我們前面，於是探針真的把一個 Claude Code session 跑了起來
+  （分頁標籤變成它宣告的任務描述，四條斷言以看不懂的方式失敗）。把 `HOME` 指向暫存目錄後：那裡
+  沒有 `~/.profile` 可 source，而且 stub 就放在該 HOME 的 `.local/bin` 裡 —— **即使 profile 真的
+  prepend `$HOME/.local/bin`，它指的也是我們的目錄**。
+- **`SHELL` 要釘成 `/bin/sh`** —— zsh 會自己送 OSC 標題（它的 prompt 就在做這件事），claude
+  session 的標籤就不確定了。
+- **「stub 真的跑起來了」要以磁碟上的憑據斷言，不要看終端畫面。** 「終端上有沒有出現某行字」對
+  掛載時機、backlog 的 flush 與捲動都很敏感（dev 的 StrictMode 還會把元件重掛一次，實測因此讀
+  不到）。把一個穩固的事實綁在脆弱的訊號上，只會換來一支時綠時紅的探針。
 
 ### 一支永遠紅的探針等於沒有探針
 

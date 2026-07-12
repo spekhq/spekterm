@@ -44,7 +44,12 @@ export function NameDialog({
 
   return (
     <div className={OVERLAY_CLASS}>
-      <div className={CARD_CLASS}>
+      {/*
+        `role="dialog"` 不只是無障礙標記 —— 導航快捷鍵以 `[role="dialog"]` 的存在判定「有對話框
+        開著」而整體不生效（session-navigation-and-labels 的 design D5）。少了它，使用者在這裡
+        打字命名時，一個 Ctrl+Tab 就會把畫面切走。
+      */}
+      <div role="dialog" aria-label={title} className={CARD_CLASS}>
         <p className="text-ink">{title}</p>
         <input
           ref={inputRef}
@@ -101,7 +106,8 @@ export function ConfirmDelete({
 
   return (
     <div className={OVERLAY_CLASS}>
-      <div className={CARD_CLASS}>
+      {/* `role="dialog"` 同時是導航快捷鍵的抑制依據 —— 見 NameDialog 的註解。 */}
+      <div role="dialog" aria-label={`刪除 ${relPath}`} className={CARD_CLASS}>
         <p className="text-ink">刪除「{relPath}」？</p>
         {isDirectory && (
           <p className="mt-1 text-[12px] text-ink-faint">
@@ -188,10 +194,41 @@ export function ContextMenu({ x, y, items, onClose }: ContextMenuProps): React.J
     }
   }, [onClose])
 
+  // **開啟時把焦點放到第一個可用的選項。**
+  //
+  // 這是「以 `Ctrl+T` 叫出選單」能成立的前提 —— 用快捷鍵叫出一個只能用滑鼠點的選單，等於沒做
+  // 這個快捷鍵（design D9）。停用的項目跳過（`disabled` 的 `<button>` 本來就不可聚焦）。
+  useEffect(() => {
+    const first = menuRef.current?.querySelector<HTMLButtonElement>(
+      'button[role="menuitem"]:not([disabled])',
+    )
+    first?.focus()
+  }, [])
+
+  /** `↑/↓` 於選項間循環移動。`Enter`／`Space` 不必處理 —— `<button>` 原生就會觸發 onClick。 */
+  const onMenuKeyDown = (event: React.KeyboardEvent<HTMLDivElement>): void => {
+    if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return
+    event.preventDefault()
+    event.stopPropagation()
+
+    const options = [
+      ...(menuRef.current?.querySelectorAll<HTMLButtonElement>(
+        'button[role="menuitem"]:not([disabled])',
+      ) ?? []),
+    ]
+    if (options.length === 0) return
+
+    const current = options.indexOf(document.activeElement as HTMLButtonElement)
+    const delta = event.key === 'ArrowDown' ? 1 : -1
+    const next = (current + delta + options.length) % options.length
+    options[next]?.focus()
+  }
+
   return (
     <div
       ref={menuRef}
       role="menu"
+      onKeyDown={onMenuKeyDown}
       style={{ left: pos.left, top: pos.top }}
       className="fixed z-30 min-w-[150px] rounded border border-hairline bg-panel py-1 text-xs shadow-lg"
     >
@@ -202,10 +239,13 @@ export function ContextMenu({ x, y, items, onClose }: ContextMenuProps): React.J
           role="menuitem"
           disabled={item.disabled}
           onClick={item.onSelect}
-          className={`block w-full px-3 py-1 text-left ${
+          // `focus:` 與 `hover:` 同樣的底色 —— 少了它，以鍵盤操作時**看不出焦點在哪一項**，
+          // 那這個選單就只是「能按 Enter 但你不知道會按到什麼」。`outline-none` 是因為底色
+          // 已經足以表達焦點，原生外框在深色主題上很突兀。
+          className={`block w-full px-3 py-1 text-left outline-none ${
             item.disabled
               ? 'cursor-not-allowed text-ink-faint opacity-40'
-              : `hover:bg-hover ${item.tone === 'danger' ? 'text-danger' : 'text-ink-dim'}`
+              : `hover:bg-hover focus:bg-hover ${item.tone === 'danger' ? 'text-danger' : 'text-ink-dim'}`
           }`}
         >
           {item.label}

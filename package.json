@@ -30,6 +30,7 @@
     "lint": "eslint .",
     "probe:files": "npm run build && node scripts/probe-files.mjs",
     "probe:terminal": "npm run build && node scripts/probe-terminal.mjs",
+    "probe:keyboard": "npm run build && node scripts/probe-keyboard.mjs",
     "probe:openspec": "npm run build && node scripts/probe-openspec.mjs"
   },
   "devDependencies": {

@@ -1,5 +1,6 @@
 import { Group, Panel, Separator } from 'react-resizable-panels'
 import { ActivityBar } from './ActivityBar'
+import { KeyboardNavigation } from './KeyboardNavigation'
 import { MainStage } from './MainStage'
 import { WorkspaceRail } from './WorkspaceRail'
 import { DirtyBuffersProvider } from './files/dirty-buffers'
@@ -23,6 +24,12 @@ export function AppShell(): React.JSX.Element {
     <DirtyBuffersProvider folders={folders}>
       <SessionsProvider>
         <OpenSpecProvider>
+          {/*
+            必須在 `SessionsProvider` 之內（它要 `useSessions()`），而 `AppShell` 本身正是渲染
+            那個 Provider 的元件 —— 掛在這一層才拿得到 context。它不渲染任何東西。
+          */}
+          <KeyboardNavigation folders={folders} selectedId={selectedId} onSelectFolder={select} />
+
           <Group orientation="horizontal" className="h-full w-full">
             <Panel defaultSize="56px" minSize="48px" maxSize="120px">
               <ActivityBar />

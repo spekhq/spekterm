@@ -520,7 +520,11 @@ spekterm
 ## 12. 橫切關注點
 
 - **狀態持久化**：工作區 folder、開啟 tab、panel 尺寸、最近專案。
-- **快捷鍵 / 命令面板**：沿用 spek `Cmd+K`，擴充為開檔 / 切 tab / 開 terminal / 寫 handoff。
+- **快捷鍵 / 命令面板**：命令面板（`Cmd+K`）仍為後續項目。**導航快捷鍵已由
+  `session-navigation-and-labels` 落地**：`Ctrl+Tab` / `Ctrl+Shift+Tab` 切換當前 repo 內的
+  session（分頁位置序、可循環），`Ctrl+↓` / `Ctrl+↑` 切換 repo（rail 順序、可循環）。
+  **`docs/workspace-mockup.html` 對快捷鍵沉默** —— 這組綁定由該 change 定義，不算偏離雛型。
+  鍵位的取捨（哪些鍵能從 pty 手上拿走、代價是什麼）見該 change 的 `design.md` D1–D2。
 - **主題**：沿用 spek dark/light，Monaco 與 xterm 主題同步。
 - **安全 / 信任模型**：
   - fs 寫入與 terminal cwd 限制在已加入的 workspace folders。
