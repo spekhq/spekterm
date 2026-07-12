@@ -592,6 +592,44 @@ async function realClick(client, rect) {
   await realMouse(client, at.x, at.y, 'left')
 }
 
+/**
+ * 量到一個**位置已經穩定**的矩形再回傳（連續 `samples` 次量到同一個位置才算數）。
+ *
+ * **量完就點會點空。** 分頁列是會動的：pty 宣告的 OSC 標題比 session 本身晚到很多 —— shell
+ * 要載完 rc、畫出第一個 prompt 才會送出 `ESC ] 0 ; ... BEL`，實測是一秒以上。標題一到，分頁
+ * 的標籤就從 `shell 1` 變成 `kewang@host:/長長的/路徑`，寬度暴增，把它右邊的「+ session」
+ * 整個往右推（實測跳了 150px）。探針量到的座標於是過期，點擊落在變寬後的分頁標籤上 ——
+ * click 的 target 是那個 `SPAN` 而不是按鈕，選單自然開不起來，**症狀看起來卻像「產品的選單
+ * 壞了」**。
+ *
+ * 取樣窗口必須跨過那個延遲：只連量兩次、間隔 150ms，會落在標題抵達前的**假平靜期**裡。
+ *
+ * 這與「先訂閱、再列目錄」同源：**在會變動的東西上取一次快照，就是在賭它不變。**
+ */
+async function stableRect(client, expression, { samples = 3, gapMs = 250, timeoutMs = 15_000 } = {}) {
+  const deadline = Date.now() + timeoutMs
+  let previous = null
+  let same = 0
+
+  while (Date.now() < deadline) {
+    const rect = await client.evaluate(expression)
+    const unchanged =
+      rect &&
+      previous &&
+      rect.x === previous.x &&
+      rect.y === previous.y &&
+      rect.width === previous.width
+
+    same = unchanged ? same + 1 : 0
+    previous = rect
+    if (same >= samples - 1) return rect
+
+    await sleep(gapMs)
+  }
+
+  return previous
+}
+
 async function pressEscape(client) {
   const key = { key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27, nativeVirtualKeyCode: 27 }
   await client.send('Input.dispatchKeyEvent', { type: 'keyDown', ...key })
@@ -613,13 +651,23 @@ async function typeLine(client, text) {
 
 /** 自分頁列的「+ session」建立一個 shell session。 */
 async function createSession(client) {
-  const btn = await pollUntil(client, NEW_SESSION_RECT, (value) => value !== null, 10_000)
-  if (!btn) throw new Error('找不到「+ session」按鈕')
-  await realClick(client, btn)
+  //
+  // **點完要確認選單真的開了，沒開就重量再點。** 對手是一個外部行程（pty）何時吐出標題，
+  // 穩定判準只能把機率壓低、消不掉它。點空的那一下最多是點到隔壁分頁（把它 focus 起來），
+  // 無害；而標題抵達後版面就不再動，重試必定收斂。
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const btn = await stableRect(client, NEW_SESSION_RECT)
+    if (!btn) throw new Error('找不到「+ session」按鈕')
+    await realClick(client, btn)
 
-  const item = await pollUntil(client, MENU_ITEM_RECT('shell'), (value) => value !== null, 3000)
-  if (!item) throw new Error('選單中找不到 shell')
-  await realClick(client, item)
+    const item = await pollUntil(client, MENU_ITEM_RECT('shell'), (value) => value !== null, 2000)
+    if (item) {
+      await realClick(client, item)
+      return
+    }
+  }
+
+  throw new Error('選單中找不到 shell（重量再點 3 次仍未開啟）')
 }
 
 // ── 主流程 ──────────────────────────────────────────────────────────────────
@@ -841,10 +889,22 @@ async function runMode(label, { port, rendererUrl }) {
     await realClick(app.client, settled ?? nodeRect)
     const afterGraphClick = await pollUntil(app.client, OVERLAY, (value) => value === null, 8000)
     check(results, '於 Graph 觸發 change 節點後 overlay 關閉', afterGraphClick === null)
+    //
+    // **必須輪詢，不能 evaluate 一次就斷言。** 換一個 change 會把側欄的資料清掉、短暫回到
+    // 「載入中…」（key 變了就不沿用上一份 —— 否則會有一瞬間顯示上一個 change，那比 loading
+    // 更糟）。錨定其實已經成立（麵包屑與視圖都對了），只是 `h2` 還沒渲染出來 —— 讀一次會讀到
+    // null。實測：這條會隨時序時綠時紅。
+    const anchoredByGraph = await pollUntil(
+      app.client,
+      ANCHORED_SLUG,
+      (value) => value === 'solo-change',
+      8000,
+    )
     check(
       results,
       '該 change 成為側欄呈現的 change',
-      (await app.client.evaluate(ANCHORED_SLUG)) === 'solo-change',
+      anchoredByGraph === 'solo-change',
+      String(anchoredByGraph),
     )
 
     // ── 全視窗 overlay：Timeline ────────────────────────────────────────────
