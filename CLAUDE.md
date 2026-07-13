@@ -220,6 +220,27 @@ node-pty 1.2.0-beta.14（釘死）、Monaco Editor、chokidar 5、react-markdown
 > **已凍結**的 appId 就變成在宣告別人的命名空間 —— 而且事後無法以改 appId 化解。**Phase 6 打包發佈
 > 前必須買下它**；這個窗口只會變窄，不會變寬。
 
+### GitHub 位置：org 是 `spekhq`（**不凍結**，與上表無關）
+
+本 repo 位於 **`spekhq/spekterm`**（原 `kewang/spekterm`，已 transfer，舊網址自動 redirect）。
+org 名**不是**凍結身分的一部分 —— repo 改名與 transfer 皆自動 redirect，隨時可做。
+
+- **`spekjs` 這個 GitHub org 開不出來。** 它被一個 0 repo、0 follower 的閒置 User 帳號佔著
+  （username 與 org 共用同一個命名空間），而 GitHub **不因閒置釋出名字**，只受理商標爭議 ——
+  申訴已放棄。`spekhq` 是 `rename-to-spekterm` design D5 早已寫下的備案。
+- **npm scope 仍是 `@spekjs`，不要「順手對齊」成 `@spekhq`。** 那個 npm org 真的叫 `spekjs`、
+  套件已發佈。**GitHub org 名與 npm scope 不一致是常態**（`@tailwindcss/*` 的源碼在
+  `tailwindlabs/tailwindcss`），為了對齊而重新發佈一次 scope，成本遠大於收益。
+- **開源的 `spek` 刻意留在 `kewang/spek`，沒有搬進 org。** 唯一的阻礙是 **GitHub Pages 不
+  redirect**（GitHub 文件明文：git 與網頁連結會 redirect，Pages **不會**）—— 而
+  `kewang.github.io/spek` 上掛著 README 頂部的 3 個 badge 與 **Live Demo**，那些 badge 隨 README
+  一起出現在 npm、VS Code Marketplace、JetBrains 商店的頁面上。搬 org ＝ 這些 URL 永久 404。
+  其餘一切（secrets、webhooks、deploy keys、issues、releases、fork、git 操作）都會跟著搬或 redirect。
+
+> **日後真要搬 `spek`，成本只會漲不會跌。** 掛上自訂網域後，`<owner>.github.io/<repo>` 會自動
+> redirect 到該網域 —— 所以**「換 owner」是唯一不被任何 redirect 覆蓋的一次搬家**。拖越久，指向
+> `kewang.github.io/spek` 的外部連結累積越多。與 `appId` 同一個形狀的單調成本。
+
 ## Workflow
 
 - **所有變更都必須使用 OpenSpec 工作流程**：每個功能、修復或修改都要先建立 OpenSpec change，
