@@ -144,8 +144,20 @@ ready 事件要等主 script 評估完成才觸發，會死鎖。
 
 ### core 套件的名稱與分發（已定案）
 
-core 對外發佈為 **`@spekjs/core`**（已於 npm public registry 發佈，本 repo 以 `^1.0.0`
-宣告依賴）。Phase 5 要抽出的 UI 套件對應為 `@spekjs/ui`。
+core 對外發佈為 **`@spekjs/core`**（已於 npm public registry 發佈，本 repo 以 `^1.1.1`
+宣告依賴）。Phase 5 抽出的 UI 套件為 **`@spekjs/ui`**（`^1.0.1`）。
+
+> **`@spekjs/core` 1.1.0 是「minor 版號卻破壞型別」的一版** —— `ChangeInfo` 新增了 **required**
+> 的 `defaultSchema: string | null`。**凡是自己建構 `ChangeInfo` 的程式碼都會 `TS2741` 編譯失敗**
+> （典型的受害者是手工組一份 `changes` 餵給 `@spekjs/ui` 的 `<ChangeTimeline>`），純粹**讀取** core
+> 產出的值則不受影響。spekterm 之所以毫髮無傷，是因為主行程的 `getChanges()` 把 core 的陣列**原封
+> 不動轉手**（沒有 `.map()`、沒有 spread 重建），renderer 的 `ChangeInfo` 又是從 IPC 型別**推導**
+> 出來的（`ChangesData['active'][number]`）—— 新欄位於是自己流穿到底。**這個「不重建」的性質是承重的**：
+> 日後若在主行程對 change 做欄位改寫（比照 `SpecInfo.path` 的絕對路徑翻譯），就會接下同步 core 型別
+> 的義務。（`SpecInfo` 早就是那樣了 —— 但它翻譯的目的地是本地 DTO `SpecSummary`，core 加欄位打不到它。）
+>
+> 順帶：**`@spekjs/ui` 對 core 是 peer 依賴**（`>=1.0.0`）。升級後務必確認 npm 把它 **dedupe 成同一份
+> core** —— 樹上若同時存在兩份，`<ChangeTimeline>` 眼中的 `ChangeInfo` 與我們的就是兩個不同的型別。
 
 改名的原因：**`@spek` 這個 npm scope 已被他人註冊**（佔用者 0 個套件），本專案帳號無權
 發佈至該 scope —— 決策與證據見 `openspec/changes/.../design.md` D1。更名與發佈由 `spek`
