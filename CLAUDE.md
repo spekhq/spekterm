@@ -53,6 +53,15 @@ terminal 裡切 branch」即時反映），以及 rail 的 repo 列重整（移�
 「缺少 `openspec/`」降級為弱訊號）。詳見下文「字級尺度」與「git 分支」兩節 —— 那裡記著四個**會靜默
 失敗**的實測踩雷。`probe:terminal` 120/120、`probe:workspace` 42/42。
 
+`session-title-authority`（不屬於任何 Phase）是**第二次 dogfooding 的回饋**——「把 session 改名成 b
+之後，claude 一直跳訊息要改回 a」。它移除了「pty 想改名要先問過」的**整個確認對話框**：使用者一旦命名
+就是**永久接管**命名權，pty 其後宣告的 OSC 標題一律**靜默地不予呈現**（交還的唯一路徑是把名字清空）。
+根因不是實作 bug，是 `session-rename-and-reorder` 的一個錯誤假設——它假定「pty 想改名是罕見事件，值得
+問一次」，但 `claude` 隨任務進展**持續**改標題。詳見下文「session 的命名權」那條的引文。連帶：那條以
+「標題衝突對話框」為載體的**快捷鍵抑制驗收**換成了 **Graph／Timeline overlay**（它本來就是
+`role="dialog"`，卻從未被驗過抑制——**把一筆隱藏的技術債換成了資產**，而不是把「三種」默默改成兩種）。
+`probe:terminal` 108/108、`probe:openspec` 146/146、`probe:keyboard` 64/64。
+
 尚未開始：打包（Phase 6）、handoff（Phase 7+）。
 
 ### 開發指令
@@ -65,7 +74,7 @@ npm test                # node:test 單元測試（fs 邊界、workspace store�
 npm run probe:shell     # 驗收 workspace-app-shell（開視窗 + 信任模型 + preload 白名單，走 CDP）
 npm run probe:workspace # 驗收 workspace-folders / filesystem-access / workspace-layout / repo-branch（rail 呈現分支、於 app 之外切 branch 後自己更新、detached HEAD、執行期間變成 git repo、rail 不呈現不可操作的控制項）
 npm run probe:files     # 驗收 file-explorer / file-viewer / 編輯 / 存檔 / 衝突 / CRUD / 導航防護 / 編輯器 worker / CSP（遠端圖片可載入、script-src 僅 self、注入點對 file:// 生效，dev + build 兩模式）
-npm run probe:terminal  # 驗收 terminal-sessions（pty 雙向／cwd／resize／多開／關分頁・reload・關窗皆不留孤兒；剪貼簿畸形輸入防禦；OSC 標題與命名權衝突以 PATH 上的 stub claude 承載，dev + build 兩模式）
+npm run probe:terminal  # 驗收 terminal-sessions（pty 雙向／cwd／resize／多開／關分頁・reload・關窗皆不留孤兒；剪貼簿畸形輸入防禦；OSC 標題與命名權（命名後 pty 反覆改名不打斷、清空即交還）以 PATH 上的 stub claude 承載，dev + build 兩模式）
 npm run probe:keyboard  # 驗收 keyboard-navigation（Ctrl+Tab 切 session／Ctrl+↑↓ 切 repo／位置序非 MRU／按鍵不流進 pty／編輯器與對話框的行為，dev + build 兩模式）
 npm run probe:openspec  # 驗收 openspec-data-access / openspec-panel（兩個視圖／兩棵樹／artifact 分頁／agent 改檔即更新／錨定／交叉導覽／Graph・Timeline 的 overlay，dev + build 兩模式）
 npm run probe:native    # 驗收 native-module-toolchain（Electron 主行程載入 node-pty + spawn pty）
@@ -319,6 +328,13 @@ org 名**不是**凍結身分的一部分 —— repo 改名與 transfer 皆自�
   裡只有 `stopPropagation()` 的 **`◈` 假按鈕**、名稱取回視覺主導（粗體＋亮色，選中轉 accent）、
   副標由「每列都喊一次的 `OpenSpec`」改為**分支**，「缺少 `openspec/`」降級為弱訊號。詳見上文
   「字級尺度」與「git 分支」兩節的實測踩雷。
+- **session 的命名權** — `session-title-authority`（已封存，**不屬於任何 Phase**）：第二次 dogfooding
+  的回饋。**移除「pty 想改名須經確認」的整條 requirement 與 `TitleConflictDialog`** —— 命名 ＝ **永久**
+  接管，pty 其後宣告的標題靜默不予呈現（不覆蓋、不確認、不提示），交還的唯一路徑是**把名字清空**
+  （清空即立即回到 pty 最近宣告的標題 —— 標題於接管期間**持續被記錄**，這是交還得以即時的前提）。
+  連帶：`keyboard-navigation` 那條「對話框開啟時導航快捷鍵不生效」的**驗收載體**由「標題衝突對話框」
+  換成 **Graph／Timeline overlay**，且那條紀律（「以角色存在判定、SHALL NOT 逐一列舉、驗收須以多種
+  對話框各驗一次」）**寫進了 spec 本身**，不再只活在這份 CLAUDE.md 裡。詳見上文「session 的命名權」。
 - Phase 6 打包與發佈，Phase 7+ 建立護城河（handoff）。
 
 > **Phase 5 對 PRD 的「抽出 `@spekjs/ui`」做了對半的裁決**（PRD §9.2 已回寫）：整頁視圖**不抽**
@@ -444,10 +460,28 @@ provider 驗證：它為 `language: '*'` 註冊，呼叫 worker 端的 `$compute
     的前提有二：導航防護確保 renderer 不會變成別人的頁面（少了它，一個 markdown 連結就能把這個
     能力交給遠端頁面）；且只在使用者明確要求貼上時讀取，不主動、不輪詢。
 
-- **session 的命名權可以被使用者接管**（`session-rename-and-reorder`）。標籤三層優先序：
-  **使用者取的名字 > pty 宣告的 OSC 標題 > 本地流水號**。使用者一旦命名，pty 想改名就**不得
-  靜默覆蓋** —— 跳確認讓他裁決（採用 pty 的／保留我的）。「採用」＝命名權交還，此後不再問。
-  **待確認的標題是單一欄位而非佇列**：`claude` 改標題很頻繁，堆疊 N 個對話框會把畫面淹掉。
+- **session 的命名權可以被使用者接管**（`session-rename-and-reorder`；語意於
+  `session-title-authority` 修正）。標籤三層優先序：**使用者取的名字 > pty 宣告的 OSC 標題
+  （僅 `claude` 目標）> 本地流水號**。使用者一旦命名，就是**永久**接管 —— pty 其後宣告的標題
+  一律**靜默地不予呈現**（不覆蓋、不確認、不提示）。交還命名權的唯一路徑：**把名字清空**。
+
+  > **這裡原本有一個「pty 想改名，要採用嗎？」的確認對話框，已移除 —— 它的前提是錯的。**
+  > 它假定「使用者命名後，pty 想改名是**罕見**事件，值得問一次」，但 `claude` 隨任務進展
+  > **持續**改標題。而「保留我的名字」只清掉待裁決欄位、**不記錄使用者已經拒絕過** —— 於是下
+  > 一次判定條件與第一次完全相同，對話框再跳一次；**連 pty 送同一個標題都會再問**（「與待裁決
+  > 的相同就不問」那條短路，在按下「保留我的」的瞬間就失效了）。第二次 dogfooding 的原話：
+  > 「改成 b 之後，claude 一直跳訊息要改回 a」。
+  >
+  > 諷刺的是，當初的 spec **已經察覺** agent 會頻繁改名（才有「待確認的標題是單一欄位而非佇列，
+  > 否則堆疊 N 個對話框會把畫面淹掉」），但緩解只做到「不同時堆疊」，沒處理「**沿著時間軸反覆問
+  > 同一個問題**」。**教訓：一個高頻事件上的確認，緩解「不要一次問太多次」是不夠的 —— 要問的是
+  > 「這個問題值得問嗎」。** 而它的答案是可預測的（使用者才剛親手命名，當然是保留自己的）——
+  > **「使用者取的名字 > pty 的標題」這條優先序本身就已經是那個裁決。**
+
+- **pty 的標題在使用者接管期間仍持續被記錄，只是不呈現**（`session-title-authority` 的 D3）。
+  這是「清空名字＝交還命名權」得以即時的前提：清空的那一刻，標籤立即回到 pty **最近一次**宣告的
+  標題。若接管期間直接丟棄，清空後會退回 `claude 1`，空等到 pty 下次宣告為止（session 閒置的話
+  可能永遠不會來）—— 使用者會以為「名字不見了」。
 - **拖曳排序用滑鼠事件實作，不用 HTML5 drag-and-drop** —— 後者在 CDP 下要走
   `Input.setInterceptDrags` + `dispatchDragEvent`，與探針既有的 `dragMouse`（真滑鼠序列）
   格格不入。自己做，驗收就能送真拖曳。
@@ -496,9 +530,15 @@ listener 沒用** —— 既有的 `Ctrl+S` 之所以被迫註冊在 Monaco 內�
 兩者都收不到，被攔下的按鍵也就不會流進 agent。**階段選對就沒有這個問題**（design D1）。
 
 「對話框開著時抑制快捷鍵」以 **`[role="dialog"]` 的存在**判定 —— 任何遵守這個無障礙慣例的新
-對話框都自動被尊重，不必記得去某份清單註冊。代價是**漏掉 `role` 的對話框會靜默失效**，因此
-`probe:keyboard` 與 `probe:terminal` 對**三種**對話框（session 命名、標題衝突、files 的）各驗
-一次抑制 —— 只驗一種就宣稱涵蓋，等於沒驗。
+對話框都自動被尊重，不必記得去某份清單註冊。代價是**漏掉 `role` 的對話框會靜默失效**，因此對
+**三種**對話框各驗一次抑制：**session 命名**與 **files 的**（`probe:keyboard`），以及 **Graph／
+Timeline 的全視窗 overlay**（`probe:openspec`）—— 只驗一種就宣稱涵蓋，等於沒驗。
+
+> **第三種原本是「pty 標題衝突」的確認對話框，它已隨 `session-title-authority` 移除。** 那條抑制
+> 驗收於是要換一個載體 —— 而 `VizOverlay` 本來就是 `role="dialog"`，卻**從未被驗過抑制**（overlay
+> 蓋滿視窗時按 `Ctrl+↓` 切 repo，切了也看不見，關掉 overlay 才發現自己站在別的 repo 上）。
+> **把一筆隱藏的技術債換成了資產** —— 而不是把「三種」默默改成「兩種」。這條紀律現在也寫進了
+> `keyboard-navigation` 的 spec 本身，不再只活在這份 CLAUDE.md 裡。
 
 ### 三顆鍵，三種代價 —— 不要混為一談
 
