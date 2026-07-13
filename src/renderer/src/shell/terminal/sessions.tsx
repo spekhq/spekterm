@@ -1,7 +1,14 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import type { FsFailure, SpawnTarget } from '../types'
 
-export type SessionStatus = 'running' | 'exited'
+/**
+ * `dormant` = 已從持久化重建、具備完整身分（名字、順序、錨定），但**還沒有 pty**。
+ *
+ * 重開 app 時若把每個 session 都 spawn 起來，就是同時啟動 N 個 claude —— 而它們本來就是死的
+ * （app 關掉時 pty 就沒了），喚醒它們只是讓一堆 claude 閒置著搶 CPU。**懶惰嚴格地更好**：
+ * 休眠的 session 於**首次被顯示**時才 spawn，於是開啟 app 恰好只會起一個（design D11）。
+ */
+export type SessionStatus = 'dormant' | 'running' | 'exited'
 
 export interface SessionState {
   id: string
@@ -9,6 +16,8 @@ export interface SessionState {
   spawnTarget: SpawnTarget
   status: SessionStatus
   exitCode?: number
+  /** 喚醒失敗的原因（folder 路徑失效時）。休眠態的呈現會顯示它，而不是靜默地什麼都不發生。 */
+  wakeError?: string
   /** 該 folder 內的建立序號（自 1 起）。pty 未宣告標題時，標籤的退路。 */
   ordinal: number
   /**
@@ -84,6 +93,16 @@ export interface SessionsApi {
   anchorChange(sessionId: string, slug: string | null): void
   /** 該 session 錨定的 change。 */
   anchoredChangeOf(sessionId: string | null): string | null
+  /**
+   * 喚醒一個休眠的 session（＝為它 spawn pty）。
+   *
+   * 呼叫端是「顯示它的那一刻」（`MainStage`）—— 這條規則只有一個：**休眠的 session 於首次被
+   * 顯示時 spawn**。一個 session 只有在「所屬 folder 被選中 **且** 它是該 folder 的 focused
+   * session」時才會顯示，於是「開啟 app 只起一個」不是另一條特例，是這條規則的自然結果。
+   *
+   * 重複呼叫是安全的（已在喚醒中或已有 pty 者為 no-op）。
+   */
+  wake(sessionId: string): void
   close(sessionId: string): void
   /**
    * pty 宣告的終端標題。空字串視為未設定。
@@ -100,6 +119,18 @@ export interface SessionsApi {
    * 回傳解除接續的函式。
    */
   attach(sessionId: string, write: (chunk: string) => void): () => void
+  /**
+   * 該 session 重建時要重播的終端畫面快照。
+   *
+   * 為什麼不像 pty 的輸出那樣塞進 backlog：重播不是「寫一段文字」那麼簡單 —— 它要處理游標與
+   * 終端模式（見 `XtermHandle.replay`），且必須在**接上 live 之前**完成。
+   *
+   * **它刻意不是「取走」（讀完即刪）**：dev 的 StrictMode 會把 `TerminalView` 的掛載 effect 跑
+   * **兩次** —— 第一次就把快照取走了，第二次（也就是真正存活下來的那個 xterm）於是拿到
+   * `undefined`，畫面一片空白。而且 **build 模式完全正常**，是那種「一邊過一邊不過」的病。
+   * 條目改在 `close()` 時才清掉。
+   */
+  restoredScrollbackOf(sessionId: string): string | undefined
 }
 
 const SessionsContext = createContext<SessionsApi | null>(null)
@@ -164,6 +195,124 @@ export function SessionsProvider({ children }: { children: React.ReactNode }): R
     })
   }, [])
 
+  /**
+   * 重建尚未完成時，**不可以把 session 清單寫回磁碟** —— 首次渲染時它是空的。
+   * 這個旗標就是那道閘（見下方的落盤 effect）。
+   */
+  const [restored, setRestored] = useState(false)
+  const restoredRef = useRef(false)
+  /** 已經送出喚醒請求的 session。避免同一個 session 被 spawn 兩次。 */
+  const waking = useRef(new Set<string>())
+  /** 重建的 session 其上次的終端畫面。由 `TerminalView` 在掛載時取走（見 `takeScrollback`）。 */
+  const restoredScrollback = useRef(new Map<string, string>())
+
+  /**
+   * 從持久化重建 session。**每個都是休眠的** —— 有身分、有畫面，但沒有 pty（design D11）。
+   */
+  useEffect(() => {
+    // **StrictMode 會把 effect 跑兩次（且只在 dev）。** 少了這道 ref，`restore()` 會被呼叫兩次，
+    // 每個 session 都變成兩份分頁 —— 而 build 模式完全正常，是那種「一邊過一邊不過」的病。
+    if (restoredRef.current) return
+    restoredRef.current = true
+
+    void window.workspace.terminal
+      .restore()
+      .then((persisted) => {
+        for (const entry of persisted) {
+          // **快照要在 session 出現之前就備妥**：`TerminalView` 一掛載就會來取它，而重播必須先於
+          // 接上 live 串流 —— 否則 pty 的第一個 prompt 會插進歷史中間（design D6）。
+          if (entry.scrollback) restoredScrollback.current.set(entry.id, entry.scrollback)
+
+          // 序號不可回退：重建後新開的 session 必須拿到比現存最大值更大的號，否則會撞號。
+          const seen = nextOrdinal.current.get(entry.folderId) ?? 0
+          nextOrdinal.current.set(entry.folderId, Math.max(seen, entry.ordinal))
+        }
+
+        // **合併，不是覆蓋。**
+        //
+        // restore 是一次非同步的 IPC —— 使用者（或探針）完全可能在它回來之前就按下「+ session」。
+        // 若在這裡直接 `setSessions(重建的清單)`，那個剛建好的 session 會被整個換掉而**憑空消失**，
+        // 但它的 pty 還活著（探針抓到的正是這個：「pty 行程存在」是綠的，「分頁出現」是紅的）。
+        setSessions((previous) => {
+          const known = new Set(previous.map((session) => session.id))
+          const restoredSessions = persisted
+            .filter((entry) => !known.has(entry.id))
+            .map((entry) => ({
+              id: entry.id,
+              folderId: entry.folderId,
+              spawnTarget: entry.spawnTarget,
+              status: 'dormant' as const,
+              ordinal: entry.ordinal,
+              title: entry.title,
+              customTitle: entry.customTitle,
+              anchoredChange: entry.anchoredChange,
+            }))
+          // 重建的排在前面 —— 它們是上次的順序，而在它們之前建立的那些是「新的」。
+          return [...restoredSessions, ...previous]
+        })
+      })
+      .catch((error) => {
+        console.error(`[sessions] 重建失敗：${String(error)}`)
+      })
+      .finally(() => {
+        // 無論成敗都要開閘 —— 否則落盤永遠不會發生，使用者接下來做的一切都不會被記住。
+        setRestored(true)
+      })
+  }, [])
+
+  /**
+   * 落盤。
+   *
+   * **`restored` 這道閘是承重的**：首次渲染時 `sessions` 是空陣列 —— 少了它，這個 effect 會在
+   * restore 從磁碟讀回來**之前**就送出一份空清單，把上一次的 session 全部抹掉。而且是靜默的：
+   * 沒有錯誤、沒有訊息，只有「重開之後什麼都不見了」。
+   *
+   * payload **不含 cwd、不含對話識別碼** —— 那兩個是主行程的欄位（design D9）。
+   */
+  useEffect(() => {
+    if (!restored) return
+    window.workspace.terminal.persist(
+      sessions
+        // 已結束的 session 不持久化：重開時不該把一個死掉的分頁重建回來（使用者裁決）。
+        .filter((session) => session.status !== 'exited')
+        .map(({ id, folderId, spawnTarget, ordinal, title, customTitle, anchoredChange }) => ({
+          id,
+          folderId,
+          spawnTarget,
+          ordinal,
+          title,
+          customTitle,
+          anchoredChange,
+        })),
+    )
+  }, [sessions, restored])
+
+  /**
+   * 喚醒一個休眠的 session。
+   *
+   * **不從 `sessionsRef` 判斷它是不是休眠的** —— 那個 ref 由一個 effect 更新，而 React 的 effect
+   * 由內而外執行：呼叫端（`MainStage`，它是子層）的 effect 會**早於**這裡的 ref 更新，於是重建後
+   * 的第一次喚醒會讀到一份還是空的 ref，然後什麼都不做。休眠與否由呼叫端判斷（它手上的
+   * `SessionState` 是當下這一次渲染的），這裡只負責「同一個 session 不送出兩次」。
+   */
+  const wake = useCallback((sessionId: string) => {
+    if (waking.current.has(sessionId)) return
+    waking.current.add(sessionId)
+
+    void window.workspace.terminal.wake(sessionId).then((result) => {
+      setSessions((previous) =>
+        previous.map((session) => {
+          if (session.id !== sessionId) return session
+          // 失敗（folder 路徑失效）時**留在 waking 集合裡**：不自動重試，否則每次重繪都會再打一次。
+          // session 維持休眠，並把原因呈現出來 —— 而不是靜默地什麼都不發生。
+          return result.ok
+            ? { ...session, status: 'running', wakeError: undefined }
+            : { ...session, wakeError: result.message }
+        }),
+      )
+    })
+  }, [])
+
   const create = useCallback(
     async (
       folderId: string,
@@ -203,6 +352,8 @@ export function SessionsProvider({ children }: { children: React.ReactNode }): R
     window.workspace.terminal.kill(sessionId)
     sinks.current.delete(sessionId)
     backlog.current.delete(sessionId)
+    waking.current.delete(sessionId)
+    restoredScrollback.current.delete(sessionId)
 
     setSessions((previous) => previous.filter((session) => session.id !== sessionId))
     if (!target) return
@@ -301,6 +452,11 @@ export function SessionsProvider({ children }: { children: React.ReactNode }): R
     })
   }, [])
 
+  const restoredScrollbackOf = useCallback(
+    (sessionId: string): string | undefined => restoredScrollback.current.get(sessionId),
+    [],
+  )
+
   const attach = useCallback((sessionId: string, write: (chunk: string) => void) => {
     const pending = backlog.current.get(sessionId)
     if (pending) {
@@ -331,14 +487,29 @@ export function SessionsProvider({ children }: { children: React.ReactNode }): R
           : (sessions.find((session) => session.id === sessionId)?.anchoredChange ?? null),
       focus,
       create,
+      wake,
       close,
       setTitle,
       rename,
       anchorChange,
       reorder,
       attach,
+      restoredScrollbackOf,
     }),
-    [sessions, focused, focus, create, close, setTitle, rename, anchorChange, reorder, attach],
+    [
+      sessions,
+      focused,
+      focus,
+      create,
+      wake,
+      close,
+      setTitle,
+      rename,
+      anchorChange,
+      reorder,
+      attach,
+      restoredScrollbackOf,
+    ],
   )
 
   return <SessionsContext.Provider value={api}>{children}</SessionsContext.Provider>

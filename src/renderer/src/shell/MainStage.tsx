@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Group, Panel, Separator, usePanelRef } from 'react-resizable-panels'
 import { useChanges } from './openspec/data'
 import { VizOverlay, type VizKind } from './openspec/VizOverlay'
@@ -81,6 +81,22 @@ export function MainStage({ folder }: MainStageProps): React.JSX.Element {
 
   const folderSessions = folder ? sessions.forFolder(folder.id) : []
   const focusedId = folder ? sessions.focusedIdFor(folder.id) : null
+
+  /**
+   * **休眠的 session 於首次被顯示時才 spawn**（design D11）。
+   *
+   * 「被顯示」＝所屬 folder 被選中 **且** 它是該 folder 的 focused session —— 也就是下面那個
+   * `active` 的判準。於是「重開 app 只起一個 claude」不是一條特例規則，而是這條規則的自然結果：
+   * 啟動當下恰好只有一個 session 被顯示。
+   *
+   * 休眠與否在這裡判斷（`displayed` 是這一次渲染的狀態），不在 `wake` 裡從 ref 判斷 —— 那個 ref
+   * 由 provider 的一個 effect 更新，而 effect 由內而外執行，這裡會早於它。
+   */
+  const displayed = focusedId ? folderSessions.find((s) => s.id === focusedId) : undefined
+  const wake = sessions.wake
+  useEffect(() => {
+    if (displayed?.status === 'dormant' && !displayed.wakeError) wake(displayed.id)
+  }, [displayed?.id, displayed?.status, displayed?.wakeError, wake])
 
   // 新 session 的初始錨定：該 folder **恰有一個** active change 時錨定它，否則留空。
   // 多個候選之間不猜 —— 猜錯的側欄比沒有側欄更糟（design D3）。
@@ -231,6 +247,9 @@ export function MainStage({ folder }: MainStageProps): React.JSX.Element {
                 <TerminalView
                   key={session.id}
                   sessionId={session.id}
+                  spawnTarget={session.spawnTarget}
+                  status={session.status}
+                  wakeError={session.wakeError}
                   active={session.folderId === folder?.id && session.id === focusedId}
                 />
               ))}

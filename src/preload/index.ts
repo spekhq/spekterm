@@ -2,7 +2,9 @@ import type { GraphData } from '@spekjs/core'
 import { type IpcRendererEvent, contextBridge, ipcRenderer } from 'electron'
 import type { DirtyEntry } from '../main/dirty-state'
 import type { FsResult, WriteResponse } from '../main/ipc/fs'
+import type { RestoredSession } from '../main/ipc/terminal'
 import type { DirEntry, FileContent } from '../main/fs-service'
+import type { RendererSession } from '../main/session-store'
 import type {
   ChangeDetailView,
   ChangesData,
@@ -184,6 +186,24 @@ const workspaceApi = {
   terminal: {
     create: (folderId: string, spawnTarget: SpawnTarget): Promise<FsResult<{ sessionId: string }>> =>
       ipcRenderer.invoke('workspace:terminal:create', folderId, spawnTarget),
+    /**
+     * 喚醒一個休眠的 session（重建後尚無 pty）。
+     *
+     * **只收 sessionId** —— 續接用的對話識別碼與最後的工作目錄都在主行程手上，renderer 連
+     * 這兩個詞彙都沒有（session-persistence 的「持久化不得把路徑詞彙交給 renderer」）。
+     */
+    wake: (sessionId: string): Promise<FsResult<{ sessionId: string }>> =>
+      ipcRenderer.invoke('workspace:terminal:wake', sessionId),
+    /** 啟動時取回要重建的 session（含各自的終端畫面快照）。 */
+    restore: (): Promise<RestoredSession[]> => ipcRenderer.invoke('workspace:terminal:restore'),
+    /** 推送 session 清單以供持久化。payload **不含任何路徑，也不含對話識別碼**。 */
+    persist: (sessions: RendererSession[]): void => {
+      ipcRenderer.send('workspace:terminal:persist', sessions)
+    },
+    /** 推送終端畫面快照（僅 shell 目標 —— claude 續接時會自行重現對話）。 */
+    snapshot: (sessionId: string, data: string): void => {
+      ipcRenderer.send('workspace:terminal:snapshot', sessionId, data)
+    },
     /** renderer → pty，單向 fire-and-forget：逐鍵輸入不必等一次 round-trip 的回應。 */
     write: (sessionId: string, data: string): void => {
       ipcRenderer.send('workspace:terminal:write', sessionId, data)

@@ -96,6 +96,27 @@ const PROBE_EXPRESSION = `(async () => {
     surplusFolderKeys: Object.keys(api?.folders ?? {}).filter(
       (key) => !['list', 'add', 'remove', 'onChanged'].includes(key),
     ),
+    // terminal 的能力。這個 namespace 一度也完全沒有守衛（同 folders 當年的漏洞）——
+    // 於是 session-restore 往它加了四個 method 而不會被任何東西擋下。補上。
+    //
+    // wake／restore／persist／snapshot 於 session-restore 引入（session-persistence 規格）：
+    // 它們的邊界要求是「持久化不得把路徑詞彙交給 renderer」—— 介面上因此沒有任何路徑參數，
+    // 也沒有對話識別碼（那是主行程的知識）。wake 只收一個 sessionId。
+    surplusTerminalKeys: Object.keys(api?.terminal ?? {}).filter(
+      (key) =>
+        ![
+          'create',
+          'wake',
+          'write',
+          'resize',
+          'kill',
+          'restore',
+          'persist',
+          'snapshot',
+          'onData',
+          'onExit',
+        ].includes(key),
+    ),
     // symlink 絕不可出現在白名單上。
     //
     // 寫入邊界的 TOCTOU 論證（file-editing-and-crud 的 design D3）整個建立在「renderer 既造不出、
@@ -165,6 +186,9 @@ try {
   check(results, 'folders 介面只暴露已定義邊界要求的能力',
     r?.surplusFolderKeys?.length === 0,
     r?.surplusFolderKeys?.length ? `多出：${r.surplusFolderKeys.join(', ')}` : '無多餘能力')
+  check(results, 'terminal 介面只暴露已定義邊界要求的能力',
+    r?.surplusTerminalKeys?.length === 0,
+    r?.surplusTerminalKeys?.length ? `多出：${r.surplusTerminalKeys.join(', ')}` : '無多餘能力')
 
   exitCode = results.every(Boolean) ? 0 : 1
 } catch (error) {

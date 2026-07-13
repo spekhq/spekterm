@@ -62,7 +62,17 @@ terminal 裡切 branch」即時反映），以及 rail 的 repo 列重整（移�
 `role="dialog"`，卻從未被驗過抑制——**把一筆隱藏的技術債換成了資產**，而不是把「三種」默默改成兩種）。
 `probe:terminal` 108/108、`probe:openspec` 146/146、`probe:keyboard` 64/64。
 
-尚未開始：打包（Phase 6）、handoff（Phase 7+）。
+`session-restore`（不屬於任何 Phase）是**第三次 dogfooding 的回饋**——「把 app 關掉再重開，原本的
+claude session 跟 shell session 都會消失不見」。消失的不只是 pty（那是必然），而是**連「開過哪些
+session、叫什麼名字、什麼順序、錨定哪個 change」都沒了** —— session 狀態一直是**純記憶體**的。
+它交付新能力 **`session-persistence`**：session 清單落盤（`sessions.json`，版本 + 原子寫 + 損毀隔離，
+比照 `workspace.json`；快照另存 `sessions/<id>.scrollback`）、重開時**原樣重建**、**claude 真的續接
+對話**（以 `--session-id` 開、以 `--resume` 續）、shell 於**最後已知的 cwd** 重生並**重播上次的畫面**，
+以及**休眠**——重建的 session **於首次被顯示時才 spawn**，於是開 app 只起**一個** claude，不是 N 個
+一起搶 CPU。連帶修好「reload 也會清光 session」。`probe:terminal` 144/144（新增 36 條）。
+
+尚未開始：打包（Phase 6）、handoff（Phase 7+）。**session 常駐**（讓 pty 活過 app 的生命）已排入
+路線圖但**刻意不做** —— 見 `docs/PRD.md` §11 的「session 常駐」，那裡記著 tmux 與自寫 daemon 的取捨。
 
 ### 開發指令
 
@@ -74,7 +84,7 @@ npm test                # node:test 單元測試（fs 邊界、workspace store�
 npm run probe:shell     # 驗收 workspace-app-shell（開視窗 + 信任模型 + preload 白名單，走 CDP）
 npm run probe:workspace # 驗收 workspace-folders / filesystem-access / workspace-layout / repo-branch（rail 呈現分支、於 app 之外切 branch 後自己更新、detached HEAD、執行期間變成 git repo、rail 不呈現不可操作的控制項）
 npm run probe:files     # 驗收 file-explorer / file-viewer / 編輯 / 存檔 / 衝突 / CRUD / 導航防護 / 編輯器 worker / CSP（遠端圖片可載入、script-src 僅 self、注入點對 file:// 生效，dev + build 兩模式）
-npm run probe:terminal  # 驗收 terminal-sessions（pty 雙向／cwd／resize／多開／關分頁・reload・關窗皆不留孤兒；剪貼簿畸形輸入防禦；OSC 標題與命名權（命名後 pty 反覆改名不打斷、清空即交還）以 PATH 上的 stub claude 承載，dev + build 兩模式）
+npm run probe:terminal  # 驗收 terminal-sessions + session-persistence（pty 雙向／cwd／resize／多開／關分頁・reload・關窗皆不留孤兒；剪貼簿畸形輸入防禦；OSC 標題與命名權；**關掉 app 再開後 session 原樣重建**、只喚醒被顯示的那一個、claude 以 --resume 續接同一個對話、續接失敗自癒為全新對話、shell 於最後 cwd 重生並重播畫面、kill -9 後快照仍在、損毀韌性、被竄改的識別碼不進命令 —— 皆以 PATH 上的 stub claude 承載，dev + build 兩模式）
 npm run probe:keyboard  # 驗收 keyboard-navigation（Ctrl+Tab 切 session／Ctrl+↑↓ 切 repo／位置序非 MRU／按鍵不流進 pty／編輯器與對話框的行為，dev + build 兩模式）
 npm run probe:openspec  # 驗收 openspec-data-access / openspec-panel（兩個視圖／兩棵樹／artifact 分頁／agent 改檔即更新／錨定／交叉導覽／Graph・Timeline 的 overlay，dev + build 兩模式）
 npm run probe:native    # 驗收 native-module-toolchain（Electron 主行程載入 node-pty + spawn pty）
@@ -335,7 +345,18 @@ org 名**不是**凍結身分的一部分 —— repo 改名與 transfer 皆自�
   連帶：`keyboard-navigation` 那條「對話框開啟時導航快捷鍵不生效」的**驗收載體**由「標題衝突對話框」
   換成 **Graph／Timeline overlay**，且那條紀律（「以角色存在判定、SHALL NOT 逐一列舉、驗收須以多種
   對話框各驗一次」）**寫進了 spec 本身**，不再只活在這份 CLAUDE.md 裡。詳見上文「session 的命名權」。
-- Phase 6 打包與發佈，Phase 7+ 建立護城河（handoff）。
+- **session 的持久化與重建** — `session-restore`（已封存，**不屬於任何 Phase**）：第三次 dogfooding
+  的回饋（「關掉 app 再重開，session 全不見了」）。新能力 `session-persistence` —— session 清單、
+  使用者取的名字、順序、錨定的 change 與終端畫面快照皆落盤（`sessions.json` + `sessions/<id>.scrollback`，
+  版本 + 原子寫 + 損毀隔離）；重開時**原樣重建**且**預設休眠**（首次被顯示才 spawn，於是只起一個
+  claude）；claude 以 `--session-id` 開、`--resume` 續接**同一個對話**，續不上時**自癒為全新對話**且
+  身分不變；shell 於**最後已知的 cwd** 重生（主行程讀 `/proc/<pid>/cwd`，夾制於 folder 邊界內）並
+  **重播上次的畫面**（歷史與 live 之間有明確分隔 —— 那是誠實性，不是裝飾）。連帶：`terminal-sessions`
+  的「初始 cwd 恆為 folder 根目錄」放寬為「落在邊界內」（**renderer 依然沒有任何路徑詞彙**），
+  `probe:shell` 補上 `terminal.*` 的白名單守衛（它一度與當年的 `folders.*` 一樣完全沒有守衛）。
+  詳見上文「session 的持久化與重建」—— 那裡記著八個**會靜默失敗**的實測踩雷。
+- Phase 6 打包與發佈，Phase 7+ 建立護城河（handoff）。**session 常駐**已排入路線圖但刻意不做
+  （PRD §11）。
 
 > **Phase 5 對 PRD 的「抽出 `@spekjs/ui`」做了對半的裁決**（PRD §9.2 已回寫）：整頁視圖**不抽**
 > （側欄是窄欄 UI，spek 是全寬頁面，不是同一個東西），但 **Graph 與 Timeline 抽了** —— 它們不是
@@ -808,6 +829,162 @@ design D4 補**，比照「探針證明不了真實鍵盤」。移除假綠斷�
 不傳到 renderer，且 headless 下它拋了也不整個崩潰 —— 此斷言驗的是「畸形輸入後主行程與 clipboard
 通道仍健康」（可觀察、真實發生），區分不了「有 guard 靜默丟棄」與「無 guard 拋例外但存活」。guard
 本身由 code review + design D3 承擔。
+
+## session 的持久化與重建（`session-restore` 起）
+
+**session 是被「重建」的，不是「常駐」的。** 關掉 app，pty 一定會死 —— **pty 的 master fd 必須有人
+持有**，app 一死，slave 收到 SIGHUP，底下的行程跟著死。重開時我們是**重新開一個 pty**，然後讓
+claude 續接對話、shell 回到最後的工作目錄。**跑到一半的 build 或 dev server 救不回來**，那需要常駐
+（見 `docs/PRD.md` §11）。不要把兩者混為一談。
+
+### `claude` CLI 的四個實測結論（全部左右了設計）
+
+- **`claude --session-id <uuid>` 可由我們指定對話 id**；`--resume <uuid>` **沿用**原 id
+  （`--fork-session` 才換）。於是 id 可以被持久化並在下次直接續接，**不必去 `~/.claude/projects/`
+  猜哪個 `.jsonl` 是我們的**。
+- **`claude --session-id <已存在的 id>` 會直接報 `Error: Session ID … is already in use.`**
+  —— 於是 **`claude --resume X || claude --session-id X` 這種自癒寫法是個陷阱**：claude 若因其他原因
+  非零退出（使用者 Ctrl+C、API 錯誤），`||` 會觸發第二條並撞號，換來一則看不懂的錯誤。
+- **開了 claude session、還沒跟它講話就關掉 app → claude 根本不寫 transcript**（實測：互動啟動、
+  4 秒後殺掉，`~/.claude/projects/` 下什麼都沒有）。於是重建時 `--resume` **必定失敗**。
+  **這不是邊角，是主線情境**（開個分頁準備等一下用）—— 續接失敗的處理不能當例外路徑草草了事。
+- `claude --resume` 在互動模式下**會自己把過去的對話重畫在終端上**。因此 **claude session 絕不重播
+  我們存的畫面快照**（會看到兩份歷史），**只有 shell 存快照**。順帶省下絕大部分的快照 IO ——
+  一直在吐字的正是 agent。
+
+### pty 的環境必須抹掉「巢狀 Claude Code」的標記 —— 否則續接功能**靜默失效**
+
+**這是 dogfooding 第一次重開 app 時抓到的，而且它偽裝成「功能正常」。**
+
+spekterm 若由一個 agent 啟動（`npm run dev` 是 agent 幫忙跑的 —— **dogfooding 時的常態**），Electron
+會繼承那個 Claude Code session 的環境變數，pty 再整份繼承下去。於是裡面每一個 `claude` 都認為自己是
+**巢狀的子 session**，而**巢狀的 claude 不寫 transcript**（實測：對話真的發生了、claude 也回覆了，但
+`~/.claude/projects/` 底下什麼都沒有）。
+
+後果：`--resume` **必然失敗** → 自癒接手 → 使用者拿到一個**能用的** claude，只是對話永遠是全新的。
+**沒有錯誤訊息、沒有紅燈，連探針也抓不到**（探針用的是 stub claude，它不管 env）。
+
+- **元兇是單一一個變數**（二分實測）：**`CLAUDE_CODE_CHILD_SESSION`**。單獨拿掉 `CLAUDECODE` 或
+  `CLAUDE_CODE_ENTRYPOINT` 都**無效**。
+- **絕不以 `CLAUDE*` 前綴一概剝除** —— `CLAUDE_CODE_OAUTH_TOKEN` 是認證用的，剝掉它 claude 登不進去。
+  `ptyEnv()` 的名單是明確列舉的，且不含任何帶 KEY／TOKEN 的名字。
+- **login shell 讓副作用很小**：使用者自己在 `~/.zshrc` 設的變數會被重新 source 回來，拿掉的只有
+  「啟動 spekterm 的那個行程注入的」。
+- **兩種 spawn 目標都適用** —— 在 shell session 裡手動打 `claude`，踩的是同一個坑。
+
+> **另一個附帶的實測**：`claude` 一啟動就會宣告一個**任務式的 OSC 標題**（`✳ Claude Code` →
+> `✳ session persistence recovery`），**即使你一個字都還沒跟它講**。所以**分頁標題不是「有對話」的
+> 證據** —— 我一度拿它當證據，差點把「沒有 transcript」誤判成 claude 的 bug。
+
+### spekterm 的 session id 與 claude 的對話 id **必須解耦**
+
+直覺會想把兩者綁死（主行程本來就用 `randomUUID()` 產 sessionId）。**但上面第二、三條讓「換號」變成
+必要能力**：續接失敗時必須以一個**全新的** uuid 開新對話（沿用舊的會撞號），而若兩者是同一個欄位，
+換號就等於換掉 session 的身分 —— 分頁 key、focus、順序、錨定全都要跟著搬。
+
+因此持久化有兩個識別碼：`id`（spekterm 的 session identity，**永不改變**）與 `claudeSessionId`
+（**可被替換**）。續接策略是**一律 `--resume`，pty 若在 3 秒內以非零碼結束就判定續接失敗，以全新 uuid
+重試一次**（至多一次）。**判準只看「時間 + 結束碼」，不解析 claude 的輸出。** 這條路徑**零 layout 依賴**
+—— 不去複製 claude 的內部檔案佈局（那會隨版本變，而且**降級方向是壞的**：猜錯就會撞號讓 session 死掉）。
+重試法猜錯的下場只是「開一個全新的 claude」，永遠不會撞號。
+
+### 喚醒把「pty 先誕生、終端後掛載」的順序**倒了過來** —— pty 於是停在 80 欄
+
+**dogfooding 抓到的**：resume 之後 claude 的畫面「縮成一小塊」，手動拖動視窗才恢復。
+
+`fit()` 在「尺寸沒變」時回 `null`（它的用途是「要不要打擾 pty」）。喚醒一個休眠的 session 時：
+
+1. 終端由隱藏轉為顯示 → `active` 的 effect 先跑（`TerminalView` 是子層，effect 早於父層的 `wake`），
+   `fit()` **成功**量到真實尺寸 → 送出 resize → **pty 還不存在，主行程直接丟掉**。
+2. 而 `lastCols` 已經記成了那個尺寸 → 之後 ResizeObserver 再 `fit()` 一律回 `null`
+   → **再也不會有人告訴 pty 真正的尺寸** → 它一輩子停在 spawn 時的 **80×24**。
+
+**新建的 session 不會踩到** —— 它的 pty **先**誕生、終端**後**掛載 `fit()`。
+
+修法：**pty 誕生的那一刻（`status` 轉為 `running`），把終端當下的尺寸告訴它**（`XtermHandle.size()`
+—— 它不做「尺寸有沒有變」的偵測，`fit()` 沒辦法回答這個問題）。
+
+> **探針證明不了這個修正（對照組確認）。** 走不走到上面那條路，取決於 xterm 何時量到字元尺寸 ——
+> 若 `fit()` 在 `active` 的 effect 裡回了 `null`，`lastCols` 維持 0，稍後 ResizeObserver 就會補救成功。
+> **探針一直走那條幸運的路**：把修正整個拿掉，斷言照樣是綠的。留下的那條只擋「完全沒有人告訴 pty
+> 尺寸」的回歸；真正的防護由 code review + design 承擔（比照 OSC 8 `linkHandler` 的先例）。
+
+### `disposed` 的 exit **不是** session 結束 —— 少了這個區分，關一次視窗就清空持久化
+
+關視窗與 reload 時我們自己殺光所有 pty（Phase 4 的「不留孤兒」）。那些 pty 都會觸發 `onExit`。而
+「已結束的 session 不持久化」這條要求，若直接寫成「收到 exit 就把它從持久化移除」——**關一次視窗，
+`sessions.json` 就被清空了**。那正是這個 change 要修的 bug 本人，只是換了一種寫法。
+
+`TerminalSink.exit` 因此帶 **`ExitReason`**：`self`（pty 自己死了）／`killed`（使用者關掉）都是真的
+結束；**`disposed`（我們收工時殺的）不是** —— 持久化必須原封不動，而且**那個 exit 也不可推給
+renderer**（reload 後的新頁面已經用同樣的 id 重建了這些 session，一則遲到的 exit 會把剛重建好的分頁
+標成已結束）。
+
+### 兩個會**靜默毀掉使用者資料**的 React 陷阱
+
+- **落盤的 effect 必須有一道「restore 完成了嗎」的閘。** 首次渲染時 `sessions` 是空陣列 —— 少了閘，
+  它會在 restore 從磁碟讀回來**之前**就送出一份空清單，**把上一次的 session 全部抹掉**。沒有錯誤、
+  沒有訊息，只有「重開之後什麼都不見了」。
+- **restore 的 `setSessions` 必須是合併，不能是覆蓋。** restore 是一次非同步 IPC，使用者完全可能在它
+  回來之前就按下「+ session」—— 直接 `setSessions(重建的清單)` 會讓那個剛建好的 session **憑空消失，
+  而它的 pty 還活著**。（探針抓到的正是這個：「pty 行程存在」是綠的，「分頁出現」是紅的。）
+
+### StrictMode 會把重建做兩次 —— 而且只有 dev 會壞
+
+- restore 的 effect 需要一道 **ref 閘**，否則 `restore()` 被呼叫兩次，**每個 session 都變成兩份分頁**。
+- 快照的取用**不可以是「讀完即刪」**：StrictMode 把 `TerminalView` 的掛載 effect 跑兩次，第一次就把
+  快照取走了，第二次（也就是**真正存活下來**的那個 xterm）拿到 `undefined`，畫面一片空白。
+  改為非破壞性讀取，條目在 `close()` 時才清掉。
+
+### `\x1b[?1049l` 只能**條件式**地送 —— 沒進過 alt screen 時，它會把游標拉回 (0,0)
+
+**`SerializeAddon` 會把終端模式一起序列化**（實測：使用者關 app 時正開著 vim，快照裡就真的有
+`\x1b[?1049h` 與 `\x1b[?1003h`）。所以重播完之後，我們**可能就站在 alternate buffer 裡** —— 不離開它，
+新的 shell 就跑在 vim 的那塊畫面上：**歷史全部看不見、沒有 scrollback**。
+
+直覺的修法是「重播前後各送一次 `?1049l` 把狀態清乾淨」。**兩邊都錯：**
+
+- **寫在歷史之前，對 alt screen 毫無作用** —— `?1049h` 在**歷史的中間**，重播完照樣在 alt buffer 裡。
+- **無條件寫在歷史之後，會毀掉沒進過 alt screen 的正常情況** —— `?1049l` 不只切換緩衝區，它還會
+  **還原「進入 alt screen 當下所儲存的游標」**。沒進去過時那個位置是 **(0,0)**：游標被拉回左上角，
+  接著寫入的分隔線蓋掉歷史的第二行、live 的第一個 prompt 再蓋掉第三行（探針抓到的畫面是
+  **`$ RK_42`** —— `MARK_42` 的前兩個字被 `$ ` 覆寫掉了）。
+
+**正解：重播完之後，只有 `term.buffer.active.type === 'alternate'` 時才送 `?1049l`。** 真的進去過時，
+它還原的正是我們要的游標；沒進去過時根本不送。不動游標的那些重置（滑鼠追蹤、SGR）則無條件送。
+
+而且**重播完要自己把游標挪到內容之後**（只用相對移動的 `\n`，絕對定位在一個尺寸與快照當下不同的終端
+上會落在錯的地方），再寫分隔線，**然後才接上 live 串流** —— 否則 pty 的第一個 prompt 會插進歷史中間。
+
+> **這條的驗收差點又是一盞假綠。** 起初的斷言是「重建後新 shell 的輸出看得見」—— 而**卡在 alt buffer
+> 裡的 shell，它的輸出照樣看得見**（只是被畫在 vim 的畫面上）。對照組（拿掉修正後重跑）**照樣全綠**。
+> 有鑑別力的判準是「**normal buffer 裡的歷史看得見**」：那是兩種情況真正的差別，也是使用者真正失去的
+> 東西。換上它之後，對照組如期變紅。
+
+### 一個 claude session 是**兩個** `/bin/sh` 行程 —— 探針要數 session，不是數行程
+
+`$SHELL -l -c "claude …"` 的那層 shell **不會 exec**（實測，cmdline 說了實話）：它與 claude 自己的
+shell 是兩個行程，兩個的 `argv[0]` 都是 `/bin/sh`。login shell 的 session 則只有一個。**拿行程數去
+斷言「只喚醒了一個 session」，會把一個好的實作判成壞的。** node-pty spawn 的恆是 `$SHELL -l …` ——
+以 `-l` 認出領頭行程，數量就等於 session 數。
+
+### `probe:terminal` 的 reload 斷言在本 change 之前是**靠競態維持的綠燈**
+
+「重新載入釋放先前的所有 pty」原本斷言「pty **數量**為 0」，而「重新載入後分頁列回到空狀態」更是
+**直接與新規格相反**（我們刻意要把分頁重建回來）—— 兩條都靠「reload 之後、restore 還沒 resolve 之前
+有一個幾毫秒的空窗」而繼續是綠的。判準必須改成「**先前那些 pid 不再存在**」（重建會立刻起新的 pty）。
+**探針的斷言會隨規格過期**（同 `probe:shell` 與 `probe:workspace` 的教訓）。
+
+> **斷言只驗「字串存在」，就驗不出畫面被弄壞。** 上面那個 `?1049l` 的 bug，在
+> `replayed.includes('MARK_42')` 這種斷言下**照樣是綠的** —— `MARK_42` 確實還「在」（雖然它變成了
+> `RK_42` 且跑到分隔線後面去了）。**順序也要驗**：歷史必須完整，且整段在分隔線之前。
+
+### 不要用 `head -N` 過濾 `npm run typecheck` 的輸出
+
+npm 會先印幾行 `>` 開頭的腳本回顯與**空行**；`npm run typecheck 2>&1 | grep -v '^>' | head -3` 於是
+只顯示那幾個空行，**真正的錯誤被擠出視窗**。我因此一度以為「typecheck 抓不到未定義的函式」而去懷疑
+`tsconfig` —— 對照組證明它抓得到（`TS2304`），是我自己把眼睛遮住了。**要看 exit code，不要看被截斷
+的前幾行。**
 
 ## 字級尺度（`rail-legibility-and-repo-row` 起）
 

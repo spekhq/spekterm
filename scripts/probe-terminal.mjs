@@ -82,17 +82,48 @@ const STUB_CLAUDE_RECEIPT = 'stub-claude-ran'
  * session 完全相同，既有的 `typeLine(printf '\\033]0;…')` 一個字都不用改就能驅動它宣告標題。
  * `SHELL` 是 `/bin/sh`（見 `SHELL_PATH`），它**不會**自己送 OSC 標題 —— 標籤因此是確定的。
  */
-function makeStubClaude() {
+/**
+ * `resumeFails`：模擬 `claude --resume <不存在的對話>` —— 實測它印一行 `No conversation found…`
+ * 然後 **exit 1**。這不是邊角：**開了 claude session、還沒跟它講話就關掉 app，claude 根本不寫
+ * transcript**，於是重建時的續接必然失敗。自癒是主線路徑，必須驗得到。
+ *
+ * stub 同時把每次被呼叫的 argv 記進 `calls()` —— 續接（`--resume <id>`）與新建（`--session-id <id>`）
+ * 用的是哪個旗標、哪個 id，只有這樣才驗得出來。
+ */
+function makeStubClaude({ resumeFails = false } = {}) {
   const home = mkTemp('spekterm-terminal-stubhome-')
   const bin = join(home, '.local', 'bin')
   mkdirSync(bin, { recursive: true })
 
   const receipt = join(home, STUB_CLAUDE_RECEIPT)
+  const callLog = join(home, 'claude-calls.log')
   const claude = join(bin, 'claude')
-  writeFileSync(claude, `#!/bin/sh\n: > "${receipt}"\nexec "$SHELL" -i\n`)
+
+  const lines = [
+    '#!/bin/sh',
+    `: > "${receipt}"`,
+    `echo "$@" >> "${callLog}"`,
+    resumeFails
+      ? 'if [ "$1" = "--resume" ]; then echo "No conversation found with session ID: $2"; exit 1; fi'
+      : '',
+    'exec "$SHELL" -i',
+  ].filter(Boolean)
+
+  writeFileSync(claude, `${lines.join('\n')}\n`)
   chmodSync(claude, 0o755)
 
-  return { home, bin, receipt }
+  return {
+    home,
+    bin,
+    receipt,
+    calls: () => {
+      try {
+        return readFileSync(callLog, 'utf8').trim().split('\n').filter(Boolean)
+      } catch {
+        return []
+      }
+    },
+  }
 }
 
 function seedProfile(folders) {
@@ -129,6 +160,38 @@ function ptyPids(marker) {
     }
   }
   return pids
+}
+
+/**
+ * **session 的數量，不是行程的數量。**
+ *
+ * 一個 claude session 是**兩個**帶 marker 的 `/bin/sh` 行程（實測，cmdline 說了實話）：
+ * `\/bin\/sh -l -c claude …`（node-pty 直接 spawn 的那個，它沒有 exec）以及它底下 claude 自己
+ * 的 shell。一個 login shell session 則只有一個。**拿行程數去斷言「只喚醒了一個 session」，
+ * 會把一個好的實作判成壞的。**
+ *
+ * node-pty spawn 的恆是 `$SHELL -l …` —— 以 `-l` 認出領頭行程，數量就等於 session 數。
+ */
+function ptySessionPids(marker) {
+  return ptyPids(marker).filter((pid) => {
+    try {
+      const argv = readFileSync(`/proc/${pid}/cmdline`, 'utf8').split('\0').filter(Boolean)
+      return argv[1] === '-l'
+    } catch {
+      return false
+    }
+  })
+}
+
+/** 診斷用：帶 marker 的 pty 行程完整命令列。斷言失敗時，光看數字看不出是誰。 */
+function ptyCmdlines(marker) {
+  return ptyPids(marker).map((pid) => {
+    try {
+      return readFileSync(`/proc/${pid}/cmdline`, 'utf8').split('\0').filter(Boolean).join(' ')
+    } catch {
+      return `pid ${pid}（已結束）`
+    }
+  })
 }
 
 async function waitForPtyCount(marker, expected, timeoutMs = 8000) {
@@ -1379,37 +1442,66 @@ async function runMode(label, { port, rendererUrl }) {
       JSON.stringify(clearedShell),
     )
 
-    // ── reload：舊 pty 必須全數釋放（design D2）
+    // ── reload：舊 pty 必須全數釋放（design D2），而 session 會被**重建**（session-persistence）
+    //
     // 這是最容易漏的一條：reload 不銷毀 webContents，只掛 'destroyed' 的清理不會觸發，
     // 舊 pty 會變孤兒，且新頁面的 xterm 再也收不到它們的輸出。
+    //
+    // **判準是「先前那些 pid 不再存在」，不是「pty 的數量為 0」。** session-restore 之後，重建會
+    // 立刻為被顯示的那個 session 起一個**新的** pty —— 數量只會在一個幾毫秒的窗口裡回到 0。
+    // 這條斷言原本寫的正是「數量為 0」，它於是變成在賭一場競態；而它下面那條「分頁列回到空狀態」
+    // 更是直接與新規格相反（我們刻意要把分頁重建回來），卻靠著同一場競態繼續是綠的 ——
+    // **探針的斷言會隨規格過期**（同 probe:shell 與 probe:workspace 的教訓）。
+    const tabsBeforeReload = await app.client.evaluate(TAB_LABELS)
+    const pidsBeforeReload = ptyPids(marker)
+
     await app.client.send('Page.reload', {})
     await pollUntil(app.client, MOUNTED, (value) => value === true, 20_000)
-    const pidsAfterReload = await waitForPtyCount(marker, 0)
+
+    let orphans = pidsBeforeReload
+    const orphanDeadline = Date.now() + 10_000
+    while (Date.now() < orphanDeadline) {
+      const alive = new Set(ptyPids(marker))
+      orphans = pidsBeforeReload.filter((pid) => alive.has(pid))
+      if (orphans.length === 0) break
+      await sleep(100)
+    }
     check(
       results,
       `${label}：重新載入釋放先前的所有 pty（不留孤兒）`,
-      pidsAfterReload.length === 0,
-      `殘留 pids=${pidsAfterReload.join(',') || '無'}`,
+      pidsBeforeReload.length > 0 && orphans.length === 0,
+      `先前 pids=${pidsBeforeReload.join(',') || '無'} 殘留=${orphans.join(',') || '無'}`,
     )
 
-    const tabsAfterReload = await app.client.evaluate(TABS)
+    // 重新載入後 session 被重建 —— 分頁、名字、順序原樣回來。
+    await pollUntil(app.client, SELECT_FOLDER('repo-a'), (value) => value === true, 10_000)
+    const tabsAfterReload = await pollUntil(
+      app.client,
+      TAB_LABELS,
+      (value) => value.length === tabsBeforeReload.length,
+      10_000,
+    )
     check(
       results,
-      `${label}：重新載入後分頁列回到空狀態`,
-      Array.isArray(tabsAfterReload) && tabsAfterReload.length === 0,
+      `${label}：重新載入後 session 被重建（分頁與名字原樣回來）`,
+      JSON.stringify(tabsAfterReload) === JSON.stringify(tabsBeforeReload),
+      `之前=${JSON.stringify(tabsBeforeReload)} 之後=${JSON.stringify(tabsAfterReload)}`,
     )
 
     // ── 關閉視窗：所有 pty 必須被清掉（真的關窗，再回查行程表）
-    await pollUntil(app.client, SELECT_FOLDER('repo-a'), (value) => value === true, 10_000)
     await sleep(300)
     await openSessionViaMenu(app.client, '進 login shell')
-    await pollUntil(app.client, TABS, (value) => value.length === 1, 8000)
-    const pidsBeforeQuit = await waitForPtyCount(marker, 1)
+    const tabsAfterCreate = await pollUntil(
+      app.client,
+      TABS,
+      (value) => value.length === tabsBeforeReload.length + 1,
+      8000,
+    )
     check(
       results,
       `${label}：重新載入後仍可建立新 session`,
-      pidsBeforeQuit.length === 1,
-      `pids=${pidsBeforeQuit.join(',')}`,
+      tabsAfterCreate.length === tabsBeforeReload.length + 1,
+      `分頁數=${tabsAfterCreate.length}（重建了 ${tabsBeforeReload.length} 個）`,
     )
 
     await app.quitGracefully()
@@ -1433,13 +1525,523 @@ async function runMode(label, { port, rendererUrl }) {
   }
 }
 
+/** 快照是 debounce 2 秒後才落盤的 —— 要等過它，否則量到的是「還沒寫」而不是「寫錯了」。 */
+const SNAPSHOT_SETTLE_MS = 3200
+
+/** 等到帶 marker 的 pty 全部消失（app 自己清乾淨，或我們自己收拾）。 */
+async function waitPtysGone(marker, timeoutMs = 10_000) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if (ptyPids(marker).length === 0) return true
+    await sleep(100)
+  }
+  return false
+}
+
+/**
+ * session 跨「關閉並重新開啟應用程式」存活（session-persistence）。
+ *
+ * **與 `runMode` 分開走一遍完整生命週期**：建立 session → 關掉 app → 以**同一個 profile** 重新
+ * 啟動 → 斷言重建。分開是因為那支已經有 108 條斷言、且對真滑鼠座標與時序極其敏感，而這裡要
+ * 反覆重啟 app；把兩者攪在一起，任何一邊的 flake 都會汙染另一邊的結論。
+ */
+async function runRestore(label, { port, rendererUrl }) {
+  console.log(`\n── ${label}（session 重建）──`)
+
+  const marker = `spek-restore-${process.pid}-${Date.now()}`
+  const { repo } = makeFixture()
+  const sub = join(repo, 'packages', 'app')
+  mkdirSync(sub, { recursive: true })
+  const profile = seedProfile([['f1', repo]])
+  const stub = makeStubClaude()
+
+  let app = null
+  try {
+    // ── 第一次啟動：建立兩個 session，讓它們留下足以辨識的痕跡
+    app = await launch({ port, profileDir: profile, rendererUrl, marker, stub })
+    await pollUntil(app.client, SELECT_FOLDER('repo-a'), (value) => value === true, 10_000)
+    await sleep(300)
+
+    await openSessionViaMenu(app.client, '跑 claude')
+    await pollUntil(app.client, TABS, (value) => value.length === 1, 8000)
+
+    // claude 目標：以我們指定的對話識別碼啟動（--session-id）—— 於是它可以被持久化並在下次續接。
+    await waitForPtyCount(marker, 1)
+    const firstCalls = stub.calls()
+    const conversation = firstCalls[0]?.split(' ')[1] ?? ''
+    check(
+      results,
+      `${label}：新建的 claude session 以我們指定的對話識別碼啟動`,
+      firstCalls.length === 1 && /^--session-id [0-9a-f-]{36}$/.test(firstCalls[0]),
+      `argv=${JSON.stringify(firstCalls)}`,
+    )
+
+    // 使用者命名 —— 重建後必須原樣回來。
+    await openTabMenu(app.client, 0)
+    await realClick(app.client, await app.client.evaluate(MENU_ITEM_RECT('重新命名')))
+    await sleep(300)
+    await app.client.send('Input.insertText', { text: 'agent-a' })
+    await pressEnter(app.client)
+    await pollUntil(app.client, TAB_LABELS, (value) => value[0]?.includes('agent-a'), 6000)
+
+    // shell 目標：cd 到子目錄、留一行可辨識的輸出 —— 兩者都要跨重啟活下來。
+    await openSessionViaMenu(app.client, '進 login shell')
+    await pollUntil(app.client, TABS, (value) => value.length === 2, 8000)
+    await realClick(app.client, await app.client.evaluate(TERMINAL_RECT))
+    await typeLine(app.client, `cd ${sub}`)
+    await typeLine(app.client, 'echo MARK_$((6*7))')
+    await waitForOutput(app.client, 'MARK_42')
+
+    const labelsBefore = await app.client.evaluate(TAB_LABELS)
+
+    // 快照是 debounce 落盤的 —— 不等它，驗到的會是「還沒寫」。
+    await sleep(SNAPSHOT_SETTLE_MS)
+
+    await app.quitGracefully()
+    check(
+      results,
+      `${label}：關閉應用程式終止其所有 pty`,
+      await waitPtysGone(marker),
+      `殘留 pids=${ptyPids(marker).join(',') || '無'}`,
+    )
+
+
+    // ── 第二次啟動：同一個 profile
+    app = await launch({ port, profileDir: profile, rendererUrl, marker, stub })
+    await pollUntil(app.client, SELECT_FOLDER('repo-a'), (value) => value === true, 10_000)
+
+    const labelsAfter = await pollUntil(
+      app.client,
+      TAB_LABELS,
+      (value) => value.length === labelsBefore.length,
+      10_000,
+    )
+    check(
+      results,
+      `${label}：重新開啟後 session 原樣重建（分頁、使用者取的名字、順序）`,
+      JSON.stringify(labelsAfter) === JSON.stringify(labelsBefore),
+      `之前=${JSON.stringify(labelsBefore)} 之後=${JSON.stringify(labelsAfter)}`,
+    )
+
+    // **只有一個 session 有 pty** —— 其餘休眠。開 app 不該同時啟動 N 個 claude。
+    await sleep(2000)
+    const awake = ptySessionPids(marker)
+    check(
+      results,
+      `${label}：重新開啟只喚醒被顯示的那一個 session（其餘休眠，沒有 pty）`,
+      awake.length === 1,
+      `已喚醒 ${awake.length} 個（重建了 ${labelsAfter.length} 個）cmdlines=${JSON.stringify(ptyCmdlines(marker))}`,
+    )
+
+    // 被喚醒的是 claude —— 它續接**同一個**對話（--resume，沿用原 id）。
+    const resumeCalls = stub.calls()
+    check(
+      results,
+      `${label}：重建的 claude session 續接同一個對話（--resume 同一個 id）`,
+      resumeCalls.length === 2 && resumeCalls[1] === `--resume ${conversation}`,
+      `argv=${JSON.stringify(resumeCalls)}`,
+    )
+
+    // claude **不重播快照** —— 它自己會重現對話，重播會讓使用者看到兩份歷史。
+    const claudeText = await app.client.evaluate(TERMINAL_TEXT)
+    check(
+      results,
+      `${label}：claude session 不重播快照（否則歷史會出現兩份）`,
+      !claudeText.includes('以上為上次的內容'),
+      `終端內容=${JSON.stringify(claudeText.slice(0, 80))}`,
+    )
+
+    // ── 切到 shell session：它才被喚醒（首次被顯示時 spawn）
+    await realClick(app.client, await app.client.evaluate(TAB_RECT(1)))
+    const woken = await (async () => {
+      const deadline = Date.now() + 10_000
+      while (Date.now() < deadline) {
+        const pids = ptySessionPids(marker)
+        if (pids.length === 2) return pids
+        await sleep(150)
+      }
+      return ptySessionPids(marker)
+    })()
+    check(
+      results,
+      `${label}：顯示一個休眠的 session 使其啟動 pty`,
+      woken.length === 2,
+      `已喚醒 ${woken.length} 個 session`,
+    )
+
+    // 上次的畫面被重播，且與 live 明確區分。
+    const replayed = await pollUntil(
+      app.client,
+      TERMINAL_TEXT,
+      (value) => value.includes('MARK_42'),
+      10_000,
+    )
+    // **順序也要驗，不能只驗「這些字串都在」。**
+    //
+    // 只斷言 `includes('MARK_42')` 的版本，對一個把畫面弄壞的實作照樣是綠的：`?1049l` 曾把游標
+    // 拉回左上角，於是分隔線蓋掉了歷史的第二行、live 的 prompt 又蓋掉第三行 —— `MARK_42` 仍然
+    // 「存在」（雖然它變成了 `RK_42` 且跑到分隔線後面）。**歷史必須完整，且整段在分隔線之前。**
+    const historyEnd = replayed.indexOf('以上為上次的內容')
+    const history = historyEnd === -1 ? '' : replayed.slice(0, historyEnd)
+    check(
+      results,
+      `${label}：重建的 shell session 完整顯示上次的畫面`,
+      history.includes('MARK_42') && history.includes('echo MARK_'),
+      `分隔線之前的內容=${JSON.stringify(history.slice(-120))}`,
+    )
+    check(
+      results,
+      `${label}：重播的歷史與 live 內容明確區分`,
+      historyEnd !== -1,
+      '缺少分隔 —— 使用者會以為那個 shell 還活著',
+    )
+
+    // shell 於**最後已知的工作目錄**重生（不是 folder 根目錄）。
+    await realClick(app.client, await app.client.evaluate(TERMINAL_RECT))
+    await typeLine(app.client, 'echo CWD=$(pwd)')
+    const cwdText = await pollUntil(
+      app.client,
+      TERMINAL_TEXT,
+      (value) => value.includes('CWD=/'),
+      10_000,
+    )
+    check(
+      results,
+      `${label}：重建的 shell session 於最後已知的工作目錄重生`,
+      cwdText.includes(`CWD=${sub}`),
+      `期待 CWD=${sub}；實得 ${JSON.stringify(cwdText.slice(-100))}`,
+    )
+
+    // 喚醒之後，pty 最終要拿到終端真正的尺寸（而不是 spawn 時的 80 欄）。
+    //
+    // **這條擋的是「完全沒有人告訴 pty 尺寸」的回歸，它證明不了那個競態被修好了。**
+    // dogfooding 抓到的 bug 是：`active` 的 effect 先 `fit()` 成功（量到 63）→ 送出 resize →
+    // **pty 還不存在，被丟掉** → 而 `lastCols` 已記成 63，之後 ResizeObserver 的 `fit()` 一律回
+    // `null`，於是 pty 一輩子停在 80 欄。但**走不走到這條路，取決於 xterm 何時量到字元尺寸** ——
+    // 探針一直走另一條（`fit()` 當下回 null → ResizeObserver 事後補救成功）。**對照組證實：把修正
+    // 拿掉，這條斷言照樣是綠的。** 真正的防護是 `TerminalView` 裡「pty 一誕生就告訴它當下尺寸」
+    // 的那個 effect，它由 code review 與 design 承擔（比照 OSC 8 linkHandler 的先例）。
+    //
+    // 判準是「**不等於 spawn 的預設值 80**」，不是「大於 80」—— 探針視窗裡終端的真實寬度是 60 幾欄。
+    // 回顯不含答案：`$(stty size)` 在輸入行的回顯裡不會展開。
+    await typeLine(app.client, "echo COLS=$(stty size | cut -d' ' -f2)")
+    const colsText = String(
+      await pollUntil(app.client, TERMINAL_TEXT, (value) => /COLS=\d+/.test(value), 10_000).catch(
+        () => '',
+      ),
+    )
+    const cols = Number(colsText.match(/COLS=(\d+)/)?.[1] ?? 0)
+    check(
+      results,
+      `${label}：喚醒的 session 其 pty 最終取得終端的真實尺寸（不是 spawn 時的 80 欄）`,
+      cols > 0 && cols !== 80,
+      `pty 的欄數=${cols}（停在 80 就表示喚醒之後沒有人告訴過它真正的尺寸）`,
+    )
+
+    // ── 已結束的 session 不持久化
+    await typeLine(app.client, 'exit')
+    await pollUntil(
+      app.client,
+      TABS,
+      (value) => value.some((tab) => tab.label?.includes('已結束') || true),
+      3000,
+    ).catch(() => {})
+    await sleep(800)
+    await app.quitGracefully()
+    await waitPtysGone(marker)
+
+    app = await launch({ port, profileDir: profile, rendererUrl, marker, stub })
+    await pollUntil(app.client, SELECT_FOLDER('repo-a'), (value) => value === true, 10_000)
+    const afterExit = await pollUntil(app.client, TAB_LABELS, (value) => value.length >= 1, 10_000)
+    check(
+      results,
+      `${label}：已結束的 session 不被持久化（重開後不出現）`,
+      afterExit.length === 1 && afterExit[0].includes('agent-a'),
+      `分頁=${JSON.stringify(afterExit)}`,
+    )
+    await app.quitGracefully()
+    await waitPtysGone(marker)
+    app = null
+
+    // ── 損毀韌性：整份無法解析 → app 照常啟動、無 session、原檔保留
+    writeFileSync(join(profile, 'sessions.json'), '{ 損毀的內容')
+    app = await launch({ port, profileDir: profile, rendererUrl, marker, stub })
+    await pollUntil(app.client, SELECT_FOLDER('repo-a'), (value) => value === true, 10_000)
+    await sleep(1200)
+    const tabsAfterCorrupt = await app.client.evaluate(TAB_LABELS)
+    const quarantined = readdirSync(profile).filter((entry) => entry.includes('.corrupt-'))
+    check(
+      results,
+      `${label}：持久化檔案損毀時應用程式照常啟動，且原檔保留`,
+      tabsAfterCorrupt.length === 0 && quarantined.length === 1,
+      `分頁=${tabsAfterCorrupt.length} 隔離檔=${quarantined.join(',') || '無'}`,
+    )
+    await app.quitGracefully()
+    await waitPtysGone(marker)
+    app = null
+  } finally {
+    if (app) await app.destroy()
+    for (const pid of ptyPids(marker)) {
+      try {
+        process.kill(pid, 'SIGKILL')
+      } catch {
+        // 已經走了
+      }
+    }
+  }
+}
+
+/**
+ * 續接失敗的自癒，以及「非正常結束仍保有最近一次快照」。
+ *
+ * 這兩條各自需要一個**不同的 stub**（`resumeFails`）或一次**非正常的死法**（SIGKILL），因此獨立
+ * 一段，不與上面那段共用 app。
+ */
+async function runHealAndCrash(label, { port, rendererUrl }) {
+  console.log(`\n── ${label}（自癒與非正常結束）──`)
+
+  const marker = `spek-heal-${process.pid}-${Date.now()}`
+  const { repo } = makeFixture()
+  const profile = seedProfile([['f1', repo]])
+  // 這支 stub 對 `--resume` 一律以非零碼結束 —— 正是「從未與該 session 對話過」時 claude 的行為。
+  const stub = makeStubClaude({ resumeFails: true })
+
+  let app = null
+  try {
+    app = await launch({ port, profileDir: profile, rendererUrl, marker, stub })
+    await pollUntil(app.client, SELECT_FOLDER('repo-a'), (value) => value === true, 10_000)
+    await sleep(300)
+
+    await openSessionViaMenu(app.client, '跑 claude')
+    await pollUntil(app.client, TABS, (value) => value.length === 1, 8000)
+    await waitForPtyCount(marker, 1)
+    const created = stub.calls()[0]?.split(' ')[1] ?? ''
+
+    await openTabMenu(app.client, 0)
+    await realClick(app.client, await app.client.evaluate(MENU_ITEM_RECT('重新命名')))
+    await sleep(300)
+    await app.client.send('Input.insertText', { text: 'healme' })
+    await pressEnter(app.client)
+    await pollUntil(app.client, TAB_LABELS, (value) => value[0]?.includes('healme'), 6000)
+
+    await app.quitGracefully()
+    await waitPtysGone(marker)
+
+    // ── 重新開啟：--resume 會失敗（沒有對話可續）→ 必須自癒成一個全新的對話
+    app = await launch({ port, profileDir: profile, rendererUrl, marker, stub })
+    await pollUntil(app.client, SELECT_FOLDER('repo-a'), (value) => value === true, 10_000)
+    await pollUntil(app.client, TAB_LABELS, (value) => value.length === 1, 10_000)
+
+    const healed = await (async () => {
+      const deadline = Date.now() + 15_000
+      while (Date.now() < deadline) {
+        const calls = stub.calls()
+        if (calls.length >= 3) return calls
+        await sleep(200)
+      }
+      return stub.calls()
+    })()
+
+    check(
+      results,
+      `${label}：續接失敗時以全新的對話識別碼自癒（不沿用舊 id —— 那會撞號）`,
+      healed.length === 3 &&
+        healed[1] === `--resume ${created}` &&
+        /^--session-id [0-9a-f-]{36}$/.test(healed[2]) &&
+        healed[2].split(' ')[1] !== created,
+      `argv=${JSON.stringify(healed)}`,
+    )
+
+    // 身分不變：分頁還在、名字還在、session 可用。
+    const healedLabels = await app.client.evaluate(TAB_LABELS)
+    check(
+      results,
+      `${label}：自癒不改變 session 的身分（分頁與名字不變）`,
+      healedLabels.length === 1 && healedLabels[0].includes('healme'),
+      `分頁=${JSON.stringify(healedLabels)}`,
+    )
+    check(
+      results,
+      `${label}：自癒後的 session 有一個活著的 pty`,
+      ptySessionPids(marker).length === 1,
+      `已喚醒 ${ptySessionPids(marker).length} 個 session`,
+    )
+
+    // 啟動的嘗試不超過兩次 —— claude 若根本起不來，不可反覆重試。
+    await sleep(1500)
+    check(
+      results,
+      `${label}：自癒至多一次（啟動的嘗試不超過兩次）`,
+      stub.calls().length === 3,
+      `argv=${JSON.stringify(stub.calls())}`,
+    )
+
+    // ── 被竄改的對話識別碼絕不可被拼進命令
+    await app.quitGracefully()
+    await waitPtysGone(marker)
+
+    const persisted = JSON.parse(readFileSync(join(profile, 'sessions.json'), 'utf8'))
+    const pwned = join(repo, 'pwned')
+    persisted.sessions[0].claudeSessionId = `x; touch ${pwned}`
+    writeFileSync(join(profile, 'sessions.json'), JSON.stringify(persisted))
+
+    app = await launch({ port, profileDir: profile, rendererUrl, marker, stub })
+    await pollUntil(app.client, SELECT_FOLDER('repo-a'), (value) => value === true, 10_000)
+    await waitForPtyCount(marker, 1)
+    await sleep(800)
+
+    const afterTamper = stub.calls().slice(3)
+    check(
+      results,
+      `${label}：被竄改的對話識別碼不進入命令，該 session 以全新對話重建`,
+      !existsSync(pwned) &&
+        afterTamper.length === 1 &&
+        /^--session-id [0-9a-f-]{36}$/.test(afterTamper[0]),
+      `注入的檔案存在=${existsSync(pwned)} argv=${JSON.stringify(afterTamper)}`,
+    )
+
+    // ── 非正常結束（SIGKILL）：最近一次快照仍在
+    await app.quitGracefully()
+    await waitPtysGone(marker)
+
+    app = await launch({ port, profileDir: profile, rendererUrl, marker, stub })
+    await pollUntil(app.client, SELECT_FOLDER('repo-a'), (value) => value === true, 10_000)
+    await pollUntil(app.client, TABS, (value) => value.length === 1, 10_000)
+
+    await openSessionViaMenu(app.client, '進 login shell')
+    await pollUntil(app.client, TABS, (value) => value.length === 2, 8000)
+    await realClick(app.client, await app.client.evaluate(TERMINAL_RECT))
+    await typeLine(app.client, 'echo CRASH_$((8*8))')
+    await waitForOutput(app.client, 'CRASH_64')
+
+    // 滾動快照是 debounce 落盤的 —— 等過它，然後**不給 app 任何收尾的機會**。
+    await sleep(SNAPSHOT_SETTLE_MS)
+    await app.destroy()
+    for (const pid of ptyPids(marker)) {
+      try {
+        process.kill(pid, 'SIGKILL')
+      } catch {
+        // 已經走了
+      }
+    }
+    app = null
+    await sleep(500)
+
+    app = await launch({ port, profileDir: profile, rendererUrl, marker, stub })
+    await pollUntil(app.client, SELECT_FOLDER('repo-a'), (value) => value === true, 10_000)
+    await pollUntil(app.client, TAB_LABELS, (value) => value.length === 2, 10_000)
+    await realClick(app.client, await app.client.evaluate(TAB_RECT(1)))
+
+    const crashText = await pollUntil(
+      app.client,
+      TERMINAL_TEXT,
+      (value) => value.includes('CRASH_64'),
+      10_000,
+    ).catch(() => '')
+    check(
+      results,
+      `${label}：應用程式被強制結束後，最近一次快照仍可還原畫面`,
+      String(crashText).includes('CRASH_64'),
+      // 這條擋住「只在關閉視窗時才序列化」的實作 —— SIGKILL 收不到任何收尾的機會。
+      `終端內容=${JSON.stringify(String(crashText).slice(-120))}`,
+    )
+  } finally {
+    if (app) await app.destroy()
+    for (const pid of ptyPids(marker)) {
+      try {
+        process.kill(pid, 'SIGKILL')
+      } catch {
+        // 已經走了
+      }
+    }
+  }
+}
+
+/**
+ * 關掉 app 時終端正處於 **alternate screen**（開著 vim）或**滑鼠追蹤**模式 —— 重播不得讓**新的**
+ * shell 卡在那個模式裡。
+ *
+ * 歷史是死的文字，live 不該繼承它的狀態。卡住的症狀很難懂：新 shell 的輸出**看不見**（它被畫到
+ * 另一個緩衝區去了），使用者只會覺得「終端壞了」。
+ */
+async function runAltScreen(label, { port, rendererUrl }) {
+  console.log(`\n── ${label}（alternate screen 的殘留）──`)
+
+  const marker = `spek-alt-${process.pid}-${Date.now()}`
+  const { repo } = makeFixture()
+  const profile = seedProfile([['f1', repo]])
+  const stub = makeStubClaude()
+
+  let app = null
+  try {
+    app = await launch({ port, profileDir: profile, rendererUrl, marker, stub })
+    await pollUntil(app.client, SELECT_FOLDER('repo-a'), (value) => value === true, 10_000)
+    await sleep(300)
+
+    await openSessionViaMenu(app.client, '進 login shell')
+    await pollUntil(app.client, TABS, (value) => value.length === 1, 8000)
+    await realClick(app.client, await app.client.evaluate(TERMINAL_RECT))
+
+    // 進入 alternate screen（`?1049h`）並開啟滑鼠追蹤（`?1003h`）—— 這正是 vim 開著時的狀態。
+    await typeLine(app.client, "printf '\\033[?1049h\\033[?1003h'; echo INSIDE_ALT")
+    await waitForOutput(app.client, 'INSIDE_ALT')
+
+    await sleep(SNAPSHOT_SETTLE_MS)
+    await app.quitGracefully()
+    await waitPtysGone(marker)
+
+    // ── 重開：新的 shell 必須是可用的
+    app = await launch({ port, profileDir: profile, rendererUrl, marker, stub })
+    await pollUntil(app.client, SELECT_FOLDER('repo-a'), (value) => value === true, 10_000)
+    await pollUntil(app.client, TABS, (value) => value.length === 1, 10_000)
+    await waitForPtyCount(marker, 1)
+    await realClick(app.client, await app.client.evaluate(TERMINAL_RECT))
+
+    // 回顯不含答案 —— 只有真的執行了才會出現 `ALT_OK_81`。
+    await typeLine(app.client, 'echo ALT_OK_$((9*9))')
+    const text = String(
+      await pollUntil(app.client, TERMINAL_TEXT, (value) => value.includes('ALT_OK_81'), 10_000).catch(
+        () => '',
+      ),
+    )
+
+    // **判準是「normal buffer 的歷史看得見」，不是「新 shell 的輸出看得見」。**
+    //
+    // 後者是個假綠（對照組證明過）：卡在 alternate buffer 裡的 shell，它的輸出**照樣看得見**
+    // —— 只是被畫在 vim 的那塊畫面上。使用者失去的是**歷史與 scrollback**（normal buffer 被
+    // 蓋住了）。真正有鑑別力的是那行 `printf` —— 它在 normal buffer 裡，只有真的離開了
+    // alternate buffer 才看得到它。
+    check(
+      results,
+      `${label}：關閉時處於 alternate screen，重建後離開它（歷史與 scrollback 都還在）`,
+      text.includes('printf') && text.includes('ALT_OK_81'),
+      `終端內容=${JSON.stringify(text.slice(-160))}`,
+    )
+  } finally {
+    if (app) await app.destroy()
+    for (const pid of ptyPids(marker)) {
+      try {
+        process.kill(pid, 'SIGKILL')
+      } catch {
+        // 已經走了
+      }
+    }
+  }
+}
+
 async function main() {
   let devServer = null
   try {
     await runMode('build', { port: BUILD_PORT, rendererUrl: null })
+    await runRestore('build', { port: BUILD_PORT, rendererUrl: null })
+    await runHealAndCrash('build', { port: BUILD_PORT, rendererUrl: null })
+    await runAltScreen('build', { port: BUILD_PORT, rendererUrl: null })
 
     devServer = await startRendererDevServer()
     await runMode('dev', { port: DEV_PORT, rendererUrl: devServer.url })
+    await runRestore('dev', { port: DEV_PORT, rendererUrl: devServer.url })
+    await runHealAndCrash('dev', { port: DEV_PORT, rendererUrl: devServer.url })
+    await runAltScreen('dev', { port: DEV_PORT, rendererUrl: devServer.url })
   } finally {
     if (devServer) {
       try {

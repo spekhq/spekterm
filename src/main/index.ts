@@ -13,6 +13,7 @@ import { registerTerminalHandlers } from './ipc/terminal'
 import { applyNavigationGuards } from './navigation'
 import { formatScanSummary, scanRepo } from './openspec'
 import { guardUnsavedChanges } from './unsaved-changes'
+import { SessionStore } from './session-store'
 import { WorkspaceStore } from './workspace-store'
 
 const currentDir = dirname(fileURLToPath(import.meta.url))
@@ -93,6 +94,15 @@ void app.whenReady().then(() => {
   const store = new WorkspaceStore(join(app.getPath('userData'), 'workspace.json'))
   store.load()
 
+  // session 的持久化與 workspace 同一個落點，理由也一樣（`--user-data-dir` 可隔離驗收）。
+  // 快照另外放一個目錄：它們是每個 session 一個檔的大塊文字，不該讓 sessions.json 這個
+  // 每次都整份重寫的小檔跟著漲。
+  const sessionStore = new SessionStore(
+    join(app.getPath('userData'), 'sessions.json'),
+    join(app.getPath('userData'), 'sessions'),
+  )
+  sessionStore.load()
+
   const dirty = new DirtyStateStore()
 
   // 在建立視窗、載入任何 renderer 內容之前施加 CSP —— renderer 從第一幀起就會渲染使用者
@@ -107,7 +117,7 @@ void app.whenReady().then(() => {
   registerOpenSpecHandlers(store)
   registerShellHandlers()
   registerAppHandlers(dirty)
-  registerTerminalHandlers(store)
+  registerTerminalHandlers(store, sessionStore)
   registerClipboardHandlers()
 
   createWindow(dirty)

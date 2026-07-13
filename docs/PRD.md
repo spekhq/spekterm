@@ -498,8 +498,37 @@ spekterm
 ### Phase 6 — 打包、設定與發佈
 - electron-builder 產出三平台安裝檔。
 - 沿用 spek 深色主題（#0a0c0f / amber #f59e0b）、圖示、原生選單。
-- 持久化開啟的 tab / layout / 最近工作區。
+- 持久化 layout（panel 尺寸）與最近工作區。
+  **session 的持久化已由 `session-restore` 落地**（不屬於任何 Phase）—— session 清單、
+  使用者取的名字、順序、錨定的 change 與終端畫面快照皆跨重啟存活，claude 以 `--resume` 續接
+  對話，shell 於最後已知的工作目錄重生。這裡剩下的是「開啟的檔案 tab」與 panel 尺寸。
 - （可選）自動更新、CHANGELOG 流程。
+
+### session 常駐（排在 Phase 6 之後，編號待定）
+
+`session-restore` 交付的是**重建**：關掉 app，pty 就死了；重開時我們把 session **重新開一個**
+（claude 續接對話、shell 回到最後的工作目錄、畫面以快照還原）。它涵蓋了痛點的絕大部分，但有一件事
+它做不到 —— **跑到一半的長行程（build、dev server、正在工作的 agent）會跟著 app 一起死。**
+
+要讓 session 真的活著，繞不過一個物理事實：**pty 的 master fd 必須有人持有。** app 一死，master
+關閉，slave 收到 SIGHUP，底下的行程跟著死。所以「常駐」不是一個功能，是一個架構決定 ——
+**必須有一個活過 app 的行程握著那個 fd**。
+
+**兩條路，取捨已記錄在案：**
+
+| | tmux（或 dtach／abduco） | 自寫常駐 daemon |
+|---|---|---|
+| 相依 | **硬相依外部二進位**。Windows 沒有 tmux；不能假設每台機器都裝了 | 無外部相依，完全可控 |
+| 複雜度 | **兩層 multiplexer 疊在一起** —— resize 協商、alternate screen、滑鼠模式都要重新處理 | 沒有雙層問題，但要自己做 daemon 生命週期、unix socket、scrollback ring buffer、版本升級相容 |
+| 對既有機制的衝擊 | **tmux 會攔截 OSC 0/2 標題**拿去當自己的 window name —— 而 `session-titles-and-controls` 整套 session 標題機制正是建立在 OSC 上 | 標題機制不受影響 |
+| 工作量 | 中 | **一整個 Phase** |
+
+**兩條路共同的代價**：Phase 4 立下的「**關閉分頁／reload／關閉視窗三路徑皆不留孤兒行程**」不變式
+會被**整個反轉**成「刻意留下孤兒」。必須同時設計回收路徑（何時該把一個沒人要的 session 殺掉），
+否則使用者機器上會慢慢累積一堆還活著的殭屍 claude。
+
+**先不做的理由**：`session-restore` 做完之後還缺的大概就只剩「長行程死掉」這一項。等 dogfooding
+一陣子，再決定要不要付上面的代價 —— 那會是一個資訊充分的決定，而不是現在猜。
 
 ### Phase 7 — Handoff 免費核心（moat 起步）
 - **Handoff schema**（§7.4）：frontmatter + 錨點 + 磁碟狀態快照。
@@ -519,7 +548,10 @@ spekterm
 
 ## 12. 橫切關注點
 
-- **狀態持久化**：工作區 folder、開啟 tab、panel 尺寸、最近專案。
+- **狀態持久化**：工作區 folder、panel 尺寸、最近專案；**terminal session 已由 `session-restore`
+  落地**（清單、名字、順序、錨定的 change、終端畫面快照，以及 claude 的對話續接）。「開啟的檔案
+  tab」仍待 Phase 6。**注意 session 的持久化是「重建」不是「常駐」** —— pty 仍隨 app 結束而死，
+  差別與代價見 §11 的「session 常駐」。
 - **快捷鍵 / 命令面板**：命令面板（`Cmd+K`）仍為後續項目。**導航快捷鍵已由
   `session-navigation-and-labels` 落地**：`Ctrl+Tab` / `Ctrl+Shift+Tab` 切換當前 repo 內的
   session（分頁位置序、可循環），`Ctrl+↓` / `Ctrl+↑` 切換 repo（rail 順序、可循環）。

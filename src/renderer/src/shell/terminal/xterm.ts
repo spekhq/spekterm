@@ -1,4 +1,5 @@
 import { FitAddon } from '@xterm/addon-fit'
+import { SerializeAddon } from '@xterm/addon-serialize'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import { Terminal } from '@xterm/xterm'
 import '@xterm/xterm/css/xterm.css'
@@ -26,6 +27,13 @@ export interface XtermHandle {
   open(parent: HTMLElement): void
   /** 依容器尺寸重排。回傳新的 cols/rows；尺寸未變或容器不可見時回傳 null。 */
   fit(): { cols: number; rows: number } | null
+  /**
+   * 當前的 cols/rows —— **不重新量測，也不做「尺寸有沒有變」的偵測**。
+   *
+   * `fit()` 在尺寸未變時回 `null`（它的用途是「要不要打擾 pty」），因此它**沒辦法**回答
+   * 「把現在的尺寸告訴一個**剛誕生**的 pty」。喚醒一個休眠的 session 時正是這個處境。
+   */
+  size(): { cols: number; rows: number }
   write(data: string): void
   /** 使用者鍵入的出口。回傳解除訂閱的函式。 */
   onInput(listener: (data: string) => void): () => void
@@ -36,6 +44,26 @@ export interface XtermHandle {
    * 不是我們去猜的。回傳解除訂閱的函式。
    */
   onTitle(listener: (title: string) => void): () => void
+  /**
+   * 把當前畫面序列化成一段可以再寫回去的文字（含跳脫序列）。用於重開 app 後還原畫面。
+   *
+   * 只取最後 `SNAPSHOT_LINES` 行 —— 快照要落到磁碟上，而 scrollback 有 5000 行，一個 SGR
+   * 密集的 agent 輸出序列化出來會非常大。
+   */
+  serialize(): string
+  /**
+   * 重播上次的畫面，接著寫入一段分隔，完成後呼叫 `done`。
+   *
+   * **不能只是 `write(history + separator)`。** `SerializeAddon` 的輸出**結尾帶一個絕對的游標定位**
+   * （把游標還原到快照當下的位置）—— 而那個位置對一個「即將接上新 pty」的終端毫無意義：實測新
+   * shell 的 prompt 會直接**蓋掉歷史中間的某一行**（探針抓到 `$ RK_42` —— `MARK_42` 的前兩個字
+   * 被 `$ ` 覆寫掉了）。
+   *
+   * 因此重播完要把游標挪到**內容之後**再寫分隔，而且只用相對移動（`\n` 會正確捲動，絕對定位不會）。
+   * `done` 必須等到分隔也寫完才呼叫 —— 呼叫端要在那之後才接上 live 串流，否則 pty 的第一個
+   * prompt 會插進歷史裡。
+   */
+  replay(history: string, separator: string, done: () => void): void
   /** 目前選取的內容（xterm 的選取不是 DOM selection，瀏覽器原生的複製抓不到它）。 */
   getSelection(): string
   hasSelection(): boolean
@@ -106,6 +134,23 @@ function terminalFontSize(): number {
   return Number.isFinite(px) && px > 0 ? px : TERMINAL_FONT_SIZE_FALLBACK
 }
 
+/**
+ * 快照保留的行數。xterm 的 scrollback 是 5000 行，但快照要寫進磁碟、每個 session 一份 ——
+ * 全部序列化並不划算。1000 行足以讓使用者認出「上次做到哪」。
+ */
+const SNAPSHOT_LINES = 1000
+
+/**
+ * 重播之後送出的模式重置：**不移動游標**。
+ *
+ * 快照裡可能殘留滑鼠追蹤（使用者關 app 時正開著 vim 或任何吃滑鼠的 TUI）與 SGR ——
+ * `SerializeAddon` **會把終端模式一起序列化**（實測，快照裡真的有 `\x1b[?1049h` 與 `\x1b[?1003h`）。
+ * 歷史是死的文字，新的 pty 不該繼承它的狀態。
+ *
+ * **這裡刻意沒有 `?1049l`** —— 那個要條件式地送（見 `replay`）。
+ */
+const RESET_MODES = '\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?25h\x1b[0m'
+
 export function createXterm(options: XtermOptions): XtermHandle {
   const { openLink, onCopy, onPaste } = options
   const term = new Terminal({
@@ -129,6 +174,9 @@ export function createXterm(options: XtermOptions): XtermHandle {
 
   const fitAddon = new FitAddon()
   term.loadAddon(fitAddon)
+
+  const serializeAddon = new SerializeAddon()
+  term.loadAddon(serializeAddon)
 
   // 覆寫預設的「開新視窗」：pty 的輸出是不受信任的內容（使用者 repo 裡的任何東西都可能
   // 印出一個 URL），絕不讓它直接驅動導航或開窗 —— 一律交給主行程驗證協定後以系統瀏覽器
@@ -186,8 +234,42 @@ export function createXterm(options: XtermOptions): XtermHandle {
       lastRows = term.rows
       return { cols: term.cols, rows: term.rows }
     },
+    size() {
+      return { cols: term.cols, rows: term.rows }
+    },
     write(data) {
       term.write(data)
+    },
+    serialize() {
+      return serializeAddon.serialize({ scrollback: SNAPSHOT_LINES })
+    },
+    replay(history, separator, done) {
+      term.write(history, () => {
+        // **快照裡可能含 `?1049h`**（實測：`SerializeAddon` 會把終端模式一起序列化）——
+        // 使用者關掉 app 時若正開著 vim，重播到這裡我們就**站在 alternate buffer 裡**。
+        // 不離開它，新的 shell 就跑在 vim 的畫面上：歷史全部看不見、沒有 scrollback。
+        //
+        // **`?1049l` 只在確實處於 alt buffer 時才送。** 它會還原「進入 alt screen 當下所儲存的
+        // 游標」—— 真的進去過時，那正是我們要的位置；**沒進去過時，那個位置是 (0,0)**，游標會被
+        // 拉回左上角，接著寫入的分隔線就蓋掉歷史的第二行、live 的第一個 prompt 再蓋掉第三行。
+        const leaveAlt = term.buffer.active.type === 'alternate' ? '\x1b[?1049l' : ''
+
+        term.write(`${leaveAlt}${RESET_MODES}`, () => {
+          const buffer = term.buffer.active
+
+          // 內容的最後一個非空行（絕對座標）。
+          let last = buffer.length - 1
+          while (last > 0 && (buffer.getLine(last)?.translateToString(true).trim() ?? '') === '') {
+            last -= 1
+          }
+
+          // 游標若停在內容之上，往下挪到內容之後。**只用相對移動** —— `\n` 會正確捲動，而絕對
+          // 定位在一個「尺寸與快照當下不同」的終端上會落在錯的地方。
+          const cursor = buffer.baseY + buffer.cursorY
+          const down = Math.max(0, last - cursor)
+          term.write(`${'\n'.repeat(down + 1)}\r${separator}`, done)
+        })
+      })
     },
     onInput(listener) {
       const disposable = term.onData(listener)
@@ -212,6 +294,7 @@ export function createXterm(options: XtermOptions): XtermHandle {
       term.focus()
     },
     dispose() {
+      serializeAddon.dispose()
       fitAddon.dispose()
       term.dispose()
     },

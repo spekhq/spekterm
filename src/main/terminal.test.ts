@@ -3,7 +3,13 @@ import fs from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, it } from 'node:test'
-import { TerminalError, TerminalService, type TerminalSink } from './terminal'
+import {
+  type ExitReason,
+  TerminalError,
+  TerminalService,
+  type TerminalSink,
+  ptyEnv,
+} from './terminal'
 import type { FolderLookup, WorkspaceFolder } from './workspace-store'
 
 /**
@@ -32,12 +38,15 @@ let repo: string
 let origShell: string | undefined
 let service: TerminalService | null
 let chunks: { sessionId: string; chunk: string }[]
-let exits: { sessionId: string; exitCode: number }[]
+let exits: { sessionId: string; exitCode: number; reason: ExitReason }[]
+let conversations: { sessionId: string; conversationId: string }[]
 
 function sink(): TerminalSink {
   return {
     data: (sessionId, chunk) => chunks.push({ sessionId, chunk }),
-    exit: (sessionId, exitCode) => exits.push({ sessionId, exitCode }),
+    exit: (sessionId, exitCode, reason) => exits.push({ sessionId, exitCode, reason }),
+    conversation: (sessionId, conversationId) =>
+      conversations.push({ sessionId, conversationId }),
   }
 }
 
@@ -52,6 +61,7 @@ beforeEach(() => {
   process.env.SHELL = '/bin/sh'
   chunks = []
   exits = []
+  conversations = []
   service = null
 })
 
@@ -83,7 +93,7 @@ describe('TerminalService', () => {
 
   it('雙向串流：輸入送達並被執行，cwd 為 folder 的根目錄', async () => {
     service = new TerminalService(lookup([{ id: 'f1', path: repo, status: 'ok' }]), sink())
-    const id = service.create('f1', 'shell')
+    const id = service.create('f1', 'shell').sessionId
     assert.equal(service.sessionCount, 1)
 
     // tty 會回顯輸入行，因此不能只斷言「畫面上出現了我送的字」。回顯的是字面的
@@ -102,7 +112,7 @@ describe('TerminalService', () => {
 
   it('pty 結束後自集合移除（集合恆等於「還活著的 pty」）', async () => {
     service = new TerminalService(lookup([{ id: 'f1', path: repo, status: 'ok' }]), sink())
-    const id = service.create('f1', 'shell')
+    const id = service.create('f1', 'shell').sessionId
 
     service.write(id, 'exit\r')
     await waitFor(() => exits.length === 1, { label: 'exit 事件' })
@@ -129,7 +139,7 @@ describe('TerminalService', () => {
 
   it('kill 終止指定的 session，其餘不受影響', async () => {
     service = new TerminalService(lookup([{ id: 'f1', path: repo, status: 'ok' }]), sink())
-    const first = service.create('f1', 'shell')
+    const first = service.create('f1', 'shell').sessionId
     service.create('f1', 'shell')
 
     service.kill(first)
@@ -146,7 +156,7 @@ describe('TerminalService', () => {
 
     let id = ''
     assert.doesNotThrow(() => {
-      id = service?.create('f1', 'shell') ?? ''
+      id = service?.create('f1', 'shell').sessionId ?? ''
     })
     assert.notEqual(id, '', 'create 仍應回傳 sessionId')
 
@@ -158,8 +168,252 @@ describe('TerminalService', () => {
     service = new TerminalService(lookup([{ id: 'f1', path: repo, status: 'ok' }]), sink())
     assert.doesNotThrow(() => service?.resize('unknown-session', 100, 40))
 
-    const id = service.create('f1', 'shell')
+    const id = service.create('f1', 'shell').sessionId
     // 0 尺寸會讓 node-pty 拋錯，因此必須先被夾制。
     assert.doesNotThrow(() => service?.resize(id, 0, 0))
+  })
+})
+
+/**
+ * 一支假的 `claude`，用來驗續接與自癒 —— 我們**叫不動真的 claude 去續接一個指定的對話**，
+ * 也不該讓一支單元測試真的啟動一個 Claude Code session。
+ *
+ * 產品的 claude 模式是 `$SHELL -l -c "claude …"`（從 PATH 解析），而 pty 的 env 整份繼承主行程的
+ * `process.env` —— 於是把 stub 前置到 PATH 就走的是**產品原本那條路徑**：動的是環境，不是被出貨的
+ * 程式碼。
+ *
+ * **`HOME` 也必須換掉（實測踩過，而且它會靜默地叫到真的 claude）**：`-l` 是 login shell，它會
+ * source `~/.profile`，而 Ubuntu 的預設 `~/.profile` 裡有 `PATH="$HOME/.local/bin:$PATH"` ——
+ * 那一行把**真** claude 的目錄搶到我們前面。把 HOME 指向暫存目錄後那裡沒有 `~/.profile` 可 source，
+ * 而且 stub 就放在該 HOME 的 `.local/bin` 裡：即使 profile 真的 prepend `$HOME/.local/bin`，
+ * 它指的也是我們的目錄。
+ */
+interface Stub {
+  /** 每次被呼叫時的 argv，一行一筆。 */
+  calls(): string[]
+}
+
+function installStubClaude({ resumeFails = false, alwaysFails = false } = {}): Stub {
+  const home = fs.realpathSync(fs.mkdtempSync(path.join(tmpdir(), 'spek-home-')))
+  const bin = path.join(home, '.local', 'bin')
+  fs.mkdirSync(bin, { recursive: true })
+  const log = path.join(home, 'calls.log')
+
+  const script = [
+    '#!/bin/sh',
+    `echo "$@" >> ${JSON.stringify(log)}`,
+    alwaysFails ? 'echo "stub always fails"; exit 1' : '',
+    resumeFails
+      ? 'if [ "$1" = "--resume" ]; then echo "No conversation found with session ID: $2"; exit 1; fi'
+      : '',
+    'echo STUB_READY',
+    // 續接成功的 claude 是個活著的互動程式 —— stub 也必須活著，否則 session 會立刻結束，
+    // 而「快速非零結束」正是自癒的判準，測試就分不清成功與失敗了。
+    'exec /bin/sh -i',
+  ]
+    .filter(Boolean)
+    .join('\n')
+
+  fs.writeFileSync(path.join(bin, 'claude'), `${script}\n`, { mode: 0o755 })
+
+  process.env.HOME = home
+  process.env.PATH = `${bin}:${process.env.PATH ?? ''}`
+  stubHomes.push(home)
+
+  return {
+    calls: () => {
+      try {
+        return fs.readFileSync(log, 'utf8').trim().split('\n').filter(Boolean)
+      } catch {
+        return []
+      }
+    },
+  }
+}
+
+let stubHomes: string[] = []
+
+describe('claude 目標的對話續接', () => {
+  let origHome: string | undefined
+  let origPath: string | undefined
+
+  beforeEach(() => {
+    origHome = process.env.HOME
+    origPath = process.env.PATH
+    stubHomes = []
+  })
+
+  afterEach(() => {
+    service?.dispose()
+    if (origHome === undefined) delete process.env.HOME
+    else process.env.HOME = origHome
+    if (origPath === undefined) delete process.env.PATH
+    else process.env.PATH = origPath
+    for (const home of stubHomes) fs.rmSync(home, { recursive: true, force: true })
+  })
+
+  it('新建的 claude session 以我們指定的對話識別碼啟動', async () => {
+    const stub = installStubClaude()
+    service = new TerminalService(lookup([{ id: 'f1', path: repo, status: 'ok' }]), sink())
+
+    const result = service.create('f1', 'claude')
+
+    await waitFor(() => stub.calls().length === 1, { label: 'stub claude 被呼叫' })
+    assert.ok(result.conversationId, '應該回報實際使用的對話識別碼')
+    // 由我們指定 id（而不是事後去 ~/.claude/projects 猜哪個 jsonl 是我們的）—— 於是它可以被
+    // 持久化，下次直接 --resume 它。
+    assert.equal(stub.calls()[0], `--session-id ${result.conversationId}`)
+  })
+
+  it('重建的 claude session 續接同一個對話', async () => {
+    const stub = installStubClaude()
+    const conversation = '44444444-4444-4444-8444-444444444444'
+    service = new TerminalService(lookup([{ id: 'f1', path: repo, status: 'ok' }]), sink())
+
+    const result = service.create('f1', 'claude', { resumeConversationId: conversation })
+
+    await waitFor(() => stub.calls().length === 1, { label: 'stub claude 被呼叫' })
+    assert.equal(stub.calls()[0], `--resume ${conversation}`)
+    // --resume 沿用原 id（--fork-session 才換號）—— 所以持久化的識別碼跨多次重開都有效。
+    assert.equal(result.conversationId, conversation)
+  })
+
+  it('被竄改的對話識別碼不得被拼進命令', async () => {
+    const stub = installStubClaude()
+    const marker = path.join(repo, 'pwned')
+    service = new TerminalService(lookup([{ id: 'f1', path: repo, status: 'ok' }]), sink())
+
+    // 持久化檔案是磁碟上的檔案 —— 它是不受信任的輸入。這個值會走到 `$SHELL -l -c "claude …"`，
+    // 一個字串命令。
+    const result = service.create('f1', 'claude', {
+      resumeConversationId: `x; touch ${marker}`,
+    })
+
+    await waitFor(() => stub.calls().length === 1, { label: 'stub claude 被呼叫' })
+    assert.equal(fs.existsSync(marker), false, '注入的命令絕不可被執行')
+    assert.ok(!stub.calls()[0].includes('touch'), '未經驗證的值絕不可進入 argv')
+    // 「沒有東西可以續接」不是錯誤 —— 以一個全新的對話開始，而不是讓這個 session 死掉。
+    assert.equal(stub.calls()[0], `--session-id ${result.conversationId}`)
+  })
+
+  it('續接失敗時以全新的對話識別碼自癒，session 不死', async () => {
+    // **這是主線，不是例外**：實測「開了 claude session、還沒跟它講話就關掉 app」時 claude 根本
+    // 不寫 transcript —— 於是重建時 --resume 必定失敗。
+    const stub = installStubClaude({ resumeFails: true })
+    const stale = '55555555-5555-4555-8555-555555555555'
+    service = new TerminalService(lookup([{ id: 'f1', path: repo, status: 'ok' }]), sink())
+
+    const { sessionId } = service.create('f1', 'claude', { resumeConversationId: stale })
+
+    await waitFor(() => conversations.length === 1, { label: '自癒回報新的對話識別碼' })
+    const healed = conversations[0].conversationId
+
+    assert.equal(conversations[0].sessionId, sessionId, 'session 的身分不變')
+    assert.notEqual(healed, stale, '必須換一個全新的 id')
+    // 沿用舊 id 會撞上 `Error: Session ID … is already in use.`（實測）——
+    // 這正是 `claude --resume X || claude --session-id X` 那種寫法是個陷阱的原因。
+    assert.deepEqual(stub.calls(), [`--resume ${stale}`, `--session-id ${healed}`])
+
+    await waitFor(() => output().includes('STUB_READY'), { label: '新的 claude 起來了' })
+    assert.equal(
+      exits.some((entry) => entry.sessionId === sessionId),
+      false,
+      '自癒過的 session 不該被回報為結束',
+    )
+    assert.equal(service.sessionCount, 1)
+  })
+
+  it('自癒至多一次 —— claude 根本起不來時不反覆重試', async () => {
+    const stub = installStubClaude({ alwaysFails: true })
+    const stale = '66666666-6666-4666-8666-666666666666'
+    service = new TerminalService(lookup([{ id: 'f1', path: repo, status: 'ok' }]), sink())
+
+    const { sessionId } = service.create('f1', 'claude', { resumeConversationId: stale })
+
+    await waitFor(() => exits.some((entry) => entry.sessionId === sessionId), {
+      label: 'session 以結束呈現',
+    })
+    await delay(300)
+
+    // 啟動的嘗試不超過兩次（原本那次 + 自癒那次）。
+    assert.equal(stub.calls().length, 2)
+    assert.equal(exits.filter((entry) => entry.sessionId === sessionId).length, 1)
+  })
+})
+
+describe('重建的工作目錄', () => {
+  it('於最後已知的子目錄重生', async () => {
+    const sub = path.join(repo, 'packages', 'app')
+    fs.mkdirSync(sub, { recursive: true })
+    service = new TerminalService(lookup([{ id: 'f1', path: repo, status: 'ok' }]), sink())
+
+    const { sessionId } = service.create('f1', 'shell', { cwd: sub })
+
+    // 回顯不含答案：`$(pwd)` 在輸入行的回顯裡不會展開，只有真的執行了才會出現。
+    service.write(sessionId, 'echo CWD=$(pwd)\n')
+    await waitFor(() => output().includes(`CWD=${sub}`), { label: 'cwd 為子目錄' })
+  })
+
+  it('越出 folder 邊界的工作目錄退回根目錄', async () => {
+    service = new TerminalService(lookup([{ id: 'f1', path: repo, status: 'ok' }]), sink())
+
+    // 使用者關掉 app 之前 `cd /tmp` 了 —— 重建不得把 pty 開在 workspace 之外。
+    const { sessionId } = service.create('f1', 'shell', { cwd: fs.realpathSync(tmpdir()) })
+
+    service.write(sessionId, 'echo CWD=$(pwd)\n')
+    await waitFor(() => output().includes(`CWD=${repo}`), { label: 'cwd 退回 folder 根目錄' })
+  })
+
+  it('已不存在的工作目錄退回根目錄', async () => {
+    service = new TerminalService(lookup([{ id: 'f1', path: repo, status: 'ok' }]), sink())
+
+    const { sessionId } = service.create('f1', 'shell', { cwd: path.join(repo, 'gone') })
+
+    service.write(sessionId, 'echo CWD=$(pwd)\n')
+    await waitFor(() => output().includes(`CWD=${repo}`), { label: 'cwd 退回 folder 根目錄' })
+  })
+})
+
+describe('pty 的環境', () => {
+  it('抹掉「巢狀 Claude Code」的標記 —— 否則裡面的 claude 不寫 transcript，續接永遠失敗', () => {
+    // spekterm 若由一個 agent 啟動（dogfooding 的常態），Electron 會繼承那個 Claude Code session
+    // 的 env。**巢狀的 claude 不寫 transcript**（二分實測：元兇是 `CLAUDE_CODE_CHILD_SESSION`）——
+    // 於是 `--resume` 必然失敗，而自癒機制會把這個失敗**蓋掉**：使用者拿到一個能用的 claude，
+    // 只是對話永遠是全新的。看起來像正常運作。
+    const env = ptyEnv({
+      CLAUDECODE: '1',
+      CLAUDE_CODE_ENTRYPOINT: 'cli',
+      CLAUDE_CODE_SESSION_ID: 'abc',
+      CLAUDE_CODE_CHILD_SESSION: 'true',
+      CLAUDE_CODE_BRIDGE_SESSION_ID: 'def',
+      CLAUDE_CODE_AGENT: 'x',
+      CLAUDE_JOB_DIR: '/tmp/job',
+      PATH: '/usr/bin',
+    })
+
+    assert.equal(env.CLAUDE_CODE_CHILD_SESSION, undefined)
+    assert.equal(env.CLAUDECODE, undefined)
+    assert.equal(env.CLAUDE_CODE_ENTRYPOINT, undefined)
+    assert.equal(env.CLAUDE_CODE_SESSION_ID, undefined)
+    assert.equal(env.CLAUDE_CODE_BRIDGE_SESSION_ID, undefined)
+    assert.equal(env.CLAUDE_CODE_AGENT, undefined)
+    assert.equal(env.CLAUDE_JOB_DIR, undefined)
+
+    // 其餘一律保留，且 TERM 對齊前端的 xterm。
+    assert.equal(env.PATH, '/usr/bin')
+    assert.equal(env.TERM, 'xterm-256color')
+  })
+
+  it('不以前綴一概剝除 —— 認證用的變數必須留下', () => {
+    // `CLAUDE_CODE_OAUTH_TOKEN` 是認證用的。以 `CLAUDE*` 前綴一概剝除，claude 會登不進去。
+    const env = ptyEnv({
+      CLAUDE_CODE_OAUTH_TOKEN: 'secret',
+      ANTHROPIC_API_KEY: 'secret',
+      CLAUDE_CODE_CHILD_SESSION: 'true',
+    })
+
+    assert.equal(env.CLAUDE_CODE_OAUTH_TOKEN, 'secret')
+    assert.equal(env.ANTHROPIC_API_KEY, 'secret')
+    assert.equal(env.CLAUDE_CODE_CHILD_SESSION, undefined)
   })
 })
