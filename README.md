@@ -9,7 +9,7 @@
 core 邏輯與視覺化元件重用開源的
 [`@spekjs/core`](https://www.npmjs.com/package/@spekjs/core) 與
 [`@spekjs/ui`](https://www.npmjs.com/package/@spekjs/ui)（皆 MIT，來自
-[`spek`](https://github.com/kewang/spek)）。
+[`spek`](https://github.com/spekhq/spek)）。
 
 ## 現況
 
@@ -106,7 +106,7 @@ npm run measure:bundle  # renderer bundle 體積報告（依編輯器核心／wo
 
 ## 與 `spek` 的關係
 
-開源的 [`spek`](https://github.com/kewang/spek)（MIT）是 OpenSpec 的內容檢視器。
+開源的 [`spek`](https://github.com/spekhq/spek)（MIT）是 OpenSpec 的內容檢視器。
 本 repo 是**獨立的私有 repo**、不是它的 npm workspace 成員，透過 npm 消費它的兩個套件：
 
 - **`@spekjs/core`** — scanner / tasks / git-cache / worktrees / types。主行程直接 `import`

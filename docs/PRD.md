@@ -33,7 +33,7 @@
 
 **spekterm** 是一個**以 agent 為核心的本地開發工作台**——一個獨立的 Electron 桌面 app（私有、專有授權），把多個「一個 repo／資料夾各自一個 `claude` session」的 terminal 包在一個殼裡，並加上一塊**懂 OpenSpec 結構的側欄**，讓使用者不必另外開 IDE 就能一邊駕駛 agent、一邊看著 spec 上下文。
 
-core 邏輯重用開源的 [`@spekjs/core`](https://github.com/kewang/spek)（MIT）；app 本身封閉、商業授權。
+core 邏輯重用開源的 [`@spekjs/core`](https://github.com/spekhq/spek)（MIT）；app 本身封閉、商業授權。
 
 **一句話定位（headline）**：spec-driven 的多 agent 開發工作台。
 

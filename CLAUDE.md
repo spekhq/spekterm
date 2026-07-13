@@ -137,7 +137,7 @@ ready 事件要等主 script 評估完成才觸發，會死鎖。
 
 ## Relationship to `spek`
 
-- 開源的 [`spek`](https://github.com/kewang/spek)（MIT）是 OpenSpec 內容檢視器 monorepo，本機 clone 在 `../spek`。
+- 開源的 [`spek`](https://github.com/spekhq/spek)（MIT）是 OpenSpec 內容檢視器 monorepo，本機 clone 在 `../spek`。
 - **本 repo 是獨立的私有 repo**，專有授權（All rights reserved），**不是** spek monorepo 的 npm workspace 成員。
 - 計畫重用 core 引擎（scanner / tasks / git-cache / worktrees / types）與 spek 的前端元件，
   詳見 `docs/PRD.md` §9。
@@ -231,15 +231,14 @@ org 名**不是**凍結身分的一部分 —— repo 改名與 transfer 皆自�
 - **npm scope 仍是 `@spekjs`，不要「順手對齊」成 `@spekhq`。** 那個 npm org 真的叫 `spekjs`、
   套件已發佈。**GitHub org 名與 npm scope 不一致是常態**（`@tailwindcss/*` 的源碼在
   `tailwindlabs/tailwindcss`），為了對齊而重新發佈一次 scope，成本遠大於收益。
-- **開源的 `spek` 刻意留在 `kewang/spek`，沒有搬進 org。** 唯一的阻礙是 **GitHub Pages 不
-  redirect**（GitHub 文件明文：git 與網頁連結會 redirect，Pages **不會**）—— 而
-  `kewang.github.io/spek` 上掛著 README 頂部的 3 個 badge 與 **Live Demo**，那些 badge 隨 README
-  一起出現在 npm、VS Code Marketplace、JetBrains 商店的頁面上。搬 org ＝ 這些 URL 永久 404。
-  其餘一切（secrets、webhooks、deploy keys、issues、releases、fork、git 操作）都會跟著搬或 redirect。
-
-> **日後真要搬 `spek`，成本只會漲不會跌。** 掛上自訂網域後，`<owner>.github.io/<repo>` 會自動
-> redirect 到該網域 —— 所以**「換 owner」是唯一不被任何 redirect 覆蓋的一次搬家**。拖越久，指向
-> `kewang.github.io/spek` 的外部連結累積越多。與 `appId` 同一個形狀的單調成本。
+- **開源的 `spek` 也已搬進 org**（`spekhq/spek`，由該 repo 自己的 `move-to-spekhq-org` 承載，
+  已隨 **v1.7.0** 發佈）。兩件事 GitHub **不 redirect**，都是一次付清的代價：
+  **GitHub Action 的 `uses:` 參照**（刻意的安全設計 —— 舊路徑直接 `repository not found`，
+  故 `uses:` 已改為 `spekhq/spek@v1`）與 **GitHub Pages**（`kewang.github.io/spek` 的 badge 與
+  Live Demo 永久失效，已改指 `spekhq.github.io/spek`）。
+- **`kewang/spek` 這個名字此後不可再被佔用** —— repo redirect 是承重的：已發佈版本的 npm
+  metadata 永遠指向舊位置且無法修正，`action.yml` 的歷史 tag 也靠它解析。重建同名 repo 會同時
+  炸掉兩者。細節見 `spek` 自己的 CLAUDE.md。
 
 ## Workflow
 
