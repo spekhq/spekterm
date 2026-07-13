@@ -43,6 +43,16 @@ session 的**錨定 change**（側欄跟隨 focused session），以及 **Graph 
 `openExternal`，不落入 xterm 內建的 confirm＋window.open）。`probe:files` 101/101、`probe:terminal`
 114/114。
 
+`rail-legibility-and-repo-row`（不屬於任何 Phase）是**第一次 dogfooding 的回饋**——字太小、repo
+名稱不夠突出、每個 repo 底下都掛一行「OpenSpec」。它交付兩個新能力與一次 rail 重整：
+**`typography-scale`**（全 renderer 的字級收斂為 token，**只剩一個旋鈕 `--text-base`**，定案 17px；
+收斂前有 70 處寫死的 `text-[Npx]`，於是 `@theme` 裡的 token 調了也沒用；新增守衛擋住寫死字級）、
+**`repo-branch`**（rail 顯示 git 分支，讀 `.git/HEAD` 不 spawn `git`，**兩層 watcher** 使「在
+terminal 裡切 branch」即時反映），以及 rail 的 repo 列重整（移除那顆 `onClick` 裡只有
+`stopPropagation()` 的 **`◈` 假按鈕**、名稱取回視覺主導、副標由「每列都喊一次的 OpenSpec」改為分支，
+「缺少 `openspec/`」降級為弱訊號）。詳見下文「字級尺度」與「git 分支」兩節 —— 那裡記著四個**會靜默
+失敗**的實測踩雷。`probe:terminal` 120/120、`probe:workspace` 42/42。
+
 尚未開始：打包（Phase 6）、handoff（Phase 7+）。
 
 ### 開發指令
@@ -302,8 +312,8 @@ org 名**不是**凍結身分的一部分 —— repo 改名與 transfer 皆自�
   （非字串不再使主行程拋未捕捉例外）、xterm 的 **OSC 8 `linkHandler`**（OSC 8 超連結改走
   `openExternal`，不落入 xterm 內建的 confirm＋window.open）。詳見上文「renderer 安全硬化的實測與
   踩雷」——含 CSP 切換依據、CDP 繞過 script-src、OSC 8 probe 假綠三個踩雷。
-- **rail 的可讀性與 repo 列重整** — `rail-legibility-and-repo-row`（**不屬於任何 Phase**）：第一次
-  dogfooding 的回饋。新能力 `typography-scale`（字級收斂為 token，**單一旋鈕 `--text-base`**，
+- **rail 的可讀性與 repo 列重整** — `rail-legibility-and-repo-row`（已封存，**不屬於任何 Phase**）：
+  第一次 dogfooding 的回饋。新能力 `typography-scale`（字級收斂為 token，**單一旋鈕 `--text-base`**，
   並加一道守衛擋住寫死字級）與 `repo-branch`（rail 顯示 git 分支，讀 `.git/HEAD` 不 spawn `git`，
   兩層 watcher 使「在 terminal 裡切 branch」即時反映）；rail 的 repo 列重整 —— 移除那顆 `onClick`
   裡只有 `stopPropagation()` 的 **`◈` 假按鈕**、名稱取回視覺主導（粗體＋亮色，選中轉 accent）、
