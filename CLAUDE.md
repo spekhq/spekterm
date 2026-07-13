@@ -216,9 +216,13 @@ node-pty 1.2.0-beta.14（釘死）、Monaco Editor、chokidar 5、react-markdown
   行程腳本**（`electron <script>` 不讀 repo 的 `package.json`，只會量到 Electron 的預設值 `Electron`）。
   它啟動真正的 `electron .`，再從**子行程的 argv** 讀出解析後的 userData。
 
-> **已知未結風險：`spekterm.com` 尚未購買**，而 `appId` 正是反寫它。若該 domain 被他人註冊，這個
-> **已凍結**的 appId 就變成在宣告別人的命名空間 —— 而且事後無法以改 appId 化解。**Phase 6 打包發佈
-> 前必須買下它**；這個窗口只會變窄，不會變寬。
+> **`spekterm.com` 與 `spekterm.app` 已購入**（2026-07-12，Cloudflare，到期 2027-07-12）——
+> **`appId` 的風險就此關閉。** `com.spekterm.app` 是反寫 `spekterm.com`，若該 domain 落入他人手中，
+> 這個**已凍結**的 appId 就變成在宣告別人的命名空間，而且事後**無法以改 appId 化解**（改 appId 的
+> 作業系統語意是「發佈一個不同的 app」）。
+>
+> **因此續約不是行政瑣事，是承重的。** domain 一旦過期被他人註冊，上面那個無解的問題就原封不動地
+> 回來 —— 而那時 app 已經發佈，退路比現在更少。
 
 ### GitHub 位置：org 是 `spekhq`（**不凍結**，與上表無關）
 
