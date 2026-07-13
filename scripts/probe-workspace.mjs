@@ -10,7 +10,7 @@
  * 用法：npm run probe:workspace
  * 結束碼 0 表示全部 scenario 通過。
  */
-import { spawn } from 'node:child_process'
+import { execFileSync, spawn } from 'node:child_process'
 import { mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -27,6 +27,11 @@ function mkTemp(prefix) {
   return dir
 }
 
+/** 在 fixture 上跑真的 git —— 見 makeFixture 中的說明。 */
+function git(cwd, args) {
+  return execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim()
+}
+
 // ── fixture ─────────────────────────────────────────────────────────────────
 
 /** 三種 folder 狀態 + 一個指向 workspace 之外的 symlink（供越界測試）。 */
@@ -35,11 +40,21 @@ function makeFixture() {
 
   const withOpenSpec = join(base, 'repo-openspec')
   mkdirSync(join(withOpenSpec, 'openspec'), { recursive: true })
-  mkdirSync(join(withOpenSpec, '.git'), { recursive: true })
   mkdirSync(join(withOpenSpec, 'sub'), { recursive: true })
   writeFileSync(join(withOpenSpec, 'readme.md'), '# x\n')
-  // 分支以手寫 .git/HEAD 承載 —— 產品是讀這個檔案（不 spawn git），所以探針也不必 spawn git。
-  writeFileSync(join(withOpenSpec, '.git', 'HEAD'), 'ref: refs/heads/master\n')
+
+  // **真的 git repo，不是手寫的 .git/HEAD。**
+  //
+  // 產品讀的是 `.git/HEAD`，所以手寫一個檔案「看起來」也能驗 —— 但那是**原地覆寫**，而真的
+  // `git checkout` 是**寫 HEAD.lock 再 rename 上去**（實測 HEAD 的 inode 每次都變）。對 watcher
+  // 來說這是兩種不同的事件：整個「chokidar 在 rename 之後仍然收得到 change」的論證（design D8），
+  // 若只用手寫檔案驗收，就**從來沒有被真的測過**。探針自己 spawn git 是可以的 —— 「不得 spawn
+  // 外部程式」是加在**產品**身上的約束（由單元測試以 child_process 攔截驗證），不是加在探針身上。
+  git(withOpenSpec, ['init', '-q', '-b', 'master'])
+  git(withOpenSpec, ['config', 'user.email', 'probe@spekterm.test'])
+  git(withOpenSpec, ['config', 'user.name', 'probe'])
+  git(withOpenSpec, ['add', '.'])
+  git(withOpenSpec, ['commit', '-qm', 'init'])
 
   const outside = join(base, 'outside')
   mkdirSync(outside, { recursive: true })
@@ -282,10 +297,10 @@ try {
   // 這是這條能力的**核心價值**：使用者就在旁邊的 terminal 裡操作這些 repo。一個切完 branch
   // 還顯示舊分支的 rail，比不顯示分支更糟 —— 它看起來像是真的。
   //
-  // 這裡直接改寫 HEAD（產品讀的就是這個檔案）。真的 `git checkout` 是寫 HEAD.lock 再 rename
-  // 上去（實測 inode 每次都變），而 chokidar 對單一檔案的監看在 rename 之後仍然存活 —— 那條
-  // 已由 design D8 的實測記載，此處驗的是「rail 收到變更後確實更新」。
-  writeFileSync(join(fixture.withOpenSpec, '.git', 'HEAD'), 'ref: refs/heads/feat/x\n')
+  // **用真的 `git checkout`**，不是改寫 HEAD 檔案。git 是寫 `HEAD.lock` 再 rename 上去（實測
+  // HEAD 的 inode 每次都變），這對 watcher 是與原地覆寫**不同的事件** —— design D8 的整個論證
+  // （chokidar 在 rename 之後仍然收得到）只有這樣才算真的被驗過。
+  git(fixture.withOpenSpec, ['checkout', '-q', '-b', 'feat/x'])
   const switched = await pollUntil(
     app.client,
     `${RAIL_ROWS}[0].text`,
@@ -295,26 +310,24 @@ try {
     typeof switched === 'string' && switched.includes('feat/x') && !switched.includes('master'),
     String(switched).replace(/\n/g, ' · '))
 
-  // detached HEAD：rail 不得空白、不得進入錯誤狀態
-  writeFileSync(
-    join(fixture.withOpenSpec, '.git', 'HEAD'),
-    'ef48cc91774f5718f672d97f1d0c365702cd57e6\n',
-  )
+  // detached HEAD：rail 不得空白、不得進入錯誤狀態（同樣走真的 git）
+  const sha = git(fixture.withOpenSpec, ['rev-parse', 'HEAD'])
+  const shortSha = sha.slice(0, 7)
+  git(fixture.withOpenSpec, ['checkout', '-q', '--detach', sha])
   const detached = await pollUntil(
     app.client,
     `${RAIL_ROWS}[0].text`,
-    (text) => typeof text === 'string' && text.includes('ef48cc9'),
+    (text) => typeof text === 'string' && text.includes(shortSha),
   )
   check(results, 'detached HEAD 呈現短 sha，rail 不失效',
-    typeof detached === 'string' && detached.includes('ef48cc9'),
-    String(detached).replace(/\n/g, ' · '))
+    typeof detached === 'string' && detached.includes(shortSha),
+    `短 sha=${shortSha} → ${String(detached).replace(/\n/g, ' · ')}`)
 
   // ── repo-branch：folder 於執行期間變成 git repo ───────────────────────────
   //
   // 這條需要**第二層** watcher：實測監看一個「尚不存在」的 `.git/HEAD` 收不到任何事件
   // （連父目錄都不存在，chokidar 無從 attach）。folder 根目錄恆常存在，故以它等 `.git` 出現。
-  mkdirSync(join(fixture.plain, '.git'), { recursive: true })
-  writeFileSync(join(fixture.plain, '.git', 'HEAD'), 'ref: refs/heads/main\n')
+  git(fixture.plain, ['init', '-q', '-b', 'main'])
   const appeared = await pollUntil(
     app.client,
     `${RAIL_ROWS}[1].text`,

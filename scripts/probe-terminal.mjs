@@ -385,6 +385,52 @@ const TERMINAL_TEXT = `(() => {
   return rows ? rows.innerText : ''
 })()`
 
+/**
+ * terminal 實際生效的字級，以及字級尺度所要求的值。
+ *
+ * `typography-scale` 要求 terminal 的字級**由尺度推導**，不得是一個與尺度無關的常數。這條
+ * 驗收有鑑別力，是因為 **`--text-terminal`（16px）與程式碼裡的 fallback（14px）不同** ——
+ * 而那個 fallback 正是這個 bug 曾經藏身的地方：`getPropertyValue('--text-terminal')` 回傳的是
+ * 字面的 `"calc(17px - 1px)"`（CSS 自訂屬性的 computed value **不求值 calc()**），`parseFloat`
+ * 得到 `NaN`，於是悄悄退回 fallback。當年 fallback 剛好等於正確值，畫面上完全看不出來。
+ *
+ * 期望值同樣交給**瀏覽器**求值：`font-size` 是有型別的屬性，其 computed value 必為絕對 px。
+ */
+const TERMINAL_FONT = `(() => {
+  const host = [...document.querySelectorAll('section[aria-label="Terminal"] > div')]
+    .find((d) => !d.classList.contains('hidden'))
+  const rows = host?.querySelector('.xterm-rows')
+  if (!rows) return null
+
+  const el = document.createElement('div')
+  el.style.fontSize = 'var(--text-terminal)'
+  document.body.appendChild(el)
+  const fromScale = getComputedStyle(el).fontSize
+  el.remove()
+
+  return { actual: getComputedStyle(rows).fontSize, fromScale }
+})()`
+
+/** 五級字級 token 求值後的實際 px —— 用來驗「尺度中不存在分不出來的級差」。 */
+const TYPE_SCALE = `(() => {
+  const resolve = (token) => {
+    const el = document.createElement('div')
+    el.style.fontSize = 'var(' + token + ')'
+    document.body.appendChild(el)
+    const px = getComputedStyle(el).fontSize
+    el.remove()
+    return px
+  }
+  return {
+    '2xs': resolve('--text-2xs'),
+    xs: resolve('--text-xs'),
+    sm: resolve('--text-sm'),
+    base: resolve('--text-base'),
+    lg: resolve('--text-lg'),
+    terminal: resolve('--text-terminal'),
+  }
+})()`
+
 const TERMINAL_RECT = RECT_OF('section[aria-label="Terminal"]')
 const NEW_SESSION_RECT = RECT_OF('[aria-label="新增 session"]')
 const SEPARATOR_RECT = RECT_OF('main[aria-label="主舞台"] [role="separator"]')
@@ -576,6 +622,47 @@ async function runMode(label, { port, rendererUrl }) {
       Array.isArray(rail) && rail.length === 1 && rail[0].includes('shell'),
       JSON.stringify(rail),
     )
+
+    // ── typography-scale：terminal 的字級由尺度推導，不是一個獨立的常數
+    const font = await app.client.evaluate(TERMINAL_FONT)
+    check(
+      results,
+      `${label}：terminal 的字級來自字級尺度（--text-terminal），不是寫死的常數`,
+      font?.actual === font?.fromScale && font?.actual !== '14px',
+      `實際=${font?.actual} 尺度要求=${font?.fromScale}（14px 是程式碼裡的 fallback —— ` +
+        `讀成它就表示 --text-terminal 沒被解析出來）`,
+    )
+
+    const scale = await app.client.evaluate(TYPE_SCALE)
+    const levels = [scale?.['2xs'], scale?.xs, scale?.sm, scale?.base, scale?.lg]
+    check(
+      results,
+      `${label}：字級尺度的五級互不相同（不存在分不出來的級差）`,
+      new Set(levels).size === 5 && levels.every((v) => /^\d+(\.\d+)?px$/.test(String(v))),
+      JSON.stringify(scale),
+    )
+
+    // ── typography-scale：轉動旋鈕，terminal 跟著走（且會重新量測）
+    //
+    // 字級決定 cell 尺寸，cell 尺寸決定行列數 —— 字級變了而不重新量測，pty 手上的 cols/rows
+    // 就與畫面錯位。字級的重讀掛在 `fit()` 上（它本來就在每次 resize 時被呼叫），所以這裡改完
+    // 旋鈕要真的觸發一次 resize（拖動 side panel 的分界），再斷言 xterm 的字級跟上了。
+    await app.client.evaluate(`document.documentElement.style.setProperty('--text-base', '24px')`)
+    const knobSep = center(await app.client.evaluate(SEPARATOR_RECT))
+    await dragMouse(app.client, knobSep, { x: knobSep.x - 40, y: knobSep.y })
+    await sleep(400)
+    const fontAfterKnob = await app.client.evaluate(TERMINAL_FONT)
+    check(
+      results,
+      `${label}：轉動字級旋鈕後，terminal 的字級隨之改變（fit 重新讀取並量測）`,
+      fontAfterKnob?.actual === '23px' && fontAfterKnob?.actual === fontAfterKnob?.fromScale,
+      `--text-base=24px → terminal 應為 23px；實際=${fontAfterKnob?.actual} 尺度=${fontAfterKnob?.fromScale}`,
+    )
+
+    // 還原旋鈕與版面 —— 後續斷言依賴原本的字級與分界位置。
+    await app.client.evaluate(`document.documentElement.style.removeProperty('--text-base')`)
+    await dragMouse(app.client, { x: knobSep.x - 40, y: knobSep.y }, knobSep)
+    await sleep(400)
 
     // ── 雙向串流：回顯 ≠ 執行
     const terminalRect = await app.client.evaluate(TERMINAL_RECT)
