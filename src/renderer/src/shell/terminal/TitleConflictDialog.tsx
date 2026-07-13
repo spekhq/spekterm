@@ -7,7 +7,7 @@ interface TitleConflictDialogProps {
 }
 
 const OVERLAY_CLASS =
-  'absolute inset-0 z-20 flex items-center justify-center bg-black/50 px-4 text-xs'
+  'absolute inset-0 z-20 flex items-center justify-center bg-black/50 px-4 text-sm'
 
 const BUTTON_CLASS = 'rounded border border-hairline px-3 py-1 text-ink-dim hover:text-ink'
 
@@ -31,7 +31,7 @@ export function TitleConflictDialog({
       >
         <p className="text-ink">這個 session 想改名</p>
 
-        <dl className="mt-3 space-y-1 text-[12px]">
+        <dl className="mt-3 space-y-1 text-xs">
           <div className="flex gap-2">
             <dt className="w-20 shrink-0 text-ink-faint">你取的名字</dt>
             <dd className="min-w-0 truncate font-mono text-ink">{session.customTitle}</dd>
@@ -42,7 +42,7 @@ export function TitleConflictDialog({
           </div>
         </dl>
 
-        <p className="mt-3 text-[12px] text-ink-faint">
+        <p className="mt-3 text-xs text-ink-faint">
           採用它的名稱之後，這個 session 之後的改名就不會再問你。
         </p>
 

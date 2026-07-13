@@ -51,9 +51,9 @@ session 的**錨定 change**（側欄跟隨 focused session），以及 **Graph 
 npm run dev             # electron-vite dev（開發模式）
 npm run build           # 建置至 out/
 npm run typecheck       # tsc：main / preload（node）+ renderer（web）
-npm test                # node:test 單元測試（fs 邊界、workspace store、listDir/readFile、watcher、外部 URL、pty 管理器、舊產品名不得殘留）
+npm test                # node:test 單元測試（fs 邊界、workspace store、listDir/readFile、watcher、外部 URL、pty 管理器、git 分支解析、字級不得寫死、舊產品名不得殘留）
 npm run probe:shell     # 驗收 workspace-app-shell（開視窗 + 信任模型 + preload 白名單，走 CDP）
-npm run probe:workspace # 驗收 workspace-folders / filesystem-access / workspace-layout
+npm run probe:workspace # 驗收 workspace-folders / filesystem-access / workspace-layout / repo-branch（rail 呈現分支、於 app 之外切 branch 後自己更新、detached HEAD、執行期間變成 git repo、rail 不呈現不可操作的控制項）
 npm run probe:files     # 驗收 file-explorer / file-viewer / 編輯 / 存檔 / 衝突 / CRUD / 導航防護 / 編輯器 worker / CSP（遠端圖片可載入、script-src 僅 self、注入點對 file:// 生效，dev + build 兩模式）
 npm run probe:terminal  # 驗收 terminal-sessions（pty 雙向／cwd／resize／多開／關分頁・reload・關窗皆不留孤兒；剪貼簿畸形輸入防禦；OSC 標題與命名權衝突以 PATH 上的 stub claude 承載，dev + build 兩模式）
 npm run probe:keyboard  # 驗收 keyboard-navigation（Ctrl+Tab 切 session／Ctrl+↑↓ 切 repo／位置序非 MRU／按鍵不流進 pty／編輯器與對話框的行為，dev + build 兩模式）
@@ -302,6 +302,13 @@ org 名**不是**凍結身分的一部分 —— repo 改名與 transfer 皆自�
   （非字串不再使主行程拋未捕捉例外）、xterm 的 **OSC 8 `linkHandler`**（OSC 8 超連結改走
   `openExternal`，不落入 xterm 內建的 confirm＋window.open）。詳見上文「renderer 安全硬化的實測與
   踩雷」——含 CSP 切換依據、CDP 繞過 script-src、OSC 8 probe 假綠三個踩雷。
+- **rail 的可讀性與 repo 列重整** — `rail-legibility-and-repo-row`（**不屬於任何 Phase**）：第一次
+  dogfooding 的回饋。新能力 `typography-scale`（字級收斂為 token，**單一旋鈕 `--text-base`**，
+  並加一道守衛擋住寫死字級）與 `repo-branch`（rail 顯示 git 分支，讀 `.git/HEAD` 不 spawn `git`，
+  兩層 watcher 使「在 terminal 裡切 branch」即時反映）；rail 的 repo 列重整 —— 移除那顆 `onClick`
+  裡只有 `stopPropagation()` 的 **`◈` 假按鈕**、名稱取回視覺主導（粗體＋亮色，選中轉 accent）、
+  副標由「每列都喊一次的 `OpenSpec`」改為**分支**，「缺少 `openspec/`」降級為弱訊號。詳見上文
+  「字級尺度」與「git 分支」兩節的實測踩雷。
 - Phase 6 打包與發佈，Phase 7+ 建立護城河（handoff）。
 
 > **Phase 5 對 PRD 的「抽出 `@spekjs/ui`」做了對半的裁決**（PRD §9.2 已回寫）：整頁視圖**不抽**
@@ -751,6 +758,71 @@ design D4 補**，比照「探針證明不了真實鍵盤」。移除假綠斷�
 不傳到 renderer，且 headless 下它拋了也不整個崩潰 —— 此斷言驗的是「畸形輸入後主行程與 clipboard
 通道仍健康」（可觀察、真實發生），區分不了「有 guard 靜默丟棄」與「無 guard 拋例外但存活」。guard
 本身由 code review + design D3 承擔。
+
+## 字級尺度（`rail-legibility-and-repo-row` 起）
+
+**renderer 的字級只有一個旋鈕：`index.css` 的 `--text-base`（定案為 17px）。** 五級尺度全部由它以
+`calc()` 平移推導（`2xs` 13 / `xs` 14 / `sm` 15 / `base` 17 / `lg` 18），terminal 的
+`--text-terminal`（16px）也是。要整體放大或縮小字級，**只改那一行**。
+
+**字級是版面的輸入，不是裝飾。** 把旋鈕從 15px 調到 17px 時，rail 立刻縮不到它宣告的
+`minSize="180px"`（實測卡在 240px）—— 因為 flex item 的 `min-width` 預設是 `auto`，`Panel` 會被
+**內容**撐住。`workspace-layout` 要求「拖動 SHALL 被夾制於該下限」，而這道夾制**在實作上一直沒有
+真的兌現**，只是字級小的時候 rail 的 min-content 恰好小於 180px，所以看不出來。修的是 `Panel` 的
+`min-w-0`（以及 rail 內不會自我截斷的標題），**不是把 180px 調高** —— 最小寬度是版面契約，不該
+隨字級浮動。
+
+- **不得寫死字級。** `npm test` 有一道守衛（`scripts/typography.test.mjs`）：產品原始碼不得出現
+  `text-[13px]` 這類 arbitrary 值，CSS 的 `font-size` 必須引用 token（`em` / `%` 放行 —— 它們相對
+  父層，會跟著旋鈕走；`rem` **不放行**，它相對 html 的 16px，旋鈕轉不動它）。這道守衛是必要的：
+  收斂前有 **70 處**寫死的字級，於是 `@theme` 裡的 token 調了也沒用。
+- **平移，不是等比縮放。** 使用者要的是「每個字都大一點」；等比縮放會讓大字長得比小字快，改變的
+  是版面的層次關係，不只是大小。
+
+### 三個會**靜默失敗**的陷阱（全部實測，全部踩過）
+
+- **`@theme` 會 tree-shake 掉沒有任何 utility 用到的 token。** `--text-terminal` 只被 JS 讀取、
+  永遠不會有 utility 引用它 —— 放在 `@theme` 裡它**會從產物中消失**。必須定義在 `:root`。
+- **CSS 自訂屬性的 computed value 不會求值 `calc()`。**
+  `getComputedStyle(root).getPropertyValue('--text-terminal')` 回傳的是字面的 `"calc(15px - 1px)"`，
+  `parseFloat` 得到 `NaN`。**而 fallback 剛好等於正確值，畫面上看不出來** —— 終端字級就此與尺度
+  脫鉤，旋鈕轉了它也不動。要讓**瀏覽器**求值：把 `var(--text-terminal)` 餵給一個離屏元素的
+  `font-size`（有型別的屬性，computed value 必為絕對 px），再讀回它的 `fontSize`。
+- **把 arbitrary 值換成具名 token，換掉的不只是你盯著的那個屬性。** `text-[12px]` 只設
+  `font-size`；`text-xs` **連 `line-height` 一起設**（Tailwind 每個字級 token 都有預設的
+  `--text-*--line-height`）。於是 45 處 `text-[12px]` 一收斂就憑空多出 16px 行高，分頁列與對話框
+  變高 —— 而 `probe:terminal` 是以**真滑鼠座標**點擊的，版面一動，那組對時序敏感的 OSC 標題斷言
+  就開始點空。**徵狀是時綠時紅、每次紅的還是不同條，極易誤判為既有的 flaky**；是 baseline 對照組
+  （stash 掉改動後跑，114/114 全綠）戳破了這個藉口。因此 `@theme` 裡的五個
+  `--text-*--line-height` 全部明確釘住，對齊各自收斂前的來源。
+
+## git 分支（`repo-branch`，`rail-legibility-and-repo-row` 起）
+
+rail 的每一列顯示該 folder 的 git 當前分支。**以讀取 `.git/HEAD` 實作，不 spawn `git`** —— 這是
+每個 folder、每次載入都要做的判定，與 `hasOpenSpec` 同一條理由（也因此 `workspace-folders` 那條
+「偵測 SHALL NOT 呼叫任何外部程式」在本 change 後依然成立）。`.git` 是**檔案**時（worktree /
+submodule）要解 `gitdir:` 那層間接，worktree 寫絕對路徑、submodule 寫相對路徑，兩種都要吃。
+
+**那個 gitdir 常在 folder 邊界之外。** 那是主行程自己的檔案存取，不經 renderer 的
+`(folderId, relPath)` 詞彙 —— **不是 `filesystem-access` 白名單的擴大**，推給 renderer 的只有分支
+字串。
+
+### 監看分支要兩層 watcher —— 兩者都反直覺（實測）
+
+- **`git checkout` 是寫 `HEAD.lock` 再 rename 上去**，HEAD 的 inode 每次都變。這正是「暫存檔 +
+  改名」模式，直覺會認為監看單一檔案的 watcher 第一次就失聯 —— **但 chokidar 撐得住**（會在 rename
+  後重新 attach，連續切三次分支三次都收到 `change`）。所以**監看單一檔案即可**，不必退而監看整個
+  `.git/`（那會被 `index.lock`、`refs/`、object 寫入的事件淹沒）。
+- **但監看一個「尚不存在」的 `.git/HEAD` 是行不通的** —— `git init` 之後 800ms 內收不到任何事件
+  （連父目錄都不存在，chokidar 無從 attach）。因此**第一層**監看 folder 根目錄（恆常存在，`depth: 0`，
+  以 basename `.git` 過濾），用來等 `.git` 出現或消失，再據以建立／銷毀**第二層**（HEAD 檔案）。
+
+> **`probe:shell` 的白名單守衛一度漏掉整個 `folders.*` namespace**（它只檢查 `fs.*` 與
+> `openspec.*`）—— 於是往 folders 加 method 不會被任何東西擋下。那是守衛的漏洞，不是許可，已補上。
+>
+> **而 `probe:workspace` 曾以那顆 `◈` 指示鈕來識別 rail 的每一列** —— `◈` 一移除，rail 的列數就
+> 變成 0，五條斷言連帶全紅，看起來像「rail 壞了」。**探針的斷言會隨規格過期**（同 Phase 5 的
+> `probe:shell` 教訓）。
 
 ## 檔案系統邊界（`multi-folder-workspace-shell` 起）
 

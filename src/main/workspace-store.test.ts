@@ -267,6 +267,32 @@ describe('衍生狀態', () => {
     assert.deepEqual(calls, ['spawnSync'], '攔截未生效，上一項斷言沒有意義')
   })
 
+  it('folder 的 git 分支是衍生狀態', () => {
+    const repo = makeDir('repo')
+    fs.mkdirSync(path.join(repo, '.git'))
+    fs.writeFileSync(path.join(repo, '.git', 'HEAD'), 'ref: refs/heads/master\n')
+    const plain = makeDir('plain')
+
+    const store = new WorkspaceStore(configPath)
+    store.load()
+    store.add(repo)
+    store.add(plain)
+
+    const [a, b] = store.list()
+    assert.equal(a.branch, 'master')
+    assert.equal(b.branch, null, '非 git repo 沒有分支 —— 那是合法狀態，不是錯誤')
+
+    // 衍生：磁碟上切了 branch，下一次 list() 就要反映它，不得沿用舊值
+    fs.writeFileSync(path.join(repo, '.git', 'HEAD'), 'ref: refs/heads/feat/x\n')
+    assert.equal(store.list()[0].branch, 'feat/x')
+
+    // 持久化一個「使用者隨時會在 terminal 裡改掉」的值，等於持久化謊言
+    const persisted = readConfig().folders as Record<string, unknown>[]
+    for (const folder of persisted) {
+      assert.equal('branch' in folder, false)
+    }
+  })
+
   it('路徑失效的 folder 保留於清單並標示 missing', () => {
     const repo = makeDir('repo')
     const first = new WorkspaceStore(configPath)

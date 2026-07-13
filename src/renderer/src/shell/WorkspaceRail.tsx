@@ -15,7 +15,7 @@ interface WorkspaceRailProps {
   onRemove: (id: string) => void
 }
 
-const ICON_BUTTON_CLASS = 'shrink-0 rounded px-1.5 py-0.5 text-xs opacity-0 group-hover:opacity-100'
+const ICON_BUTTON_CLASS = 'shrink-0 rounded px-1.5 py-0.5 text-sm opacity-0 group-hover:opacity-100'
 
 function FolderIcon(): React.JSX.Element {
   return (
@@ -73,9 +73,17 @@ function FolderRow({
 
   const reorder = useDragReorder(sessions.length, 'vertical', rectOf, onReorderSessions)
 
-  const openSpecTitle = folder.hasOpenSpec
-    ? `${folder.name} — 以 OpenSpec 身分開啟`
-    : `${folder.name} — 沒有 openspec/，只能用 Files 身分`
+  /**
+   * 副標只說**非常態**的事。
+   *
+   * 「含有 `openspec/`」是常態 —— 每一列都喊一次的訊息不傳達任何資訊，只是噪音（而它一度
+   * 還與最右邊那顆 `◈` 是同一個布林值的兩次呈現）。因此有 openspec 時它沉默，只在**缺少**
+   * 時附註；分支則是常時呈現的事實。
+   */
+  const subtitle =
+    folder.status === 'missing'
+      ? '路徑失效'
+      : [folder.branch, folder.hasOpenSpec ? null : '無 openspec/'].filter(Boolean).join(' · ')
 
   const items: MenuItem[] = menu
     ? [
@@ -108,7 +116,7 @@ function FolderRow({
         }}
         title={folder.path}
         className={
-          'flex cursor-pointer items-center gap-2 px-3 py-2 text-sm ' +
+          'flex cursor-pointer items-center gap-2 px-3 py-2 text-base ' +
           (selected ? 'bg-hover text-ink' : 'text-ink-dim hover:bg-hover/60')
         }
       >
@@ -123,7 +131,7 @@ function FolderRow({
               event.stopPropagation()
               onToggle()
             }}
-            className="w-3 shrink-0 text-[11px] text-ink-faint hover:text-ink"
+            className="w-3 shrink-0 text-2xs text-ink-faint hover:text-ink"
           >
             {expanded ? '▾' : '▸'}
           </button>
@@ -134,16 +142,21 @@ function FolderRow({
         <FolderIcon />
 
         <div className="min-w-0 flex-1">
-          <div className="truncate">{folder.name}</div>
-          <div className="truncate text-[12px] text-ink-faint">
-            {folder.status === 'missing' ? '路徑失效' : folder.hasOpenSpec ? 'OpenSpec' : 'Files only'}
+          {/*
+            名稱是使用者用來辨識 repo 的東西，必須是這一列視覺權重最高的元素。它一度是
+            normal weight + 未選中時暗灰，於是雖然字級比副標大，卻被副標平分了注意力 ——
+            字重與顏色比 px 更能解決「不夠突出」。
+          */}
+          <div className={`truncate font-bold ${selected ? 'text-accent' : 'text-ink'}`}>
+            {folder.name}
           </div>
+          {subtitle && <div className="truncate font-mono text-xs text-ink-faint">{subtitle}</div>}
         </div>
 
         {sessions.length > 0 && (
           <span
             title={`${sessions.length} 個 session`}
-            className="shrink-0 rounded bg-hover px-1 text-[11px] text-ink-faint"
+            className="shrink-0 rounded bg-hover px-1 text-2xs text-ink-faint"
           >
             {sessions.length}
           </span>
@@ -152,7 +165,7 @@ function FolderRow({
         {folder.status === 'missing' && (
           <span
             title={`路徑已不存在或不是目錄：${folder.path}`}
-            className="shrink-0 rounded border border-danger/40 px-1 text-[11px] text-danger"
+            className="shrink-0 rounded border border-danger/40 px-1 text-2xs text-danger"
           >
             失效
           </span>
@@ -172,20 +185,12 @@ function FolderRow({
           ＋
         </button>
 
-        <button
-          type="button"
-          disabled={!folder.hasOpenSpec}
-          title={openSpecTitle}
-          aria-label={`OpenSpec — ${folder.name}`}
-          onClick={(event) => event.stopPropagation()}
-          className={
-            'shrink-0 rounded px-1.5 py-0.5 text-xs ' +
-            (folder.hasOpenSpec ? 'text-accent hover:bg-accent/10' : 'text-ink-faint opacity-40')
-          }
-        >
-          ◈
-        </button>
-
+        {/*
+          這裡曾有一顆 `◈`。它的 onClick 裡**只有 stopPropagation()** —— 一顆長得像按鈕、
+          按下去卻什麼都不發生的指示燈，會反覆消耗使用者的注意力去確認它是不是壞了。而且
+          OpenSpec 身分的**真入口**是主舞台 header 的 PanelSwitch（那裡本來就有一個 ◈），
+          雛型的 rail 裡從來沒有這顆。已移除 —— rail 不呈現不可操作的控制項。
+        */}
         <button
           type="button"
           aria-label={`自 workspace 移除 ${folder.name}`}
@@ -231,7 +236,7 @@ function FolderRow({
                   className={
                     // 縮排造出樹狀層次（mockup 的 .ws-session-row）
                     // select-none：拖曳時不該把標籤的文字反白選起來（實測體感很差）。
-                    'flex items-center gap-2 py-1.5 pr-1 pl-9 text-[12px] select-none ' +
+                    'flex items-center gap-2 py-1.5 pr-1 pl-9 text-xs select-none ' +
                     (reorder.dragging ? 'cursor-grabbing ' : 'cursor-grab ') +
                     // 插入指示：拖到這裡放開，就會插在它前面
                     (reorder.isDropTarget(index) ? 'border-t-2 border-t-accent ' : '') +
@@ -316,12 +321,16 @@ export function WorkspaceRail({
   )
 
   return (
-    <aside aria-label="工作區" className="flex h-full flex-col border-r border-hairline bg-rail">
-      <h2 className="px-3 pt-3 pb-2 text-[12px] tracking-widest text-ink-faint">WORKSPACE</h2>
+    <aside
+      aria-label="工作區"
+      className="flex h-full min-w-0 flex-col overflow-hidden border-r border-hairline bg-rail"
+    >
+      {/* 標題不會自己截斷，於是它會撐住 rail 的 min-content —— 拖到最小寬度時就溢出到分界之外。 */}
+      <h2 className="truncate px-3 pt-3 pb-2 text-xs tracking-widest text-ink-faint">WORKSPACE</h2>
 
       <ul className="flex-1 overflow-y-auto">
         {folders.length === 0 ? (
-          <li className="px-3 py-6 text-xs text-ink-faint">尚未加入任何 folder</li>
+          <li className="px-3 py-6 text-sm text-ink-faint">尚未加入任何 folder</li>
         ) : (
           folders.map((folder) => (
             <FolderRow
@@ -349,7 +358,7 @@ export function WorkspaceRail({
       <button
         type="button"
         onClick={onAdd}
-        className="m-2 rounded border border-dashed border-hairline px-3 py-2 text-xs text-ink-dim hover:border-accent/40 hover:text-accent"
+        className="m-2 rounded border border-dashed border-hairline px-3 py-2 text-sm text-ink-dim hover:border-accent/40 hover:text-accent"
       >
         + Add folder
       </button>

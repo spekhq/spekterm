@@ -76,11 +76,41 @@ export interface XtermOptions {
  * 建立一個終端把手。所有與外界的接觸（開連結、讀寫剪貼簿）都由呼叫端注入 —— wrapper 不認得
  * `workspace.*`，信任決策留在這道接縫之外。
  */
+/**
+ * 終端的字級。
+ *
+ * xterm 的 `fontSize` 是數字（它用 canvas 量測 cell 尺寸），吃不到 CSS token —— 因此從
+ * `--text-terminal` 讀出來再交給它。等寬字在相同 px 下的視覺比例與比例字不同，故終端自成
+ * 一級；但那一級仍由 `--text-base` 這個旋鈕推導，不是一個與字級尺度無關的常數。
+ *
+ * **不能直接讀那個自訂屬性（實測，而且它會靜默失敗）**：CSS 自訂屬性的 computed value
+ * **不會求值 `calc()`** —— `getPropertyValue('--text-terminal')` 回傳的是字面的
+ * `"calc(15px - 1px)"`，`parseFloat` 於是得到 `NaN`，悄悄退回下面那個 fallback。因為 fallback
+ * 剛好等於當時的正確值，畫面上完全看不出來：終端的字級從此與尺度脫鉤，旋鈕轉了它也不動。
+ *
+ * 解法是讓**瀏覽器**去求值：`font-size` 是有型別的屬性，它的 computed value 一定是絕對 px。
+ * 把 `var(--text-terminal)` 餵給一個離屏元素的 `font-size`，再讀回它 computed 的 `fontSize`。
+ */
+const TERMINAL_FONT_SIZE_FALLBACK = 14
+
+function terminalFontSize(): number {
+  const probe = document.createElement('div')
+  probe.style.position = 'absolute'
+  probe.style.visibility = 'hidden'
+  probe.style.fontSize = 'var(--text-terminal)'
+  document.body.appendChild(probe)
+  const px = Number.parseFloat(getComputedStyle(probe).fontSize)
+  probe.remove()
+
+  // 終端字級是使用者最常盯著的東西 —— 變數若不見了，也不能變成瀏覽器預設的 16px 或 0。
+  return Number.isFinite(px) && px > 0 ? px : TERMINAL_FONT_SIZE_FALLBACK
+}
+
 export function createXterm(options: XtermOptions): XtermHandle {
   const { openLink, onCopy, onPaste } = options
   const term = new Terminal({
     fontFamily: "'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace",
-    fontSize: 14,
+    fontSize: terminalFontSize(),
     lineHeight: 1.3,
     cursorBlink: true,
     // 換行由 pty 內的程式自理，不要 xterm 代為轉換。
@@ -135,6 +165,13 @@ export function createXterm(options: XtermOptions): XtermHandle {
       term.open(parent)
     },
     fit() {
+      // 字級決定 cell 尺寸，cell 尺寸決定行列數 —— 字級變了而不重新量測，pty 手上的 cols/rows
+      // 就與畫面錯位。在這裡（而不是另開一個 API）重新讀取，是因為 fit 本來就在 attach 與
+      // 每次 resize 時被呼叫；於是尺度的旋鈕一轉（dev 的 HMR 會即時改寫 CSS 變數），終端
+      // 下一次 fit 就跟上，不必重啟。
+      const fontSize = terminalFontSize()
+      if (fontSize !== term.options.fontSize) term.options.fontSize = fontSize
+
       // 容器為 display:none（未 focused 的 session）時尺寸為 0，proposeDimensions 會給出
       // 無效值 —— 此時不該 fit，也不該拿 0 去打擾 pty。
       const proposed = fitAddon.proposeDimensions()

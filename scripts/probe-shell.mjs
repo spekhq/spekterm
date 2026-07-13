@@ -85,6 +85,17 @@ const PROBE_EXPRESSION = `(async () => {
           'onChanged',
         ].includes(key),
     ),
+    // workspace folder 的清單與其推送更新。同一條白名單原則。
+    //
+    // 這個 namespace 一度**完全沒有守衛**（本檢查只涵蓋 fs.* 與 openspec.*）—— 於是往
+    // folders 加 method 不會被任何東西擋下。那是守衛的漏洞，不是許可：白名單原則的重點是
+    // 「介面上只能有已為其定義邊界要求的能力」，漏掉一整個 namespace 等於它沒有白名單。
+    //
+    // onChanged 於 rail-legibility-and-repo-row 引入（repo-branch 規格）：分支在 app 之外
+    // 被切換時，rail 必須自己更新 —— 那需要一個推送通道。它只送 folder 清單，不含任何路徑。
+    surplusFolderKeys: Object.keys(api?.folders ?? {}).filter(
+      (key) => !['list', 'add', 'remove', 'onChanged'].includes(key),
+    ),
     // symlink 絕不可出現在白名單上。
     //
     // 寫入邊界的 TOCTOU 論證（file-editing-and-crud 的 design D3）整個建立在「renderer 既造不出、
@@ -151,6 +162,9 @@ try {
   check(results, 'openspec 介面只暴露已定義邊界要求的能力',
     r?.surplusOpenSpecKeys?.length === 0,
     r?.surplusOpenSpecKeys?.length ? `多出：${r.surplusOpenSpecKeys.join(', ')}` : '無多餘能力')
+  check(results, 'folders 介面只暴露已定義邊界要求的能力',
+    r?.surplusFolderKeys?.length === 0,
+    r?.surplusFolderKeys?.length ? `多出：${r.surplusFolderKeys.join(', ')}` : '無多餘能力')
 
   exitCode = results.every(Boolean) ? 0 : 1
 } catch (error) {

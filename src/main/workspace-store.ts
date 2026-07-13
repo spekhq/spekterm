@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
+import { readBranch } from './git-branch'
 
 /**
  * 設定檔的結構版本。從第一天就寫入 —— 沒有版本欄位的舊檔日後無法安全遷移。
@@ -26,6 +27,13 @@ export interface WorkspaceFolder extends PersistedFolder {
   status: FolderStatus
   /** 衍生狀態：每次讀取重算，不持久化。持久化衍生狀態就是持久化謊言。 */
   hasOpenSpec: boolean
+  /**
+   * git 當前分支。非 git repo、detached 以外無法解讀的狀態，皆為 `null`。
+   *
+   * 與 `hasOpenSpec` 同樣是衍生狀態 —— 而且它比誰都更不能持久化：使用者就在旁邊的 terminal
+   * 裡切 branch，存下來的值下一秒就是假的。
+   */
+  branch: string | null
 }
 
 export interface FolderLookup {
@@ -48,6 +56,9 @@ function describeFolder(folder: PersistedFolder): WorkspaceFolder {
     name: path.basename(folder.path),
     status,
     hasOpenSpec: status === 'ok' && isDirectory(path.join(folder.path, 'openspec')),
+    // 單次檔案讀取，不 spawn `git`（見 git-branch.ts）—— 與 hasOpenSpec 同樣是「每個 folder、
+    // 每次載入」都要做的判定，rail 是使用者最先看到的東西，它必須廉價。
+    branch: status === 'ok' ? readBranch(folder.path) : null,
   }
 }
 

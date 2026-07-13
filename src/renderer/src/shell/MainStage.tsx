@@ -174,11 +174,11 @@ export function MainStage({ folder }: MainStageProps): React.JSX.Element {
 
   return (
     <main aria-label="主舞台" className="flex h-full flex-col bg-stage">
-      <header className="flex items-center gap-3 border-b border-hairline px-4 py-2 text-sm">
+      <header className="flex items-center gap-3 border-b border-hairline px-4 py-2 text-base">
         <span className={folder ? 'text-ink' : 'text-ink-faint'}>
           {folder ? folder.name : '尚未選擇 repo'}
         </span>
-        {folder && <span className="truncate text-xs text-ink-faint">{folder.path}</span>}
+        {folder && <span className="truncate text-sm text-ink-faint">{folder.path}</span>}
 
         <span className="flex-1" />
 
@@ -194,7 +194,7 @@ export function MainStage({ folder }: MainStageProps): React.JSX.Element {
           aria-expanded={!collapsed}
           aria-label={collapsed ? '展開 side panel' : '收合 side panel'}
           title={collapsed ? '展開 side panel' : '收合 side panel'}
-          className="rounded border border-hairline px-2 py-1 text-xs text-ink-dim hover:text-accent"
+          className="rounded border border-hairline px-2 py-1 text-sm text-ink-dim hover:text-accent"
         >
           {collapsed ? '▤ 展開' : '▤ 收合'}
         </button>
@@ -239,7 +239,7 @@ export function MainStage({ folder }: MainStageProps): React.JSX.Element {
               ))}
 
             {!focusedId && (
-              <div className="flex h-full items-center justify-center text-xs text-ink-faint">
+              <div className="flex h-full items-center justify-center text-sm text-ink-faint">
                 {folder ? '以 + session 開一個終端' : '尚未選擇 repo'}
               </div>
             )}

@@ -38,6 +38,8 @@ function makeFixture() {
   mkdirSync(join(withOpenSpec, '.git'), { recursive: true })
   mkdirSync(join(withOpenSpec, 'sub'), { recursive: true })
   writeFileSync(join(withOpenSpec, 'readme.md'), '# x\n')
+  // 分支以手寫 .git/HEAD 承載 —— 產品是讀這個檔案（不 spawn git），所以探針也不必 spawn git。
+  writeFileSync(join(withOpenSpec, '.git', 'HEAD'), 'ref: refs/heads/master\n')
 
   const outside = join(base, 'outside')
   mkdirSync(outside, { recursive: true })
@@ -117,17 +119,37 @@ async function launch(profileDir) {
 
 // ── renderer 內的量測 ───────────────────────────────────────────────────────
 
+/**
+ * rail 上的 folder 列。
+ *
+ * **以「移除」按鈕識別一列**（每個 folder 列都有，session 子列沒有）。它一度是以那顆 `◈`
+ * 指示鈕識別的 —— 而 `◈` 已隨 rail-legibility-and-repo-row 移除（它的 onClick 裡只有
+ * stopPropagation，是一顆按不下去的假按鈕，且不在雛型裡）。探針的斷言會隨規格過期。
+ */
 const RAIL_ROWS = `[...document.querySelectorAll('aside[aria-label="工作區"] li')]
   .map((li) => {
-    const openSpec = li.querySelector('button[aria-label^="OpenSpec"]')
-    if (!openSpec) return null
+    const remove = li.querySelector('button[aria-label^="自 workspace 移除 "]')
+    if (!remove) return null
+    const name = remove.getAttribute('aria-label').replace('自 workspace 移除 ', '')
     return {
-      name: openSpec.getAttribute('aria-label').replace('OpenSpec — ', ''),
-      openSpecDisabled: openSpec.disabled,
+      name,
       text: li.innerText,
+      // rail 不再為「含有 openspec」這個常態發聲 —— 這兩個都必須恆為 false／不存在。
+      hasOpenSpecButton: !!li.querySelector('button[aria-label^="OpenSpec"]'),
+      hasDiamond: li.innerText.includes('◈'),
     }
   })
   .filter(Boolean)`
+
+/**
+ * rail 上每一個可點擊的控制項是否都有實際作用。
+ *
+ * 「不呈現不可操作的控制項」是 workspace-layout 的一條 requirement —— 一個長得像按鈕、按下去
+ * 卻什麼都不發生的元素，會反覆消耗使用者的注意力去確認它是不是壞了。這裡以「所有按鈕都必須
+ * 具備 aria-label，且不得是已知的純指示用途」來近似；`◈` 那顆的特徵是 disabled 或無任何行為。
+ */
+const RAIL_BUTTONS = `[...document.querySelectorAll('aside[aria-label="工作區"] button')]
+  .map((b) => ({ label: b.getAttribute('aria-label'), disabled: b.disabled }))`
 
 const LAYOUT = `(() => {
   const width = (selector) => document.querySelector(selector)?.getBoundingClientRect().width ?? -1
@@ -218,17 +240,89 @@ try {
     rows.map((r) => r.name).join(', '))
 
   const [openSpecRow, plainRow, missingRow] = rows
-  check(results, '含 openspec 的 folder：OpenSpec 入口可用', openSpecRow?.openSpecDisabled === false)
-  check(results, '不含 openspec 的 folder：入口停用且明確標示',
-    plainRow?.openSpecDisabled === true && plainRow.text.includes('Files only'),
+
+  // 「含有 openspec」是**常態**，rail 不為它發聲 —— 每一列都喊一次的訊息不傳達任何資訊。
+  check(results, '含 openspec 的 folder：rail 不為此呈現任何標示',
+    openSpecRow?.hasOpenSpecButton === false &&
+      openSpecRow?.hasDiamond === false &&
+      !openSpecRow?.text.includes('OpenSpec'),
+    openSpecRow?.text.replace(/\n/g, ' · '))
+
+  // 缺少 openspec 是**異常**，才發聲（弱訊號）。
+  check(results, '不含 openspec 的 folder：以弱訊號標示',
+    plainRow?.text.includes('無 openspec/'),
     plainRow?.text.replace(/\n/g, ' · '))
+
   check(results, '路徑失效的 folder：明確標示', missingRow?.text.includes('失效'),
     missingRow?.text.replace(/\n/g, ' · '))
+
+  // ── repo-branch：rail 呈現分支 ───────────────────────────────────────────
+  check(results, 'rail 呈現 folder 的 git 分支', openSpecRow?.text.includes('master'),
+    openSpecRow?.text.replace(/\n/g, ' · '))
+  check(results, '非 git repo 不使該列失效（沒有分支是合法狀態）',
+    plainRow?.name === 'repo-plain' && !plainRow?.text.includes('master'),
+    plainRow?.text.replace(/\n/g, ' · '))
+
+  // ── workspace-layout：rail 不呈現不可操作的控制項 ─────────────────────────
+  const buttons = await app.client.evaluate(RAIL_BUTTONS)
+  check(results, 'rail 上不存在 ◈ 那顆按不下去的假按鈕',
+    buttons.every((b) => !b.label?.startsWith('OpenSpec')),
+    buttons.map((b) => b.label).filter(Boolean).slice(0, 5).join(', '))
 
   const folders = await app.client.evaluate('window.workspace.folders.list()')
   check(results, 'hasOpenSpec 與 status 由主行程重算',
     folders[0].hasOpenSpec === true && folders[1].hasOpenSpec === false && folders[2].status === 'missing',
     folders.map((f) => `${f.name}:${f.status}/${f.hasOpenSpec}`).join(' '))
+  check(results, '分支為衍生狀態，由主行程供應',
+    folders[0].branch === 'master' && folders[1].branch === null && folders[2].branch === null,
+    folders.map((f) => `${f.name}:${f.branch ?? '(無)'}`).join(' '))
+
+  // ── repo-branch：在 app 之外切 branch，rail 自己更新 ──────────────────────
+  //
+  // 這是這條能力的**核心價值**：使用者就在旁邊的 terminal 裡操作這些 repo。一個切完 branch
+  // 還顯示舊分支的 rail，比不顯示分支更糟 —— 它看起來像是真的。
+  //
+  // 這裡直接改寫 HEAD（產品讀的就是這個檔案）。真的 `git checkout` 是寫 HEAD.lock 再 rename
+  // 上去（實測 inode 每次都變），而 chokidar 對單一檔案的監看在 rename 之後仍然存活 —— 那條
+  // 已由 design D8 的實測記載，此處驗的是「rail 收到變更後確實更新」。
+  writeFileSync(join(fixture.withOpenSpec, '.git', 'HEAD'), 'ref: refs/heads/feat/x\n')
+  const switched = await pollUntil(
+    app.client,
+    `${RAIL_ROWS}[0].text`,
+    (text) => typeof text === 'string' && text.includes('feat/x'),
+  )
+  check(results, '於 app 之外切換分支後，rail 自己更新（不需重啟）',
+    typeof switched === 'string' && switched.includes('feat/x') && !switched.includes('master'),
+    String(switched).replace(/\n/g, ' · '))
+
+  // detached HEAD：rail 不得空白、不得進入錯誤狀態
+  writeFileSync(
+    join(fixture.withOpenSpec, '.git', 'HEAD'),
+    'ef48cc91774f5718f672d97f1d0c365702cd57e6\n',
+  )
+  const detached = await pollUntil(
+    app.client,
+    `${RAIL_ROWS}[0].text`,
+    (text) => typeof text === 'string' && text.includes('ef48cc9'),
+  )
+  check(results, 'detached HEAD 呈現短 sha，rail 不失效',
+    typeof detached === 'string' && detached.includes('ef48cc9'),
+    String(detached).replace(/\n/g, ' · '))
+
+  // ── repo-branch：folder 於執行期間變成 git repo ───────────────────────────
+  //
+  // 這條需要**第二層** watcher：實測監看一個「尚不存在」的 `.git/HEAD` 收不到任何事件
+  // （連父目錄都不存在，chokidar 無從 attach）。folder 根目錄恆常存在，故以它等 `.git` 出現。
+  mkdirSync(join(fixture.plain, '.git'), { recursive: true })
+  writeFileSync(join(fixture.plain, '.git', 'HEAD'), 'ref: refs/heads/main\n')
+  const appeared = await pollUntil(
+    app.client,
+    `${RAIL_ROWS}[1].text`,
+    (text) => typeof text === 'string' && text.includes('main'),
+  )
+  check(results, 'folder 於執行期間變成 git repo，rail 開始呈現分支',
+    typeof appeared === 'string' && appeared.includes('main'),
+    String(appeared).replace(/\n/g, ' · '))
 
   // ── filesystem-access：透過真正的 preload API ────────────────────────────
   console.log('\n檔案系統邊界（經 renderer 實際呼叫 preload API）')

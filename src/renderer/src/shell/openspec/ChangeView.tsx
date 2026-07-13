@@ -51,7 +51,7 @@ export function ChangeView({
         <button
           type="button"
           onClick={onGoToChanges}
-          className="rounded border border-hairline px-3 py-1 text-[12px] text-ink-dim hover:border-accent hover:text-accent"
+          className="rounded border border-hairline px-3 py-1 text-xs text-ink-dim hover:border-accent hover:text-accent"
         >
           到 Changes 選一個
         </button>
@@ -65,7 +65,7 @@ export function ChangeView({
   const artifacts = orderArtifacts(data.artifacts, data.schemaOrder)
 
   if (artifacts.length === 0) {
-    return <p className="px-4 py-3 text-xs text-ink-faint">這個 change 還沒有任何 artifact。</p>
+    return <p className="px-4 py-3 text-sm text-ink-faint">這個 change 還沒有任何 artifact。</p>
   }
 
   // 預設停在 tasks —— 駕駛 agent 時要盯的是它。沒有 tasks 就退回第一個 artifact。
@@ -79,7 +79,7 @@ export function ChangeView({
       <div className="shrink-0 px-4 pt-4">
         <div className="flex items-center gap-2">
           <h2
-            className="min-w-0 truncate font-mono text-[16px] font-bold text-ink"
+            className="min-w-0 truncate font-mono text-lg font-bold text-ink"
             title={data.slug}
           >
             {data.slug}
@@ -113,7 +113,7 @@ export function ChangeView({
               role="tab"
               aria-selected={selected}
               onClick={() => setActiveId(artifact.id)}
-              className={`-mb-px shrink-0 border-b-2 px-3 py-[6px] text-[12px] transition-colors ${
+              className={`-mb-px shrink-0 border-b-2 px-3 py-[6px] text-xs transition-colors ${
                 selected
                   ? 'border-accent font-bold text-accent'
                   : 'border-transparent text-ink-dim hover:text-ink'
@@ -180,13 +180,23 @@ function TaskList({ tasks }: { tasks: ParsedTasks }): React.JSX.Element {
     <section aria-label="Tasks" className="flex flex-col gap-3">
       {tasks.sections.map((section) => (
         <div key={section.title}>
-          <h4 className="mb-1 text-[12px] font-bold text-ink-dim">{section.title}</h4>
-          <ul className="flex flex-col gap-[2px]">
+          {/*
+            標題與 task 都用 `text-base` —— 與 proposal 那些純文字內文（MarkdownView）同一級。
+            它一度比它底下的 task 還小，那說不通。層級靠字重與顏色區分，不靠字級。
+          */}
+          <h4 className="mb-1.5 text-base font-bold text-ink">{section.title}</h4>
+          {/*
+            task 清單是側欄的**主要閱讀內容** —— 使用者一邊駕駛 agent 一邊盯著的就是它。
+            它一度被當成輔助文字：偏小的字級 + 暗灰 + 緊行距，三者疊起來，把字級旋鈕轉到
+            底也還是嫌小。主要內容用主要內容的層級（`text-base`）、正常行距、未完成者用
+            最亮的前景色 —— 「還沒做的事」才是要讀的東西。
+          */}
+          <ul className="flex flex-col gap-1">
             {section.tasks.map((task) => (
               <li
                 key={task.text}
-                className={`flex gap-2 text-[13px] leading-snug ${
-                  task.completed ? 'text-ink-faint line-through' : 'text-ink-dim'
+                className={`flex gap-2 text-base ${
+                  task.completed ? 'text-ink-faint line-through' : 'text-ink'
                 }`}
               >
                 <span className={task.completed ? 'text-green' : 'text-ink-faint'}>
@@ -234,7 +244,7 @@ function DeltaList({
                   className="rounded border border-hairline bg-stage px-3 py-2"
                 >
                   <div className="mb-1 flex items-start gap-2">
-                    <span className="min-w-0 flex-1 text-[13px] font-bold text-ink">
+                    <span className="min-w-0 flex-1 text-sm font-bold text-ink">
                       {requirement.name}
                     </span>
                     <DeltaBadge verb={requirement.verb} />
@@ -266,7 +276,7 @@ function OpenFileButton({
       onClick={() => onOpenFile(relPath)}
       aria-label={`在 Files 中開啟 ${relPath}`}
       title={`在 Files 中開啟 ${relPath}`}
-      className="shrink-0 rounded border border-hairline px-[6px] py-[1px] text-[11px] text-ink-faint hover:border-accent hover:text-accent"
+      className="shrink-0 rounded border border-hairline px-[6px] py-[1px] text-2xs text-ink-faint hover:border-accent hover:text-accent"
     >
       ▤
     </button>

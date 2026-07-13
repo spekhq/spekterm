@@ -174,7 +174,7 @@ export function FilesPanel({
     return (
       <section
         aria-label="Files"
-        className="flex h-full items-center justify-center px-6 text-center text-xs text-ink-faint"
+        className="flex h-full items-center justify-center px-6 text-center text-sm text-ink-faint"
       >
         尚未選擇 repo —— 於左側的 workspace 選一個，或加入新的 folder
       </section>
@@ -231,7 +231,7 @@ export function FilesPanel({
 
   return (
     <section aria-label="Files" className="relative flex h-full flex-col overflow-hidden">
-      <header className="flex items-center gap-2 border-b border-hairline px-3 py-2 text-xs">
+      <header className="flex items-center gap-2 border-b border-hairline px-3 py-2 text-sm">
         <nav aria-label="路徑" className="min-w-0 flex-1 truncate text-ink-faint">
           <span>{folder.name}</span>
           <span className="px-1">/</span>
@@ -256,14 +256,14 @@ export function FilesPanel({
 
         {/* 未存的檔案可能藏在一個尚未展開的目錄裡，樹上的標記那時看不到。 */}
         {dirtyCount > 0 && (
-          <span className="shrink-0 text-[11px] text-accent" title="未存的變更">
+          <span className="shrink-0 text-2xs text-accent" title="未存的變更">
             ● {dirtyCount}
           </span>
         )}
 
         {openPath === null ? (
           <>
-            <span className="shrink-0 font-mono text-[11px] text-ink-faint">
+            <span className="shrink-0 font-mono text-2xs text-ink-faint">
               {tree.visibleCount} 個項目
             </span>
             {/* 根目錄在樹上沒有列可以右鍵，因此入口在這裡。 */}
@@ -275,7 +275,7 @@ export function FilesPanel({
                 event.stopPropagation()
                 setMenu({ row: null, x: event.clientX, y: event.clientY })
               }}
-              className="shrink-0 rounded border border-hairline px-2 py-[2px] text-[12px] text-ink-dim hover:text-accent"
+              className="shrink-0 rounded border border-hairline px-2 py-[2px] text-xs text-ink-dim hover:text-accent"
             >
               ＋
             </button>
@@ -293,7 +293,7 @@ export function FilesPanel({
                     onClick={() => onViewInOpenSpec(target)}
                     aria-label="在 OpenSpec 中檢視"
                     title="在 OpenSpec 中檢視"
-                    className="shrink-0 rounded border border-hairline px-2 py-[2px] text-[12px] text-ink-dim hover:border-accent hover:text-accent"
+                    className="shrink-0 rounded border border-hairline px-2 py-[2px] text-xs text-ink-dim hover:border-accent hover:text-accent"
                   >
                     ◈
                   </button>
@@ -303,7 +303,7 @@ export function FilesPanel({
             <button
               type="button"
               onClick={() => setOpenPath(null)}
-              className="shrink-0 rounded border border-hairline px-2 py-[2px] text-[12px] text-ink-dim hover:text-accent"
+              className="shrink-0 rounded border border-hairline px-2 py-[2px] text-xs text-ink-dim hover:text-accent"
             >
               ‹ 返回
             </button>
@@ -315,9 +315,9 @@ export function FilesPanel({
         {openPath === null ? (
           <div className="h-full overflow-auto px-1 py-1">
             {tree.rootError ? (
-              <p className="px-3 py-2 text-xs text-danger">{tree.rootError}</p>
+              <p className="px-3 py-2 text-sm text-danger">{tree.rootError}</p>
             ) : tree.rootLoading && tree.rows.length === 0 ? (
-              <p className="px-3 py-2 text-xs text-ink-faint">載入中…</p>
+              <p className="px-3 py-2 text-sm text-ink-faint">載入中…</p>
             ) : (
               <FileTree
                 rows={tree.rows}
@@ -366,7 +366,7 @@ export function FilesPanel({
       )}
 
       {serverError && !dialog && (
-        <p className="border-t border-hairline px-3 py-2 text-[12px] text-danger">{serverError}</p>
+        <p className="border-t border-hairline px-3 py-2 text-xs text-danger">{serverError}</p>
       )}
     </section>
   )

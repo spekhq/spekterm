@@ -7,8 +7,8 @@ interface SessionNameDialogProps {
 }
 
 const OVERLAY_CLASS =
-  'absolute inset-0 z-20 flex items-center justify-center bg-black/50 px-4 text-xs'
-const BUTTON_CLASS = 'rounded border border-hairline px-2 py-[3px] text-[12px] hover:bg-stage'
+  'absolute inset-0 z-20 flex items-center justify-center bg-black/50 px-4 text-sm'
+const BUTTON_CLASS = 'rounded border border-hairline px-2 py-[3px] text-xs hover:bg-stage'
 
 /**
  * 替 session 取名。
@@ -53,7 +53,7 @@ export function SessionNameDialog({
           className="mt-2 w-full rounded border border-hairline bg-stage px-2 py-1 font-mono text-ink outline-none focus:border-accent/50"
         />
 
-        <p className="mt-1 text-[12px] text-ink-faint">
+        <p className="mt-1 text-xs text-ink-faint">
           清空即回到跟隨 pty 宣告的名稱。取名之後，pty 想改名會先問過你。
         </p>
 

@@ -35,7 +35,7 @@ function Tab({
       title={title}
       onClick={() => onSelect(identity)}
       className={[
-        'flex items-center gap-1 rounded px-2 py-1 text-xs transition-colors',
+        'flex items-center gap-1 rounded px-2 py-1 text-sm transition-colors',
         active ? 'bg-hover text-ink' : 'text-ink-dim',
         disabled ? 'cursor-not-allowed opacity-40' : 'hover:text-accent',
       ].join(' ')}

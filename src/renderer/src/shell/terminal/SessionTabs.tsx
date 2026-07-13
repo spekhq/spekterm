@@ -20,7 +20,7 @@ interface SessionTabsProps {
 }
 
 const NEW_BUTTON_CLASS =
-  'shrink-0 self-center rounded border border-hairline px-2 py-1 text-[12px] text-ink-dim hover:border-accent/40 hover:text-accent'
+  'shrink-0 self-center rounded border border-hairline px-2 py-1 text-xs text-ink-dim hover:border-accent/40 hover:text-accent'
 
 export function SessionTabs({
   sessions,
@@ -66,7 +66,7 @@ export function SessionTabs({
   if (sessions.length === 0) {
     return (
       <div className="flex items-center gap-3 border-b border-hairline bg-panel px-3 py-2">
-        <span className="text-xs text-ink-faint">尚無 session</span>
+        <span className="text-sm text-ink-faint">尚無 session</span>
         <button
           type="button"
           onClick={spawn.open}
@@ -75,7 +75,7 @@ export function SessionTabs({
         >
           + session
         </button>
-        {error && <span className="truncate text-[12px] text-danger">{error}</span>}
+        {error && <span className="truncate text-xs text-danger">{error}</span>}
         {spawn.menu}
       </div>
     )
@@ -130,12 +130,12 @@ export function SessionTabs({
                 // 截斷的是呈現，不是資料 —— 完整標題在這裡拿得到。
                 title={`${full} — ${statusTitle(session)}`}
                 onClick={() => onFocus(session.id)}
-                className="flex items-center gap-2 py-2 pr-1 pl-3 text-xs"
+                className="flex items-center gap-2 py-2 pr-1 pl-3 text-sm"
               >
                 <StatusDot session={session} />
                 <span className="whitespace-nowrap font-mono">{label}</span>
                 {session.status === 'exited' && (
-                  <span className="text-[11px] text-ink-faint">已結束</span>
+                  <span className="text-2xs text-ink-faint">已結束</span>
                 )}
               </button>
 
@@ -144,7 +144,7 @@ export function SessionTabs({
                 aria-label={`關閉 session ${label}`}
                 title={`關閉 session ${full}`}
                 onClick={() => onClose(session.id)}
-                className="rounded px-1 text-xs text-ink-faint opacity-0 group-hover:opacity-100 hover:text-danger"
+                className="rounded px-1 text-sm text-ink-faint opacity-0 group-hover:opacity-100 hover:text-danger"
               >
                 ✕
               </button>
@@ -166,7 +166,7 @@ export function SessionTabs({
       <span className="flex-1" />
 
       {error && (
-        <span className="max-w-[240px] self-center truncate px-2 text-[12px] text-danger">
+        <span className="max-w-[240px] self-center truncate px-2 text-xs text-danger">
           {error}
         </span>
       )}

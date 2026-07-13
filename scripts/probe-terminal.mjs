@@ -426,6 +426,30 @@ async function realClick(client, rect) {
 }
 
 /**
+ * 對某個 session 分頁開啟右鍵選單，並**確認它真的開了**；沒開就重新量測座標再點一次。
+ *
+ * 「量完就點」是在賭版面不動 —— 而分頁列會動。分頁的標籤會因為 pty 宣告的 OSC 標題、或使用者
+ * 自己的改名而改變寬度（一次改名就能讓標籤從一串超長標題縮成 `temp-name`），於是**上一次量到的
+ * 座標在幾毫秒內就過期**，點擊落在別的元素上，選單自然開不起來。
+ *
+ * 症狀是探針在某個看似無關的地方 `TypeError: Cannot read properties of null` —— 因為
+ * `MENU_ITEM_RECT(...)` 找不到選單。**不要重用一個量過的 rect 去點第二次。**
+ */
+async function openTabMenu(client, index, attempts = 5) {
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    const rect = await client.evaluate(TAB_RECT(index))
+    if (rect) {
+      const at = center(rect)
+      await realMouse(client, at.x, at.y, 'right')
+      const menu = await pollUntil(client, MENU_IN_VIEWPORT, (value) => value !== null, 1500)
+      if (menu) return menu
+    }
+    await sleep(200)
+  }
+  throw new Error(`分頁 ${index} 的右鍵選單開不起來（座標持續過期或選單溢出 viewport）`)
+}
+
+/**
  * 送一行指令給終端（xterm 的隱形 textarea → onData → pty）。
  *
  * **Enter 必須是一次真正的按鍵事件。** 實測：把 `\r` 併進 `Input.insertText` 的文字裡，
@@ -1005,7 +1029,9 @@ async function runMode(label, { port, rendererUrl }) {
       `${label}：未位移的按下放開是點擊（切換 focus，順序不變）`,
       JSON.stringify(orderBeforeClick) === JSON.stringify(orderAfterClick) &&
         tabsAfterClick[1]?.selected === true,
-      `順序不變=${JSON.stringify(orderBeforeClick) === JSON.stringify(orderAfterClick)} focused=${tabsAfterClick[1]?.selected}`,
+      // 印出實際順序 —— 只斷言布林值的 check()，失敗時什麼線索都不會留下。
+      `前=${JSON.stringify(orderBeforeClick)} 後=${JSON.stringify(orderAfterClick)} ` +
+        `selected=${JSON.stringify(tabsAfterClick.map((t) => t.selected))}`,
     )
 
     // ── 關閉一個分頁 → 該 pty 被清掉
@@ -1308,17 +1334,16 @@ async function runMode(label, { port, rendererUrl }) {
     // ── 清空名稱 ＝ 放棄命名權
     //
     // claude session：回到**跟隨 pty 宣告的標題**（此刻是那個過長的標題）。
-    const claudeTab = center(await app.client.evaluate(TAB_RECT(0)))
-    await realMouse(app.client, claudeTab.x, claudeTab.y, 'right')
-    await pollUntil(app.client, MENU_IN_VIEWPORT, (value) => value !== null, 4000)
+    await openTabMenu(app.client, 0)
     await realClick(app.client, await app.client.evaluate(MENU_ITEM_RECT('重新命名')))
     await sleep(300)
     await app.client.send('Input.insertText', { text: 'temp-name' })
     await pressEnter(app.client)
     await pollUntil(app.client, TAB_LABELS, (value) => value[0]?.includes('temp-name'), 6000)
 
-    await realMouse(app.client, claudeTab.x, claudeTab.y, 'right')
-    await pollUntil(app.client, MENU_IN_VIEWPORT, (value) => value !== null, 4000)
+    // 改名把標籤從那串超長標題縮成 `temp-name`，分頁寬度因此劇變 —— 上面量到的座標已經過期，
+    // 必須重新量測（`openTabMenu` 每次都重量，並確認選單真的開了）。
+    await openTabMenu(app.client, 0)
     await realClick(app.client, await app.client.evaluate(MENU_ITEM_RECT('重新命名')))
     await sleep(300)
     await app.client.send('Input.insertText', { text: '' }) // 輸入框已全選 —— 送出空字串＝清空

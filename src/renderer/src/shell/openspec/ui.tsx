@@ -7,16 +7,16 @@ import type { DeltaVerb } from './delta'
  * 掃描要遞迴讀目錄並取 git 時間戳，大 repo 的第一次是感覺得到的。
  */
 export function Loading(): React.JSX.Element {
-  return <p className="px-4 py-3 text-xs text-ink-faint">載入中…</p>
+  return <p className="px-4 py-3 text-sm text-ink-faint">載入中…</p>
 }
 
 export function ErrorNote({ message }: { message: string }): React.JSX.Element {
-  return <p className="px-4 py-3 text-xs text-danger">{message}</p>
+  return <p className="px-4 py-3 text-sm text-danger">{message}</p>
 }
 
 export function Empty({ children }: { children: React.ReactNode }): React.JSX.Element {
   return (
-    <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center text-xs text-ink-faint">
+    <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center text-sm text-ink-faint">
       {children}
     </div>
   )
@@ -24,7 +24,7 @@ export function Empty({ children }: { children: React.ReactNode }): React.JSX.El
 
 export function SectionTitle({ children }: { children: React.ReactNode }): React.JSX.Element {
   return (
-    <h3 className="mb-2 text-[11px] font-bold uppercase tracking-wider text-ink-faint">
+    <h3 className="mb-2 text-2xs font-bold uppercase tracking-wider text-ink-faint">
       {children}
     </h3>
   )
@@ -34,7 +34,7 @@ export function SectionTitle({ children }: { children: React.ReactNode }): React
 export function StatusBadge({ status }: { status: 'active' | 'archived' }): React.JSX.Element {
   return (
     <span
-      className={`shrink-0 rounded px-[6px] py-[1px] font-mono text-[10px] font-bold uppercase ${
+      className={`shrink-0 rounded px-[6px] py-[1px] font-mono text-2xs font-bold uppercase ${
         status === 'active' ? 'bg-accent-soft text-accent' : 'bg-hover text-ink-faint'
       }`}
     >
@@ -56,7 +56,7 @@ export function DeltaBadge({ verb }: { verb: DeltaVerb }): React.JSX.Element {
 
   return (
     <span
-      className={`shrink-0 rounded px-[6px] py-[1px] font-mono text-[10px] font-bold uppercase ${tone}`}
+      className={`shrink-0 rounded px-[6px] py-[1px] font-mono text-2xs font-bold uppercase ${tone}`}
     >
       {verb}
     </span>
@@ -96,7 +96,7 @@ export function TaskCount({
   total: number
 }): React.JSX.Element {
   return (
-    <span className="shrink-0 font-mono text-[12px] text-accent">
+    <span className="shrink-0 font-mono text-xs text-accent">
       {completed}/{total}
     </span>
   )

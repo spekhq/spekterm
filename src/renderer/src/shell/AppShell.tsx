@@ -37,7 +37,14 @@ export function AppShell(): React.JSX.Element {
 
             <Separator className={SEPARATOR_CLASS} />
 
-            <Panel defaultSize="260px" minSize="180px">
+            {/*
+              `min-w-0` 不是裝飾：flex item 的 `min-width` 預設是 `auto`，於是 Panel 會被它的
+              **內容**撐住，縮不到 `minSize` —— 宣告的最小寬度就兌現不了（spec 要求「拖動 SHALL
+              被夾制於該下限」）。字級小的時候 rail 的 min-content 恰好小於 180px，這個缺陷因此
+              一直看不出來；`--text-base` 一調到 17px，rail 就再也縮不到 180px（實測卡在 240px，
+              是探針抓到的）。**最小寬度是版面契約，不該隨字級浮動** —— 所以修 Panel，不是調高 180。
+            */}
+            <Panel defaultSize="260px" minSize="180px" className="min-w-0">
               <WorkspaceRail
                 folders={folders}
                 selectedId={selectedId}

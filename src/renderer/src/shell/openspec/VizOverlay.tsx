@@ -65,7 +65,7 @@ export function VizOverlay({
       className="fixed inset-0 z-50 flex flex-col bg-stage"
     >
       <header className="flex shrink-0 items-center gap-2 border-b border-hairline px-4 py-2">
-        <span className="text-xs text-ink-faint">{folderName}</span>
+        <span className="text-sm text-ink-faint">{folderName}</span>
 
         <nav aria-label="視覺化" role="tablist" className="ml-3 flex gap-1">
           {TABS.map(({ id, label }) => (
@@ -75,7 +75,7 @@ export function VizOverlay({
               role="tab"
               aria-selected={kind === id}
               onClick={() => onChangeKind(id)}
-              className={`rounded px-3 py-1 text-[12px] transition-colors ${
+              className={`rounded px-3 py-1 text-xs transition-colors ${
                 kind === id
                   ? 'bg-accent-soft font-bold text-accent'
                   : 'text-ink-dim hover:bg-hover hover:text-ink'
@@ -93,7 +93,7 @@ export function VizOverlay({
           onClick={onClose}
           aria-label="關閉"
           title="關閉（Esc）"
-          className="rounded border border-hairline px-2 py-1 text-[12px] text-ink-dim hover:border-accent hover:text-accent"
+          className="rounded border border-hairline px-2 py-1 text-xs text-ink-dim hover:border-accent hover:text-accent"
         >
           ✕ Esc
         </button>
@@ -125,7 +125,7 @@ function GraphPane({
   if (error) return <ErrorNote message={error} />
   if (loading || !data) return <Loading />
   if (data.edges.length === 0) {
-    return <p className="px-4 py-3 text-xs text-ink-faint">沒有 spec 與 change 的關聯可以呈現。</p>
+    return <p className="px-4 py-3 text-sm text-ink-faint">沒有 spec 與 change 的關聯可以呈現。</p>
   }
 
   // 圖會填滿父容器 —— 父容器要有明確高度，且 relative 才放得下圖例。
@@ -193,7 +193,7 @@ function TimelinePane({
       </div>
 
       {laneItems === 0 ? (
-        <p className="rounded border border-hairline px-4 py-6 text-xs text-ink-faint">
+        <p className="rounded border border-hairline px-4 py-6 text-sm text-ink-faint">
           沒有可以放上時間軸的 change。
         </p>
       ) : (
@@ -207,7 +207,7 @@ function TimelinePane({
       {/* 沒有 createdDate 的 change 放不上時間軸 —— 它們不該就這樣消失。 */}
       {unknownCreated.length > 0 && (
         <section aria-label="沒有建立日期的 change">
-          <h3 className="mb-1 text-[12px] font-bold text-ink-dim">
+          <h3 className="mb-1 text-xs font-bold text-ink-dim">
             沒有建立日期（{unknownCreated.length}）
           </h3>
           <ul className="flex flex-col gap-[2px]">
@@ -216,7 +216,7 @@ function TimelinePane({
                 <button
                   type="button"
                   onClick={() => onSelectChange(change.slug)}
-                  className="font-mono text-[12px] text-ink-faint hover:text-accent"
+                  className="font-mono text-xs text-ink-faint hover:text-accent"
                   title={change.description}
                 >
                   {change.slug}
@@ -244,7 +244,7 @@ function Chip({
       type="button"
       onClick={onClick}
       aria-pressed={active}
-      className={`rounded border px-2 py-[3px] text-[12px] transition-colors ${
+      className={`rounded border px-2 py-[3px] text-xs transition-colors ${
         active
           ? 'border-accent bg-accent-soft text-accent'
           : 'border-hairline text-ink-dim hover:text-ink'

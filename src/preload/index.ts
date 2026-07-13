@@ -110,6 +110,19 @@ const workspaceApi = {
     add: (): Promise<WorkspaceFolder[]> => ipcRenderer.invoke('workspace:folders:add'),
     remove: (id: string): Promise<WorkspaceFolder[]> =>
       ipcRenderer.invoke('workspace:folders:remove', id),
+    /**
+     * folder 清單的推送更新（目前唯一的來源是 git 分支變動 —— 使用者在 terminal 裡切 branch）。
+     * 回傳取消訂閱的函式：renderer 拿不到 `ipcRenderer`，因此也無從自行解除其他監聽器。
+     */
+    onChanged: (listener: (folders: WorkspaceFolder[]) => void): (() => void) => {
+      const handler = (_event: IpcRendererEvent, folders: WorkspaceFolder[]): void => {
+        listener(folders)
+      }
+      ipcRenderer.on('workspace:folders:changed', handler)
+      return () => {
+        ipcRenderer.off('workspace:folders:changed', handler)
+      }
+    },
   },
   app: {
     /**

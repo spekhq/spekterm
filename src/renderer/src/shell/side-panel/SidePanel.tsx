@@ -49,7 +49,7 @@ export function SidePanel({
     return (
       <section
         aria-label="OpenSpec"
-        className="flex h-full items-center justify-center px-6 text-center text-xs text-ink-faint"
+        className="flex h-full items-center justify-center px-6 text-center text-sm text-ink-faint"
       >
         尚未選擇 repo —— 於左側的 workspace 選一個，或加入新的 folder
       </section>

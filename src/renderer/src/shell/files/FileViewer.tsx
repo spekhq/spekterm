@@ -53,8 +53,8 @@ interface NoticeProps {
 function Notice({ title, hint, tone = 'neutral' }: NoticeProps): React.JSX.Element {
   return (
     <div className="flex h-full flex-col items-center justify-center gap-2 px-6 text-center">
-      <p className={`text-sm ${tone === 'danger' ? 'text-danger' : 'text-ink-dim'}`}>{title}</p>
-      {hint && <p className="text-xs text-ink-faint">{hint}</p>}
+      <p className={`text-base ${tone === 'danger' ? 'text-danger' : 'text-ink-dim'}`}>{title}</p>
+      {hint && <p className="text-sm text-ink-faint">{hint}</p>}
     </div>
   )
 }
@@ -203,7 +203,7 @@ export function FileViewer({ folderId, relPath }: FileViewerProps): React.JSX.El
   return (
     <div className="flex h-full flex-col">
       {markdown && (
-        <div className="flex items-center gap-1 border-b border-hairline px-3 py-1.5 text-[12px]">
+        <div className="flex items-center gap-1 border-b border-hairline px-3 py-1.5 text-xs">
           {(['preview', 'source'] as const).map((candidate) => (
             <button
               key={candidate}
@@ -222,28 +222,28 @@ export function FileViewer({ folderId, relPath }: FileViewerProps): React.JSX.El
       )}
 
       {conflict && (
-        <div className="border-b border-hairline bg-hover px-3 py-2 text-xs">
+        <div className="border-b border-hairline bg-hover px-3 py-2 text-sm">
           <p className="text-danger">這個檔案在你編輯期間已被外部改動</p>
           <p className="mt-1 text-ink-faint">存檔會覆蓋對方的內容。你的變更仍在。</p>
           <div className="mt-2 flex gap-2">
             <button
               type="button"
               onClick={() => void save(true)}
-              className="rounded border border-hairline px-2 py-[2px] text-[12px] text-danger hover:bg-stage"
+              className="rounded border border-hairline px-2 py-[2px] text-xs text-danger hover:bg-stage"
             >
               以我的內容覆寫
             </button>
             <button
               type="button"
               onClick={discardAndReload}
-              className="rounded border border-hairline px-2 py-[2px] text-[12px] text-ink-dim hover:bg-stage"
+              className="rounded border border-hairline px-2 py-[2px] text-xs text-ink-dim hover:bg-stage"
             >
               捨棄我的變更並重載
             </button>
             <button
               type="button"
               onClick={() => setConflict(false)}
-              className="rounded border border-hairline px-2 py-[2px] text-[12px] text-ink-faint hover:bg-stage"
+              className="rounded border border-hairline px-2 py-[2px] text-xs text-ink-faint hover:bg-stage"
             >
               取消
             </button>
@@ -252,13 +252,13 @@ export function FileViewer({ folderId, relPath }: FileViewerProps): React.JSX.El
       )}
 
       {saveError && (
-        <div className="border-b border-hairline bg-hover px-3 py-2 text-xs text-danger">
+        <div className="border-b border-hairline bg-hover px-3 py-2 text-sm text-danger">
           存檔失敗：{describeFailure(saveError).title}
         </div>
       )}
 
       {stale && !conflict && (
-        <div className="flex items-center justify-between gap-2 border-b border-hairline bg-hover px-3 py-2 text-xs text-ink-dim">
+        <div className="flex items-center justify-between gap-2 border-b border-hairline bg-hover px-3 py-2 text-sm text-ink-dim">
           <span>
             檔案已在磁碟上變更
             {isDirty && <span className="text-danger">（重新載入會捨棄你未存的變更）</span>}
@@ -266,7 +266,7 @@ export function FileViewer({ folderId, relPath }: FileViewerProps): React.JSX.El
           <button
             type="button"
             onClick={isDirty ? discardAndReload : reload}
-            className="rounded border border-hairline px-2 py-[2px] text-[12px] text-accent hover:bg-stage"
+            className="rounded border border-hairline px-2 py-[2px] text-xs text-accent hover:bg-stage"
           >
             重新載入
           </button>
