@@ -8,7 +8,11 @@ import type { FolderLookup } from './workspace-store'
 /** 新 session 的 spawn 目標。兩者都經 login shell 啟動（design D6）。 */
 export type SpawnTarget = 'claude' | 'shell'
 
-export type TerminalCode = 'UNKNOWN_FOLDER' | 'FOLDER_UNAVAILABLE' | 'SPAWN_FAILED'
+export type TerminalCode =
+  | 'UNKNOWN_FOLDER'
+  | 'UNKNOWN_SESSION'
+  | 'FOLDER_UNAVAILABLE'
+  | 'SPAWN_FAILED'
 
 export class TerminalError extends Error {
   constructor(
@@ -123,9 +127,9 @@ export function ptyEnv(source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessE
  * （這種東西不值得只擋一層）。新建對話用 `--session-id`（由我們指定 id，於是它可被持久化並在
  * 下次續接）；續接用 `--resume`（實測：它**沿用**原 id，不會換號 —— `--fork-session` 才換）。
  */
-function spawnArgs(target: SpawnTarget, conversation?: ClaudeConversation): string[] {
-  if (target !== 'claude') return ['-l']
-  if (!conversation) return ['-l', '-c', 'claude']
+function spawnArgs(target: SpawnTarget, conversation: ClaudeConversation | undefined): string[] {
+  // claude 目標**恆有**一個對話（`create()` 不是續接就是新建）—— 沒有「不帶 id 的 claude」。
+  if (target !== 'claude' || !conversation) return ['-l']
 
   const { id, mode } = conversation
   if (!isUuid(id)) throw new TerminalError('SPAWN_FAILED', 'conversation id 不是合法的 UUID')
@@ -247,7 +251,12 @@ export class TerminalService {
           ? { id: options.resumeConversationId as string, mode: 'resume' }
           : { id: randomUUID(), mode: 'new' }
 
-    this.#spawn(sessionId, folder.path, target, conversation, this.#initialCwd(folder.path, options.cwd), false)
+    this.#spawn(sessionId, folder.path, target, conversation, {
+      cwd: this.#initialCwd(folder.path, options.cwd),
+      cols: INITIAL_COLS,
+      rows: INITIAL_ROWS,
+      healed: false,
+    })
 
     return { sessionId, conversationId: conversation?.id }
   }
@@ -274,15 +283,15 @@ export class TerminalService {
     folderPath: string,
     target: SpawnTarget,
     conversation: ClaudeConversation | undefined,
-    cwd: string,
-    healed: boolean,
+    options: { cwd: string; cols: number; rows: number; healed: boolean },
   ): void {
+    const { cwd, cols, rows, healed } = options
     let pty: IPty
     try {
       pty = spawn(resolveShell(), spawnArgs(target, conversation), {
         name: 'xterm-256color',
-        cols: INITIAL_COLS,
-        rows: INITIAL_ROWS,
+        cols,
+        rows,
         cwd,
         // TERM 明確設定以對齊前端 xterm；其餘環境自 process.env 繼承，但抹掉「巢狀 Claude Code」
         // 的標記（見 `ptyEnv` —— 少了那一步，裡面的 claude 不寫 transcript，續接永遠失敗）。
@@ -343,14 +352,22 @@ export class TerminalService {
 
     const conversation: ClaudeConversation = { id: randomUUID(), mode: 'new' }
     try {
-      this.#spawn(
-        sessionId,
-        session.folderPath,
-        session.target,
-        conversation,
-        this.#initialCwd(session.folderPath, undefined),
-        true,
-      )
+      this.#spawn(sessionId, session.folderPath, session.target, conversation, {
+        cwd: this.#initialCwd(session.folderPath, undefined),
+        // **繼承將死那顆 pty 的尺寸。**
+        //
+        // 自癒對 renderer **完全不可見**（`status` 一直是 `running`，它收不到任何事件）——
+        // 於是「pty 誕生時把終端當下的尺寸告訴它」那個 effect 不會重跑，而 `fit()` 又因為
+        // 「尺寸沒變」一律回 `null`。少了這一行，自癒出來的 pty **一輩子停在 80×24**：claude
+        // 以 80 欄排版、畫面縮成一小塊，要手動拖動視窗才恢復。
+        //
+        // **而自癒是主線情境**（沒跟 claude 講過話的 session，續接必定失敗）—— 這條路上的 pty
+        // 尺寸壞掉，比 wake 那條更常被看到。`IPty` 的 `cols`／`rows` 記著它最後一次被 resize
+        // 的尺寸，正是我們要的。
+        cols: session.pty.cols,
+        rows: session.pty.rows,
+        healed: true,
+      })
     } catch {
       // 連新的 pty 都配置不出來 —— 讓原本的失敗照常呈現。
       this.#sessions.delete(sessionId)

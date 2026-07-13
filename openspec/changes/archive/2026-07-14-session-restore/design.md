@@ -186,9 +186,16 @@ session 一多，重開 app 會有一段明顯的忙碌期。而那些 session *
 規則只有一條：**休眠的 session 於首次被顯示時 spawn。**
 
 一個 session 只有在「它所屬的 folder 被選中 **且** 它是該 folder 的 focused session」時才會顯示。
-於是啟動當下**恰好只有一個** session 被顯示（上次選中的 folder 的 focused session）——「只自動
-spawn 一個」不是另一條特例規則，是這條規則的自然結果。之後使用者切到哪個 repo、點到哪個分頁，
-那個 session 才醒過來。
+於是**至多只有一個** session 被顯示 ——「只自動 spawn 一個」不是另一條特例規則，是這條規則的自然結果。
+使用者切到哪個 repo、點到哪個分頁，那個 session 才醒過來。
+
+> **驗收時修正**：這裡原本寫的是「啟動當下**恰好**只有一個 session 被顯示（**上次選中的 folder** 的
+> focused session）」—— **那個前提不成立**：選中的 folder 從來沒有被持久化（`useWorkspaceFolders` 的
+> `selectedId` 初始為 `null`），所以冷啟動當下**一個 session 都不會醒**，要等使用者先點一個 repo。
+> 不變式（「至多一個，且只有被顯示的那個」）是對的，是那句話**過度宣稱**了。
+>
+> **持久化「上次選中的 folder」是一個合理的後續項目**（重開 app 直接回到上次待的地方），但它屬於
+> workspace 的狀態、不屬於 session 的持久化 —— 不在本 change 硬塞。
 
 因此 session 的狀態多一個值：**`dormant`**（已重建、有身分與畫面，但**沒有 pty**）。它與 `running`
 ／`exited` 並列。既有的 `terminal-sessions` 從未要求「每個 session 恆有一個 pty」（那只是 Purpose

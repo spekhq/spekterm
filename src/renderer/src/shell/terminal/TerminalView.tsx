@@ -87,13 +87,21 @@ export function TerminalView({
   // 仍有一份略舊的快照。
   useEffect(() => {
     if (!snapshots) return
+    // **只有真的有 pty 的 session 才可以覆寫自己的快照。**
+    //
+    // 一個從未被喚醒的休眠 shell session，它的 xterm 裡已經被 `replay()` 寫進了「歷史 + 分隔線」。
+    // 若關窗時照樣序列化，那份**含分隔線**的內容就會被寫回快照檔 —— 下次開啟再重播一次、再追加
+    // 一條新的分隔線。使用者一路不碰它，**每重開一次就多一條「以上為上次的內容」**。而且隱藏中的
+    // 終端從未 `fit()` 過，它是以 80 欄重新序列化的，歷史每輪還會被重排一次。
+    if (status !== 'running') return
+
     const flush = (): void => {
       const data = handleRef.current?.serialize()
       if (data) window.workspace.terminal.snapshot(sessionId, data)
     }
     window.addEventListener('beforeunload', flush)
     return () => window.removeEventListener('beforeunload', flush)
-  }, [sessionId, snapshots])
+  }, [sessionId, snapshots, status])
 
   // 建立終端、接上 session、把使用者輸入送回 pty。這個 effect 一輩子只跑一次。
   useEffect(() => {
@@ -225,7 +233,14 @@ export function TerminalView({
     <div
       ref={hostRef}
       // 隱藏而非卸載 —— scrollback 活在 xterm 實例裡，卸載即遺失。
-      className={active ? 'h-full w-full' : 'hidden'}
+      //
+      // **`relative` 是承重的**：底下那些休眠提示是 `absolute` 的，需要一個定位祖先；少了它，
+      // 它們會相對於更外層的 `<section>` 定位。而真正致命的是**堆疊順序** —— xterm 的 `.xterm`
+      // 是 `position: relative`（它自己的 CSS），且由 `handle.open(host)` 在 effect 裡 append，
+      // 也就是排在 React children **之後**。兩者都是 `z-index: auto` → 依 tree order 繪製 →
+      // **xterm 蓋在提示上**，而 `.xterm-viewport` 的背景是不透明的。於是休眠的 claude 分頁
+      // 看起來就是一塊空白終端 —— 正是 spec 明文禁止的那件事。提示因此必須明確拿到 z-index。
+      className={active ? 'relative h-full w-full' : 'hidden'}
       onContextMenu={(event) => {
         event.preventDefault()
         // 選取狀態要在開啟選單的當下取樣 —— 選單一旦開啟，焦點就離開終端了。
@@ -253,15 +268,24 @@ export function TerminalView({
       */}
       {status === 'dormant' &&
         (wakeError ? (
-          <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-shell/90 px-3 py-2 text-2xs text-danger">
-            無法恢復這個 session：{wakeError}
+          // **恢復不了是個錯誤狀態，它必須看得見。** 貼在底部的一條細帶太弱 —— 使用者面對的仍是
+          // 一大塊黑色空白，只有邊緣一行小字。置中呈現，與 claude 的休眠提示同一種載體。
+          //
+          // **這一個刻意不是 `pointer-events-none`**（另外兩個是）：它背後是一個**永遠不會活過來**
+          // 的終端，沒有東西值得點。讓它接住指標事件，這塊提示才是實心的 —— 而不是一層點得穿的
+          // 幽靈。順帶也讓探針能以 `elementFromPoint` 做真正的 hit-test（`pointer-events-none`
+          // 的元素會被它跳過，於是「它有沒有被 xterm 蓋住」根本量不到）。
+          <div className="absolute inset-0 z-10 flex items-center justify-center">
+            <div className="max-w-[80%] rounded border border-hairline bg-shell/90 px-4 py-3 text-center text-2xs text-danger">
+              無法恢復這個 session：{wakeError}
+            </div>
           </div>
         ) : spawnTarget === 'shell' ? (
-          <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-shell/90 px-3 py-2 text-2xs text-ink-faint">
+          <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 bg-shell/90 px-3 py-2 text-2xs text-ink-faint">
             休眠中 · 正在於上次的工作目錄重新開啟 shell（先前的行程不會回來）
           </div>
         ) : (
-          <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+          <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center">
             <div className="rounded border border-hairline bg-shell/90 px-4 py-3 text-center text-2xs text-ink-faint">
               休眠中 · 正在恢復對話…
             </div>

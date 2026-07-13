@@ -52,18 +52,19 @@ pty 宣告的標題屬於「必需」而非「衍生」：**休眠的 session �
 重建出來的 session SHALL 處於**休眠**狀態 —— 具備完整身分（名字、順序、錨定）但**沒有 pty**。
 休眠的 session SHALL 於**首次被顯示**時才啟動其 pty。
 
-於是開啟應用程式時 SHALL 只有一個 session 被啟動（被選中的 folder 之 focused session）——
-SHALL NOT 一次啟動所有 session。
+於是開啟應用程式時 SHALL **至多一個** session 被啟動 —— 即被選中的 folder 之 focused session；
+SHALL NOT 一次啟動所有 session。**選中的 folder 不被持久化**，因此冷啟動當下沒有任何 folder 被選中，
+也就沒有任何 session 被啟動；使用者選一個 repo 之後，該 repo 的 focused session 才醒過來。
 
 休眠狀態 SHALL 被明確地呈現，SHALL NOT 呈現為一個空白的終端。
 
 未被喚醒的休眠 session SHALL 維持持久化 —— 使用者一路未喚醒它便再次關閉應用程式時，它 SHALL 於
 下次開啟時仍然存在。
 
-#### Scenario: 開啟應用程式只啟動一個 session
+#### Scenario: 開啟應用程式至多啟動一個 session
 
-- **WHEN** 使用者關閉應用程式時有多個跨 folder 的 session，然後重新開啟應用程式
-- **THEN** 只有被選中的 folder 之 focused session 啟動了 pty，其餘 session 皆為休眠且無 pty
+- **WHEN** 使用者關閉應用程式時有多個 session，重新開啟應用程式並選中其中一個 folder
+- **THEN** 只有該 folder 的 focused session 啟動了 pty，其餘 session 皆為休眠且無 pty
 
 #### Scenario: 顯示一個休眠的 session 使其啟動
 

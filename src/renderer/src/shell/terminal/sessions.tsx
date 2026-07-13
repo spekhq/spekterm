@@ -299,18 +299,35 @@ export function SessionsProvider({ children }: { children: React.ReactNode }): R
     if (waking.current.has(sessionId)) return
     waking.current.add(sessionId)
 
-    void window.workspace.terminal.wake(sessionId).then((result) => {
+    const fail = (message: string): void => {
       setSessions((previous) =>
-        previous.map((session) => {
-          if (session.id !== sessionId) return session
+        previous.map((session) =>
           // 失敗（folder 路徑失效）時**留在 waking 集合裡**：不自動重試，否則每次重繪都會再打一次。
           // session 維持休眠，並把原因呈現出來 —— 而不是靜默地什麼都不發生。
-          return result.ok
-            ? { ...session, status: 'running', wakeError: undefined }
-            : { ...session, wakeError: result.message }
-        }),
+          session.id === sessionId ? { ...session, wakeError: message } : session,
+        ),
       )
-    })
+    }
+
+    void window.workspace.terminal
+      .wake(sessionId)
+      .then((result) => {
+        if (!result.ok) {
+          fail(result.message)
+          return
+        }
+        setSessions((previous) =>
+          previous.map((session) =>
+            session.id === sessionId
+              ? { ...session, status: 'running', wakeError: undefined }
+              : session,
+          ),
+        )
+      })
+      // IPC 本身 reject（罕見，但不是不可能）時，少了這個 catch，該 session 會永遠卡在
+      // `waking` 集合裡、`wakeError` 也不會被設定 —— 使用者面對的是一個什麼都不做、也不說
+      // 為什麼的分頁。
+      .catch((error) => fail(String(error)))
   }, [])
 
   const create = useCallback(

@@ -375,6 +375,31 @@ const TAB_RECT = (index) => `(() => {
 })()`
 
 /** 分頁的標籤依序。 */
+/**
+ * 每個分頁的 tooltip（`<完整標題> — <狀態>`）與狀態燈的實際顏色。
+ *
+ * **休眠不是結束。** `session-badge` 原本只認得 running／exited —— 於是每個重建出來的休眠
+ * session 都亮**紅燈**、tooltip 說它「已結束（代碼 0）」。那是使用者重開 app 之後看到的第一個
+ * 畫面，等於在告訴他「你的 session 都死了」（違反「休眠狀態 SHALL 被明確地呈現」）。
+ */
+const TAB_STATUS = `[...document.querySelectorAll('[aria-label="Session 分頁"] [role="tab"]')].map((tab) => {
+  const dot = tab.querySelector('span[aria-hidden="true"]')
+  return {
+    title: tab.getAttribute('title') ?? '',
+    dot: dot ? getComputedStyle(dot).backgroundColor : null,
+  }
+})`
+
+/** danger 的實際色值（用來斷言休眠**不是**這個顏色）。 */
+const DANGER_COLOR = `(() => {
+  const probe = document.createElement('span')
+  probe.className = 'bg-danger'
+  document.body.appendChild(probe)
+  const color = getComputedStyle(probe).backgroundColor
+  probe.remove()
+  return color
+})()`
+
 const TAB_LABELS = `[...document.querySelectorAll('[aria-label="Session 分頁"] [role="tab"]')]
   .map((tab) => tab.innerText.replace(/\\s+/g, ' ').trim())`
 
@@ -1623,6 +1648,17 @@ async function runRestore(label, { port, rendererUrl }) {
       `之前=${JSON.stringify(labelsBefore)} 之後=${JSON.stringify(labelsAfter)}`,
     )
 
+    // **休眠不是結束。** 這條驗的是使用者重開 app 之後看到的第一個畫面。
+    const danger = await app.client.evaluate(DANGER_COLOR)
+    const status = await app.client.evaluate(TAB_STATUS)
+    const dormantTab = status[1] // 分頁 1（shell）此刻仍休眠 —— 只有被顯示的那個會被喚醒
+    check(
+      results,
+      `${label}：休眠的 session 不被呈現為「已結束」`,
+      !dormantTab?.title?.includes('已結束') && dormantTab?.dot !== danger,
+      `tooltip=${JSON.stringify(dormantTab?.title)} 狀態燈=${dormantTab?.dot}（danger=${danger}）`,
+    )
+
     // **只有一個 session 有 pty** —— 其餘休眠。開 app 不該同時啟動 N 個 claude。
     await sleep(2000)
     const awake = ptySessionPids(marker)
@@ -1649,6 +1685,29 @@ async function runRestore(label, { port, rendererUrl }) {
       `${label}：claude session 不重播快照（否則歷史會出現兩份）`,
       !claudeText.includes('以上為上次的內容'),
       `終端內容=${JSON.stringify(claudeText.slice(0, 80))}`,
+    )
+
+    // ── **再關一次、再開一次，全程不碰那個休眠的 shell session。**
+    //
+    // 驗兩件事：(1) 未喚醒的休眠 session 於再次重啟後仍然存在；(2) 它**不會把重播的歷史再序列化
+    // 回自己的快照** —— 那個 xterm 裡此刻已經有「歷史 + 分隔線」了，若關窗時照樣 serialize，
+    // 下次重播就會再追加一條分隔線。使用者一路不碰它，每重開一次就多一條。
+    await app.quitGracefully()
+    await waitPtysGone(marker)
+
+    app = await launch({ port, profileDir: profile, rendererUrl, marker, stub })
+    await pollUntil(app.client, SELECT_FOLDER('repo-a'), (value) => value === true, 10_000)
+    const labelsAgain = await pollUntil(
+      app.client,
+      TAB_LABELS,
+      (value) => value.length === labelsBefore.length,
+      10_000,
+    )
+    check(
+      results,
+      `${label}：未喚醒的休眠 session 於再次重啟後仍然存在`,
+      JSON.stringify(labelsAgain) === JSON.stringify(labelsBefore),
+      `分頁=${JSON.stringify(labelsAgain)}`,
     )
 
     // ── 切到 shell session：它才被喚醒（首次被顯示時 spawn）
@@ -1694,6 +1753,15 @@ async function runRestore(label, { port, rendererUrl }) {
       `${label}：重播的歷史與 live 內容明確區分`,
       historyEnd !== -1,
       '缺少分隔 —— 使用者會以為那個 shell 還活著',
+    )
+
+    // 經過兩次「重建但不喚醒」之後，分隔線仍然**恰好一條**。
+    const separators = replayed.split('以上為上次的內容').length - 1
+    check(
+      results,
+      `${label}：休眠期間不把重播的歷史再序列化回快照（分隔線不累積）`,
+      separators === 1,
+      `分隔線數量=${separators}（每重開一次就多一條，表示休眠中的終端把自己的重播內容寫回了快照）`,
     )
 
     // shell 於**最後已知的工作目錄**重生（不是 folder 根目錄）。
@@ -1876,6 +1944,33 @@ async function runHealAndCrash(label, { port, rendererUrl }) {
       `argv=${JSON.stringify(stub.calls())}`,
     )
 
+    // **自癒重生的 pty 也必須拿到終端的真實尺寸。**
+    //
+    // 自癒對 renderer **完全不可見**（`status` 一直是 `running`）—— 那個「pty 誕生時推尺寸」的
+    // effect 不會重跑，`fit()` 又因「尺寸沒變」回 `null`。少了「繼承將死那顆 pty 的尺寸」，自癒
+    // 出來的 pty 一輩子停在 80×24。**而自癒是主線情境**（沒跟 claude 講過話的 session，續接必定
+    // 失敗），這條路上的尺寸壞掉比 wake 那條更常被看到。
+    //
+    // stub claude 自己 `exec "$SHELL" -i`，所以這個 session 是個可以打字的互動 shell。
+    await realClick(app.client, await app.client.evaluate(TERMINAL_RECT))
+    await typeLine(app.client, "echo HCOLS=$(stty size | cut -d' ' -f2)")
+    const healedCols = Number(
+      String(
+        await pollUntil(
+          app.client,
+          TERMINAL_TEXT,
+          (value) => /HCOLS=\d+/.test(value),
+          10_000,
+        ).catch(() => ''),
+      ).match(/HCOLS=(\d+)/)?.[1] ?? 0,
+    )
+    check(
+      results,
+      `${label}：自癒重生的 pty 也採用終端的真實尺寸（不是 spawn 時的 80 欄）`,
+      healedCols > 0 && healedCols !== 80,
+      `pty 的欄數=${healedCols}（停在 80 就表示自癒那條路沒有把尺寸帶過去）`,
+    )
+
     // ── 被竄改的對話識別碼絕不可被拼進命令
     await app.quitGracefully()
     await waitPtysGone(marker)
@@ -2029,6 +2124,102 @@ async function runAltScreen(label, { port, rendererUrl }) {
   }
 }
 
+/**
+ * **休眠的 session 絕不能只是一塊空白終端**（session-persistence 明文要求）。
+ *
+ * 這條原本是零覆蓋的 —— 而它是壞的：休眠提示是 host div 的 React child，xterm 的 `.xterm`
+ * （`position: relative`）由 `handle.open(host)` 在 effect 裡 append，**排在 React children 之後**。
+ * 兩者都是 `z-index: auto` → 依 tree order 繪製 → **xterm 蓋在提示上**，而 `.xterm-viewport`
+ * 的背景是不透明的。休眠的 claude 分頁於是看起來就是一塊空白終端。
+ *
+ * **載體：folder 的路徑失效。** 休眠的 session 一被顯示就會醒過來，那個提示只是一瞬間 ——
+ * 除非它**醒不過來**。路徑失效時 `create` 以 FOLDER_UNAVAILABLE 拒絕，session 停在休眠態並
+ * 呈現原因。這給了一個穩定可觀察的休眠畫面，同時也驗到了「喚醒失敗要說明原因，而不是靜默
+ * 地什麼都不發生」。
+ *
+ * 判準是 `elementFromPoint` —— 只有真的畫在最上層才拿得到它。斷言「DOM 裡有這個節點」是驗不到
+ * 堆疊順序的（它一直都在，只是被蓋住）。
+ */
+async function runDormantHint(label, { port, rendererUrl }) {
+  console.log(`\n── ${label}（休眠的呈現）──`)
+
+  const marker = `spek-hint-${process.pid}-${Date.now()}`
+  const { repo } = makeFixture()
+  const profile = seedProfile([['f1', repo]])
+  const stub = makeStubClaude()
+
+  // 直接種一份持久化的 session，然後把 repo 目錄整個刪掉 —— folder 仍在 workspace 裡，但路徑失效。
+  writeFileSync(
+    join(profile, 'sessions.json'),
+    JSON.stringify({
+      version: 1,
+      sessions: [
+        {
+          id: '9f1e7a2c-3b4d-4e5f-8a9b-0c1d2e3f4a5b',
+          folderId: 'f1',
+          spawnTarget: 'claude',
+          ordinal: 1,
+          customTitle: 'ghost',
+        },
+      ],
+    }),
+  )
+  rmSync(repo, { recursive: true, force: true })
+
+  let app = null
+  try {
+    app = await launch({ port, profileDir: profile, rendererUrl, marker, stub })
+    await pollUntil(app.client, SELECT_FOLDER('repo-a'), (value) => value === true, 10_000)
+    await pollUntil(app.client, TABS, (value) => value.length === 1, 10_000)
+
+    // 顯示它 → 嘗試喚醒 → folder 路徑失效 → 停在休眠態並說明原因。
+    const hint = await pollUntil(
+      app.client,
+      `(() => {
+        const term = document.querySelector('section[aria-label="Terminal"]')
+        if (!term) return null
+        const box = term.getBoundingClientRect()
+        // 終端正中央實際被畫在最上層的是誰？
+        const top = document.elementFromPoint(
+          Math.round(box.left + box.width / 2),
+          Math.round(box.top + box.height / 2),
+        )
+        return top ? { text: top.innerText ?? '', className: String(top.className ?? '') } : null
+      })()`,
+      (value) => Boolean(value?.text),
+      12_000,
+    ).catch(() => null)
+
+    check(
+      results,
+      `${label}：休眠的 session 不呈現為一塊空白終端（提示畫在最上層）`,
+      Boolean(hint?.text) && !hint.className.includes('xterm'),
+      `終端中央最上層的元素=${JSON.stringify(hint)}`,
+    )
+    check(
+      results,
+      `${label}：喚醒失敗時說明原因，而不是靜默地什麼都不發生`,
+      Boolean(hint?.text?.includes('無法恢復')),
+      `提示內容=${JSON.stringify(hint?.text)}`,
+    )
+    check(
+      results,
+      `${label}：喚醒失敗的 session 不留下任何 pty`,
+      ptyPids(marker).length === 0,
+      `殘留 pids=${ptyPids(marker).join(',') || '無'}`,
+    )
+  } finally {
+    if (app) await app.destroy()
+    for (const pid of ptyPids(marker)) {
+      try {
+        process.kill(pid, 'SIGKILL')
+      } catch {
+        // 已經走了
+      }
+    }
+  }
+}
+
 async function main() {
   let devServer = null
   try {
@@ -2036,12 +2227,14 @@ async function main() {
     await runRestore('build', { port: BUILD_PORT, rendererUrl: null })
     await runHealAndCrash('build', { port: BUILD_PORT, rendererUrl: null })
     await runAltScreen('build', { port: BUILD_PORT, rendererUrl: null })
+    await runDormantHint('build', { port: BUILD_PORT, rendererUrl: null })
 
     devServer = await startRendererDevServer()
     await runMode('dev', { port: DEV_PORT, rendererUrl: devServer.url })
     await runRestore('dev', { port: DEV_PORT, rendererUrl: devServer.url })
     await runHealAndCrash('dev', { port: DEV_PORT, rendererUrl: devServer.url })
     await runAltScreen('dev', { port: DEV_PORT, rendererUrl: devServer.url })
+    await runDormantHint('dev', { port: DEV_PORT, rendererUrl: devServer.url })
   } finally {
     if (devServer) {
       try {

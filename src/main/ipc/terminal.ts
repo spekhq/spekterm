@@ -152,7 +152,7 @@ export function registerTerminalHandlers(store: FolderLookup, sessions: SessionS
   ipcMain.handle(TERMINAL_CHANNELS.wake, (event, sessionId: string) =>
     toResult(() => {
       const persisted = sessions.get(sessionId)
-      if (!persisted) throw new TerminalError('UNKNOWN_FOLDER', `unknown session: ${sessionId}`)
+      if (!persisted) throw new TerminalError('UNKNOWN_SESSION', `unknown session: ${sessionId}`)
 
       const service = serviceFor(store, sessions, event.sender)
       const result = service.create(persisted.folderId, persisted.spawnTarget, {

@@ -186,6 +186,19 @@ export class SessionStore {
    */
   #pendingMainFields = new Map<string, Partial<Pick<PersistedSession, 'claudeSessionId' | 'cwd'>>>()
 
+  /**
+   * 已經確定結束（pty 自己死了、或使用者關掉）的 session。**它們不得被復活。**
+   *
+   * renderer 的清單是 debounce 落盤的 —— 待寫入的那一份可能是**在該 session 結束之前**擷取的。
+   * 若使用者剛好在這個窗口裡關掉 app，關窗時的 flush 會拿那份過期的清單去 `replace()`，把一個
+   * 已經死掉的 session 寫回 `sessions.json`，下次以休眠態重建回來（spec：「已結束的 session
+   * 不被持久化」）。
+   *
+   * session 的識別碼是 UUID、永不重用，因此這個集合只增不減是安全的（每個 app 生命週期內，
+   * 它的上限就是使用者關掉過的 session 數）。
+   */
+  #gone = new Set<string>()
+
   constructor(
     private readonly filePath: string,
     private readonly scrollbackDir: string,
@@ -201,6 +214,8 @@ export class SessionStore {
         console.error(`[sessions] 無法讀取，以空清單啟動：${String(error)}`)
       }
       this.#sessions = []
+      // 孤兒快照仍要清 —— 設定檔不見了，那些快照就更沒有歸屬了。
+      this.pruneScrollback()
       return
     }
 
@@ -212,6 +227,7 @@ export class SessionStore {
           (kept ? `；原檔保留於 ${kept}` : `；原檔保留失敗`),
       )
       this.#sessions = []
+      this.pruneScrollback()
       return
     }
 
@@ -240,6 +256,8 @@ export class SessionStore {
     const next: PersistedSession[] = []
     for (const entry of incoming) {
       if (!isUuid(entry.id)) continue
+      // 已經確定結束的 session，不因為一份過期的清單而復活（見 `#gone`）。
+      if (this.#gone.has(entry.id)) continue
       const kept = previous.get(entry.id)
       const waiting = this.#pendingMainFields.get(entry.id)
       this.#pendingMainFields.delete(entry.id)
@@ -291,6 +309,10 @@ export class SessionStore {
 
   remove(sessionId: string): void {
     this.#pendingMainFields.delete(sessionId)
+    // 墓碑必須在「這筆是否存在」之前立起來 —— 一個尚未被 renderer persist 過的 session 也可能
+    // 已經死了（例如 claude 啟動失敗），而它的 id 仍然躺在待寫入的清單裡。
+    if (isUuid(sessionId)) this.#gone.add(sessionId)
+
     const next = this.#sessions.filter((session) => session.id !== sessionId)
     if (next.length === this.#sessions.length) return
     this.#sessions = next

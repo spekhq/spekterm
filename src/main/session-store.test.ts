@@ -222,3 +222,36 @@ describe('SessionStore 的快照', () => {
     assert.equal(clampScrollback('short'), 'short')
   })
 })
+
+describe('SessionStore：已結束的 session 不得被復活', () => {
+  it('一份過期的 debounce 清單不得把已結束的 session 寫回磁碟', () => {
+    // renderer 的清單是 debounce 落盤的 —— 待寫入的那一份可能是在該 session 結束**之前**擷取的。
+    // 使用者若剛好在這個窗口裡關掉 app，關窗時的 flush 會拿那份過期的清單去 replace()，
+    // 把一個已經死掉的 session 寫回去，下次以休眠態重建回來。
+    const kept = store()
+    const alive = { id: UUID_A, folderId: 'f1', spawnTarget: 'claude' as const, ordinal: 1 }
+    const dying = { id: UUID_B, folderId: 'f1', spawnTarget: 'shell' as const, ordinal: 2 }
+    kept.replace([alive, dying])
+
+    // pty 死了 —— 主行程立刻把它從持久化移除。
+    kept.remove(UUID_B)
+    assert.deepEqual(kept.list().map((s) => s.id), [UUID_A])
+
+    // 但 renderer 那份「還活著的時候」擷取的清單此刻才落盤。
+    kept.replace([alive, dying])
+
+    assert.deepEqual(
+      kept.list().map((s) => s.id),
+      [UUID_A],
+      '已結束的 session 不得因為一份過期的清單而復活',
+    )
+  })
+
+  it('錨定的 change 跨 replace 保留', () => {
+    const kept = store()
+    kept.replace([
+      { id: UUID_A, folderId: 'f1', spawnTarget: 'claude', ordinal: 1, anchoredChange: 'my-change' },
+    ])
+    assert.equal(kept.list()[0].anchoredChange, 'my-change')
+  })
+})

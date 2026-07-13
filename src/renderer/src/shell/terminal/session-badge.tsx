@@ -34,21 +34,30 @@ export function sessionLabel(session: SessionState): string {
 
 export function statusTitle(session: SessionState): string {
   if (session.status === 'running') return '運作中'
+  // **休眠不是結束。** 少了這一條，重建出來的 session 會被說成「已結束（代碼 0）」——
+  // 而那是使用者重開 app 後看到的第一個畫面，等於在告訴他「你的 session 都死了」。
+  if (session.status === 'dormant') return '休眠中 · 顯示即恢復'
   return session.exitCode === 0 ? '已結束' : `已結束（代碼 ${session.exitCode ?? 0}）`
 }
 
 /**
- * 狀態燈。**本 phase 只反映 pty 存活／已結束** —— mockup 的 waiting／running 是 agent 的
+ * 狀態燈。**本 phase 只反映 pty 存活／休眠／已結束** —— mockup 的 waiting／running 是 agent 的
  * 語意，需解析 agent 輸出才能得知，屬後續 phase。非零結束以 danger 呈現，好讓「claude 找
  * 不到」這類啟動失敗看得見。
+ *
+ * **休眠有自己的顏色，而且絕不能是 danger**（session-persistence：「休眠狀態 SHALL 被明確地
+ * 呈現」）。原本的實作只認得 running／exited，於是每個休眠的 session 都亮紅燈 —— 重建成功的
+ * session 看起來全都是死的。
  */
 export function StatusDot({ session }: { session: SessionState }): React.JSX.Element {
   const tone =
     session.status === 'running'
       ? 'bg-emerald-400'
-      : session.exitCode === 0
+      : session.status === 'dormant'
         ? 'bg-ink-faint'
-        : 'bg-danger'
+        : session.exitCode === 0
+          ? 'bg-ink-faint'
+          : 'bg-danger'
 
   return <span aria-hidden="true" className={`h-1.5 w-1.5 shrink-0 rounded-full ${tone}`} />
 }

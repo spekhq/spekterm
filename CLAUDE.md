@@ -888,6 +888,37 @@ spekterm 若由一個 agent 啟動（`npm run dev` 是 agent 幫忙跑的 ——
 —— 不去複製 claude 的內部檔案佈局（那會隨版本變，而且**降級方向是壞的**：猜錯就會撞號讓 session 死掉）。
 重試法猜錯的下場只是「開一個全新的 claude」，永遠不會撞號。
 
+### 「新增一個狀態」＝**要去找出每一個 `if (status === …)`** —— 而且它們不會編譯失敗
+
+`session-persistence` 為 session 加了第三個狀態 `dormant`。TypeScript **一條都沒攔下來** ——
+因為既有的判斷全是 `status === 'running' ? A : B` 這種**二分**寫法，多一個列舉值只是靜默地落進
+`else`。實測後果（`/opsx:verify` 的獨立稽核抓到）：
+
+- `session-badge.tsx` 只認得 running／exited → **每個休眠的 session 都亮紅燈、tooltip 說它
+  「已結束（代碼 0）」**。那是使用者重開 app 之後看到的**第一個畫面** —— 等於在告訴他「你的
+  session 都死了」。
+- `TerminalView` 的快照 flush 只判斷 spawnTarget、不判斷 status → 一個**從未被喚醒**的休眠 shell
+  session，關窗時會把 xterm 裡那份「重播的歷史 + 分隔線」**再序列化回快照** → 下次重播再追加一條
+  分隔線。**每重開一次就多一條。**
+
+**加列舉值時，把 `status ===` / `spawnTarget ===` 全部 grep 一遍。** 三元運算子的 `else` 分支是
+新狀態的墳場。
+
+### 休眠的提示被 xterm 蓋住 —— 而 `elementFromPoint` **量不到 `pointer-events-none` 的元素**
+
+xterm 的 `.xterm` 是 `position: relative`，且由 `handle.open(host)` 在 **effect 裡 append** ——
+排在 React children **之後**。兩者都是 `z-index: auto` → 依 tree order 繪製 → **xterm 蓋在提示上**，
+而 `.xterm-viewport` 的背景是不透明的。於是「休眠的 session SHALL NOT 呈現為空白終端」這條 spec
+**在實作上完全沒有兌現**，卻沒有任何測試發現 —— 那個 scenario 是零覆蓋的。
+
+修法是 host 給 `relative`、提示給 `z-10`。**但驗它的方法有個坑**：`document.elementFromPoint()`
+回傳的是「**會收到指標事件**的最上層元素」——**它會跳過 `pointer-events: none` 的元素**。拿它去量
+一個 `pointer-events-none` 的提示，永遠只會拿到底下的 xterm，**不管修沒修**。
+
+順著這個坑反而問出一個對的產品決定：**「這個 session 恢復不了」的提示不該是 `pointer-events-none`**
+—— 它背後是一個永遠不會活過來的終端，沒有東西值得點。讓它接住指標事件，提示才是實心的，而
+`elementFromPoint` 也就成了真正的 hit-test（對照組確認：拿掉 `z-10`，它回傳 `xterm-screen`）。
+
 ### 喚醒把「pty 先誕生、終端後掛載」的順序**倒了過來** —— pty 於是停在 80 欄
 
 **dogfooding 抓到的**：resume 之後 claude 的畫面「縮成一小塊」，手動拖動視窗才恢復。
@@ -904,10 +935,17 @@ spekterm 若由一個 agent 啟動（`npm run dev` 是 agent 幫忙跑的 ——
 修法：**pty 誕生的那一刻（`status` 轉為 `running`），把終端當下的尺寸告訴它**（`XtermHandle.size()`
 —— 它不做「尺寸有沒有變」的偵測，`fit()` 沒辦法回答這個問題）。
 
-> **探針證明不了這個修正（對照組確認）。** 走不走到上面那條路，取決於 xterm 何時量到字元尺寸 ——
-> 若 `fit()` 在 `active` 的 effect 裡回了 `null`，`lastCols` 維持 0，稍後 ResizeObserver 就會補救成功。
-> **探針一直走那條幸運的路**：把修正整個拿掉，斷言照樣是綠的。留下的那條只擋「完全沒有人告訴 pty
-> 尺寸」的回歸；真正的防護由 code review + design 承擔（比照 OSC 8 `linkHandler` 的先例）。
+> **探針證明不了 wake 那條路的修正（對照組確認）。** 走不走到上面那條路，取決於 xterm 何時量到
+> 字元尺寸 —— 若 `fit()` 在 `active` 的 effect 裡回了 `null`，`lastCols` 維持 0，稍後 ResizeObserver
+> 就會補救成功。**探針一直走那條幸運的路**：把修正整個拿掉，斷言照樣是綠的。留下的那條只擋「完全
+> 沒有人告訴 pty 尺寸」的回歸；真正的防護由 code review + design 承擔（比照 OSC 8 `linkHandler`）。
+
+> **而 `#heal()` 那條路上，同一個 bug 是確定會發生的 —— 它一開始漏掉了。** 自癒對 renderer
+> **完全不可見**（`status` 一直是 `running`，它收不到任何事件）：那個「pty 誕生時推尺寸」的 effect
+> 不會重跑，`fit()` 又因「尺寸沒變」回 `null` —— 於是自癒出來的 pty **一輩子停在 80×24**。而
+> **自癒是主線情境**（沒跟 claude 講過話的 session，續接必定失敗），這條路比 wake 那條更常被走到。
+> 修法：`#spawn` 接受 cols／rows，`#heal` 把**將死那顆 pty 的 `IPty.cols`／`rows`** 帶過去。
+> 這條探針驗得到（stub claude 自己 `exec $SHELL -i`，是個可以打字的互動 shell）。
 
 ### `disposed` 的 exit **不是** session 結束 —— 少了這個區分，關一次視窗就清空持久化
 
