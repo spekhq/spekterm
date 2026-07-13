@@ -327,18 +327,15 @@ const RENAME_INPUT_RECT = `(() => {
   return { x: r.x, y: r.y, width: r.width, height: r.height }
 })()`
 
-/** 改名確認對話框是否開著。 */
-const CONFLICT_OPEN = `Boolean(document.querySelector('[aria-label="session 改名確認"]'))`
-
-/** 確認對話框中的按鈕 rect。 */
-const CONFLICT_BUTTON_RECT = (label) => `(() => {
-  const dialog = document.querySelector('[aria-label="session 改名確認"]')
-  if (!dialog) return null
-  const btn = [...dialog.querySelectorAll('button')].find((b) => b.innerText.includes(${JSON.stringify(label)}))
-  if (!btn) return null
-  const r = btn.getBoundingClientRect()
-  return { x: r.x, y: r.y, width: r.width, height: r.height }
-})()`
+/**
+ * **有任何對話框開著嗎？**
+ *
+ * 命名權的斷言（「pty 改名不打斷使用者」）是**否定**的，因此它必須問一個**開放**的問題：畫面上
+ * 有沒有**任何**對話框。若改問「那個確認對話框在不在」，它就綁死在一個特定元件的 `aria-label`
+ * 上 —— 而該元件已於 session-title-authority 刪除，那種寫法會恆為 false，成為一盞測不到自己
+ * 宣稱在測的東西的綠燈。
+ */
+const ANY_DIALOG_OPEN = `Boolean(document.querySelector('[role="dialog"]'))`
 
 const NEW_BUTTON_GAP = `(() => {
   const tabs = [...document.querySelectorAll('[aria-label="Session 分頁"] [role="tab"]')]
@@ -505,24 +502,6 @@ async function openTabMenu(client, index, attempts = 5) {
 async function typeLine(client, text) {
   await client.send('Input.insertText', { text })
   await pressEnter(client)
-}
-
-/**
- * 送一顆帶修飾鍵的按鍵。`modifiers` 是 CDP 的位元遮罩：Alt=1、Ctrl=2、Meta=4、Shift=8。
- *
- * **`rawKeyDown` 而非 `keyDown`**：帶修飾鍵而不產生文字的按鍵走的是 raw 事件；用 `keyDown`
- * 並附 `text` 會多出一個 char 事件（在終端上就是多打了一個字）。
- */
-async function pressKeyWithModifiers(client, spec, modifiers) {
-  const base = {
-    key: spec.key,
-    code: spec.code,
-    windowsVirtualKeyCode: spec.vk,
-    nativeVirtualKeyCode: spec.vk,
-    modifiers,
-  }
-  await client.send('Input.dispatchKeyEvent', { type: 'rawKeyDown', ...base })
-  await client.send('Input.dispatchKeyEvent', { type: 'keyUp', ...base })
 }
 
 /** Enter 必須是一次真的按鍵事件（見 `typeLine` 的註解）。對話框的送出也走這裡。 */
@@ -1020,22 +999,22 @@ async function runMode(label, { port, rendererUrl }) {
       `分頁=${JSON.stringify(renamedTabs)} rail=${JSON.stringify(renamedRail)}`,
     )
 
-    // ── 已命名的 login shell session：pty 送出標題時**不該**跳確認
+    // ── 已命名的 login shell session：pty 送出標題時**不該**跳任何對話框
     //
     // shell 根本不採用 pty 的標題（見上），因此「pty 想改名」這個情境對它不存在 —— 使用者不該
     // 被一個「pty 想把它改名為 kewang@host:/tmp/…，要採用嗎？」的對話框打斷，而那個名字他永遠
     // 看不到。**這是 design D4「擋在 setTitle() 而非顯示層」唯一測得出來的後果**：若只改顯示層，
-    // 標籤會是對的，但這個對話框照跳不誤。
+    // 標籤會是對的，但那個對話框照跳不誤。
     await realClick(app.client, terminalRect)
     await sleep(200)
     await typeLine(app.client, "printf '\\033]0;pty-wants-this\\007'")
     await sleep(1500) // 給對話框足夠的時間跳出來 —— 沒有這段等待，「沒跳」只是還沒跳
 
-    const noConflict = await app.client.evaluate(CONFLICT_OPEN)
+    const noConflict = await app.client.evaluate(ANY_DIALOG_OPEN)
     const labelAfterOsc = await app.client.evaluate(TAB_LABELS)
     check(
       results,
-      `${label}：已命名的 login shell session，pty 送出標題時不跳確認`,
+      `${label}：已命名的 login shell session，pty 送出標題時不跳對話框`,
       noConflict === false && labelAfterOsc[0]?.includes('my-session'),
       `對話框=${noConflict} 標籤=${JSON.stringify(labelAfterOsc)}`,
     )
@@ -1259,7 +1238,11 @@ async function runMode(label, { port, rendererUrl }) {
       JSON.stringify(claudeRail),
     )
 
-    // ── 命名權：使用者命名之後，pty 想改名必須先問過
+    // ── 命名權：使用者命名 ＝ **永久**接管，pty 其後的標題靜默不予呈現
+    //
+    // 這一段是 session-title-authority 的主場，**取代了原本「pty 想改名要先問過」那組斷言** ——
+    // 那個確認對話框已移除：`claude` 隨任務進展持續改標題，每次都問一遍就是無限打斷（第二次
+    // dogfooding 抓到的），而它問的又是一個答案可預測的問題（使用者才剛親手命名）。
     const claudeTab0 = center(await app.client.evaluate(TAB_RECT(0)))
     await realMouse(app.client, claudeTab0.x, claudeTab0.y, 'right')
     await pollUntil(app.client, MENU_IN_VIEWPORT, (value) => value !== null, 4000)
@@ -1284,109 +1267,52 @@ async function runMode(label, { port, rendererUrl }) {
     await realClick(app.client, claudeTermRect)
     await sleep(200)
 
-    // **兩個標題，中間隔 3 秒 —— 一次打完。**
+    // **兩個標題，一次打完：先送「同一個」，再送一個「不同的」。**
     //
-    // 第二個標題必須在**對話框已經開著**的時候抵達，才驗得到「待確認的標題至多一個」。而對話框
-    // 是 modal overlay：它蓋在終端上面，這時候點終端會點到 overlay，`insertText` 也進不了 pty
-    // —— **對話框開著時根本打不了字**。但 pty 不受 UI 焦點影響，它會照自己的節奏把第二個標題吐
-    // 出來。所以要在對話框跳出**之前**就把整條命令送進去。
-    await typeLine(app.client, "printf '\\033]0;pty-wants-this\\007'; sleep 3; printf '\\033]0;pty-supersedes\\007'")
-
-    const claudeConflict = await pollUntil(app.client, CONFLICT_OPEN, (value) => value === true, 8000)
-    const claudeLabelDuring = await app.client.evaluate(TAB_LABELS)
-    check(
-      results,
-      `${label}：手動命名後 pty 改名會跳確認，且標籤尚未被覆蓋`,
-      claudeConflict === true && claudeLabelDuring[0]?.includes('my-claude'),
-      `對話框=${claudeConflict} 標籤=${JSON.stringify(claudeLabelDuring)}`,
-    )
-
-    // 待確認的標題**至多一個**：確認尚未裁決時 pty 又改名，新標題**取代**原本待確認的那個，
-    // 不堆出第二個對話框（`claude` 改標題很頻繁，堆疊 N 個會把畫面淹掉）。
+    // 第一個 `claude-osc-title` 正是 pty 先前宣告過、使用者命名前看到的那個 —— 使用者回報的情境
+    // 就是「改名成 b 之後，claude 一直要改回 a」。**舊實作連這個都會再問一次**：「與待裁決的標題
+    // 相同就不問」那條短路，在使用者按下「保留我的名字」的瞬間就失效了（待裁決欄位已被清空）。
     //
-    // 斷言**成對**：對話框仍只有一個，**且它顯示的是新標題** —— 只數「一個」的話，一個「後來的
-    // 標題被整個丟掉」的實作也會通過。
-    const superseded = await pollUntil(
+    // 第二個 `pty-later` 是一個貨真價實的新標題 —— 它同時是下面那個對照組的錨。
+    await typeLine(
       app.client,
-      `(() => {
-        const dialogs = [...document.querySelectorAll('[aria-label="session 改名確認"]')]
-        return { count: dialogs.length, text: dialogs.map((d) => d.innerText).join(' ') }
-      })()`,
-      (value) => value.text.includes('pty-supersedes'),
-      10_000,
+      "printf '\\033]0;claude-osc-title\\007'; sleep 1; printf '\\033]0;pty-later\\007'",
     )
+    await sleep(3000) // 讓兩個標題都抵達，並給任何對話框足夠的時間跳出來
+
+    const noDialogWhileOwned = await app.client.evaluate(ANY_DIALOG_OPEN)
+    const labelWhileOwned = await app.client.evaluate(TAB_LABELS)
     check(
       results,
-      `${label}：待確認的標題至多一個，且被最新的標題取代`,
-      superseded.count === 1 && superseded.text.includes('pty-supersedes'),
-      `對話框數=${superseded.count} 內容含新標題=${superseded.text.includes('pty-supersedes')}`,
+      `${label}：手動命名後 pty 反覆宣告標題，不跳任何對話框且標籤不變`,
+      noDialogWhileOwned === false && labelWhileOwned[0]?.includes('my-claude'),
+      `對話框=${noDialogWhileOwned} 標籤=${JSON.stringify(labelWhileOwned)}`,
     )
 
-    // 標題衝突的對話框開著時，導航快捷鍵必須讓位 —— 它正在等使用者的鍵盤裁決。
+    // ── 清空名稱 ＝ 交還命名權，標籤**立即**回到 pty 最近宣告的標題
     //
-    // 這是第三種對話框（另兩種：session 命名、files 的對話框，由 probe:keyboard 涵蓋）。
-    // **三種都要驗**：抑制是以 `[role="dialog"]` 的存在判定的，而那條慣例只要有一種對話框漏掉
-    // 就會靜默失效 —— 只驗一種就宣稱涵蓋，等於沒驗。
-    await pressKeyWithModifiers(app.client, { key: 'Tab', code: 'Tab', vk: 9 }, 2 /* Ctrl */)
-    await sleep(400)
-    const conflictStillOpen = await app.client.evaluate(CONFLICT_OPEN)
-    const labelDuringSuppression = await app.client.evaluate(TAB_LABELS)
-    check(
-      results,
-      `${label}：標題衝突對話框開啟時，導航快捷鍵不生效`,
-      conflictStillOpen === true && labelDuringSuppression[0]?.includes('my-claude'),
-      `對話框=${conflictStillOpen} 標籤=${JSON.stringify(labelDuringSuppression)}`,
-    )
+    // **這一條同時是上面那條的對照組 —— 少了它，上面就是假綠。** 「沒有對話框」是一個否定斷言：
+    // stub 若根本沒把那兩個 OSC 標題送出去（PATH 沒接好、shell 沒起來、命令沒執行），它一樣會
+    // 通過。而標籤在清空的瞬間變成 `pty-later`，證明了兩件事：那些標題**真的抵達了** `setTitle()`
+    //（於是「沒跳對話框」是真的沒跳，不是根本沒送）；以及接管期間 pty 的標題**持續被記錄**，
+    // 交還是即時的，不必空等 pty 下一次宣告（design D3）。
+    await openTabMenu(app.client, 0)
+    await realClick(app.client, await app.client.evaluate(MENU_ITEM_RECT('重新命名')))
+    await sleep(300)
+    await app.client.send('Input.insertText', { text: '' }) // 輸入框已全選 —— 送出空字串＝清空
+    await pressEnter(app.client)
 
-    // 保留我的名字 → 標籤不動
-    await realClick(app.client, await app.client.evaluate(CONFLICT_BUTTON_RECT('保留我的名字')))
-    await pollUntil(app.client, CONFLICT_OPEN, (value) => value === false, 4000)
-    const claudeAfterKeep = await app.client.evaluate(TAB_LABELS)
-    check(
-      results,
-      `${label}：選「保留我的名字」後標籤維持使用者取的名字`,
-      claudeAfterKeep[0]?.includes('my-claude'),
-      JSON.stringify(claudeAfterKeep),
-    )
-
-    // 再送一次不同的標題 → 應該**再問一次**
-    await realClick(app.client, claudeTermRect)
-    await sleep(200)
-    await typeLine(app.client, "printf '\\033]0;pty-again\\007'")
-    const claudeConflictAgain = await pollUntil(app.client, CONFLICT_OPEN, (value) => value === true, 8000)
-    check(results, `${label}：pty 再次改名時再次請求確認`, claudeConflictAgain === true)
-
-    // 採用它的名稱 → 命名權交還 pty
-    await realClick(app.client, await app.client.evaluate(CONFLICT_BUTTON_RECT('採用它的名稱')))
-    const claudeAfterAccept = await pollUntil(
+    const handedBack = await pollUntil(
       app.client,
       TAB_LABELS,
-      (value) => value[0]?.includes('pty-again'),
+      (value) => value[0]?.includes('pty-later'),
       6000,
     )
     check(
       results,
-      `${label}：選「採用它的名稱」後標籤改為 pty 的標題`,
-      claudeAfterAccept[0]?.includes('pty-again'),
-      JSON.stringify(claudeAfterAccept),
-    )
-
-    // 命名權已交還 —— 此後 pty 改名不該再跳確認
-    await realClick(app.client, claudeTermRect)
-    await sleep(200)
-    await typeLine(app.client, "printf '\\033]0;pty-third\\007'")
-    const claudeHandback = await pollUntil(
-      app.client,
-      TAB_LABELS,
-      (value) => value[0]?.includes('pty-third'),
-      8000,
-    )
-    const claudeNoDialog = await app.client.evaluate(CONFLICT_OPEN)
-    check(
-      results,
-      `${label}：命名權交還後 pty 的改名不再需要確認`,
-      claudeHandback[0]?.includes('pty-third') && claudeNoDialog === false,
-      `標籤=${JSON.stringify(claudeHandback)} 對話框=${claudeNoDialog}`,
+      `${label}：清空名稱後標籤立即變為 pty 於接管期間最近宣告的標題`,
+      handedBack[0]?.includes('pty-later'),
+      JSON.stringify(handedBack),
     )
 
     // ── 過長的標題被截斷，但完整標題不遺失（tooltip 拿得到）
@@ -1418,37 +1344,8 @@ async function runMode(label, { port, rendererUrl }) {
       `標籤=${truncated?.label} 提示=${String(truncated?.title).slice(0, 70)}`,
     )
 
-    // ── 清空名稱 ＝ 放棄命名權
+    // ── 清空名稱 ＝ 交還命名權（claude 的往返已於上面的對照組驗過）
     //
-    // claude session：回到**跟隨 pty 宣告的標題**（此刻是那個過長的標題）。
-    await openTabMenu(app.client, 0)
-    await realClick(app.client, await app.client.evaluate(MENU_ITEM_RECT('重新命名')))
-    await sleep(300)
-    await app.client.send('Input.insertText', { text: 'temp-name' })
-    await pressEnter(app.client)
-    await pollUntil(app.client, TAB_LABELS, (value) => value[0]?.includes('temp-name'), 6000)
-
-    // 改名把標籤從那串超長標題縮成 `temp-name`，分頁寬度因此劇變 —— 上面量到的座標已經過期，
-    // 必須重新量測（`openTabMenu` 每次都重量，並確認選單真的開了）。
-    await openTabMenu(app.client, 0)
-    await realClick(app.client, await app.client.evaluate(MENU_ITEM_RECT('重新命名')))
-    await sleep(300)
-    await app.client.send('Input.insertText', { text: '' }) // 輸入框已全選 —— 送出空字串＝清空
-    await pressEnter(app.client)
-
-    const clearedClaude = await pollUntil(
-      app.client,
-      TAB_LABELS,
-      (value) => !value[0]?.includes('temp-name'),
-      6000,
-    )
-    check(
-      results,
-      `${label}：claude session 清空名稱後回到跟隨 pty 宣告的標題`,
-      !clearedClaude[0]?.includes('temp-name') && clearedClaude[0]?.includes('…'),
-      JSON.stringify(clearedClaude),
-    )
-
     // login shell 的 session：回到**本地標籤**，即使它的 pty 曾宣告過標題（那些標題一律被丟棄）。
     await openSessionViaMenu(app.client, '進 login shell')
     await pollUntil(app.client, TABS, (value) => value.length === 2, 8000)

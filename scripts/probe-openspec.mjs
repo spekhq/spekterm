@@ -449,6 +449,12 @@ const OVERLAY = `(() => {
   }
 })()`
 
+/** 當前選中的 repo —— 主舞台的 header 第一行就是它。 */
+const SELECTED_FOLDER = `(() => {
+  const header = document.querySelector('main[aria-label="主舞台"] header')
+  return header ? header.innerText.split('\\n')[0].trim() : null
+})()`
+
 /** 力導向圖的節點：spec 是 circle、change 是 rect。 */
 const GRAPH_NODES = `(() => {
   const dialog = document.querySelector('[role="dialog"]')
@@ -671,6 +677,24 @@ async function pressEscape(client) {
 }
 
 /**
+ * `Ctrl+↓`（rail 上的下一個 repo）。
+ *
+ * **`rawKeyDown` 而非 `keyDown`**：帶修飾鍵而不產生文字的按鍵走的是 raw 事件；用 `keyDown`
+ * 並附 `text` 會多出一個 char 事件（在終端上就是多打了一個字）。
+ */
+async function pressCtrlArrowDown(client) {
+  const key = {
+    key: 'ArrowDown',
+    code: 'ArrowDown',
+    windowsVirtualKeyCode: 40,
+    nativeVirtualKeyCode: 40,
+    modifiers: 2 /* Ctrl */,
+  }
+  await client.send('Input.dispatchKeyEvent', { type: 'rawKeyDown', ...key })
+  await client.send('Input.dispatchKeyEvent', { type: 'keyUp', ...key })
+}
+
+/**
  * 送一行指令給終端。
  *
  * **Enter 必須是一次真的按鍵事件** —— 把 `\r` 併進 `Input.insertText` 的文字裡，字元會抵達 pty
@@ -883,6 +907,32 @@ async function runMode(label, { port, rendererUrl }) {
     // Graph 與 Timeline 來自 @spekjs/ui（與 spek web 同一份程式碼）。這裡驗的是**宿主的接線**：
     // overlay 真的蓋滿視窗、顏色契約真的接上、選一個 change 真的錨定。
     console.log('\n全視窗 overlay：Graph')
+
+    // **對照組：這顆 `Ctrl+↓` 在沒有 overlay 時，真的切得動 repo。**
+    //
+    // 下面那條「overlay 開著時導航快捷鍵不生效」是一條**否定**斷言 —— 若這支探針送出的按鍵根本
+    // 沒抵達 renderer（事件型別錯、修飾鍵沒帶上、焦點不對），repo 當然不會變，它照樣全綠。
+    // **先證明這顆按鍵是活的，那條斷言才有意義。**（同 probe:terminal 的「沒有對話框」與「清空
+    // 名稱後標籤立即改變」那一對。）
+    const folderBase = await app.client.evaluate(SELECTED_FOLDER)
+    await pressCtrlArrowDown(app.client)
+    const folderSwitched = await pollUntil(
+      app.client,
+      SELECTED_FOLDER,
+      (value) => value !== folderBase,
+      4000,
+    )
+    check(
+      results,
+      'Ctrl+↓ 在無 overlay 時確實切換 repo（下方抑制斷言的對照組）',
+      folderSwitched !== folderBase,
+      `${folderBase} → ${folderSwitched}`,
+    )
+
+    // 切回來 —— 後面的斷言都以 repo-single 為準。
+    await app.client.evaluate(SELECT_FOLDER('repo-single'))
+    await pollUntil(app.client, SELECTED_FOLDER, (value) => value?.includes('repo-single'), 6000)
+
     check(results, '自側欄開啟 Graph', (await app.client.evaluate(CLICK_OPEN_VIZ('Graph'))) === true)
     const graphOverlay = await pollUntil(app.client, OVERLAY, (value) => value !== null, 10_000)
     check(results, 'Graph 於 overlay 中呈現', graphOverlay?.label === 'Graph', JSON.stringify(graphOverlay))
@@ -908,6 +958,32 @@ async function runMode(label, { port, rendererUrl }) {
       '@spekjs/ui 的顏色契約接到我們的主題色',
       Boolean(themeVars.accent) && themeVars.accent === themeVars.ours,
       JSON.stringify(themeVars),
+    )
+
+    // ── overlay 開著時，導航快捷鍵必須讓位（session-title-authority 的 design D4）
+    //
+    // overlay 蓋滿整個視窗 —— 這時候按 `Ctrl+↓` 切到別的 repo，切了也看不見，而使用者關掉
+    // overlay 之後會發現自己莫名其妙站在另一個 repo 上。抑制是以 `[role="dialog"]` 的存在判定
+    // 的（與對話框的身分無關），overlay 帶著那個角色，因此**理應**已被涵蓋 —— 但在此之前**從未
+    // 被驗證過**。
+    //
+    // **這條是本 change 的淨得。** 它取代了原本以「pty 標題衝突對話框」為載體的那條抑制驗收
+    //（該對話框已移除）。三種載體（session 命名、files 的對話框、這個 overlay）必須各驗一次：
+    // 抑制邏輯的失效模式不是判定寫錯，而是**某個對話框漏了 role="dialog"，於是靜默地不被尊重**
+    // —— 只驗一種就宣稱涵蓋，等於沒驗。
+    //
+    // fixture 有四個 folder，因此「folder 沒變」不是一條恆真的斷言 —— 快捷鍵若真的生效了，它
+    // **有地方可去**。而「這顆按鍵本身是活的」則由上面的對照組證明。
+    const folderBeforeKey = await app.client.evaluate(SELECTED_FOLDER)
+    await pressCtrlArrowDown(app.client)
+    await sleep(500)
+    const folderAfterKey = await app.client.evaluate(SELECTED_FOLDER)
+    const overlayAfterKey = await app.client.evaluate(OVERLAY)
+    check(
+      results,
+      'overlay 開啟時，導航快捷鍵不生效（overlay 仍開著、repo 未被切走）',
+      folderAfterKey === folderBeforeKey && overlayAfterKey !== null,
+      `repo：${folderBeforeKey} → ${folderAfterKey}；overlay=${overlayAfterKey?.label ?? 'null'}`,
     )
 
     // 力導向圖是動的 —— 等它停下來再量節點位置。

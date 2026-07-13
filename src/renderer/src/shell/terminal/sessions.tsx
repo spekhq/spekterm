@@ -16,23 +16,27 @@ export interface SessionState {
    *
    * session 的身分由**跑在裡面的東西**宣告（`claude` 會主動送這個），而不是由我們的流水號
    * 決定。未設定時為 `undefined`，標籤退回 `${spawnTarget} ${ordinal}`。
+   *
+   * **它恆被記錄，即使使用者已接管命名權**（此時它只是不被呈現）—— 於是使用者清空名稱、
+   * 交還命名權的那一刻，標籤能**立即**回到 pty 最近一次宣告的標題，而不必空等它下一次宣告
+   *（那可能是好幾分鐘後，session 閒置的話甚至永遠不會來）。「清空名稱」是交還命名權的唯一
+   * 路徑，它必須即時且確定（session-title-authority 的 design D3）。
    */
   title?: string
   /**
    * 使用者親自取的名字。**優先於 pty 宣告的標題。**
    *
-   * 一旦設定，就代表使用者**接管了這個 session 的命名權** —— 此後 pty 想改名必須先經過
-   * 確認（見 `pendingTitle`），不得靜默覆蓋。
+   * 一旦設定，就代表使用者**永久接管了這個 session 的命名權** —— 此後 pty 宣告的標題一律
+   * 靜默地不予呈現：不覆蓋、不確認、不提示。**連 pty 反覆宣告同一個標題也一樣。**
+   *
+   * 這裡曾經有一個確認對話框（「pty 想改名，要採用嗎？」），已於 session-title-authority
+   * 移除：`claude` 隨任務進展**持續**改標題，那個對話框於是無限重跳（第二次 dogfooding 抓到）；
+   * 而它問的又是一個答案可預測的問題 —— 使用者才剛親手命名，當然是保留自己的。**「使用者指定
+   * 的名稱 > pty 宣告的標題」這條優先序本身就已經是那個裁決**，不需要再問第二次（design D1）。
+   *
+   * 交還命名權：把名字清空（見 `rename`）。
    */
   customTitle?: string
-  /**
-   * pty 想改成、但**尚未被使用者裁決**的名字。
-   *
-   * 只有在使用者已接管命名權（`customTitle` 存在）時才會出現。**它是單一欄位而非佇列**：
-   * pty 在確認尚未裁決時又送新標題，只會取代它 —— `claude` 改標題很頻繁，堆疊出 N 個
-   * 對話框會把畫面淹掉，而使用者真正關心的只有「它現在想叫什麼」（design D2）。
-   */
-  pendingTitle?: string
   /**
    * 這個 session 正在做的 change。側欄的「本 change」視圖跟著它走。
    *
@@ -81,16 +85,14 @@ export interface SessionsApi {
   /** 該 session 錨定的 change。 */
   anchoredChangeOf(sessionId: string | null): string | null
   close(sessionId: string): void
-  /** pty 宣告的終端標題。空字串視為未設定。使用者已接管命名權時，改為待裁決而不覆蓋。 */
+  /**
+   * pty 宣告的終端標題。空字串視為未設定。
+   *
+   * 使用者已接管命名權時**照樣記錄，只是不呈現** —— 不覆蓋、不確認、不打斷（design D1／D3）。
+   */
   setTitle(sessionId: string, title: string): void
-  /** 使用者親自命名。空字串＝放棄命名權，回到跟隨 pty。 */
+  /** 使用者親自命名（＝永久接管命名權）。空字串＝交還命名權，回到跟隨 pty。 */
   rename(sessionId: string, name: string): void
-  /** 採用 pty 想改的名字 —— 命名權交還 pty，此後不再詢問。 */
-  acceptPendingTitle(sessionId: string): void
-  /** 保留使用者取的名字，忽略這次 pty 的標題（下次它再改名會再問一次）。 */
-  keepCustomTitle(sessionId: string): void
-  /** 該 folder 中有待裁決標題的 session（同時至多一個對話框）。 */
-  pendingFor(folderId: string): SessionState | null
   /** 重排同一個 folder 之內的 session 順序。索引是該 folder 之內的序位。 */
   reorder(folderId: string, fromIndex: number, toIndex: number): void
   /**
@@ -238,22 +240,19 @@ export function SessionsProvider({ children }: { children: React.ReactNode }): R
       // 游標底下跳走。`claude` 宣告的標題則相反：短、且正是我們要的身分。
       //
       // **擋在這裡，而不是擋在顯示層**（session-navigation-and-labels 的 design D4）：這是 OSC
-      // 標題進入 session 狀態的唯一入口，於是 `title` 恆為 undefined，標籤自然退回本地標籤，
-      // 而 `pendingTitle` 也永遠不會被設 —— 連帶讓「pty 想改名」的確認對話框對 shell session
-      // 失去觸發條件。若只改顯示層，使用者仍會被一個「pty 想把它改名為 kewang@host:/tmp/…，
-      // 要採用嗎？」的對話框打斷，而那個名字他根本永遠看不到。
+      // 標題進入 session 狀態的唯一入口，於是 shell session 的 `title` 恆為 undefined —— 標籤
+      // 自然退回本地標籤，而「清空名稱後回到本地標籤（即使 pty 曾宣告過標題）」也自然成立，
+      // 顯示層與 `rename` 都不必為 spawn 目標特判。
       if (target.spawnTarget === 'shell') return previous
 
-      // 使用者已接管命名權 —— pty 的標題**不得靜默覆蓋**，改為待裁決（design D2）。
-      if (target.customTitle !== undefined) {
-        // 與使用者取的名字相同、或與已在等待裁決的相同，就沒什麼好問的。
-        if (next === undefined || next === target.customTitle || next === target.pendingTitle) {
-          return previous
-        }
-        return previous.map((session) =>
-          session.id === sessionId ? { ...session, pendingTitle: next } : session,
-        )
-      }
+      // **使用者已接管命名權時，標題照樣記錄下來 —— 只是不被呈現。**
+      //
+      // 這裡不做任何裁決：不覆蓋（標籤的優先序自然讓 `customTitle` 贏），也不呈現確認。`claude`
+      // 隨任務進展持續改標題，每次都問一遍就是無限打斷，而那個問題的答案又是可預測的 —— 使用者
+      // 才剛親手命名（design D1）。
+      //
+      // **記錄而不丟棄**是有目的的：使用者清空名稱交還命名權時，標籤要能立即回到 pty 最近一次
+      // 宣告的標題，不必空等它下一次宣告（design D3）。
 
       // agent 可能反覆送同一個標題 —— 值沒變就不要製造新的陣列（否則每次都重繪整棵樹）。
       if (target.title === next) return previous
@@ -270,33 +269,10 @@ export function SessionsProvider({ children }: { children: React.ReactNode }): R
     setSessions((previous) =>
       previous.map((session) =>
         session.id === sessionId
-          ? // 清空＝放棄命名權，回到跟隨 pty；連帶把待裁決的也清掉（已無意義）。
-            { ...session, customTitle: next, pendingTitle: undefined }
+          ? // 清空＝交還命名權，標籤回到跟隨 pty。`title` 一直都在記錄（見 `setTitle`），
+            // 所以這一刻標籤立即變成 pty 最近宣告的標題，不必等它下一次宣告。
+            { ...session, customTitle: next }
           : session,
-      ),
-    )
-  }, [])
-
-  const acceptPendingTitle = useCallback((sessionId: string) => {
-    setSessions((previous) =>
-      previous.map((session) =>
-        session.id === sessionId
-          ? // 命名權交還 pty —— customTitle 清掉之後，它之後的改名就不再需要確認。
-            {
-              ...session,
-              title: session.pendingTitle,
-              customTitle: undefined,
-              pendingTitle: undefined,
-            }
-          : session,
-      ),
-    )
-  }, [])
-
-  const keepCustomTitle = useCallback((sessionId: string) => {
-    setSessions((previous) =>
-      previous.map((session) =>
-        session.id === sessionId ? { ...session, pendingTitle: undefined } : session,
       ),
     )
   }, [])
@@ -349,10 +325,6 @@ export function SessionsProvider({ children }: { children: React.ReactNode }): R
         if (explicit && sessions.some((session) => session.id === explicit)) return explicit
         return sessions.find((session) => session.folderId === folderId)?.id ?? null
       },
-      pendingFor: (folderId) =>
-        sessions.find(
-          (session) => session.folderId === folderId && session.pendingTitle !== undefined,
-        ) ?? null,
       anchoredChangeOf: (sessionId) =>
         sessionId === null
           ? null
@@ -362,26 +334,11 @@ export function SessionsProvider({ children }: { children: React.ReactNode }): R
       close,
       setTitle,
       rename,
-      acceptPendingTitle,
-      keepCustomTitle,
       anchorChange,
       reorder,
       attach,
     }),
-    [
-      sessions,
-      focused,
-      focus,
-      create,
-      close,
-      setTitle,
-      rename,
-      acceptPendingTitle,
-      keepCustomTitle,
-      anchorChange,
-      reorder,
-      attach,
-    ],
+    [sessions, focused, focus, create, close, setTitle, rename, anchorChange, reorder, attach],
   )
 
   return <SessionsContext.Provider value={api}>{children}</SessionsContext.Provider>

@@ -7,7 +7,6 @@ import { PanelSwitch } from './side-panel/PanelSwitch'
 import { SidePanel } from './side-panel/SidePanel'
 import { SessionTabs } from './terminal/SessionTabs'
 import { TerminalView } from './terminal/TerminalView'
-import { TitleConflictDialog } from './terminal/TitleConflictDialog'
 import { useSessions } from './terminal/sessions'
 import type { PanelIdentity, SpawnTarget, WorkspaceFolder } from './types'
 
@@ -82,8 +81,6 @@ export function MainStage({ folder }: MainStageProps): React.JSX.Element {
 
   const folderSessions = folder ? sessions.forFolder(folder.id) : []
   const focusedId = folder ? sessions.focusedIdFor(folder.id) : null
-  // 使用者取了名字、而 pty 想改成別的 —— 由他裁決。同時至多一個（design D2）。
-  const pending = folder ? sessions.pendingFor(folder.id) : null
 
   // 新 session 的初始錨定：該 folder **恰有一個** active change 時錨定它，否則留空。
   // 多個候選之間不猜 —— 猜錯的側欄比沒有側欄更糟（design D3）。
@@ -242,14 +239,6 @@ export function MainStage({ folder }: MainStageProps): React.JSX.Element {
               <div className="flex h-full items-center justify-center text-sm text-ink-faint">
                 {folder ? '以 + session 開一個終端' : '尚未選擇 repo'}
               </div>
-            )}
-
-            {pending && (
-              <TitleConflictDialog
-                session={pending}
-                onAccept={() => sessions.acceptPendingTitle(pending.id)}
-                onKeep={() => sessions.keepCustomTitle(pending.id)}
-              />
             )}
           </section>
         </Panel>
