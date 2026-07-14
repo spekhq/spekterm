@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next'
 import type { PanelIdentity } from '../types'
 
 interface PanelSwitchProps {
@@ -58,32 +59,32 @@ export function PanelSwitch({
   openSpecEnabled,
   onSelect,
 }: PanelSwitchProps): React.JSX.Element {
+  const { t } = useTranslation()
+
   return (
     <div
       role="tablist"
-      aria-label="side panel 身分切換"
+      aria-label={t('panelSwitch.label')}
       className="flex items-center gap-[2px] rounded border border-hairline p-[2px]"
     >
       <Tab
         identity="openspec"
-        label="OpenSpec"
+        label={t('panelSwitch.openSpec')}
         icon="◈"
         active={active === 'openspec'}
         disabled={!openSpecEnabled}
         title={
-          openSpecEnabled
-            ? 'OpenSpec：這個 repo 的 spec 與 change'
-            : '這個 repo 沒有 openspec/，只能使用 Files 身分'
+          openSpecEnabled ? t('panelSwitch.openSpecTooltip') : t('panelSwitch.openSpecDisabled')
         }
         onSelect={onSelect}
       />
       <Tab
         identity="files"
-        label="Files"
+        label={t('panelSwitch.files')}
         icon="▤"
         active={active === 'files'}
         disabled={false}
-        title="Files：這個 repo 的檔案樹"
+        title={t('panelSwitch.filesTooltip')}
         onSelect={onSelect}
       />
     </div>

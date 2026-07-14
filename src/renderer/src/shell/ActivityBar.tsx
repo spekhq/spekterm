@@ -1,3 +1,5 @@
+import { useTranslation } from 'react-i18next'
+
 const ICON_PROPS = {
   viewBox: '0 0 24 24',
   fill: 'none',
@@ -8,7 +10,8 @@ const ICON_PROPS = {
 
 interface ActivityItem {
   id: string
-  label: string
+  /** 文案在渲染時才自字典取出 —— 這是模組層級的常數，那時 `t` 尚未初始化。 */
+  labelKey: 'activityBar.sessions' | 'activityBar.handoffs' | 'activityBar.search' | 'activityBar.settings'
   enabled: boolean
   icon: React.JSX.Element
   atBottom?: boolean
@@ -21,7 +24,7 @@ interface ActivityItem {
 const ITEMS: ActivityItem[] = [
   {
     id: 'sessions',
-    label: 'Sessions',
+    labelKey: 'activityBar.sessions',
     enabled: true,
     icon: (
       <svg {...ICON_PROPS}>
@@ -34,7 +37,7 @@ const ITEMS: ActivityItem[] = [
   },
   {
     id: 'handoffs',
-    label: 'Handoffs',
+    labelKey: 'activityBar.handoffs',
     enabled: false,
     icon: (
       <svg {...ICON_PROPS}>
@@ -45,7 +48,7 @@ const ITEMS: ActivityItem[] = [
   },
   {
     id: 'search',
-    label: '搜尋',
+    labelKey: 'activityBar.search',
     enabled: false,
     icon: (
       <svg {...ICON_PROPS}>
@@ -56,7 +59,7 @@ const ITEMS: ActivityItem[] = [
   },
   {
     id: 'settings',
-    label: '設定',
+    labelKey: 'activityBar.settings',
     enabled: false,
     atBottom: true,
     icon: (
@@ -69,30 +72,36 @@ const ITEMS: ActivityItem[] = [
 ]
 
 export function ActivityBar(): React.JSX.Element {
+  const { t } = useTranslation()
+
   return (
     <nav
-      aria-label="活動列"
+      aria-label={t('activityBar.label')}
       className="flex h-full flex-col items-center gap-1 bg-shell px-2 py-3"
     >
-      {ITEMS.map((item) => (
-        <div key={item.id} className={item.atBottom ? 'mt-auto' : undefined}>
-          <button
-            type="button"
-            disabled={!item.enabled}
-            aria-current={item.enabled ? 'page' : undefined}
-            title={item.enabled ? item.label : `${item.label} — 尚未可用，規劃於後續 Phase`}
-            className={
-              'flex h-9 w-9 items-center justify-center rounded-md transition-colors ' +
-              (item.enabled
-                ? 'bg-accent/10 text-accent'
-                : 'text-ink-faint opacity-40 hover:bg-transparent')
-            }
-          >
-            {item.icon}
-            <span className="sr-only">{item.label}</span>
-          </button>
-        </div>
-      ))}
+      {ITEMS.map((item) => {
+        const label = t(item.labelKey)
+
+        return (
+          <div key={item.id} className={item.atBottom ? 'mt-auto' : undefined}>
+            <button
+              type="button"
+              disabled={!item.enabled}
+              aria-current={item.enabled ? 'page' : undefined}
+              title={item.enabled ? label : t('activityBar.comingSoon', { label })}
+              className={
+                'flex h-9 w-9 items-center justify-center rounded-md transition-colors ' +
+                (item.enabled
+                  ? 'bg-accent/10 text-accent'
+                  : 'text-ink-faint opacity-40 hover:bg-transparent')
+              }
+            >
+              {item.icon}
+              <span className="sr-only">{label}</span>
+            </button>
+          </div>
+        )
+      })}
     </nav>
   )
 }

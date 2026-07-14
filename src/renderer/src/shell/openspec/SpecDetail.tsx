@@ -1,6 +1,7 @@
 import { MarkdownView } from '../files/MarkdownView'
 import { useSpec } from './data'
 import { ErrorNote, Loading } from './ui'
+import { useTranslation } from 'react-i18next'
 
 interface SpecDetailProps {
   folderId: string
@@ -21,6 +22,8 @@ export function SpecDetail({
   onBack,
   onOpenFile,
 }: SpecDetailProps): React.JSX.Element {
+  const { t } = useTranslation()
+
   const { data, loading, error } = useSpec(folderId, topic)
 
   return (
@@ -31,15 +34,15 @@ export function SpecDetail({
           onClick={onBack}
           className="rounded border border-hairline px-2 py-[2px] text-xs text-ink-dim hover:text-accent"
         >
-          ‹ 返回
+          {t('common.back')}
         </button>
         <span className="flex-1" />
         {data?.relPath && (
           <button
             type="button"
             onClick={() => onOpenFile(data.relPath as string)}
-            aria-label={`在 Files 中開啟 ${data.relPath}`}
-            title={`在 Files 中開啟 ${data.relPath}`}
+            aria-label={t('openspec.openInFiles', { path: data.relPath })}
+            title={t('openspec.openInFiles', { path: data.relPath })}
             className="shrink-0 rounded border border-hairline px-[6px] py-[2px] text-2xs text-ink-faint hover:border-accent hover:text-accent"
           >
             ▤
@@ -57,7 +60,7 @@ export function SpecDetail({
             <MarkdownView text={data.content} />
             {data.relatedChanges.length > 0 && (
               <p className="mt-4 border-t border-hairline pt-3 text-xs text-ink-faint">
-                動到這份 spec 的 change：{data.relatedChanges.join('、')}
+                {t('openspec.relatedChanges', { changes: data.relatedChanges.join(', ') })}
               </p>
             )}
           </>

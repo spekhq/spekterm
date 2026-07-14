@@ -22,6 +22,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { check, connect, pollUntil, waitForPageTarget } from './lib/cdp.mjs'
+import { copy, suffixOf } from './lib/copy.mjs'
 
 const BUILD_PORT = 9228
 const DEV_PORT = 9229
@@ -203,7 +204,7 @@ function seedProfile(folders) {
 // ── app 啟動 ────────────────────────────────────────────────────────────────
 
 const MOUNTED = `Boolean(
-  document.querySelector('aside[aria-label="工作區"]') &&
+  document.querySelector('aside[aria-label="${copy('rail.label')}"]') &&
   document.getElementById('root')?.children.length &&
   document.visibilityState === 'visible'
 )`
@@ -285,7 +286,7 @@ async function launch({ port, profileDir, rendererUrl, stub }) {
 // ── renderer 內的量測（一律以 role / aria-label 選取，不掛 data-*）───────────
 
 const SELECT_FOLDER = (name) => `(() => {
-  const row = [...document.querySelectorAll('aside[aria-label="工作區"] div[role="button"]')]
+  const row = [...document.querySelectorAll('aside[aria-label="${copy('rail.label')}"] div[role="button"]')]
     .find((el) => el.innerText.includes(${JSON.stringify(name)}))
   if (!row) return false
   row.click()
@@ -293,14 +294,14 @@ const SELECT_FOLDER = (name) => `(() => {
 })()`
 
 const IDENTITY = `(() => {
-  if (document.querySelector('section[aria-label="Files"]')) return 'files'
-  if (document.querySelector('section[aria-label="OpenSpec"]')) return 'openspec'
+  if (document.querySelector('section[aria-label="${copy('files.label')}"]')) return 'files'
+  if (document.querySelector('section[aria-label="${copy('openspec.label')}"]')) return 'openspec'
   return null
 })()`
 
 // 這個 app 現在有四個 tablist（身分切換／OpenSpec 視圖／change artifact／session 分頁）。
 // **每一個選擇器都必須連 aria-label 一起指名**，否則會抓成一團。
-const SWITCH = '[role="tablist"][aria-label="side panel 身分切換"]'
+const SWITCH = `[role="tablist"][aria-label="${copy('panelSwitch.label')}"]`
 
 const CLICK_IDENTITY = (icon) => `(() => {
   const tab = [...document.querySelectorAll('${SWITCH} button[role="tab"]')]
@@ -310,11 +311,11 @@ const CLICK_IDENTITY = (icon) => `(() => {
   return true
 })()`
 
-const VIEW_TABS = `[...document.querySelectorAll('[role="tablist"][aria-label="OpenSpec 視圖"] button[role="tab"]')]
+const VIEW_TABS = `[...document.querySelectorAll('[role="tablist"][aria-label="${copy('openspec.views')}"] button[role="tab"]')]
   .map((tab) => ({ label: tab.innerText.trim(), selected: tab.getAttribute('aria-selected') === 'true' }))`
 
 const CLICK_VIEW = (label) => `(() => {
-  const tab = [...document.querySelectorAll('[role="tablist"][aria-label="OpenSpec 視圖"] button[role="tab"]')]
+  const tab = [...document.querySelectorAll('[role="tablist"][aria-label="${copy('openspec.views')}"] button[role="tab"]')]
     .find((el) => el.innerText.trim() === ${JSON.stringify(label)})
   if (!tab) return false
   tab.click()
@@ -323,64 +324,64 @@ const CLICK_VIEW = (label) => `(() => {
 
 /** 側欄同時只顯示一個視圖 —— 以各視圖的標誌性 landmark 判定。 */
 const VISIBLE_VIEWS = `[
-  document.querySelector('[role="tablist"][aria-label="Change artifact"]') ? 'change' : null,
-  document.querySelector('section[aria-label="Specs"]') ? 'browse' : null,
+  document.querySelector('[role="tablist"][aria-label="${copy('openspec.changeArtifact')}"]') ? 'change' : null,
+  document.querySelector('section[aria-label="${copy('openspec.specs')}"]') ? 'browse' : null,
 ].filter(Boolean)`
 
 /** 「本 change」視圖顯示的 slug（空狀態時為 null）。 */
 const ANCHORED_SLUG = `(() => {
-  const h = document.querySelector('section[aria-label="OpenSpec"] h2')
+  const h = document.querySelector('section[aria-label="${copy('openspec.label')}"] h2')
   return h ? h.innerText.trim() : null
 })()`
 
 const CHANGE_EMPTY_TEXT = `(() => {
-  const panel = document.querySelector('section[aria-label="OpenSpec"]')
+  const panel = document.querySelector('section[aria-label="${copy('openspec.label')}"]')
   if (!panel) return null
-  if (panel.querySelector('[role="tablist"][aria-label="Change artifact"]')) return null
-  return panel.innerText.includes('還沒有錨定的 change') ? panel.innerText.trim() : null
+  if (panel.querySelector('[role="tablist"][aria-label="${copy('openspec.changeArtifact')}"]')) return null
+  return panel.innerText.includes('${copy('openspec.noAnchoredChange')}') ? panel.innerText.trim() : null
 })()`
 
 // ── 本 change：artifact 分頁 ────────────────────────────────────────────────
 
-const ARTIFACT_TABS = `[...document.querySelectorAll('[role="tablist"][aria-label="Change artifact"] button[role="tab"]')]
+const ARTIFACT_TABS = `[...document.querySelectorAll('[role="tablist"][aria-label="${copy('openspec.changeArtifact')}"] button[role="tab"]')]
   .map((t) => ({ label: t.innerText.trim(), selected: t.getAttribute('aria-selected') === 'true' }))`
 
 const CLICK_ARTIFACT = (label) => `(() => {
-  const tab = [...document.querySelectorAll('[role="tablist"][aria-label="Change artifact"] button[role="tab"]')]
+  const tab = [...document.querySelectorAll('[role="tablist"][aria-label="${copy('openspec.changeArtifact')}"] button[role="tab"]')]
     .find((t) => t.innerText.trim().toLowerCase() === ${JSON.stringify(label)}.toLowerCase())
   if (!tab) return false
   tab.click()
   return true
 })()`
 
-const PANEL_TEXT = `document.querySelector('section[aria-label="OpenSpec"]')?.innerText ?? ''`
+const PANEL_TEXT = `document.querySelector('section[aria-label="${copy('openspec.label')}"]')?.innerText ?? ''`
 
 const PROGRESS = `(() => {
-  const bar = document.querySelector('section[aria-label="OpenSpec"] [role="progressbar"][aria-label="tasks 進度"]')
+  const bar = document.querySelector('section[aria-label="${copy('openspec.label')}"] [role="progressbar"][aria-label="${copy('openspec.taskProgress')}"]')
   if (!bar) return null
   return { now: Number(bar.getAttribute('aria-valuenow')), max: Number(bar.getAttribute('aria-valuemax')) }
 })()`
 
-const TASK_SECTIONS = `[...document.querySelectorAll('section[aria-label="Tasks"] h4')].map((h) => h.innerText.trim())`
+const TASK_SECTIONS = `[...document.querySelectorAll('section[aria-label="${copy('openspec.tasks')}"] h4')].map((h) => h.innerText.trim())`
 
 /** 已完成的項目要與未完成者在視覺上可區分 —— 看 computed style，不看 class。 */
-const TASK_ITEMS = `[...document.querySelectorAll('section[aria-label="Tasks"] li')].map((li) => ({
+const TASK_ITEMS = `[...document.querySelectorAll('section[aria-label="${copy('openspec.tasks')}"] li')].map((li) => ({
   text: li.innerText.replace(/\\s+/g, ' ').trim(),
   struck: getComputedStyle(li).textDecorationLine.includes('line-through'),
 }))`
 
-const DELTA_BADGES = `[...document.querySelectorAll('section[aria-label="Spec deltas"] span')]
+const DELTA_BADGES = `[...document.querySelectorAll('section[aria-label="${copy('openspec.specDeltas')}"] span')]
   .map((s) => s.innerText.trim())
   .filter((t) => ['ADDED', 'MODIFIED', 'REMOVED', 'RENAMED'].includes(t))`
 
 /** BDD 關鍵字的顏色。WHEN 是 blue、THEN 是 green —— 兩者必須不同，且都不是內文的顏色。 */
 const BDD_COLORS = `(() => {
-  const strongs = [...document.querySelectorAll('section[aria-label="Spec deltas"] strong')]
+  const strongs = [...document.querySelectorAll('section[aria-label="${copy('openspec.specDeltas')}"] strong')]
   const pick = (word) => {
     const el = strongs.find((s) => s.innerText.trim() === word)
     return el ? getComputedStyle(el).color : null
   }
-  const body = document.querySelector('section[aria-label="Spec deltas"] p')
+  const body = document.querySelector('section[aria-label="${copy('openspec.specDeltas')}"] p')
   return { when: pick('WHEN'), then: pick('THEN'), body: body ? getComputedStyle(body).color : null }
 })()`
 
@@ -389,25 +390,25 @@ const BDD_COLORS = `(() => {
 // 樹上的一列是 `[role="treeitem"]`，`aria-level` 表示層級（頂層區段不是 treeitem）。
 // Specs：topic 在 level 2、heading 在 level 3/4。Changes：群組在 level 2、change 在 level 3。
 
-const SPEC_TREE_TOPICS = `[...document.querySelectorAll('section[aria-label="Specs"] [role="treeitem"][aria-level="2"]')]
+const SPEC_TREE_TOPICS = `[...document.querySelectorAll('section[aria-label="${copy('openspec.specs')}"] [role="treeitem"][aria-level="2"]')]
   .map((r) => ({ topic: r.getAttribute('title'), text: r.innerText.replace(/\\s+/g, ' ').trim(), expanded: r.getAttribute('aria-expanded') }))`
 
-const SPEC_TREE_HEADINGS = `[...document.querySelectorAll('section[aria-label="Specs"] [role="treeitem"][aria-level="3"], section[aria-label="Specs"] [role="treeitem"][aria-level="4"]')]
+const SPEC_TREE_HEADINGS = `[...document.querySelectorAll('section[aria-label="${copy('openspec.specs')}"] [role="treeitem"][aria-level="3"], section[aria-label="${copy('openspec.specs')}"] [role="treeitem"][aria-level="4"]')]
   .map((r) => r.getAttribute('title'))`
 
 /** 樹上一列有兩顆 button：展開鈕與「開啟」鈕。**點箭頭只展開，不換內容** —— 兩者不可混用。 */
 const EXPAND_TREE_ROW = (title) => `(() => {
-  const row = [...document.querySelectorAll('section[aria-label="OpenSpec"] [role="treeitem"]')]
+  const row = [...document.querySelectorAll('section[aria-label="${copy('openspec.label')}"] [role="treeitem"]')]
     .find((r) => r.getAttribute('title') === ${JSON.stringify(title)})
   if (!row) return false
-  const toggle = row.querySelector('button[aria-label="展開"], button[aria-label="收合"]')
+  const toggle = row.querySelector('button[aria-label="${copy('openspec.expand')}"], button[aria-label="${copy('openspec.collapse')}"]')
   if (!toggle) return false
   toggle.click()
   return true
 })()`
 
 const ACTIVATE_TREE_ROW = (title) => `(() => {
-  const row = [...document.querySelectorAll('section[aria-label="OpenSpec"] [role="treeitem"]')]
+  const row = [...document.querySelectorAll('section[aria-label="${copy('openspec.label')}"] [role="treeitem"]')]
     .find((r) => r.getAttribute('title') === ${JSON.stringify(title)})
   if (!row) return false
   const buttons = [...row.querySelectorAll('button')]
@@ -424,12 +425,14 @@ const CHANGE_TREE_ROWS = (group) => `[...document.querySelectorAll('section[aria
     text: r.innerText.replace(/\\s+/g, ' ').trim(),
   }))`
 
-const SPEC_CONTENT = `document.querySelector('section[aria-label="OpenSpec"]')?.innerText ?? ''`
+const SPEC_CONTENT = `document.querySelector('section[aria-label="${copy('openspec.label')}"]')?.innerText ?? ''`
 
 // ── Graph / Timeline 的全視窗 overlay ──────────────────────────────────────
 
 const CLICK_OPEN_VIZ = (kind) => `(() => {
-  const btn = document.querySelector('button[aria-label="開啟 ${kind}"]')
+  const btn = document.querySelector('button[aria-label="${copy(
+    kind === 'Graph' ? 'openspec.openGraph' : 'openspec.openTimeline',
+  )}"]')
   if (!btn) return false
   btn.click()
   return true
@@ -451,7 +454,7 @@ const OVERLAY = `(() => {
 
 /** 當前選中的 repo —— 主舞台的 header 第一行就是它。 */
 const SELECTED_FOLDER = `(() => {
-  const header = document.querySelector('main[aria-label="主舞台"] header')
+  const header = document.querySelector('main[aria-label="${copy('stage.label')}"] header')
   return header ? header.innerText.split('\\n')[0].trim() : null
 })()`
 
@@ -489,6 +492,7 @@ const GRAPH_NODE_RECT = (nodeId) => `(() => {
 
 const TIMELINE = `(() => {
   const dialog = document.querySelector('[role="dialog"]')
+  // 這個 aria-label 來自 **@spekjs/ui 套件內部**，不是我們的文案 —— 不歸字典管，硬編是對的。
   const svg = dialog?.querySelector('svg[aria-label="Change lifecycle timeline"]')
   if (!svg) return null
   const labels = [...dialog.querySelectorAll('.spekui-timeline-label')].map((b) =>
@@ -525,7 +529,7 @@ const SPEK_THEME_VARS = `(() => {
 // ── 交叉導覽 ───────────────────────────────────────────────────────────────
 
 const CLICK_OPEN_FILE = (needle) => `(() => {
-  const btn = [...document.querySelectorAll('button[aria-label^="在 Files 中開啟"]')]
+  const btn = [...document.querySelectorAll('button[aria-label$="${suffixOf('openspec.openInFiles')}"]')]
     .find((b) => (b.getAttribute('aria-label') ?? '').includes(${JSON.stringify(needle)}))
   if (!btn) return false
   btn.click()
@@ -533,7 +537,7 @@ const CLICK_OPEN_FILE = (needle) => `(() => {
 })()`
 
 const CLICK_VIEW_IN_OPENSPEC = `(() => {
-  const btn = document.querySelector('button[aria-label="在 OpenSpec 中檢視"]')
+  const btn = document.querySelector('button[aria-label="${copy('files.viewInOpenSpec')}"]')
   if (!btn) return false
   btn.click()
   return true
@@ -541,20 +545,20 @@ const CLICK_VIEW_IN_OPENSPEC = `(() => {
 
 /** Files 身分：當前開啟檔案的路徑（breadcrumb 的最後一段）。 */
 const OPEN_FILE_PATH = `(() => {
-  const nav = document.querySelector('section[aria-label="Files"] nav[aria-label="路徑"]')
+  const nav = document.querySelector('section[aria-label="${copy('files.label')}"] nav[aria-label="${copy('files.pathNav')}"]')
   if (!nav) return null
   const last = nav.querySelector('span[title]')
   return last ? last.getAttribute('title') : null
 })()`
 
-const SESSION_TABS = `[...document.querySelectorAll('[role="tablist"][aria-label="Session 分頁"] button[role="tab"]')]
+const SESSION_TABS = `[...document.querySelectorAll('[role="tablist"][aria-label="${copy('sessions.tabs')}"] button[role="tab"]')]
   .map((t) => ({ label: t.innerText.trim(), selected: t.getAttribute('aria-selected') === 'true' }))`
 
 // ── Files 身分的檔案樹（驗未存的編輯跨身分存活）──────────────────────────
 //
 // **必須限定在 Files 之內** —— 瀏覽視圖的兩棵樹也是 `[role="treeitem"]`。
 
-const FILES_TREE = 'section[aria-label="Files"] [role="treeitem"]'
+const FILES_TREE = `section[aria-label="${copy('files.label')}"] [role="treeitem"]`
 
 const TREE_ROWS = `[...document.querySelectorAll('${FILES_TREE}')].map((r) => r.getAttribute('title'))`
 
@@ -569,7 +573,7 @@ const CLICK_ROW = (relPath) => `(() => {
 const ROW_IS_DIRTY = (relPath) => `(() => {
   const row = [...document.querySelectorAll('${FILES_TREE}')]
     .find((r) => r.getAttribute('title') === ${JSON.stringify(relPath)})
-  return row ? Boolean(row.querySelector('[aria-label="有未存的變更"]')) : null
+  return row ? Boolean(row.querySelector('[aria-label="${copy('files.unsaved')}"]')) : null
 })()`
 
 const EDITOR_TEXT = `document.querySelector('.monaco-editor .view-lines')?.innerText.replace(/\\u00a0/g, ' ') ?? null`
@@ -582,14 +586,14 @@ const FOCUS_EDITOR = `(() => {
 })()`
 
 const TERMINAL_RECT = `(() => {
-  const el = document.querySelector('section[aria-label="Terminal"]')
+  const el = document.querySelector('section[aria-label="${copy('stage.terminal')}"]')
   if (!el) return null
   const r = el.getBoundingClientRect()
   return { x: r.x, y: r.y, width: r.width, height: r.height }
 })()`
 
 const NEW_SESSION_RECT = `(() => {
-  const el = document.querySelector('[aria-label="新增 session"]')
+  const el = document.querySelector('[aria-label="${copy('sessions.new')}"]')
   if (!el) return null
   const r = el.getBoundingClientRect()
   return { x: r.x, y: r.y, width: r.width, height: r.height }
@@ -605,7 +609,7 @@ const MENU_ITEM_RECT = (label) => `(() => {
 })()`
 
 const FOCUS_SESSION_TAB = (index) => `(() => {
-  const tabs = [...document.querySelectorAll('[role="tablist"][aria-label="Session 分頁"] button[role="tab"]')]
+  const tabs = [...document.querySelectorAll('[role="tablist"][aria-label="${copy('sessions.tabs')}"] button[role="tab"]')]
   const tab = tabs[${index}]
   if (!tab) return false
   tab.click()
@@ -748,7 +752,11 @@ async function runMode(label, { port, rendererUrl }) {
   try {
     // ── 預設身分、兩個視圖、衍生的預設錨定 ──────────────────────────────────
     console.log('\n預設身分與兩個視圖')
-    check(results, '選中含 openspec 的 folder', (await app.client.evaluate(SELECT_FOLDER('repo-single'))) === true)
+    // **必須輪詢。** `MOUNTED` 只等 rail 的 <aside> 出現 —— folder 列來自一次非同步的
+    // `folders.list()`，晚一步才渲染。只 evaluate 一次的話，機器一忙就選不到那一列，
+    // 而後面每一條斷言都會跟著紅（看起來像側欄壞了，其實只是還沒畫出來）。
+    const picked = await pollUntil(app.client, SELECT_FOLDER('repo-single'), (ok) => ok === true, 8000)
+    check(results, '選中含 openspec 的 folder', picked === true)
     const identity = await pollUntil(app.client, IDENTITY, (value) => value !== null, 8000)
     check(results, '預設身分為 OpenSpec', identity === 'openspec', String(identity))
 
@@ -756,10 +764,16 @@ async function runMode(label, { port, rendererUrl }) {
     check(
       results,
       'OpenSpec 身分呈現「本 change」與「瀏覽」兩個視圖',
-      tabs.length === 2 && tabs.map((t) => t.label).join(',') === '本 change,瀏覽',
+      tabs.length === 2 &&
+        tabs.map((t) => t.label).join(',') ===
+          [copy('openspec.tabChange'), copy('openspec.tabBrowse')].join(','),
       tabs.map((t) => t.label).join(', '),
     )
-    check(results, '預設視圖為「本 change」', tabs.find((t) => t.selected)?.label === '本 change')
+    check(
+      results,
+      '預設視圖為「本 change」',
+      tabs.find((t) => t.selected)?.label === copy('openspec.tabChange'),
+    )
 
     // **尚未建立任何 session** —— 恰一個 active change 時仍要看得到它（衍生的預設值，不是
     // 建立 session 時的快照）。使用者選了 repo 卻看到空白側欄，是說不過去的。
@@ -855,7 +869,7 @@ async function runMode(label, { port, rendererUrl }) {
 
     // ── 瀏覽：兩棵樹 ───────────────────────────────────────────────────────
     console.log('\n瀏覽視圖：Specs / Changes 兩棵樹')
-    check(results, '可切換至瀏覽視圖', (await app.client.evaluate(CLICK_VIEW('瀏覽'))) === true)
+    check(results, '可切換至瀏覽視圖', (await app.client.evaluate(CLICK_VIEW(copy('openspec.tabBrowse')))) === true)
     const views = await pollUntil(app.client, VISIBLE_VIEWS, (list) => list.includes('browse'), 8000)
     check(results, '一次只顯示一個視圖', views.length === 1, views.join(', '))
 
@@ -935,7 +949,7 @@ async function runMode(label, { port, rendererUrl }) {
 
     check(results, '自側欄開啟 Graph', (await app.client.evaluate(CLICK_OPEN_VIZ('Graph'))) === true)
     const graphOverlay = await pollUntil(app.client, OVERLAY, (value) => value !== null, 10_000)
-    check(results, 'Graph 於 overlay 中呈現', graphOverlay?.label === 'Graph', JSON.stringify(graphOverlay))
+    check(results, 'Graph 於 overlay 中呈現', graphOverlay?.label === copy('viz.graph'), JSON.stringify(graphOverlay))
     check(
       results,
       'overlay 覆蓋整個視窗',
@@ -1053,14 +1067,18 @@ async function runMode(label, { port, rendererUrl }) {
     check(
       results,
       '多個 active change 時不自動錨定',
-      typeof emptyText === 'string' && emptyText.includes('還沒有錨定的 change'),
+      typeof emptyText === 'string' && emptyText.includes(copy('openspec.noAnchoredChange')),
       String(emptyText).split('\n').filter(Boolean)[0],
     )
-    check(results, '空狀態提供前往選擇 change 的引導', String(emptyText).includes('到 Changes 選一個'))
+    check(
+      results,
+      '空狀態提供前往選擇 change 的引導',
+      String(emptyText).includes(copy('openspec.goToChanges')),
+    )
 
     // ── 於瀏覽視圖建立錨定 ──────────────────────────────────────────────────
     console.log('\n於瀏覽視圖建立錨定')
-    await app.client.evaluate(CLICK_VIEW('瀏覽'))
+    await app.client.evaluate(CLICK_VIEW(copy('openspec.tabBrowse')))
     const manyActive = await pollUntil(app.client, CHANGE_TREE_ROWS('Active'), (list) => list.length === 2, 8000)
     check(
       results,
@@ -1087,7 +1105,7 @@ async function runMode(label, { port, rendererUrl }) {
     const nowAnchored = await pollUntil(app.client, ANCHORED_SLUG, (value) => value === 'add-oauth', 8000)
     check(results, '錨定後切至本 change 視圖', nowAnchored === 'add-oauth')
 
-    await app.client.evaluate(CLICK_VIEW('瀏覽'))
+    await app.client.evaluate(CLICK_VIEW(copy('openspec.tabBrowse')))
     const marked = await pollUntil(
       app.client,
       CHANGE_TREE_ROWS('Active'),
@@ -1111,7 +1129,7 @@ async function runMode(label, { port, rendererUrl }) {
     const twoTabs = await pollUntil(app.client, SESSION_TABS, (list) => list.length === 2, 10_000)
     check(results, '該 folder 有兩個 session', twoTabs.length === 2)
 
-    await app.client.evaluate(CLICK_VIEW('瀏覽'))
+    await app.client.evaluate(CLICK_VIEW(copy('openspec.tabBrowse')))
     await pollUntil(app.client, CHANGE_TREE_ROWS('Active'), (list) => list.length > 0, 8000)
     await app.client.evaluate(ACTIVATE_TREE_ROW('add-invoice'))
     const second = await pollUntil(app.client, ANCHORED_SLUG, (value) => value === 'add-invoice', 8000)
@@ -1164,11 +1182,11 @@ async function runMode(label, { port, rendererUrl }) {
     check(
       results,
       '沒有 active change 時無錨定',
-      typeof noAnchor === 'string' && noAnchor.includes('還沒有錨定的 change'),
+      typeof noAnchor === 'string' && noAnchor.includes(copy('openspec.noAnchoredChange')),
       String(noAnchor).split('\n').filter(Boolean)[0],
     )
 
-    await app.client.evaluate(CLICK_VIEW('瀏覽'))
+    await app.client.evaluate(CLICK_VIEW(copy('openspec.tabBrowse')))
     const legacyTopics = await pollUntil(app.client, SPEC_TREE_TOPICS, (list) => list.length > 0, 8000)
     check(
       results,

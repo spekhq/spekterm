@@ -14,11 +14,11 @@ import { isAllowedExternalUrl } from './external-url'
 export function applyNavigationGuards(contents: WebContents): void {
   contents.on('will-navigate', (details) => {
     details.preventDefault()
-    console.warn(`[navigation] 已阻擋 renderer 導航至 ${details.url}`)
+    console.warn(`[navigation] blocked renderer navigation to ${details.url}`)
   })
 
   contents.setWindowOpenHandler(({ url }) => {
-    console.warn(`[navigation] 已阻擋 renderer 開啟新視窗 ${url}`)
+    console.warn(`[navigation] blocked renderer from opening a window for ${url}`)
     return { action: 'deny' }
   })
 }

@@ -312,6 +312,11 @@ describe('claude 目標的對話續接', () => {
     assert.notEqual(healed, stale, '必須換一個全新的 id')
     // 沿用舊 id 會撞上 `Error: Session ID … is already in use.`（實測）——
     // 這正是 `claude --resume X || claude --session-id X` 那種寫法是個陷阱的原因。
+    // **等 stub 真的記下第二次呼叫。** 產品在 spawn 的當下就回報了新的 conversationId，
+    // 但 stub 是在自己的行程裡 `echo "$@" >> log` —— 中間隔著一次 fork/exec。直接斷言會在
+    // 機器負載高時讀到只有一筆的 log（實測：平行跑完整 npm test 時偶爾紅）。其餘的
+    // `stub.calls()` 斷言本來就都先 waitFor 過，這裡與下一條漏了。
+    await waitFor(() => stub.calls().length === 2, { label: 'stub 記下了自癒的那次呼叫' })
     assert.deepEqual(stub.calls(), [`--resume ${stale}`, `--session-id ${healed}`])
 
     await waitFor(() => output().includes('STUB_READY'), { label: '新的 claude 起來了' })
@@ -333,9 +338,10 @@ describe('claude 目標的對話續接', () => {
     await waitFor(() => exits.some((entry) => entry.sessionId === sessionId), {
       label: 'session 以結束呈現',
     })
+    await waitFor(() => stub.calls().length === 2, { label: 'stub 記下了兩次啟動' })
     await delay(300)
 
-    // 啟動的嘗試不超過兩次（原本那次 + 自癒那次）。
+    // 啟動的嘗試不超過兩次（原本那次 + 自癒那次）—— `delay` 之後仍然是 2，才叫「不反覆重試」。
     assert.equal(stub.calls().length, 2)
     assert.equal(exits.filter((entry) => entry.sessionId === sessionId).length, 1)
   })

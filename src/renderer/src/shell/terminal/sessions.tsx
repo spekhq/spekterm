@@ -252,7 +252,7 @@ export function SessionsProvider({ children }: { children: React.ReactNode }): R
         })
       })
       .catch((error) => {
-        console.error(`[sessions] 重建失敗：${String(error)}`)
+        console.error(`[sessions] restore failed: ${String(error)}`)
       })
       .finally(() => {
         // 無論成敗都要開閘 —— 否則落盤永遠不會發生，使用者接下來做的一切都不會被記住。
@@ -534,6 +534,6 @@ export function SessionsProvider({ children }: { children: React.ReactNode }): R
 
 export function useSessions(): SessionsApi {
   const api = useContext(SessionsContext)
-  if (!api) throw new Error('useSessions 必須用在 SessionsProvider 之內')
+  if (!api) throw new Error('useSessions must be used inside a SessionsProvider')
   return api
 }

@@ -1,3 +1,5 @@
+import { useTranslation } from 'react-i18next'
+import { t } from '@shared/i18n'
 import type { DeltaVerb } from './delta'
 
 /**
@@ -7,7 +9,8 @@ import type { DeltaVerb } from './delta'
  * 掃描要遞迴讀目錄並取 git 時間戳，大 repo 的第一次是感覺得到的。
  */
 export function Loading(): React.JSX.Element {
-  return <p className="px-4 py-3 text-sm text-ink-faint">載入中…</p>
+  const { t: translate } = useTranslation()
+  return <p className="px-4 py-3 text-sm text-ink-faint">{translate('common.loading')}</p>
 }
 
 export function ErrorNote({ message }: { message: string }): React.JSX.Element {
@@ -79,7 +82,7 @@ export function ProgressBar({
       aria-valuenow={completed}
       aria-valuemin={0}
       aria-valuemax={total}
-      aria-label="tasks 進度"
+      aria-label={t('openspec.taskProgress')}
       className="h-[3px] w-full overflow-hidden rounded-full bg-hover"
     >
       <i className="block h-full rounded-full bg-accent" style={{ width: `${percent}%` }} />

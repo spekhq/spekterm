@@ -1,4 +1,5 @@
 import { useCallback, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import type { WorkspaceFolder } from '../types'
 import { BrowseView } from './BrowseView'
 import { ChangeView } from './ChangeView'
@@ -9,9 +10,9 @@ import type { VizKind } from './VizOverlay'
 /** OpenSpec 身分**內部**的第二層導航。與 side panel 的身分切換（OpenSpec │ Files）不同層級。 */
 export type OpenSpecTab = 'change' | 'browse'
 
-const TABS: { id: OpenSpecTab; label: string }[] = [
-  { id: 'change', label: '本 change' },
-  { id: 'browse', label: '瀏覽' },
+const TABS: { id: OpenSpecTab; labelKey: 'openspec.tabChange' | 'openspec.tabBrowse' }[] = [
+  { id: 'change', labelKey: 'openspec.tabChange' },
+  { id: 'browse', labelKey: 'openspec.tabBrowse' },
 ]
 
 interface OpenSpecPanelProps {
@@ -47,6 +48,8 @@ export function OpenSpecPanel({
   request,
   onOpenViz,
 }: OpenSpecPanelProps): React.JSX.Element {
+  const { t } = useTranslation()
+
   // 自 Files 身分跳過來的請求，**初始值就要套用** —— 這個元件在切到 OpenSpec 身分的那一刻
   // 才掛載，若只在「nonce 變了」時才反應，跳過來的那一次會沒有反應。
   const [tab, setTab] = useState<OpenSpecTab>(
@@ -87,9 +90,9 @@ export function OpenSpecPanel({
   }
 
   return (
-    <section aria-label="OpenSpec" className="flex h-full flex-col overflow-hidden">
+    <section aria-label={t('openspec.label')} className="flex h-full flex-col overflow-hidden">
       <header className="flex items-center gap-2 border-b border-hairline px-3 py-2 text-sm">
-        <nav aria-label="路徑" className="min-w-0 flex-1 truncate text-ink-faint">
+        <nav aria-label={t('openspec.pathNav')} className="min-w-0 flex-1 truncate text-ink-faint">
           <span>{folder.name}</span>
           <span className="px-1">/</span>
           <Crumb tab={tab} anchoredChange={anchoredChange} openSpec={openSpec} />
@@ -97,11 +100,11 @@ export function OpenSpecPanel({
       </header>
 
       <nav
-        aria-label="OpenSpec 視圖"
+        aria-label={t('openspec.views')}
         role="tablist"
         className="flex shrink-0 items-center gap-1 border-b border-hairline px-2 py-1"
       >
-        {TABS.map(({ id, label }) => (
+        {TABS.map(({ id, labelKey }) => (
           <button
             key={id}
             type="button"
@@ -117,7 +120,7 @@ export function OpenSpecPanel({
                 : 'text-ink-dim hover:bg-hover hover:text-ink'
             }`}
           >
-            {label}
+            {t(labelKey)}
           </button>
         ))}
 
@@ -130,8 +133,8 @@ export function OpenSpecPanel({
         <button
           type="button"
           onClick={() => onOpenViz('graph')}
-          aria-label="開啟 Graph"
-          title="Graph —— spec 與 change 的關聯"
+          aria-label={t('openspec.openGraph')}
+          title={t('openspec.graphTooltip')}
           className="rounded px-2 py-[3px] text-xs text-ink-dim hover:bg-hover hover:text-accent"
         >
           ◈
@@ -139,8 +142,8 @@ export function OpenSpecPanel({
         <button
           type="button"
           onClick={() => onOpenViz('timeline')}
-          aria-label="開啟 Timeline"
-          title="Timeline —— change 的生命週期"
+          aria-label={t('openspec.openTimeline')}
+          title={t('openspec.timelineTooltip')}
           className="rounded px-2 py-[3px] text-xs text-ink-dim hover:bg-hover hover:text-accent"
         >
           ▤
@@ -190,6 +193,8 @@ function Crumb({
   anchoredChange: string | null
   openSpec: string | null
 }): React.JSX.Element {
+  const { t } = useTranslation()
+
   if (tab === 'change') {
     return (
       <>
@@ -218,5 +223,5 @@ function Crumb({
     )
   }
 
-  return <span>瀏覽</span>
+  return <span>{t('openspec.tabBrowse')}</span>
 }

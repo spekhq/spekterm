@@ -3,6 +3,8 @@ import type { SpawnTarget } from '../types'
 import { ContextMenu, type MenuItem } from '../files/dialogs'
 import { type SessionStatus, useSessions } from './sessions'
 import { type XtermHandle, createXterm } from './xterm'
+import { useTranslation } from 'react-i18next'
+import { t } from '@shared/i18n'
 
 interface TerminalViewProps {
   sessionId: string
@@ -32,7 +34,10 @@ const SNAPSHOT_DEBOUNCE_MS = 2000
  * **這不是裝飾，是誠實性。** 重播的字不是這個 pty 產生的 —— 新 shell 對它一無所知。不標示的話，
  * 使用者會以為那個 shell 還活著：去找他背景跑著的 job、以為 `cd` 過的位置與環境變數還在。
  */
-const SEPARATOR = '\x1b[2m── 以上為上次的內容 · spekterm 已重新啟動 ──\x1b[0m\r\n'
+function separator(): string {
+  // 只有**文字**進字典 —— ANSI 與框線字元是呈現，不是文案。
+  return `\x1b[2m── ${t('sessions.replaySeparator')} ──\x1b[0m\r\n`
+}
 
 export function TerminalView({
   sessionId,
@@ -41,6 +46,7 @@ export function TerminalView({
   wakeError,
   active,
 }: TerminalViewProps): React.JSX.Element {
+  const { t } = useTranslation()
   // 解構出穩定的 callback。若依賴整個 api 物件，session 清單一變動就會重建 xterm
   // （連同 scrollback 一起消失）。
   const { attach, setTitle, restoredScrollbackOf } = useSessions()
@@ -140,7 +146,7 @@ export function TerminalView({
     }
 
     const history = restoredScrollbackOf(sessionId)
-    if (history) handle.replay(history, SEPARATOR, streamLive)
+    if (history) handle.replay(history, separator(), streamLive)
     else streamLive()
 
     const stopInput = handle.onInput((data) => {
@@ -212,7 +218,7 @@ export function TerminalView({
 
   const items: MenuItem[] = [
     {
-      label: '複製',
+      label: t('sessions.copy'),
       // 停用而非隱藏 —— 使用者要看得到這個操作存在。
       disabled: !menu?.hasSelection,
       onSelect: () => {
@@ -221,7 +227,7 @@ export function TerminalView({
       },
     },
     {
-      label: '貼上',
+      label: t('sessions.paste'),
       onSelect: () => {
         setMenu(null)
         paste()
@@ -277,17 +283,17 @@ export function TerminalView({
           // 的元素會被它跳過，於是「它有沒有被 xterm 蓋住」根本量不到）。
           <div className="absolute inset-0 z-10 flex items-center justify-center">
             <div className="max-w-[80%] rounded border border-hairline bg-shell/90 px-4 py-3 text-center text-2xs text-danger">
-              無法恢復這個 session：{wakeError}
+              {t('sessions.wakeFailed', { message: wakeError })}
             </div>
           </div>
         ) : spawnTarget === 'shell' ? (
           <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 bg-shell/90 px-3 py-2 text-2xs text-ink-faint">
-            休眠中 · 正在於上次的工作目錄重新開啟 shell（先前的行程不會回來）
+            {t('sessions.dormantShell')}
           </div>
         ) : (
           <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center">
             <div className="rounded border border-hairline bg-shell/90 px-4 py-3 text-center text-2xs text-ink-faint">
-              休眠中 · 正在恢復對話…
+              {t('sessions.dormantClaude')}
             </div>
           </div>
         ))}

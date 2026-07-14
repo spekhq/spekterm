@@ -1,8 +1,9 @@
 import { type BrowserWindow, dialog, ipcMain } from 'electron'
+import { t } from '@shared/i18n'
 import type { DirtyEntry, DirtyStateStore } from './dirty-state'
 import { APP_CHANNELS } from './ipc/app'
 
-/** 「儲存全部」的往返上限。renderer 沒回應時退回對話框，而不是默默關閉。 */
+/** 「Save All」的往返上限。renderer 沒回應時退回對話框，而不是默默關閉。 */
 const SAVE_ALL_TIMEOUT_MS = 10_000
 
 /** 對話框中最多列出幾個檔案。再多就只給數字 —— 一個捲不動的清單幫不上決定。 */
@@ -18,13 +19,13 @@ function describe(entries: DirtyEntry[]): string {
     .join('\n')
 
   const remaining = entries.length - MAX_LISTED
-  return remaining > 0 ? `${listed}\n…以及另外 ${remaining} 個檔案` : listed
+  return remaining > 0 ? `${listed}\n${t('unsaved.more', { count: remaining })}` : listed
 }
 
 /**
  * 請 renderer 存下所有未存的變更，並等它回報。
  *
- * 逾時視為失敗 —— 呼叫端會退回對話框，讓使用者改選「不儲存並關閉」或「取消」。
+ * 逾時視為失敗 —— 呼叫端會退回對話框，讓使用者改選「Don't Save」或「Cancel」。
  * 靜默關閉不是選項。
  */
 function requestSaveAll(window: BrowserWindow): Promise<boolean> {
@@ -63,11 +64,11 @@ export async function confirmDiscardOrSave(
 
   const { response } = await dialog.showMessageBox(window, {
     type: 'warning',
-    buttons: ['儲存全部', '不儲存並關閉', '取消'],
+    buttons: [t('unsaved.saveAll'), t('unsaved.discard'), t('unsaved.cancel')],
     defaultId: Choice.SaveAll,
     cancelId: Choice.Cancel,
     noLink: true,
-    message: `有 ${entries.length} 個檔案尚未儲存`,
+    message: t('unsaved.message', { count: entries.length }),
     detail: describe(entries),
   })
 

@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { MarkdownView } from '../files/MarkdownView'
 import type { ChangeArtifactView, DeltaSpecView, ParsedTasks } from '../types'
 import { useChange } from './data'
@@ -41,19 +42,21 @@ export function ChangeView({
   onOpenFile,
   onGoToChanges,
 }: ChangeViewProps): React.JSX.Element {
+  const { t } = useTranslation()
+
   const { data, loading, error } = useChange(folderId, slug)
   const [activeId, setActiveId] = useState<string | null>(null)
 
   if (slug === null) {
     return (
       <Empty>
-        <p>這個 session 還沒有錨定的 change。</p>
+        <p>{t('openspec.noAnchoredChange')}</p>
         <button
           type="button"
           onClick={onGoToChanges}
           className="rounded border border-hairline px-3 py-1 text-xs text-ink-dim hover:border-accent hover:text-accent"
         >
-          到 Changes 選一個
+          {t('openspec.goToChanges')}
         </button>
       </Empty>
     )
@@ -65,7 +68,7 @@ export function ChangeView({
   const artifacts = orderArtifacts(data.artifacts, data.schemaOrder)
 
   if (artifacts.length === 0) {
-    return <p className="px-4 py-3 text-sm text-ink-faint">這個 change 還沒有任何 artifact。</p>
+    return <p className="px-4 py-3 text-sm text-ink-faint">{t('openspec.noArtifacts')}</p>
   }
 
   // 預設停在 tasks —— 駕駛 agent 時要盯的是它。沒有 tasks 就退回第一個 artifact。
@@ -100,7 +103,7 @@ export function ChangeView({
       </div>
 
       <nav
-        aria-label="Change artifact"
+        aria-label={t('openspec.changeArtifact')}
         role="tablist"
         className="mt-3 flex shrink-0 overflow-x-auto border-b border-hairline px-2"
       >
@@ -176,8 +179,10 @@ function ArtifactContent({
 }
 
 function TaskList({ tasks }: { tasks: ParsedTasks }): React.JSX.Element {
+  const { t } = useTranslation()
+
   return (
-    <section aria-label="Tasks" className="flex flex-col gap-3">
+    <section aria-label={t('openspec.tasks')} className="flex flex-col gap-3">
       {tasks.sections.map((section) => (
         <div key={section.title}>
           {/*
@@ -219,8 +224,10 @@ function DeltaList({
   specs: DeltaSpecView[]
   onOpenFile: (relPath: string) => void
 }): React.JSX.Element {
+  const { t } = useTranslation()
+
   return (
-    <section aria-label="Spec deltas" className="flex flex-col gap-4">
+    <section aria-label={t('openspec.specDeltas')} className="flex flex-col gap-4">
       {specs.map((spec) => {
         const parsed = parseDelta(spec.content)
 
@@ -268,14 +275,16 @@ function OpenFileButton({
   relPath: string | null
   onOpenFile: (relPath: string) => void
 }): React.JSX.Element | null {
+  const { t } = useTranslation()
+
   if (!relPath) return null
 
   return (
     <button
       type="button"
       onClick={() => onOpenFile(relPath)}
-      aria-label={`在 Files 中開啟 ${relPath}`}
-      title={`在 Files 中開啟 ${relPath}`}
+      aria-label={t('openspec.openInFiles', { path: relPath })}
+      title={t('openspec.openInFiles', { path: relPath })}
       className="shrink-0 rounded border border-hairline px-[6px] py-[1px] text-2xs text-ink-faint hover:border-accent hover:text-accent"
     >
       ▤

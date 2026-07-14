@@ -127,7 +127,7 @@ export class WorkspaceStore {
       raw = fs.readFileSync(this.filePath, 'utf8')
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-        console.error(`[workspace] 設定檔無法讀取，以空 workspace 啟動：${String(error)}`)
+        console.error(`[workspace] config unreadable, starting with an empty workspace: ${String(error)}`)
       }
       this.folders = []
       return
@@ -137,8 +137,8 @@ export class WorkspaceStore {
     if (!parsed) {
       const kept = quarantine(this.filePath)
       console.error(
-        `[workspace] 設定檔無法解析，以空 workspace 啟動` +
-          (kept ? `；原檔保留於 ${kept}` : `；原檔保留失敗`),
+        `[workspace] config unparsable, starting with an empty workspace` +
+          (kept ? `; the original was kept at ${kept}` : `; the original could not be kept`),
       )
       this.folders = []
       return

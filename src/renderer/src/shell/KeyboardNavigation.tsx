@@ -1,4 +1,5 @@
 import { useEffect } from 'react'
+import { t } from '@shared/i18n'
 import { useSessions } from './terminal/sessions'
 import type { WorkspaceFolder } from './types'
 
@@ -85,7 +86,11 @@ export function KeyboardNavigation({
         // 而 spawn 選單的狀態也不必從 `SessionTabs` 搬出來。鍵盤的接縫仍然只有這一處（design D9）。
         //
         // 沒有選中的 repo 時，這顆按鈕根本不在 DOM 裡 —— 自然成為無操作。
-        const entry = document.querySelector<HTMLElement>('[aria-label="新增 session"]')
+        //
+        // **文案自字典取得，絕不硬編。** `aria-label` 在這裡同時是選擇器：寫死它，一次文案
+        // 改動就會**靜默地**廢掉這顆快捷鍵 —— 字串比對不會使型別檢查失敗，也不會有任何紅燈
+        // （`ui-localization`：以文案定位介面元素的程式碼自字典取得該文案）。
+        const entry = document.querySelector<HTMLElement>(`[aria-label="${t('sessions.new')}"]`)
         entry?.click()
         return
       }

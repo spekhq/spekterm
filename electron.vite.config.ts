@@ -1,6 +1,10 @@
+import { fileURLToPath } from 'node:url'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import { defineConfig, externalizeDepsPlugin } from 'electron-vite'
+
+/** 字典住在 `src/shared`，main 與 renderer 都要解析得到它（見 `src/shared/i18n`）。 */
+const alias = { '@shared': fileURLToPath(new URL('src/shared', import.meta.url)) }
 
 /** `basic-languages/<lang>/<lang>.js` 是 grammar 本體，經動態 import 載入。 */
 const LAZY_GRAMMAR = /basic-languages\/[^/]+\/[^/]+\.js$/
@@ -25,12 +29,15 @@ export default defineConfig({
   // native 模組（node-pty）無法被 bundler 處理。
   main: {
     plugins: [externalizeDepsPlugin()],
+    resolve: { alias },
   },
   preload: {
     plugins: [externalizeDepsPlugin()],
+    resolve: { alias },
   },
   renderer: {
     plugins: [react(), tailwindcss()],
+    resolve: { alias },
     build: {
       rollupOptions: {
         output: {

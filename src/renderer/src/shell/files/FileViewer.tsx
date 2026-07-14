@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
+import { useTranslation } from 'react-i18next'
+import { t } from '@shared/i18n'
 import { CodeEditor } from '../../editor'
 import type { FsFailure, FsResult, FileContent } from '../types'
 import { MarkdownView } from './MarkdownView'
@@ -24,23 +26,26 @@ function describeFailure(failure: FsFailure): { title: string; hint?: string } {
       const size = failure.detail?.size
       const limit = failure.detail?.limit
       return {
-        title: '檔案過大，無法檢視',
+        title: t('viewer.tooLarge'),
         hint:
           size !== undefined && limit !== undefined
-            ? `這個檔案是 ${formatBytes(size)}，檢視器的上限是 ${formatBytes(limit)}。`
+            ? t('viewer.tooLargeHint', {
+                size: formatBytes(size),
+                limit: formatBytes(limit),
+              })
             : undefined,
       }
     }
     case 'BINARY':
-      return { title: '二進位檔案，無法以文字檢視' }
+      return { title: t('viewer.binary') }
     case 'NOT_A_FILE':
-      return { title: '目標不是檔案' }
+      return { title: t('viewer.notAFile') }
     case 'ESCAPES_ROOT':
-      return { title: '超出 workspace 邊界', hint: '這個路徑指向已加入的 folder 之外。' }
+      return { title: t('viewer.escapesRoot'), hint: t('viewer.escapesRootHint') }
     case 'NOT_FOUND':
-      return { title: '檔案不存在' }
+      return { title: t('viewer.notFound') }
     default:
-      return { title: '無法開啟檔案', hint: failure.message }
+      return { title: t('viewer.openFailed'), hint: failure.message }
   }
 }
 
@@ -66,6 +71,7 @@ interface FileViewerProps {
 
 /** 呼叫端以 `relPath` 為 key 掛載，因此初始狀態就是 `loading`，不需要 effect 去設它。 */
 export function FileViewer({ folderId, relPath }: FileViewerProps): React.JSX.Element {
+  const { t } = useTranslation()
   const [state, setState] = useState<ViewerState>({ status: 'loading' })
   const [stale, setStale] = useState(false)
   /** 存檔時偵測到磁碟已被改動。保留 buffer，等使用者決定。 */
@@ -179,14 +185,14 @@ export function FileViewer({ folderId, relPath }: FileViewerProps): React.JSX.El
   }, [dirty, folderId, relPath, reload])
 
   if (state.status === 'loading') {
-    return <Notice title="載入中…" />
+    return <Notice title={t('common.loading')} />
   }
 
   if (state.status === 'deleted') {
     return (
       <Notice
-        title="這個檔案已被刪除"
-        hint={buffer ? '你仍有未存的變更，但它的目標已不存在。' : undefined}
+        title={t('viewer.deleted')}
+        hint={buffer ? t('viewer.deletedDirty') : undefined}
         tone="danger"
       />
     )
@@ -214,7 +220,7 @@ export function FileViewer({ folderId, relPath }: FileViewerProps): React.JSX.El
                 mode === candidate ? 'bg-hover text-ink' : 'text-ink-faint hover:text-ink-dim'
               }`}
             >
-              {candidate === 'preview' ? '預覽' : '原始碼'}
+              {candidate === 'preview' ? t('viewer.preview') : t('viewer.source')}
             </button>
           ))}
           {isDirty && <span className="ml-1 text-accent">●</span>}
@@ -223,29 +229,29 @@ export function FileViewer({ folderId, relPath }: FileViewerProps): React.JSX.El
 
       {conflict && (
         <div className="border-b border-hairline bg-hover px-3 py-2 text-sm">
-          <p className="text-danger">這個檔案在你編輯期間已被外部改動</p>
-          <p className="mt-1 text-ink-faint">存檔會覆蓋對方的內容。你的變更仍在。</p>
+          <p className="text-danger">{t('viewer.conflict')}</p>
+          <p className="mt-1 text-ink-faint">{t('viewer.conflictHint')}</p>
           <div className="mt-2 flex gap-2">
             <button
               type="button"
               onClick={() => void save(true)}
               className="rounded border border-hairline px-2 py-[2px] text-xs text-danger hover:bg-stage"
             >
-              以我的內容覆寫
+              {t('viewer.overwrite')}
             </button>
             <button
               type="button"
               onClick={discardAndReload}
               className="rounded border border-hairline px-2 py-[2px] text-xs text-ink-dim hover:bg-stage"
             >
-              捨棄我的變更並重載
+              {t('viewer.discardAndReload')}
             </button>
             <button
               type="button"
               onClick={() => setConflict(false)}
               className="rounded border border-hairline px-2 py-[2px] text-xs text-ink-faint hover:bg-stage"
             >
-              取消
+              {t('common.cancel')}
             </button>
           </div>
         </div>
@@ -253,22 +259,22 @@ export function FileViewer({ folderId, relPath }: FileViewerProps): React.JSX.El
 
       {saveError && (
         <div className="border-b border-hairline bg-hover px-3 py-2 text-sm text-danger">
-          存檔失敗：{describeFailure(saveError).title}
+          {t('viewer.saveFailed', { reason: describeFailure(saveError).title })}
         </div>
       )}
 
       {stale && !conflict && (
         <div className="flex items-center justify-between gap-2 border-b border-hairline bg-hover px-3 py-2 text-sm text-ink-dim">
           <span>
-            檔案已在磁碟上變更
-            {isDirty && <span className="text-danger">（重新載入會捨棄你未存的變更）</span>}
+            {t('viewer.stale')}
+            {isDirty && <span className="text-danger"> {t('viewer.staleDirty')}</span>}
           </span>
           <button
             type="button"
             onClick={isDirty ? discardAndReload : reload}
             className="rounded border border-hairline px-2 py-[2px] text-xs text-accent hover:bg-stage"
           >
-            重新載入
+            {t('viewer.reload')}
           </button>
         </div>
       )}

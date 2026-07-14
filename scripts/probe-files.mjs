@@ -28,6 +28,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { check, connect, pollUntil, waitForPageTarget } from './lib/cdp.mjs'
+import { copy } from './lib/copy.mjs'
 
 const BUILD_PORT = 9224
 const DEV_PORT = 9225
@@ -110,7 +111,7 @@ function seedProfile(folders) {
 // ── app 啟動 ────────────────────────────────────────────────────────────────
 
 const MOUNTED = `Boolean(
-  document.querySelector('aside[aria-label="工作區"]') &&
+  document.querySelector('aside[aria-label="${copy('rail.label')}"]') &&
   document.getElementById('root')?.children.length &&
   document.visibilityState === 'visible'
 )`
@@ -202,7 +203,7 @@ async function launch({ port, profileDir, rendererUrl }) {
 // ── renderer 內的量測 ───────────────────────────────────────────────────────
 
 const SELECT_FOLDER = (name) => `(() => {
-  const row = [...document.querySelectorAll('aside[aria-label="工作區"] div[role="button"]')]
+  const row = [...document.querySelectorAll('aside[aria-label="${copy('rail.label')}"] div[role="button"]')]
     .find((el) => el.innerText.includes(${JSON.stringify(name)}))
   if (!row) return false
   row.click()
@@ -211,7 +212,7 @@ const SELECT_FOLDER = (name) => `(() => {
 
 // 身分切換的 tablist 必須指名 —— 側欄的 OpenSpec 身分自己也有一個 tablist（四個視圖），
 // 全域的 [role="tablist"] 會把兩者混在一起（session 分頁列是第三個）。
-const SWITCH = '[role="tablist"][aria-label="side panel 身分切換"]'
+const SWITCH = `[role="tablist"][aria-label="${copy('panelSwitch.label')}"]`
 
 const TABS = `[...document.querySelectorAll('${SWITCH} button[role="tab"]')].map((tab) => ({
   label: tab.innerText.trim(),
@@ -229,8 +230,8 @@ const CLICK_TAB = (label) => `(() => {
 })()`
 
 const IDENTITY = `(() => {
-  if (document.querySelector('section[aria-label="Files"]')) return 'files'
-  if (document.querySelector('section[aria-label="OpenSpec"]')) return 'openspec'
+  if (document.querySelector('section[aria-label="${copy('files.label')}"]')) return 'files'
+  if (document.querySelector('section[aria-label="${copy('openspec.label')}"]')) return 'openspec'
   return null
 })()`
 
@@ -250,9 +251,11 @@ const CLICK_ROW = (relPath) => `(() => {
   return true
 })()`
 
+// 項目數的文案是複數形式（`1 item` / `N items`）—— 以字典的複數版組出 regex，
+// `(\\d+)` 正好落在 `{{count}}` 的位置成為擷取群組。
 const ITEM_COUNT = `(() => {
-  const header = document.querySelector('section[aria-label="Files"] header')
-  const match = header?.innerText.match(/(\\d+) 個項目/)
+  const header = document.querySelector('section[aria-label="${copy('files.label')}"] header')
+  const match = header?.innerText.match(/${copy('files.itemCount_other', { count: '(\\d+)' })}/)
   return match ? Number(match[1]) : -1
 })()`
 
@@ -315,17 +318,17 @@ const INPUT_AREA_READONLY = `(() => {
 })()`
 
 /** side panel 內文，用來偵測衝突／過期橫幅之類的文字提示。 */
-const SIDE_PANEL_TEXT = `document.querySelector('section[aria-label="Side panel"]')?.innerText ?? ''`
+const SIDE_PANEL_TEXT = `document.querySelector('section[aria-label="${copy('openspec.sidePanel')}"]')?.innerText ?? ''`
 
 /** 某一列樹節點是否帶著未存變更的標記。 */
 const ROW_IS_DIRTY = (relPath) => `(() => {
   const row = [...document.querySelectorAll('[role="treeitem"]')].find((r) => r.getAttribute('title') === ${JSON.stringify(relPath)})
-  return row ? Boolean(row.querySelector('[aria-label="有未存的變更"]')) : null
+  return row ? Boolean(row.querySelector('[aria-label="${copy('files.unsaved')}"]')) : null
 })()`
 
 /** 點面板 header 的「‹ 返回」，自檔案檢視換頁回檔案樹。 */
 const BACK_TO_TREE = `(() => {
-  const btn = [...document.querySelectorAll('section[aria-label="Files"] header button')].find((b) => b.textContent.includes('返回'))
+  const btn = [...document.querySelectorAll('section[aria-label="${copy('files.label')}"] header button')].find((b) => b.textContent.includes('${copy('common.back')}'))
   if (!btn) return false
   btn.click()
   return true
@@ -341,7 +344,7 @@ const CLICK_MENU_ITEM = (label) => `(() => {
 
 /** 對話框輸入名稱並確定。 */
 const SUBMIT_NAME_DIALOG = (name) => `(() => {
-  const input = document.querySelector('[role="dialog"] input, section[aria-label="Files"] input')
+  const input = document.querySelector('[role="dialog"] input, section[aria-label="${copy('files.label')}"] input')
   if (!input) return false
   const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set
   setter.call(input, ${JSON.stringify(name)})
@@ -350,9 +353,9 @@ const SUBMIT_NAME_DIALOG = (name) => `(() => {
   return true
 })()`
 
-/** 點確認刪除對話框裡的「刪除」。 */
+/** 點確認刪除對話框裡的確認鈕。 */
 const CONFIRM_DELETE = `(() => {
-  const btn = [...document.querySelectorAll('button')].find((b) => b.textContent.trim() === '刪除' && b.closest('.absolute'))
+  const btn = [...document.querySelectorAll('button')].find((b) => b.textContent.trim() === '${copy('common.delete')}' && b.closest('.absolute'))
   if (!btn) return false
   btn.click()
   return true
@@ -360,7 +363,7 @@ const CONFIRM_DELETE = `(() => {
 
 /** 點 markdown 檢視的 [預覽│原始碼] 切換鈕（帶 aria-pressed 的才是模式鈕）。 */
 const CLICK_MODE = (label) => `(() => {
-  const btn = [...document.querySelectorAll('section[aria-label="Files"] button[aria-pressed]')]
+  const btn = [...document.querySelectorAll('section[aria-label="${copy('files.label')}"] button[aria-pressed]')]
     .find((b) => b.textContent.trim() === ${JSON.stringify(label)})
   if (!btn) return false
   btn.click()
@@ -369,7 +372,7 @@ const CLICK_MODE = (label) => `(() => {
 
 /** 某個模式鈕當前是否為選定（aria-pressed）。 */
 const MODE_PRESSED = (label) => `(() => {
-  const btn = [...document.querySelectorAll('section[aria-label="Files"] button[aria-pressed]')]
+  const btn = [...document.querySelectorAll('section[aria-label="${copy('files.label')}"] button[aria-pressed]')]
     .find((b) => b.textContent.trim() === ${JSON.stringify(label)})
   return btn ? btn.getAttribute('aria-pressed') === 'true' : null
 })()`
@@ -422,7 +425,7 @@ async function coordsOf(client, expression) {
 
 const ROW_EL = (relPath) =>
   `[...document.querySelectorAll('[role="treeitem"]')].find((r) => r.getAttribute('title') === ${JSON.stringify(relPath)})`
-const PLUS_BTN = `document.querySelector('section[aria-label="Files"] header button[aria-label="在根目錄新增"]')`
+const PLUS_BTN = `document.querySelector('section[aria-label="${copy('files.label')}"] header button[aria-label="${copy('files.newAtRoot')}"]')`
 
 /** 選單是否存在且完整落在 viewport 內。'missing' / 'in' / 'out'。 */
 const MENU_PLACEMENT = `(() => {
@@ -446,12 +449,12 @@ async function sendCtrlS(client) {
   await client.send('Input.dispatchKeyEvent', { type: 'keyUp', ...ctrl, key: 's', code: 'KeyS' })
 }
 
-const PANEL_TEXT = `document.querySelector('section[aria-label="Side panel"]')?.innerText ?? ''`
+const PANEL_TEXT = `document.querySelector('section[aria-label="${copy('openspec.sidePanel')}"]')?.innerText ?? ''`
 
-const SIDE_PANEL_WIDTH = `document.querySelector('section[aria-label="Side panel"]')?.getBoundingClientRect().width ?? -1`
+const SIDE_PANEL_WIDTH = `document.querySelector('section[aria-label="${copy('openspec.sidePanel')}"]')?.getBoundingClientRect().width ?? -1`
 
 const CLICK_COLLAPSE = `(() => {
-  const button = document.querySelector('main[aria-label="主舞台"] header button[aria-expanded]')
+  const button = document.querySelector('main[aria-label="${copy('stage.label')}"] header button[aria-expanded]')
   if (!button) return false
   button.click()
   return true
@@ -551,12 +554,14 @@ async function probeBuild(fixture, profile) {
     // ── file-explorer：尚未選擇 folder ──────────────────────────────────────
     console.log('\n尚未選擇 folder')
     const emptyText = await pollUntil(app.client, PANEL_TEXT, (text) => text.length > 0)
-    check(results, '未選中任何 folder 時呈現說明此狀態的提示', /尚未選擇 repo/.test(emptyText),
+    check(results, '未選中任何 folder 時呈現說明此狀態的提示', (emptyText ?? '').includes(copy('stage.noRepo')),
       emptyText.split('\n').filter(Boolean)[0])
 
     // ── workspace-layout：身分切換 ──────────────────────────────────────────
     console.log('\nside panel 的兩個同層互斥身分')
-    check(results, '選中含 openspec 的 folder', (await app.client.evaluate(SELECT_FOLDER('repo-openspec'))) === true)
+    // 必須輪詢 —— folder 列來自一次非同步的 `folders.list()`，晚於 rail 本身的掛載。
+    const picked = await pollUntil(app.client, SELECT_FOLDER('repo-openspec'), (ok) => ok === true, 8000)
+    check(results, '選中含 openspec 的 folder', picked === true)
 
     const tabs = await app.client.evaluate(TABS)
     check(results, '身分切換入口呈現兩個分頁', tabs.length === 2, tabs.map((t) => t.label).join(', '))
@@ -582,7 +587,7 @@ async function probeBuild(fixture, profile) {
     const plainTabs = await pollUntil(app.client, TABS, (list) => list.find((t) => t.label.includes('OpenSpec'))?.disabled === true)
     const openSpecTab = plainTabs.find((t) => t.label.includes('OpenSpec'))
     check(results, '不含 openspec 時 OpenSpec 入口停用', openSpecTab?.disabled === true)
-    check(results, '停用的入口附說明', /沒有 openspec/.test(openSpecTab?.title ?? ''), openSpecTab?.title)
+    check(results, '停用的入口附說明', (openSpecTab?.title ?? '').includes(copy('panelSwitch.openSpecDisabled')), openSpecTab?.title)
     await app.client.evaluate(CLICK_TAB('◈'))
     check(results, '停用的身分不可被切換至', (await app.client.evaluate(IDENTITY)) === 'files')
     check(results, 'Files 身分恆可用', plainTabs.find((t) => t.label.includes('Files'))?.disabled === false)
@@ -593,6 +598,17 @@ async function probeBuild(fixture, profile) {
     const rootRows = await pollUntil(app.client, ROWS, (rows) => rows.length >= 6)
 
     check(results, '呈現根目錄的直接子項目', rootRows.some((r) => r.path === 'README.md') && rootRows.some((r) => r.path === 'sub'))
+
+    // **相對時間的 locale 必須跟著 UI 的語言走**（`ui-localization`）。這條非驗不可：
+    // `Intl.RelativeTimeFormat` 的 locale 若脫鉤，畫面上就會在一片英文裡混出「3 分鐘前」，
+    // 而**其餘每一條斷言都照樣是綠的** —— 樹畫得出來、路徑對得上，只有那一欄是別的語言。
+    const mtimeText = rootRows.find((r) => r.path === 'README.md')?.text ?? ''
+    check(
+      results,
+      '檔案樹的相對時間以 UI 的語言呈現',
+      /\b(just now|\d+ (seconds?|minutes?|hours?|days?|months?|years?) ago)\b/.test(mtimeText),
+      mtimeText,
+    )
     check(results, '未展開的目錄不載入其子項目', !rootRows.some((r) => r.path === 'sub/nested.txt'),
       rootRows.map((r) => r.path).join(' '))
 
@@ -693,8 +709,8 @@ async function probeBuild(fixture, profile) {
 
     // 指向 workspace 之外的 symlink：不得展開，且要說明原因
     check(results, '點擊越界的 symlink 目錄', (await app.client.evaluate(CLICK_ROW_BY_NAME('escape-link'))) === true)
-    const escapeRow = await pollUntil(app.client, ROW_BY_NAME('escape-link'), (row) => /邊界/.test(row?.text ?? ''))
-    check(results, '展開越界 symlink 失敗並說明超出 workspace 邊界', /超出 workspace 邊界/.test(escapeRow?.text ?? ''),
+    const escapeRow = await pollUntil(app.client, ROW_BY_NAME('escape-link'), (row) => (row?.text ?? '').includes(copy('files.failure.expandEscapesRoot')))
+    check(results, '展開越界 symlink 失敗並說明超出 workspace 邊界', (escapeRow?.text ?? '').includes(copy('files.failure.expandEscapesRoot')),
       escapeRow?.text)
     const noSecret = await app.client.evaluate(ROW_PATHS)
     check(results, '越界 symlink 之下不呈現任何項目', !noSecret.some((p) => p?.includes('secret.txt')))
@@ -727,20 +743,20 @@ async function probeBuild(fixture, profile) {
     check(results, 'readFile 拒絕逃逸出邊界的路徑', escaped.ok === false, escaped.code)
 
     await app.client.evaluate(CLICK_ROW('big.txt'))
-    const bigText = await pollUntil(app.client, PANEL_TEXT, (text) => /過大/.test(text))
-    check(results, 'UI 呈現「檔案過大」與上限', /過大/.test(bigText) && /2\.0 MB/.test(bigText),
+    const bigText = await pollUntil(app.client, PANEL_TEXT, (text) => (text ?? '').includes(copy('viewer.tooLarge')))
+    check(results, 'UI 呈現「檔案過大」與上限', bigText.includes(copy('viewer.tooLarge')) && /2\.0 MB/.test(bigText),
       bigText.split('\n').filter(Boolean).slice(-2).join(' · '))
     check(results, '過大的檔案不呈現任何內容片段', !/aaaa/.test(bigText))
 
-    await app.client.evaluate(`document.querySelector('section[aria-label="Files"] header button')?.click()`)
+    await app.client.evaluate(`document.querySelector('section[aria-label="${copy('files.label')}"] header button')?.click()`)
     await pollUntil(app.client, ROW_PATHS, (paths) => paths.includes('binary.bin'))
     await app.client.evaluate(CLICK_ROW('binary.bin'))
-    const binaryText = await pollUntil(app.client, PANEL_TEXT, (text) => /二進位/.test(text))
-    check(results, 'UI 呈現「二進位檔案」', /二進位/.test(binaryText))
+    const binaryText = await pollUntil(app.client, PANEL_TEXT, (text) => (text ?? '').includes(copy('viewer.binary')))
+    check(results, 'UI 呈現「二進位檔案」', binaryText.includes(copy('viewer.binary')))
 
     // ── file-viewer：未知副檔名 ─────────────────────────────────────────────
     console.log('\n檔案檢視：未知副檔名')
-    await app.client.evaluate(`document.querySelector('section[aria-label="Files"] header button')?.click()`)
+    await app.client.evaluate(`document.querySelector('section[aria-label="${copy('files.label')}"] header button')?.click()`)
     await pollUntil(app.client, ROW_PATHS, (paths) => paths.includes('notes.unknownext'))
     await app.client.evaluate(CLICK_ROW('notes.unknownext'))
 
@@ -785,7 +801,7 @@ async function probeBuild(fixture, profile) {
     await sleep(400)
     const panelAfterSave = await app.client.evaluate(SIDE_PANEL_TEXT)
     check(results, '存檔不觸發自身的外部變更提示',
-      !/檔案已在磁碟上變更/.test(panelAfterSave))
+      !panelAfterSave.includes(copy('viewer.stale')))
 
     // 回到樹，存檔後標記應消失。
     await app.client.evaluate(BACK_TO_TREE)
@@ -805,14 +821,14 @@ async function probeBuild(fixture, profile) {
     await sleep(50)
     await app.client.evaluate(FOCUS_EDITOR)
     await sendCtrlS(app.client)
-    const conflictShown = await pollUntil(app.client, SIDE_PANEL_TEXT, (text) => /在你編輯期間已被外部改動/.test(text))
-    check(results, '存檔時偵測到外部改動並呈現衝突', /在你編輯期間已被外部改動/.test(conflictShown))
+    const conflictShown = await pollUntil(app.client, SIDE_PANEL_TEXT, (text) => (text ?? '').includes(copy('viewer.conflict')))
+    check(results, '存檔時偵測到外部改動並呈現衝突', conflictShown.includes(copy('viewer.conflict')))
     check(results, '衝突時未以我的內容覆寫磁碟',
       readFileSync(join(fixture.repo, 'notes.unknownext'), 'utf8') === externalContent)
 
     // ── file-operations：新增 / 刪除 ────────────────────────────────────────
     console.log('\n檔案操作：新增與刪除')
-    await app.client.evaluate(`document.querySelector('section[aria-label="Files"] header button')?.click()`)
+    await app.client.evaluate(`document.querySelector('section[aria-label="${copy('files.label')}"] header button')?.click()`)
     await pollUntil(app.client, ROW_PATHS, (paths) => paths.length > 0)
 
     // 真的點「＋」（右上角）—— 這個位置正是會讓選單溢出 viewport 的邊角案例。
@@ -822,8 +838,8 @@ async function probeBuild(fixture, profile) {
     await pollUntil(app.client, `document.querySelectorAll('[role="menuitem"]').length`, (n) => n > 0)
     check(results, '根目錄新增選單落在 viewport 內（不溢出右緣）',
       (await app.client.evaluate(MENU_PLACEMENT)) === 'in')
-    await app.client.evaluate(CLICK_MENU_ITEM('新增檔案'))
-    await pollUntil(app.client, `Boolean(document.querySelector('section[aria-label="Files"] input'))`, (v) => v)
+    await app.client.evaluate(CLICK_MENU_ITEM(copy('files.newFile')))
+    await pollUntil(app.client, `Boolean(document.querySelector('section[aria-label="${copy('files.label')}"] input'))`, (v) => v)
     await app.client.evaluate(SUBMIT_NAME_DIALOG('probe-new.txt'))
     const created = await pollDisk(() => existsSync(join(fixture.repo, 'probe-new.txt')))
     check(results, '新增的檔案出現在磁碟上', created)
@@ -837,9 +853,9 @@ async function probeBuild(fixture, profile) {
     await pollUntil(app.client, `document.querySelectorAll('[role="menuitem"]').length`, (n) => n > 0)
     check(results, '右鍵樹列的選單出現且落在 viewport 內',
       (await app.client.evaluate(MENU_PLACEMENT)) === 'in')
-    await app.client.evaluate(CLICK_MENU_ITEM('刪除'))
-    const confirmVisible = await pollUntil(app.client, SIDE_PANEL_TEXT, (text) => /這個動作無法復原/.test(text))
-    check(results, '刪除前呈現確認', /這個動作無法復原/.test(confirmVisible))
+    await app.client.evaluate(CLICK_MENU_ITEM(copy('common.delete')))
+    const confirmVisible = await pollUntil(app.client, SIDE_PANEL_TEXT, (text) => (text ?? '').includes(copy('files.deleteIrreversible')))
+    check(results, '刪除前呈現確認', confirmVisible.includes(copy('files.deleteIrreversible')))
     await app.client.evaluate(CONFIRM_DELETE)
     const deleted = await pollDisk(() => !existsSync(join(fixture.repo, 'probe-new.txt')))
     check(results, '確認後檔案自磁碟移除', deleted)
@@ -850,8 +866,8 @@ async function probeBuild(fixture, profile) {
     const plusPos2 = await coordsOf(app.client, PLUS_BTN)
     await realMouse(app.client, plusPos2.x, plusPos2.y, 'left')
     await pollUntil(app.client, `document.querySelectorAll('[role="menuitem"]').length`, (n) => n > 0)
-    await app.client.evaluate(CLICK_MENU_ITEM('新增檔案'))
-    await pollUntil(app.client, `Boolean(document.querySelector('section[aria-label="Files"] input'))`, (v) => v)
+    await app.client.evaluate(CLICK_MENU_ITEM(copy('files.newFile')))
+    await pollUntil(app.client, `Boolean(document.querySelector('section[aria-label="${copy('files.label')}"] input'))`, (v) => v)
     await app.client.evaluate(SUBMIT_NAME_DIALOG('w2.txt'))
     await pollUntil(app.client, ROW_PATHS, (paths) => paths.includes('w2.txt'))
 
@@ -868,8 +884,8 @@ async function probeBuild(fixture, profile) {
     const w2Pos = await coordsOf(app.client, ROW_EL('w2.txt'))
     await realMouse(app.client, w2Pos.x, w2Pos.y, 'right')
     await pollUntil(app.client, `document.querySelectorAll('[role="menuitem"]').length`, (n) => n > 0)
-    await app.client.evaluate(CLICK_MENU_ITEM('重新命名'))
-    await pollUntil(app.client, `Boolean(document.querySelector('section[aria-label="Files"] input'))`, (v) => v)
+    await app.client.evaluate(CLICK_MENU_ITEM(copy('files.rename')))
+    await pollUntil(app.client, `Boolean(document.querySelector('section[aria-label="${copy('files.label')}"] input'))`, (v) => v)
     await app.client.evaluate(SUBMIT_NAME_DIALOG('w2-renamed.txt'))
     const renamed = await pollDisk(() =>
       existsSync(join(fixture.repo, 'w2-renamed.txt')) && !existsSync(join(fixture.repo, 'w2.txt')))
@@ -881,9 +897,9 @@ async function probeBuild(fixture, profile) {
     const w2rPos = await coordsOf(app.client, ROW_EL('w2-renamed.txt'))
     await realMouse(app.client, w2rPos.x, w2rPos.y, 'right')
     await pollUntil(app.client, `document.querySelectorAll('[role="menuitem"]').length`, (n) => n > 0)
-    await app.client.evaluate(CLICK_MENU_ITEM('刪除'))
-    const unsavedWarn = await pollUntil(app.client, SIDE_PANEL_TEXT, (text) => /其中有未存的變更/.test(text))
-    check(results, '刪除有未存變更的檔案時確認訊息指出未存變更', /其中有未存的變更/.test(unsavedWarn))
+    await app.client.evaluate(CLICK_MENU_ITEM(copy('common.delete')))
+    const unsavedWarn = await pollUntil(app.client, SIDE_PANEL_TEXT, (text) => (text ?? '').includes(copy('files.deleteUnsaved')))
+    check(results, '刪除有未存變更的檔案時確認訊息指出未存變更', unsavedWarn.includes(copy('files.deleteUnsaved')))
     await app.client.evaluate(CONFIRM_DELETE)
     const removedDirty = await pollDisk(() => !existsSync(join(fixture.repo, 'w2-renamed.txt')))
     check(results, '確認後有未存變更的檔案自磁碟移除', removedDirty)
@@ -927,10 +943,10 @@ async function probeBuild(fixture, profile) {
       imgViolations.length ? imgViolations.join(',') : '(無違規，正確)')
 
     // 預設為預覽模式（渲染後的樣貌）
-    check(results, 'markdown 預設呈現預覽模式', (await app.client.evaluate(MODE_PRESSED('預覽'))) === true)
+    check(results, 'markdown 預設呈現預覽模式', (await app.client.evaluate(MODE_PRESSED(copy('viewer.preview')))) === true)
 
     // 切換至原始碼 → 呈現可編輯的原始 markdown 文字，預覽區退場
-    await app.client.evaluate(CLICK_MODE('原始碼'))
+    await app.client.evaluate(CLICK_MODE(copy('viewer.source')))
     const source = await pollUntil(app.client, EDITOR_TEXT, (text) => /# 標題/.test(text ?? ''))
     check(results, '切換至原始碼模式呈現原始 markdown', /# 標題/.test(source ?? ''))
     check(results, '原始碼模式為可編輯的編輯器（非唯讀）',
@@ -940,7 +956,7 @@ async function probeBuild(fixture, profile) {
     await app.client.evaluate(FOCUS_EDITOR)
     await app.client.send('Input.insertText', { text: 'MDEDIT ' })
     await pollUntil(app.client, EDITOR_TEXT, (text) => /MDEDIT /.test(text ?? ''))
-    await app.client.evaluate(CLICK_MODE('預覽'))
+    await app.client.evaluate(CLICK_MODE(copy('viewer.preview')))
     const previewText = await pollUntil(app.client, PREVIEW_TEXT, (text) => /MDEDIT/.test(text ?? ''))
     check(results, '原始碼模式的修改反映於預覽', /MDEDIT/.test(previewText ?? ''))
 
@@ -983,12 +999,12 @@ async function probeBuild(fixture, profile) {
     check(results, 'worker 完成一次往返（URL 被標為連結）', links > 0, `${links} 個 .detected-link`)
 
     writeFileSync(join(fixture.repo, 'sample.ts'), '// 已被外部改動 https://example.com/spec\n')
-    const staleText = await pollUntil(app.client, PANEL_TEXT, (text) => /已在磁碟上變更/.test(text))
-    check(results, '檢視中的檔案被外部修改時提示過期', /已在磁碟上變更/.test(staleText))
+    const staleText = await pollUntil(app.client, PANEL_TEXT, (text) => (text ?? '').includes(copy('viewer.stale')))
+    check(results, '檢視中的檔案被外部修改時提示過期', staleText.includes(copy('viewer.stale')))
 
     unlinkSync(join(fixture.repo, 'sample.ts'))
-    const deletedText = await pollUntil(app.client, PANEL_TEXT, (text) => /已被刪除/.test(text))
-    check(results, '檢視中的檔案被外部刪除時明確標示', /已被刪除/.test(deletedText))
+    const deletedText = await pollUntil(app.client, PANEL_TEXT, (text) => (text ?? '').includes(copy('viewer.deleted')))
+    check(results, '檢視中的檔案被外部刪除時明確標示', deletedText.includes(copy('viewer.deleted')))
   } finally {
     await app.close()
   }

@@ -71,6 +71,16 @@ session、叫什麼名字、什麼順序、錨定哪個 change」都沒了** —
 以及**休眠**——重建的 session **於首次被顯示時才 spawn**，於是開 app 只起**一個** claude，不是 N 個
 一起搶 CPU。連帶修好「reload 也會清光 session」。`probe:terminal` 144/144（新增 36 條）。
 
+`ui-copy-i18n`（不屬於任何 Phase）把 **app 的文案從中英混雜正名為全英文**，並讓文案第一次**有地方
+住**。原本約 150 個使用者可見的字串硬編在 JSX、`aria-label`、`title`、原生對話框與 `TerminalError`
+的 message 裡 —— 同一條活動列上並排著 `Handoffs` 與「搜尋」「設定」。它交付 **i18next + 單一 `en`
+字典**（`src/shared/i18n/en.json`，**主行程與 renderer 共用同一份**）、key 的**編譯期型別安全**、
+以及一道**守衛**（產品原始碼的字串字面值不得含 CJK，註解豁免 —— 走 AST 而非行掃描）。連帶：
+**`aria-label` 同時是選擇器**這件事被正面處理 —— 6 支 probe 的 97 處選擇器與 `Ctrl+T` 的
+`querySelector` 全部改為**自同一份字典取字串**，於是「改文案 → 探針靜默選不到元素」這個失敗模式
+被結構性地消滅。`npm test` 228/228，六支 probe 全綠（15 / 42 / 101 / 162 / 64 / 146）。
+詳見下文「UI 文案與 i18n」—— 那裡記著五個**會靜默失敗**的實測踩雷。
+
 尚未開始：打包（Phase 6）、handoff（Phase 7+）。**session 常駐**（讓 pty 活過 app 的生命）已排入
 路線圖但**刻意不做** —— 見 `docs/PRD.md` §11 的「session 常駐」，那裡記著 tmux 與自寫 daemon 的取捨。
 
@@ -80,7 +90,7 @@ session、叫什麼名字、什麼順序、錨定哪個 change」都沒了** —
 npm run dev             # electron-vite dev（開發模式）
 npm run build           # 建置至 out/
 npm run typecheck       # tsc：main / preload（node）+ renderer（web）
-npm test                # node:test 單元測試（fs 邊界、workspace store、listDir/readFile、watcher、外部 URL、pty 管理器、git 分支解析、字級不得寫死、舊產品名不得殘留）
+npm test                # node:test 單元測試（fs 邊界、workspace store、listDir/readFile、watcher、外部 URL、pty 管理器、git 分支解析、字級不得寫死、舊產品名不得殘留、UI 文案不得含 CJK、aria-label 不得硬編、字典 key 的型別安全）
 npm run probe:shell     # 驗收 workspace-app-shell（開視窗 + 信任模型 + preload 白名單，走 CDP）
 npm run probe:workspace # 驗收 workspace-folders / filesystem-access / workspace-layout / repo-branch（rail 呈現分支、於 app 之外切 branch 後自己更新、detached HEAD、執行期間變成 git repo、rail 不呈現不可操作的控制項）
 npm run probe:files     # 驗收 file-explorer / file-viewer / 編輯 / 存檔 / 衝突 / CRUD / 導航防護 / 編輯器 worker / CSP（遠端圖片可載入、script-src 僅 self、注入點對 file:// 生效，dev + build 兩模式）
@@ -355,6 +365,15 @@ org 名**不是**凍結身分的一部分 —— repo 改名與 transfer 皆自�
   的「初始 cwd 恆為 folder 根目錄」放寬為「落在邊界內」（**renderer 依然沒有任何路徑詞彙**），
   `probe:shell` 補上 `terminal.*` 的白名單守衛（它一度與當年的 `folders.*` 一樣完全沒有守衛）。
   詳見上文「session 的持久化與重建」—— 那裡記著八個**會靜默失敗**的實測踩雷。
+- **UI 文案與 i18n** — `ui-copy-i18n`（**不屬於任何 Phase**）：app 的文案從**中英混雜**正名為
+  全英文，並第一次讓文案**有地方住**。新能力 `ui-localization` —— i18next + **單一 `en` 字典**
+  （`src/shared/i18n/en.json`，主行程與 renderer **共用同一份**）、key 的**編譯期型別安全**
+  （`CustomTypeOptions` + `resolveJsonModule`，**不需型別產生器**）、以及一道**守衛**（產品原始碼
+  的字串字面值不得含 CJK；註解豁免，因此**必須走 AST**）。連帶：`openspec-panel`、
+  `keyboard-navigation`、`file-explorer` 的 delta（那些 scenario 以中文文案指名控制項），以及
+  **6 支 probe 的 97 處選擇器 + `Ctrl+T` 的 `querySelector` 全部改為自字典取字串** ——
+  `aria-label` 在這個 repo 裡同時是**選擇器**，硬編它，一次文案改動就會讓探針**靜默地選不到元素**
+  （而 `Ctrl+T` 連紅燈都不會有）。詳見上文「UI 文案與 i18n」。
 - Phase 6 打包與發佈，Phase 7+ 建立護城河（handoff）。**session 常駐**已排入路線圖但刻意不做
   （PRD §11）。
 
@@ -377,6 +396,9 @@ org 名**不是**凍結身分的一部分 —— repo 改名與 transfer 皆自�
 
 - 程式碼用英文撰寫
 - 註解與文件使用繁體中文（台灣用語）
+- **UI 文案為英文，且一律來自字典**（`src/shared/i18n/en.json`）—— 見下文「UI 文案與 i18n」。
+  註解仍是繁中：那兩件事是分開的，而它們曾經混在一起（於是每個 change 的作者一邊用中文寫註解，
+  一邊很自然地把中文寫進 `aria-label`）。
 - 本 repo 的 Node 版本固定在 `.nvmrc`（22.22.0），與 `../spek` 一致
 
 ## Phase 0 推翻的 PRD 假設
@@ -1023,6 +1045,139 @@ npm 會先印幾行 `>` 開頭的腳本回顯與**空行**；`npm run typecheck 
 只顯示那幾個空行，**真正的錯誤被擠出視窗**。我因此一度以為「typecheck 抓不到未定義的函式」而去懷疑
 `tsconfig` —— 對照組證明它抓得到（`TS2304`），是我自己把眼睛遮住了。**要看 exit code，不要看被截斷
 的前幾行。**
+
+## UI 文案與 i18n（`ui-copy-i18n` 起）
+
+**使用者看得到的每一個字都來自字典 `src/shared/i18n/en.json`，語言是英文。** 主行程與 renderer
+**共用同一份字典**（兩個 realm 各持有一份 i18next 實例，`resources` 指向同一個 JSON）。
+
+**「使用者可見的文案」有四類，後兩類最容易漏 —— 它們住在主行程，看起來像內部錯誤：**
+
+1. renderer 的介面文字（JSX、`aria-label`、`title`、驗證訊息、空狀態）
+2. 主行程的**原生對話框**（關窗時的未存提示）
+3. 主行程**經 IPC 送達畫面**的錯誤訊息 —— `TerminalError` 的 message 會被畫成「Cannot restore
+   this session: …」，`FsServiceError` 的 message 會成為 FileViewer 的 hint
+4. **寫進 pty 串流給人讀的訊息**（session 重建的重播分隔線；只有**文字**進字典，ANSI 與框線
+   字元留在程式碼）
+
+**`console.*` 與內部不變式的 `throw` 不進字典**（沒有使用者會讀到它們），**但一律英文** ——
+因為守衛是一刀切的，而一刀切是對的：「這個字串會不會被顯示」**無法靜態判定**（見第 3 類）。
+
+### 字典是 `.json` 而不是 `.ts` —— 因為 probe 要 import 它
+
+`scripts/*.mjs` import 不了 TypeScript。Node 22 的 import attributes 讀得到 JSON：
+`import en from '…/en.json' with { type: 'json' }`（`scripts/lib/copy.mjs`）。
+
+**而「JSON 字典 ⇒ key 沒有型別安全」是錯的。** `resolveJsonModule` 早已開啟，把 `typeof en` 餵進
+i18next 的 `CustomTypeOptions`（`src/shared/i18n/i18next.d.ts`），`t('rail.emty')` 就會
+**編譯失敗**（TS2345，還會提示 `Did you mean "rail.empty"?`）。**不需要任何型別產生器。** 少了這
+一段，打錯的 key 會在執行期把 `rail.emty` 這串字**印在畫面上**。
+
+### i18n **於模組載入時初始化**，不是導出一個「請記得呼叫」的 init
+
+**未初始化的 `t()` 不會拋錯，它回傳 `undefined`**（實測）—— 任何在 init 之前產生的文案都會靜靜
+地變成 `undefined`：不是錯誤訊息，畫面上就只是什麼都沒有。而「誰先載入」在三個環境裡並不一致：
+主行程於 `whenReady` 才啟動、renderer 於進入點，而**單元測試根本沒有進入點**（它直接 import
+`fs-service`，而那裡的錯誤訊息現在也走字典）。把 init 綁在 import 上，這一整類 bug 就不存在了。
+
+renderer 因此改用 `<I18nextProvider>` 交付實例（`use(initReactI18next)` 必須在 `init` 之前，
+而 init 已經發生在 import 的那一刻）。
+
+### **`i18next` 必須在 `dependencies`，不是 `devDependencies`**
+
+main 的 build 用 `externalizeDepsPlugin()` —— i18next 不會被 bundle 進 main，而是在**執行期
+require**（已驗證：`out/main/index.js` 裡是 `import i18next from "i18next"`）。electron-builder
+只把 `dependencies` 打進 asar，**放錯區塊時 dev 模式完全正常，打包後的 app 一啟動就
+`MODULE_NOT_FOUND`**。（`react-i18next` 只在 renderer、會被 vite bundle 進產物，因此放
+`devDependencies` —— 比照 `react` 與 `react-markdown`。）
+
+### 守衛：產品原始碼的字串字面值不得含 CJK（`scripts/copy-language.test.mjs`）
+
+**文案之所以會變成中文，不是因為有人決定用中文，而是因為沒有東西擋著。** 收斂前有約 150 處。
+
+- **必須走語法樹（`ts.createSourceFile`），不能 regex 掃行** —— **豁免註解正是這道守衛的核心
+  語意**（repo 慣例是繁中註解），而註解與字串在同一行裡分不開（`const x = 'ok' // 這是註解`），
+  JSX 的區塊註解更是讓「行首是不是 `//`」的判斷完全失效。判不準註解，守衛不是誤殺就是全綠。
+- **對照組不是裝飾**：守衛餵一段刻意違規的來源要求它被抓到、餵一段只有繁中註解的來源要求它
+  不被誤報。**外加一次實地對照** —— 往真的產品檔案塞一個中文字串，確認它會紅（這證明的是
+  `walk()` 真的走到了 `src/`，而不是掃了空目錄之後全綠）。
+- 豁免：`*.test.ts`（測試可以用中文描述自己在測什麼）、`scripts/`（探針的輸出是開發工具）。
+
+> **這道守衛只擋 CJK，擋不住硬編的英文文案。** `Side panel`、`Change artifact`、`Specs`、
+> `Tasks`、`Spec deltas` 這些 `aria-label` 本來就是英文，於是守衛看不見它們，我第一輪也漏了 ——
+> **是 probe 的選擇器盤點把它們揪出來的。** 新增可見文案時（尤其是英文的），要自己記得進字典。
+
+### **`aria-label` 同時是選擇器** —— 這是本 repo 的結構性事實
+
+驗收不得為此在產品 UI 上掛 `data-*`（既有紀律），於是 probe 只能靠 `role` 與 `aria-label` 定位
+元素 —— **6 支 probe 共 97 處**。而 `Ctrl+T` 的實作是「找到既有的建立入口並觸發它」，靠的正是
+`document.querySelector('[aria-label="…"]')`。
+
+**兩者都從字典取字串**（`scripts/lib/copy.mjs` 的 `copy()` / `label()`；`KeyboardNavigation.tsx`
+用 `t('sessions.new')`）。**文案與選擇器一旦分離為兩份字面值，它們就會在某一次改文案時失去同步
+—— 而失去同步的徵狀是「選不到元素」，不是「斷言失敗」。** `Ctrl+T` 更是連紅燈都不會有：字串比對
+不會使型別檢查失敗，快捷鍵直接靜默失效。
+
+> **「測試與被測物同源，字典寫錯時探針不會發現」—— 不成立。** probe 驗的是**行為**，不是文案
+> 內容：沒有哪條 spec 說那顆按鈕必須叫 `New session`，spec 說的是「觸發它會建立一個 session」。
+> `aria-label` 在 probe 裡的角色是**定位手段**，與 `role` 或 CSS class 沒有差別。文案內容的正確
+> 性由人擔保 —— 它就印在畫面上。
+
+### 三道守衛，缺一不可（它們互補，不重複）
+
+| 守衛 | 擋什麼 | 少了它會怎樣 |
+|---|---|---|
+| `copy-language.test.mjs` | 產品原始碼的字串字面值含 **CJK** | 文案慢慢變回中文（沒有東西擋著） |
+| `aria-label-source.test.mjs` | **硬編**的 `aria-label`（**含本來就是英文的**） | 改文案時探針**靜默地選不到元素**；`Ctrl+T` 連紅燈都沒有 |
+| `i18n-key-safety.test.mjs` | 字典 key 的**編譯期**型別安全 | 打錯的 key 在**執行期**把 `rail.emty` 印在畫面上 |
+
+**第二道是第一道抓不到的**：`Side panel`、`Change artifact`、`Specs`、`Tasks` 這些 `aria-label`
+本來就是英文，CJK 守衛看不見它們 —— `ui-copy-i18n` 的第一輪實作正好漏掉了它們。
+
+**第三道守的是一份 ambient declaration。** `src/shared/i18n/i18next.d.ts` 的 `CustomTypeOptions`
+**沒有任何模組 import 它** —— **拿掉那個檔案，`npm run typecheck` 照樣 exit 0**（已實測），而
+`t('rail.emty')` 從此變成一個只在執行期現形的錯誤。**一個「拿掉之後沒有任何東西會紅」的防護，
+就是一個遲早會被拿掉的防護。**
+
+### 五個實測踩雷（全部會靜默失敗，或以「產品壞了」的樣貌現身）
+
+- **英文的語序與中文不同 —— 前綴／後綴選擇器不能機械替換。** `自 workspace 移除 {{name}}` 的
+  固定部分在**前面**，它的英文 `Remove {{name}} from workspace` 把變數放到了**中間**（前綴只剩
+  `Remove `）。而 rail 的展開／收合鈕，中文的兩個標籤都以「的 session」結尾 —— 一個 `$=` 就通吃；
+  英文是 `Expand sessions in {{name}}` / `Collapse sessions in {{name}}`，**沒有共同的固定後綴，
+  只能兩個前綴都試**。`copy.mjs` 因此提供 `prefixOf` / `suffixOf` / `patternOf`（後者可**自文案
+  反推變數的值**）；`prefixOf` 在前綴為空時**拋錯** —— `[aria-label^=""]` 會匹配**每一個**元素，
+  那比選不到更糟，因為它會靜默地通過。
+- **探針的內容斷言也會過期，不只選擇器。** `/尚未選擇 repo/.test(...)`、`/過大/`、
+  `/這個動作無法復原/`、`CLICK_MENU_ITEM('新增檔案')`、`CLICK_VIEW('瀏覽')`、
+  `MODE_PRESSED('預覽')`、`indexOf('以上為上次的內容')` —— 這些比對的是 UI 上的**文字**，
+  換文案就全紅。**但要區分文案與 fixture**：`/# 標題/` 是探針自己寫進 markdown 檔的內容，
+  改它就錯了。
+- **註解裡的 `*/` 與反引號會炸掉檔案（我踩了兩次）。** 在 `copy-language.test.mjs` 的**區塊註解**
+  裡寫 JSX 的區塊註解形式，那個 `*/` 提前關閉了註解；在 probe 的**模板字串**內寫註解、又在裡面
+  用反引號舉例，反引號把模板字串提前結束了。**很應景 —— 這道守衛講的正是「註解與程式碼難分」。**
+- **一支新的 CPU 密集測試會逼出既有的競態。** `copy-language.test.mjs` 用 TypeScript 解析整個
+  `src/`，`npm test` 平行跑時把 `terminal.test.ts` 的兩處 `stub.calls()` 斷言擠爆了 ——
+  產品在 spawn 的**當下**就回報了 conversationId，但 stub 是在自己的行程裡 `echo "$@" >> log`，
+  中間隔著一次 fork/exec。**其餘的 `stub.calls()` 斷言本來就都先 `waitFor` 過，那兩處漏了。**
+  （baseline 對照證明它不是 i18n 引入的：改動前完整 `npm test` 連跑 4 次全綠。）
+- **對已 `close()` 的 CDP client 呼叫 `evaluate`，會無限等待。** `cdp.mjs` 的 `send` 是靠 message
+  id 配對 resolve 的 —— WebSocket 關掉之後，訊息沒有人接，那個 Promise **永遠不會 resolve**：
+  **不拋錯、不逾時**。`probe:shell` 在 `pollUntil` 之後就 `client.close()` 了，我在那之後補一條
+  `evaluate` 量 `document.documentElement.lang`，探針就這樣卡死十分鐘 —— **而症狀看起來像
+  「Electron 啟動很慢」**（我差點就當成慢而繼續等）。**量測要併進 `PROBE_EXPRESSION`**，那個
+  IIFE 在 client 還活著時就跑完了。
+- **`probe:openspec` 的第一條斷言一直是靠運氣的。** `MOUNTED` 只等 rail 的 `<aside>` 出現 ——
+  **folder 列來自一次非同步的 `folders.list()`，晚一步才渲染**。`SELECT_FOLDER` 只 `evaluate`
+  一次，機器一忙就選不到那一列，而後面**每一條**斷言都跟著紅（看起來像側欄壞了，其實只是還沒
+  畫出來）。已改為輪詢。
+
+### 順手抓到的一則過期文案
+
+`SessionNameDialog` 的提示原本寫著「取名之後，pty 想改名**會先問過你**」—— 而那個確認對話框早已
+隨 `session-title-authority` 移除（現在是**永久接管、靜默忽略**）。文案與行為不符，而且它承諾的是
+一個不存在的功能。英文版改為誠實的敘述：「While a name is set, titles announced by the pty are
+ignored. Clear the name to follow them again.」**全面改寫文案時會撞見這種東西 —— 它們是資產。**
 
 ## 字級尺度（`rail-legibility-and-repo-row` 起）
 

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 
 interface SessionNameDialogProps {
   initialValue: string
@@ -24,6 +25,8 @@ export function SessionNameDialog({
   onSubmit,
   onCancel,
 }: SessionNameDialogProps): React.JSX.Element {
+  const { t } = useTranslation()
+
   const [value, setValue] = useState(initialValue)
   const inputRef = useRef<HTMLInputElement>(null)
 
@@ -36,15 +39,15 @@ export function SessionNameDialog({
     <div className={OVERLAY_CLASS}>
       <div
         role="dialog"
-        aria-label="重新命名 session"
+        aria-label={t('sessions.renameTitle')}
         className="w-full max-w-sm rounded border border-hairline bg-panel p-3 shadow-lg"
       >
-        <p className="text-ink">重新命名 session</p>
+        <p className="text-ink">{t('sessions.renameTitle')}</p>
 
         <input
           ref={inputRef}
           value={value}
-          aria-label="session 名稱"
+          aria-label={t('sessions.nameLabel')}
           onChange={(event) => setValue(event.target.value)}
           onKeyDown={(event) => {
             if (event.key === 'Enter') onSubmit(value)
@@ -53,20 +56,18 @@ export function SessionNameDialog({
           className="mt-2 w-full rounded border border-hairline bg-stage px-2 py-1 font-mono text-ink outline-none focus:border-accent/50"
         />
 
-        <p className="mt-1 text-xs text-ink-faint">
-          清空即回到跟隨 pty 宣告的名稱。取名之後，pty 想改名會先問過你。
-        </p>
+        <p className="mt-1 text-xs text-ink-faint">{t('sessions.renameHint')}</p>
 
         <div className="mt-3 flex justify-end gap-2">
           <button type="button" onClick={onCancel} className={BUTTON_CLASS}>
-            取消
+            {t('common.cancel')}
           </button>
           <button
             type="button"
             onClick={() => onSubmit(value)}
             className={`${BUTTON_CLASS} border-accent/40 text-accent`}
           >
-            確定
+            {t('common.confirm')}
           </button>
         </div>
       </div>

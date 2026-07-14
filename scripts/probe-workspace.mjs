@@ -16,6 +16,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { check, connect, dragMouse, pollUntil, pressKey, waitForPageTarget } from './lib/cdp.mjs'
+import { copy, patternOf, suffixOf } from './lib/copy.mjs'
 
 const DEBUG_PORT = 9223
 const results = []
@@ -97,7 +98,7 @@ function seedProfile(folders) {
  * 因此必須等到 visible 且三個分界都就位，才開始互動。
  */
 const MOUNTED = `(() => {
-  const rail = document.querySelector('aside[aria-label="工作區"]')
+  const rail = document.querySelector('aside[aria-label="${copy('rail.label')}"]')
   return Boolean(
     rail &&
     document.getElementById('root')?.children.length &&
@@ -141,16 +142,16 @@ async function launch(profileDir) {
  * 指示鈕識別的 —— 而 `◈` 已隨 rail-legibility-and-repo-row 移除（它的 onClick 裡只有
  * stopPropagation，是一顆按不下去的假按鈕，且不在雛型裡）。探針的斷言會隨規格過期。
  */
-const RAIL_ROWS = `[...document.querySelectorAll('aside[aria-label="工作區"] li')]
+const RAIL_ROWS = `[...document.querySelectorAll('aside[aria-label="${copy('rail.label')}"] li')]
   .map((li) => {
-    const remove = li.querySelector('button[aria-label^="自 workspace 移除 "]')
+    const remove = li.querySelector('button[aria-label$="${suffixOf('rail.removeFolder')}"]')
     if (!remove) return null
-    const name = remove.getAttribute('aria-label').replace('自 workspace 移除 ', '')
+    const name = remove.getAttribute('aria-label').match(/^${patternOf('rail.removeFolder')}$/)?.[1]
     return {
       name,
       text: li.innerText,
       // rail 不再為「含有 openspec」這個常態發聲 —— 這兩個都必須恆為 false／不存在。
-      hasOpenSpecButton: !!li.querySelector('button[aria-label^="OpenSpec"]'),
+      hasOpenSpecButton: !!li.querySelector('button[aria-label^="${copy('panelSwitch.openSpec')}"]'),
       hasDiamond: li.innerText.includes('◈'),
     }
   })
@@ -163,7 +164,7 @@ const RAIL_ROWS = `[...document.querySelectorAll('aside[aria-label="工作區"] 
  * 卻什麼都不發生的元素，會反覆消耗使用者的注意力去確認它是不是壞了。這裡以「所有按鈕都必須
  * 具備 aria-label，且不得是已知的純指示用途」來近似；`◈` 那顆的特徵是 disabled 或無任何行為。
  */
-const RAIL_BUTTONS = `[...document.querySelectorAll('aside[aria-label="工作區"] button')]
+const RAIL_BUTTONS = `[...document.querySelectorAll('aside[aria-label="${copy('rail.label')}"] button')]
   .map((b) => ({ label: b.getAttribute('aria-label'), disabled: b.disabled }))`
 
 const LAYOUT = `(() => {
@@ -172,19 +173,19 @@ const LAYOUT = `(() => {
     const r = el.getBoundingClientRect()
     return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) }
   })
-  const toggle = document.querySelector('main[aria-label="主舞台"] header button[aria-expanded]')
+  const toggle = document.querySelector('main[aria-label="${copy('stage.label')}"] header button[aria-expanded]')
   return {
     separators,
-    rail: width('aside[aria-label="工作區"]'),
-    activityBar: width('nav[aria-label="活動列"]'),
-    sidePanel: width('section[aria-label="Side panel"]'),
-    terminal: width('section[aria-label="Terminal"]'),
+    rail: width('aside[aria-label="${copy('rail.label')}"]'),
+    activityBar: width('nav[aria-label="${copy('activityBar.label')}"]'),
+    sidePanel: width('section[aria-label="${copy('openspec.sidePanel')}"]'),
+    terminal: width('section[aria-label="${copy('stage.terminal')}"]'),
     toggleLabel: toggle?.getAttribute('aria-label') ?? null,
     toggleExpanded: toggle?.getAttribute('aria-expanded') ?? null,
   }
 })()`
 
-const ACTIVITY_BAR = `[...document.querySelectorAll('nav[aria-label="活動列"] button')].map((b) => ({
+const ACTIVITY_BAR = `[...document.querySelectorAll('nav[aria-label="${copy('activityBar.label')}"] button')].map((b) => ({
   label: b.querySelector('.sr-only')?.textContent ?? '',
   disabled: b.disabled,
   current: b.getAttribute('aria-current'),
@@ -222,7 +223,7 @@ const callListDir = (folderId, relPath) => `(async () => {
 // 依 label 選取會在競態下找不到按鈕，讓「展開」靜默地沒有發生。
 // 以 aria-expanded 選取而非「header 的第一顆按鈕」—— 身分切換的分頁排在它前面。
 const CLICK_TOGGLE = `(() => {
-  const button = document.querySelector('main[aria-label="主舞台"] header button[aria-expanded]')
+  const button = document.querySelector('main[aria-label="${copy('stage.label')}"] header button[aria-expanded]')
   if (!button) return false
   button.click()
   return true
@@ -265,10 +266,10 @@ try {
 
   // 缺少 openspec 是**異常**，才發聲（弱訊號）。
   check(results, '不含 openspec 的 folder：以弱訊號標示',
-    plainRow?.text.includes('無 openspec/'),
+    plainRow?.text.includes(copy('rail.noOpenspec')),
     plainRow?.text.replace(/\n/g, ' · '))
 
-  check(results, '路徑失效的 folder：明確標示', missingRow?.text.includes('失效'),
+  check(results, '路徑失效的 folder：明確標示', missingRow?.text.includes(copy('rail.missingBadge')),
     missingRow?.text.replace(/\n/g, ' · '))
 
   // ── repo-branch：rail 呈現分支 ───────────────────────────────────────────
@@ -424,7 +425,7 @@ try {
   check(results, 'Sessions 可用且預設選取',
     activity[0]?.disabled === false && activity[0]?.current === 'page', activity[0]?.label)
   check(results, '尚未實作的入口停用且附提示',
-    activity.slice(1).every((item) => item.disabled && /尚未可用/.test(item.title)),
+    activity.slice(1).every((item) => item.disabled && item.title.includes(suffixOf('activityBar.comingSoon'))),
     activity.slice(1).map((i) => i.label).join(', '))
 
   await app.close()

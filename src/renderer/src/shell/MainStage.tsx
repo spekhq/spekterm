@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { Group, Panel, Separator, usePanelRef } from 'react-resizable-panels'
 import { useChanges } from './openspec/data'
 import { VizOverlay, type VizKind } from './openspec/VizOverlay'
@@ -15,6 +16,7 @@ interface MainStageProps {
 }
 
 export function MainStage({ folder }: MainStageProps): React.JSX.Element {
+  const { t } = useTranslation()
   const sidePanelRef = usePanelRef()
   const [collapsed, setCollapsed] = useState(false)
   // 預設身分是 OpenSpec —— 雛型的預設，也是這個工作台的主張：使用者加入一個有 openspec/ 的
@@ -186,10 +188,10 @@ export function MainStage({ folder }: MainStageProps): React.JSX.Element {
   )
 
   return (
-    <main aria-label="主舞台" className="flex h-full flex-col bg-stage">
+    <main aria-label={t('stage.label')} className="flex h-full flex-col bg-stage">
       <header className="flex items-center gap-3 border-b border-hairline px-4 py-2 text-base">
         <span className={folder ? 'text-ink' : 'text-ink-faint'}>
-          {folder ? folder.name : '尚未選擇 repo'}
+          {folder ? folder.name : t('stage.noRepo')}
         </span>
         {folder && <span className="truncate text-sm text-ink-faint">{folder.path}</span>}
 
@@ -205,11 +207,11 @@ export function MainStage({ folder }: MainStageProps): React.JSX.Element {
           type="button"
           onClick={toggleSidePanel}
           aria-expanded={!collapsed}
-          aria-label={collapsed ? '展開 side panel' : '收合 side panel'}
-          title={collapsed ? '展開 side panel' : '收合 side panel'}
+          aria-label={collapsed ? t('stage.expandSidePanel') : t('stage.collapseSidePanel')}
+          title={collapsed ? t('stage.expandSidePanel') : t('stage.collapseSidePanel')}
           className="rounded border border-hairline px-2 py-1 text-sm text-ink-dim hover:text-accent"
         >
-          {collapsed ? '▤ 展開' : '▤ 收合'}
+          {`▤ ${collapsed ? t('common.expand') : t('common.collapse')}`}
         </button>
       </header>
 
@@ -229,7 +231,7 @@ export function MainStage({ folder }: MainStageProps): React.JSX.Element {
 
       <Group orientation="horizontal" className="flex-1">
         <Panel minSize="240px">
-          <section aria-label="Terminal" className="relative h-full bg-shell">
+          <section aria-label={t('stage.terminal')} className="relative h-full bg-shell">
             {/*
               **掛載所有 folder 的所有 session**，只讓當前 folder 的 focused 那一個顯示。
               若只掛載當前 folder 的，切走再切回時 xterm 實例已被卸載，scrollback 就沒了
@@ -256,7 +258,7 @@ export function MainStage({ folder }: MainStageProps): React.JSX.Element {
 
             {!focusedId && (
               <div className="flex h-full items-center justify-center text-sm text-ink-faint">
-                {folder ? '以 + session 開一個終端' : '尚未選擇 repo'}
+                {folder ? t('stage.noSession') : t('stage.noRepo')}
               </div>
             )}
           </section>
@@ -273,7 +275,7 @@ export function MainStage({ folder }: MainStageProps): React.JSX.Element {
           onResize={syncCollapsed}
         >
           {/* 視覺分界由 Separator 提供；此處若再加 border-l，收合後會殘留一條 1px 的線 */}
-          <section aria-label="Side panel" className="h-full overflow-hidden bg-panel">
+          <section aria-label={t('openspec.sidePanel')} className="h-full overflow-hidden bg-panel">
             <SidePanel
               identity={activeIdentity}
               folder={folder}

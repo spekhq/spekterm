@@ -3,6 +3,7 @@ import { useMemo, useState } from 'react'
 import type { ChangeInfo } from '../types'
 import { useChanges, useSpec, useSpecs } from './data'
 import { ErrorNote, Loading, ProgressBar, TaskCount } from './ui'
+import { useTranslation } from 'react-i18next'
 
 interface BrowseViewProps {
   folderId: string
@@ -98,6 +99,8 @@ function Row({
   title?: string
   children: React.ReactNode
 }): React.JSX.Element {
+  const { t } = useTranslation()
+
   return (
     <div
       role="treeitem"
@@ -113,7 +116,7 @@ function Row({
         <button
           type="button"
           onClick={onToggle}
-          aria-label={expanded ? '收合' : '展開'}
+          aria-label={expanded ? t('openspec.collapse') : t('openspec.expand')}
           className="shrink-0 px-1 py-[3px]"
         >
           <Chevron open={Boolean(expanded)} />
@@ -140,6 +143,8 @@ function SpecsTree({
   folderId: string
   onOpenSpec: (topic: string) => void
 }): React.JSX.Element {
+  const { t } = useTranslation()
+
   const { data, loading, error } = useSpecs(folderId)
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set())
 
@@ -153,13 +158,13 @@ function SpecsTree({
   }
 
   return (
-    <TreeSection label="Specs" count={data?.length ?? null}>
+    <TreeSection label={t('openspec.specs')} count={data?.length ?? null}>
       {error ? (
         <ErrorNote message={error} />
       ) : loading || !data ? (
         <Loading />
       ) : data.length === 0 ? (
-        <p className="px-3 py-1 text-xs text-ink-faint">還沒有 spec。</p>
+        <p className="px-3 py-1 text-xs text-ink-faint">{t('openspec.noSpecs')}</p>
       ) : (
         data.map((spec) => (
           <div key={spec.topic}>
@@ -209,6 +214,8 @@ function SpecHeadings({
   topic: string
   onOpenSpec: () => void
 }): React.JSX.Element {
+  const { t } = useTranslation()
+
   const { data, loading, error } = useSpec(folderId, topic)
 
   const headings = useMemo<Heading[]>(
@@ -217,9 +224,9 @@ function SpecHeadings({
   )
 
   if (error) return <ErrorNote message={error} />
-  if (loading || !data) return <p className="py-1 pl-8 text-xs text-ink-faint">載入中…</p>
+  if (loading || !data) return <p className="py-1 pl-8 text-xs text-ink-faint">{t('common.loading')}</p>
   if (headings.length === 0) {
-    return <p className="py-1 pl-8 text-xs text-ink-faint">沒有標題。</p>
+    return <p className="py-1 pl-8 text-xs text-ink-faint">{t('openspec.noHeadings')}</p>
   }
 
   return (
@@ -250,29 +257,31 @@ function ChangesTree({
   anchoredChange: string | null
   onAnchor: (slug: string) => void
 }): React.JSX.Element {
+  const { t } = useTranslation()
+
   const { data, loading, error } = useChanges(folderId)
 
   const total = data ? data.active.length + data.archived.length : null
 
   return (
-    <TreeSection label="Changes" count={total}>
+    <TreeSection label={t('openspec.changes')} count={total}>
       {error ? (
         <ErrorNote message={error} />
       ) : loading || !data ? (
         <Loading />
       ) : total === 0 ? (
-        <p className="px-3 py-1 text-xs text-ink-faint">還沒有 change。</p>
+        <p className="px-3 py-1 text-xs text-ink-faint">{t('openspec.noChanges')}</p>
       ) : (
         <>
           <ChangeGroup
-            label="Active"
+            label={t('openspec.active')}
             changes={data.active}
             anchoredChange={anchoredChange}
             onAnchor={onAnchor}
             defaultOpen
           />
           <ChangeGroup
-            label="Archived"
+            label={t('openspec.archived')}
             changes={data.archived}
             anchoredChange={anchoredChange}
             onAnchor={onAnchor}

@@ -4,6 +4,7 @@ import { createPortal } from 'react-dom'
 import type { ChangeInfo } from '../types'
 import { useChanges, useGraphData } from './data'
 import { ErrorNote, Loading } from './ui'
+import { useTranslation } from 'react-i18next'
 
 /** overlay 裡的兩個視覺化。**它們是不同的東西** —— Graph 是關聯結構，Timeline 是生命週期。 */
 export type VizKind = 'graph' | 'timeline'
@@ -20,9 +21,10 @@ interface VizOverlayProps {
   onSelectSpec: (topic: string) => void
 }
 
-const TABS: { id: VizKind; label: string }[] = [
-  { id: 'graph', label: '◈ Graph' },
-  { id: 'timeline', label: '▤ Timeline' },
+/** 圖示是呈現、文案是文案 —— 只有後者進字典。 */
+const TABS: { id: VizKind; icon: string; labelKey: 'viz.graph' | 'viz.timeline' }[] = [
+  { id: 'graph', icon: '◈', labelKey: 'viz.graph' },
+  { id: 'timeline', icon: '▤', labelKey: 'viz.timeline' },
 ]
 
 /**
@@ -49,6 +51,8 @@ export function VizOverlay({
   onSelectChange,
   onSelectSpec,
 }: VizOverlayProps): React.JSX.Element {
+  const { t } = useTranslation()
+
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
       if (event.key === 'Escape') onClose()
@@ -61,14 +65,14 @@ export function VizOverlay({
     <div
       role="dialog"
       aria-modal="true"
-      aria-label={kind === 'graph' ? 'Graph' : 'Timeline'}
+      aria-label={kind === 'graph' ? t('viz.graph') : t('viz.timeline')}
       className="fixed inset-0 z-50 flex flex-col bg-stage"
     >
       <header className="flex shrink-0 items-center gap-2 border-b border-hairline px-4 py-2">
         <span className="text-sm text-ink-faint">{folderName}</span>
 
-        <nav aria-label="視覺化" role="tablist" className="ml-3 flex gap-1">
-          {TABS.map(({ id, label }) => (
+        <nav aria-label={t('viz.label')} role="tablist" className="ml-3 flex gap-1">
+          {TABS.map(({ id, icon, labelKey }) => (
             <button
               key={id}
               type="button"
@@ -81,7 +85,7 @@ export function VizOverlay({
                   : 'text-ink-dim hover:bg-hover hover:text-ink'
               }`}
             >
-              {label}
+              {`${icon} ${t(labelKey)}`}
             </button>
           ))}
         </nav>
@@ -91,8 +95,8 @@ export function VizOverlay({
         <button
           type="button"
           onClick={onClose}
-          aria-label="關閉"
-          title="關閉（Esc）"
+          aria-label={t('viz.close')}
+          title={t('viz.closeTooltip')}
           className="rounded border border-hairline px-2 py-1 text-xs text-ink-dim hover:border-accent hover:text-accent"
         >
           ✕ Esc
@@ -120,12 +124,14 @@ function GraphPane({
   onSelectChange: (slug: string) => void
   onSelectSpec: (topic: string) => void
 }): React.JSX.Element {
+  const { t } = useTranslation()
+
   const { data, loading, error } = useGraphData(folderId)
 
   if (error) return <ErrorNote message={error} />
   if (loading || !data) return <Loading />
   if (data.edges.length === 0) {
-    return <p className="px-4 py-3 text-sm text-ink-faint">沒有 spec 與 change 的關聯可以呈現。</p>
+    return <p className="px-4 py-3 text-sm text-ink-faint">{t('viz.noGraph')}</p>
   }
 
   // 圖會填滿父容器 —— 父容器要有明確高度，且 relative 才放得下圖例。
@@ -143,6 +149,8 @@ function TimelinePane({
   folderId: string
   onSelectChange: (slug: string) => void
 }): React.JSX.Element {
+  const { t } = useTranslation()
+
   const changes = useChanges(folderId)
   const graph = useGraphData(folderId)
   const [groupByTopic, setGroupByTopic] = useState(false)
@@ -179,14 +187,18 @@ function TimelinePane({
     <div className="flex flex-col gap-3">
       <div className="flex flex-wrap items-center gap-2">
         <Chip
-          label={groupByTopic ? '已依 topic 分組' : '依 topic 分組'}
+          label={groupByTopic ? t('viz.groupedByTopic') : t('viz.groupByTopic')}
           active={groupByTopic}
           onClick={() => setGroupByTopic((v) => !v)}
         />
         <span className="h-4 w-px bg-hairline" />
-        <Chip label="隱藏 active" active={hideActive} onClick={() => setHideActive((v) => !v)} />
         <Chip
-          label="隱藏 archived"
+          label={t('viz.hideActive')}
+          active={hideActive}
+          onClick={() => setHideActive((v) => !v)}
+        />
+        <Chip
+          label={t('viz.hideArchived')}
           active={hideArchived}
           onClick={() => setHideArchived((v) => !v)}
         />
@@ -194,7 +206,7 @@ function TimelinePane({
 
       {laneItems === 0 ? (
         <p className="rounded border border-hairline px-4 py-6 text-sm text-ink-faint">
-          沒有可以放上時間軸的 change。
+          {t('viz.noTimeline')}
         </p>
       ) : (
         <ChangeTimeline
@@ -206,9 +218,9 @@ function TimelinePane({
 
       {/* 沒有 createdDate 的 change 放不上時間軸 —— 它們不該就這樣消失。 */}
       {unknownCreated.length > 0 && (
-        <section aria-label="沒有建立日期的 change">
+        <section aria-label={t('viz.undatedSection')}>
           <h3 className="mb-1 text-xs font-bold text-ink-dim">
-            沒有建立日期（{unknownCreated.length}）
+            {t('viz.undatedHeading', { count: unknownCreated.length })}
           </h3>
           <ul className="flex flex-col gap-[2px]">
             {unknownCreated.map((change) => (

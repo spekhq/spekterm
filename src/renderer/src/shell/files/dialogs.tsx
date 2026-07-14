@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { validateName } from './names'
+import { useTranslation } from 'react-i18next'
 
 const OVERLAY_CLASS =
   'absolute inset-0 z-20 flex items-center justify-center bg-black/50 px-4 text-sm'
@@ -24,6 +25,7 @@ export function NameDialog({
   onSubmit,
   onCancel,
 }: NameDialogProps): React.JSX.Element {
+  const { t } = useTranslation()
   const [value, setValue] = useState(initialValue)
   const [touched, setTouched] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
@@ -68,10 +70,10 @@ export function NameDialog({
         {error && <p className="mt-1 text-xs text-danger">{error}</p>}
         <div className="mt-3 flex justify-end gap-2">
           <button type="button" onClick={onCancel} className={`${BUTTON_CLASS} text-ink-faint`}>
-            取消
+            {t('common.cancel')}
           </button>
           <button type="button" onClick={submit} className={`${BUTTON_CLASS} text-accent`}>
-            確定
+            {t('common.confirm')}
           </button>
         </div>
       </div>
@@ -101,25 +103,24 @@ export function ConfirmDelete({
   onConfirm,
   onCancel,
 }: ConfirmDeleteProps): React.JSX.Element {
+  const { t } = useTranslation()
   const confirmRef = useRef<HTMLButtonElement>(null)
   useEffect(() => confirmRef.current?.focus(), [])
 
   return (
     <div className={OVERLAY_CLASS}>
       {/* `role="dialog"` 同時是導航快捷鍵的抑制依據 —— 見 NameDialog 的註解。 */}
-      <div role="dialog" aria-label={`刪除 ${relPath}`} className={CARD_CLASS}>
-        <p className="text-ink">刪除「{relPath}」？</p>
+      <div role="dialog" aria-label={t('files.deleteAria', { path: relPath })} className={CARD_CLASS}>
+        <p className="text-ink">{t('files.deleteQuestion', { path: relPath })}</p>
         {isDirectory && (
-          <p className="mt-1 text-xs text-ink-faint">
-            這個目錄與其下的所有項目都會被移除。
-          </p>
+          <p className="mt-1 text-xs text-ink-faint">{t('files.deleteDirectory')}</p>
         )}
-        {hasUnsaved && <p className="mt-1 text-xs text-danger">其中有未存的變更，會一併消失。</p>}
-        <p className="mt-1 text-xs text-ink-faint">這個動作無法復原。</p>
+        {hasUnsaved && <p className="mt-1 text-xs text-danger">{t('files.deleteUnsaved')}</p>}
+        <p className="mt-1 text-xs text-ink-faint">{t('files.deleteIrreversible')}</p>
 
         <div className="mt-3 flex justify-end gap-2">
           <button type="button" onClick={onCancel} className={`${BUTTON_CLASS} text-ink-faint`}>
-            取消
+            {t('common.cancel')}
           </button>
           <button
             ref={confirmRef}
@@ -130,7 +131,7 @@ export function ConfirmDelete({
             }}
             className={`${BUTTON_CLASS} text-danger`}
           >
-            刪除
+            {t('common.delete')}
           </button>
         </div>
       </div>

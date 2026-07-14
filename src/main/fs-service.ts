@@ -17,6 +17,7 @@ import {
   resolveWithinRoot,
 } from './fs-boundary'
 import type { FolderLookup, WorkspaceFolder } from './workspace-store'
+import { t } from '@shared/i18n'
 
 export type DirEntryKind = 'file' | 'directory' | 'symlink' | 'other'
 
@@ -94,10 +95,10 @@ export function toPosixRelPath(relPath: string): string {
 function requireFolder(store: FolderLookup, folderId: string): WorkspaceFolder {
   const folder = store.list().find((candidate) => candidate.id === folderId)
   if (!folder) {
-    throw new FsServiceError('UNKNOWN_FOLDER', `unknown folder: ${folderId}`)
+    throw new FsServiceError('UNKNOWN_FOLDER', t('fsError.unknownFolder', { folderId }))
   }
   if (folder.status !== 'ok') {
-    throw new FsServiceError('FOLDER_UNAVAILABLE', `folder is unavailable: ${folder.path}`)
+    throw new FsServiceError('FOLDER_UNAVAILABLE', t('fsError.folderUnavailable', { path: folder.path }))
   }
   return folder
 }
@@ -119,7 +120,7 @@ export async function listDir(
 
   const stats = await stat(target)
   if (!stats.isDirectory()) {
-    throw new FsServiceError('NOT_A_DIRECTORY', `not a directory: ${relPath}`)
+    throw new FsServiceError('NOT_A_DIRECTORY', t('fsError.notADirectory', { path: relPath }))
   }
 
   const entries = await readdir(target, { withFileTypes: true })
@@ -170,12 +171,12 @@ export async function readFile(
 
   const stats = await stat(target)
   if (!stats.isFile()) {
-    throw new FsServiceError('NOT_A_FILE', `not a file: ${relPath}`)
+    throw new FsServiceError('NOT_A_FILE', t('fsError.notAFile', { path: relPath }))
   }
 
   // 先問大小再讀。反過來的話，一個 4 GB 的檔案會在得知它太大之前就炸掉主行程。
   if (stats.size > MAX_READ_FILE_BYTES) {
-    throw new FsServiceError('TOO_LARGE', `file is too large: ${relPath}`, {
+    throw new FsServiceError('TOO_LARGE', t('fsError.tooLarge', { path: relPath }), {
       size: stats.size,
       limit: MAX_READ_FILE_BYTES,
     })
@@ -185,14 +186,14 @@ export async function readFile(
 
   // stat 與 read 之間檔案可能長大。再確認一次的成本是一個比較。
   if (buffer.length > MAX_READ_FILE_BYTES) {
-    throw new FsServiceError('TOO_LARGE', `file is too large: ${relPath}`, {
+    throw new FsServiceError('TOO_LARGE', t('fsError.tooLarge', { path: relPath }), {
       size: buffer.length,
       limit: MAX_READ_FILE_BYTES,
     })
   }
 
   if (looksBinary(buffer)) {
-    throw new FsServiceError('BINARY', `file appears to be binary: ${relPath}`)
+    throw new FsServiceError('BINARY', t('fsError.binary', { path: relPath }))
   }
 
   return { text: decodeUtf8(buffer), mtimeMs: stats.mtimeMs, size: stats.size }
@@ -221,23 +222,23 @@ function hasControlChar(name: string): boolean {
  */
 export function validateName(name: string): void {
   if (name.length === 0) {
-    throw new FsServiceError('INVALID_NAME', 'name must not be empty')
+    throw new FsServiceError('INVALID_NAME', t('fsError.nameEmpty'))
   }
   if (name === '.' || name === '..') {
-    throw new FsServiceError('INVALID_NAME', `name must not be "${name}"`)
+    throw new FsServiceError('INVALID_NAME', t('fsError.nameDotted', { name }))
   }
   if (name.includes('/') || name.includes('\\')) {
-    throw new FsServiceError('INVALID_NAME', `name must not contain a path separator: ${name}`)
+    throw new FsServiceError('INVALID_NAME', t('fsError.nameSeparator', { name }))
   }
   if (FORBIDDEN_CHARS.test(name) || hasControlChar(name)) {
-    throw new FsServiceError('INVALID_NAME', `name contains a forbidden character: ${name}`)
+    throw new FsServiceError('INVALID_NAME', t('fsError.nameForbidden', { name }))
   }
   // Windows 會靜默地把結尾的空白與句點吃掉，於是建立出的檔案叫別的名字。
   if (/[ .]$/.test(name)) {
-    throw new FsServiceError('INVALID_NAME', `name must not end with a space or a period: ${name}`)
+    throw new FsServiceError('INVALID_NAME', t('fsError.nameTrailing', { name }))
   }
   if (WINDOWS_RESERVED.test(name.split('.')[0] ?? '')) {
-    throw new FsServiceError('INVALID_NAME', `name is a reserved device name: ${name}`)
+    throw new FsServiceError('INVALID_NAME', t('fsError.nameReserved', { name }))
   }
 }
 
@@ -278,7 +279,7 @@ export async function writeFile(
     opened = await openExistingForWrite(folder.path, relPath)
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'EISDIR') {
-      throw new FsServiceError('NOT_A_FILE', `not a file: ${relPath}`)
+      throw new FsServiceError('NOT_A_FILE', t('fsError.notAFile', { path: relPath }))
     }
     throw error
   }
@@ -287,11 +288,11 @@ export async function writeFile(
   try {
     const before = await handle.stat()
     if (!before.isFile()) {
-      throw new FsServiceError('NOT_A_FILE', `not a file: ${relPath}`)
+      throw new FsServiceError('NOT_A_FILE', t('fsError.notAFile', { path: relPath }))
     }
 
     if (baseMtimeMs !== undefined && before.mtimeMs !== baseMtimeMs) {
-      throw new FsServiceError('CONFLICT', `file changed on disk: ${relPath}`, {
+      throw new FsServiceError('CONFLICT', t('fsError.conflict', { path: relPath }), {
         diskMtimeMs: before.mtimeMs,
       })
     }
@@ -327,7 +328,7 @@ export async function createFile(
     await handle.close()
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
-      throw new FsServiceError('ALREADY_EXISTS', `already exists: ${relPath}`)
+      throw new FsServiceError('ALREADY_EXISTS', t('fsError.alreadyExists', { path: relPath }))
     }
     throw error
   }
@@ -347,7 +348,7 @@ export async function createDirectory(
     await mkdir(target)
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
-      throw new FsServiceError('ALREADY_EXISTS', `already exists: ${relPath}`)
+      throw new FsServiceError('ALREADY_EXISTS', t('fsError.alreadyExists', { path: relPath }))
     }
     throw error
   }
@@ -370,7 +371,7 @@ export async function deleteEntry(
   const { lexicalPath, realPath, realRoot } = await resolveExistingWithin(folder.path, relPath)
 
   if (realPath === realRoot) {
-    throw new FsServiceError('PROTECTED_ROOT', 'cannot delete the workspace folder itself')
+    throw new FsServiceError('PROTECTED_ROOT', t('fsError.cannotDeleteRoot'))
   }
 
   await rm(lexicalPath, { recursive: true })
@@ -396,7 +397,7 @@ export async function rename(
 
   const from = await resolveExistingWithin(folder.path, fromRelPath)
   if (from.realPath === from.realRoot) {
-    throw new FsServiceError('PROTECTED_ROOT', 'cannot rename the workspace folder itself')
+    throw new FsServiceError('PROTECTED_ROOT', t('fsError.cannotRenameRoot'))
   }
 
   const to = await resolveNewWithin(folder.path, toRelPath)

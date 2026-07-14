@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
+import { useTranslation } from 'react-i18next'
+import { t } from '@shared/i18n'
 import type { FileRequest, OpenSpecTarget } from '../openspec/nav'
 import { targetOfPath } from '../openspec/nav'
 import type { FsFailure, FsResult, WorkspaceFolder } from '../types'
@@ -25,15 +27,15 @@ function useNow(intervalMs = 60_000): number {
 function describeOperationFailure(failure: FsFailure): string {
   switch (failure.code) {
     case 'ALREADY_EXISTS':
-      return '這個名稱已經被使用了'
+      return t('files.failure.alreadyExists')
     case 'INVALID_NAME':
-      return '這個名稱在某些平台上無法使用'
+      return t('files.failure.invalidName')
     case 'NOT_FOUND':
-      return '目標已不存在'
+      return t('files.failure.notFound')
     case 'ESCAPES_ROOT':
-      return '這個路徑超出 workspace 邊界'
+      return t('files.failure.escapesRoot')
     case 'PROTECTED_ROOT':
-      return '不能對 workspace folder 本身做這件事'
+      return t('files.failure.protectedRoot')
     default:
       return failure.message
   }
@@ -76,6 +78,8 @@ export function FilesPanel({
   request = null,
   onViewInOpenSpec = null,
 }: FilesPanelProps): React.JSX.Element {
+  const { t } = useTranslation()
+
   // 自 OpenSpec 身分跳過來的請求，**初始值就要套用**。
   //
   // 這個元件在切到 Files 身分的那一刻才第一次掛載（在那之前 SidePanel 渲染的是 OpenSpecPanel）
@@ -173,10 +177,10 @@ export function FilesPanel({
   if (!folder) {
     return (
       <section
-        aria-label="Files"
+        aria-label={t('files.label')}
         className="flex h-full items-center justify-center px-6 text-center text-sm text-ink-faint"
       >
-        尚未選擇 repo —— 於左側的 workspace 選一個，或加入新的 folder
+        {t('stage.noRepoHint')}
       </section>
     )
   }
@@ -191,14 +195,14 @@ export function FilesPanel({
 
     const items: MenuItem[] = [
       {
-        label: '新增檔案',
+        label: t('files.newFile'),
         onSelect: () => {
           setDialog({ kind: 'newFile', parent })
           closeMenu()
         },
       },
       {
-        label: '新增資料夾',
+        label: t('files.newDirectory'),
         onSelect: () => {
           setDialog({ kind: 'newDirectory', parent })
           closeMenu()
@@ -209,14 +213,14 @@ export function FilesPanel({
     if (row) {
       items.push(
         {
-          label: '重新命名',
+          label: t('files.rename'),
           onSelect: () => {
             setDialog({ kind: 'rename', target: row.relPath })
             closeMenu()
           },
         },
         {
-          label: '刪除',
+          label: t('common.delete'),
           tone: 'danger',
           onSelect: () => {
             setPendingDelete(row)
@@ -230,9 +234,9 @@ export function FilesPanel({
   })()
 
   return (
-    <section aria-label="Files" className="relative flex h-full flex-col overflow-hidden">
+    <section aria-label={t('files.label')} className="relative flex h-full flex-col overflow-hidden">
       <header className="flex items-center gap-2 border-b border-hairline px-3 py-2 text-sm">
-        <nav aria-label="路徑" className="min-w-0 flex-1 truncate text-ink-faint">
+        <nav aria-label={t('files.pathNav')} className="min-w-0 flex-1 truncate text-ink-faint">
           <span>{folder.name}</span>
           <span className="px-1">/</span>
           {openPath === null ? (
@@ -256,7 +260,7 @@ export function FilesPanel({
 
         {/* 未存的檔案可能藏在一個尚未展開的目錄裡，樹上的標記那時看不到。 */}
         {dirtyCount > 0 && (
-          <span className="shrink-0 text-2xs text-accent" title="未存的變更">
+          <span className="shrink-0 text-2xs text-accent" title={t('files.unsaved')}>
             ● {dirtyCount}
           </span>
         )}
@@ -264,13 +268,13 @@ export function FilesPanel({
         {openPath === null ? (
           <>
             <span className="shrink-0 font-mono text-2xs text-ink-faint">
-              {tree.visibleCount} 個項目
+              {t('files.itemCount', { count: tree.visibleCount })}
             </span>
             {/* 根目錄在樹上沒有列可以右鍵，因此入口在這裡。 */}
             <button
               type="button"
-              aria-label="在根目錄新增"
-              title="在根目錄新增"
+              aria-label={t('files.newAtRoot')}
+              title={t('files.newAtRoot')}
               onClick={(event) => {
                 event.stopPropagation()
                 setMenu({ row: null, x: event.clientX, y: event.clientY })
@@ -291,8 +295,8 @@ export function FilesPanel({
                   <button
                     type="button"
                     onClick={() => onViewInOpenSpec(target)}
-                    aria-label="在 OpenSpec 中檢視"
-                    title="在 OpenSpec 中檢視"
+                    aria-label={t('files.viewInOpenSpec')}
+                    title={t('files.viewInOpenSpec')}
                     className="shrink-0 rounded border border-hairline px-2 py-[2px] text-xs text-ink-dim hover:border-accent hover:text-accent"
                   >
                     ◈
@@ -305,7 +309,7 @@ export function FilesPanel({
               onClick={() => setOpenPath(null)}
               className="shrink-0 rounded border border-hairline px-2 py-[2px] text-xs text-ink-dim hover:text-accent"
             >
-              ‹ 返回
+              {t('common.back')}
             </button>
           </>
         )}
@@ -317,7 +321,7 @@ export function FilesPanel({
             {tree.rootError ? (
               <p className="px-3 py-2 text-sm text-danger">{tree.rootError}</p>
             ) : tree.rootLoading && tree.rows.length === 0 ? (
-              <p className="px-3 py-2 text-sm text-ink-faint">載入中…</p>
+              <p className="px-3 py-2 text-sm text-ink-faint">{t('common.loading')}</p>
             ) : (
               <FileTree
                 rows={tree.rows}
@@ -340,10 +344,10 @@ export function FilesPanel({
         <NameDialog
           title={
             dialog.kind === 'rename'
-              ? '重新命名'
+              ? t('files.rename')
               : dialog.kind === 'newFile'
-                ? '新增檔案'
-                : '新增資料夾'
+                ? t('files.newFile')
+                : t('files.newDirectory')
           }
           initialValue={dialog.kind === 'rename' ? baseNameOf(dialog.target) : ''}
           serverError={serverError}

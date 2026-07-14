@@ -25,6 +25,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { check, connect, dragMouse, pollUntil, waitForPageTarget } from './lib/cdp.mjs'
+import { copy, prefixOf } from './lib/copy.mjs'
 
 const BUILD_PORT = 9226
 const DEV_PORT = 9227
@@ -207,7 +208,7 @@ async function waitForPtyCount(marker, expected, timeoutMs = 8000) {
 // ── app 啟動 ────────────────────────────────────────────────────────────────
 
 const MOUNTED = `Boolean(
-  document.querySelector('aside[aria-label="工作區"]') &&
+  document.querySelector('aside[aria-label="${copy('rail.label')}"]') &&
   document.getElementById('root')?.children.length &&
   document.visibilityState === 'visible'
 )`
@@ -299,22 +300,22 @@ async function launch({ port, profileDir, rendererUrl, marker, stub }) {
 // ── renderer 內的量測（一律 role／aria，不掛 data-*）─────────────────────────
 
 const SELECT_FOLDER = (name) => `(() => {
-  const rows = [...document.querySelectorAll('aside[aria-label="工作區"] li > div[role="button"]')]
+  const rows = [...document.querySelectorAll('aside[aria-label="${copy('rail.label')}"] li > div[role="button"]')]
   const row = rows.find((r) => r.innerText.includes(${JSON.stringify(name)}))
   if (!row) return false
   row.click()
   return true
 })()`
 
-const TABS = `[...document.querySelectorAll('[aria-label="Session 分頁"] [role="tab"]')].map((tab) => ({
+const TABS = `[...document.querySelectorAll('[aria-label="${copy('sessions.tabs')}"] [role="tab"]')].map((tab) => ({
   label: tab.innerText.replace(/\\s+/g, ' ').trim(),
   selected: tab.getAttribute('aria-selected') === 'true',
-  exited: tab.innerText.includes('已結束'),
+  exited: tab.innerText.includes('${copy('sessions.exitedBadge')}'),
 }))`
 
 /** rail 的 session 子列（第 n 個，自 0 起）。 */
 const RAIL_SESSION_RECT = (index) => `(() => {
-  const rows = [...document.querySelectorAll('aside[aria-label="工作區"] ul[aria-label$="的 session"] li > div[role="button"]')]
+  const rows = [...document.querySelectorAll('aside[aria-label="${copy('rail.label')}"] ul[aria-label^="${prefixOf('rail.folderSessions')}"] li > div[role="button"]')]
   const row = rows[${index}]
   if (!row) return null
   const r = row.getBoundingClientRect()
@@ -322,18 +323,28 @@ const RAIL_SESSION_RECT = (index) => `(() => {
 })()`
 
 /** rail 上展開／收合 session 子列的 caret。 */
+/**
+ * 展開／收合 session 子列的箭頭鈕。
+ *
+ * **它的 aria-label 隨狀態而異，而英文把變數放在句尾**（Expand sessions in <name>）—— 沒有
+ * 共同的固定後綴可用，只能兩個前綴都試。中文版的兩個標籤都以「的 session」結尾，一個後綴
+ * 選擇器就通吃 —— 那是語言的巧合，不是可以沿用的結構。
+ */
 const RAIL_CARET_RECT = `(() => {
-  const btn = document.querySelector('aside[aria-label="工作區"] button[aria-label$="的 session"]')
+  const btn = document.querySelector(
+    'aside[aria-label="${copy('rail.label')}"] button[aria-label^="${prefixOf('rail.expandSessions')}"], ' +
+    'aside[aria-label="${copy('rail.label')}"] button[aria-label^="${prefixOf('rail.collapseSessions')}"]'
+  )
   if (!btn) return null
   const r = btn.getBoundingClientRect()
   return { x: r.x, y: r.y, width: r.width, height: r.height }
 })()`
 
-const RAIL_SESSION_COUNT = `document.querySelectorAll('aside[aria-label="工作區"] ul[aria-label$="的 session"] li').length`
+const RAIL_SESSION_COUNT = `document.querySelectorAll('aside[aria-label="${copy('rail.label')}"] ul[aria-label^="${prefixOf('rail.folderSessions')}"] li').length`
 
 /** rail 上 folder 列的「＋」建立入口（hover 才顯示，但 opacity 不影響 rect 與點擊）。 */
 const RAIL_NEW_SESSION_RECT = `(() => {
-  const btn = document.querySelector('aside[aria-label="工作區"] [aria-label^="新增 session —"]')
+  const btn = document.querySelector('aside[aria-label="${copy('rail.label')}"] [aria-label^="${prefixOf('rail.newSessionIn')}"]')
   if (!btn) return null
   const r = btn.getBoundingClientRect()
   return { x: r.x, y: r.y, width: r.width, height: r.height }
@@ -341,8 +352,8 @@ const RAIL_NEW_SESSION_RECT = `(() => {
 
 /** rail 上第 n 個 session 子列的關閉鈕。 */
 const RAIL_CLOSE_SESSION_RECT = (index) => `(() => {
-  const rows = [...document.querySelectorAll('aside[aria-label="工作區"] ul[aria-label$="的 session"] li')]
-  const btn = rows[${index}]?.querySelector('[aria-label^="關閉 session"]')
+  const rows = [...document.querySelectorAll('aside[aria-label="${copy('rail.label')}"] ul[aria-label^="${prefixOf('rail.folderSessions')}"] li')]
+  const btn = rows[${index}]?.querySelector('[aria-label^="${prefixOf('sessions.closeSession')}"]')
   if (!btn) return null
   const r = btn.getBoundingClientRect()
   return { x: r.x, y: r.y, width: r.width, height: r.height }
@@ -367,7 +378,7 @@ const CLIPBOARD_READ = `window.workspace.clipboard.readText()`
 
 /** 第 n 個分頁的 rect（用於真右鍵與拖曳）。 */
 const TAB_RECT = (index) => `(() => {
-  const tabs = [...document.querySelectorAll('[aria-label="Session 分頁"] [role="tab"]')]
+  const tabs = [...document.querySelectorAll('[aria-label="${copy('sessions.tabs')}"] [role="tab"]')]
   const tab = tabs[${index}]
   if (!tab) return null
   const r = tab.getBoundingClientRect()
@@ -382,7 +393,7 @@ const TAB_RECT = (index) => `(() => {
  * session 都亮**紅燈**、tooltip 說它「已結束（代碼 0）」。那是使用者重開 app 之後看到的第一個
  * 畫面，等於在告訴他「你的 session 都死了」（違反「休眠狀態 SHALL 被明確地呈現」）。
  */
-const TAB_STATUS = `[...document.querySelectorAll('[aria-label="Session 分頁"] [role="tab"]')].map((tab) => {
+const TAB_STATUS = `[...document.querySelectorAll('[aria-label="${copy('sessions.tabs')}"] [role="tab"]')].map((tab) => {
   const dot = tab.querySelector('span[aria-hidden="true"]')
   return {
     title: tab.getAttribute('title') ?? '',
@@ -400,16 +411,16 @@ const DANGER_COLOR = `(() => {
   return color
 })()`
 
-const TAB_LABELS = `[...document.querySelectorAll('[aria-label="Session 分頁"] [role="tab"]')]
+const TAB_LABELS = `[...document.querySelectorAll('[aria-label="${copy('sessions.tabs')}"] [role="tab"]')]
   .map((tab) => tab.innerText.replace(/\\s+/g, ' ').trim())`
 
 /** rail 子列的標籤依序（去掉尾巴的 ✕）。 */
-const RAIL_LABELS = `[...document.querySelectorAll('aside[aria-label="工作區"] ul[aria-label$="的 session"] li')]
+const RAIL_LABELS = `[...document.querySelectorAll('aside[aria-label="${copy('rail.label')}"] ul[aria-label^="${prefixOf('rail.folderSessions')}"] li')]
   .map((li) => li.innerText.replace(/✕/g, '').replace(/\\s+/g, ' ').trim())`
 
 /** 重新命名對話框的輸入框。 */
 const RENAME_INPUT_RECT = `(() => {
-  const el = document.querySelector('[aria-label="session 名稱"]')
+  const el = document.querySelector('[aria-label="${copy('sessions.nameLabel')}"]')
   if (!el) return null
   const r = el.getBoundingClientRect()
   return { x: r.x, y: r.y, width: r.width, height: r.height }
@@ -426,9 +437,9 @@ const RENAME_INPUT_RECT = `(() => {
 const ANY_DIALOG_OPEN = `Boolean(document.querySelector('[role="dialog"]'))`
 
 const NEW_BUTTON_GAP = `(() => {
-  const tabs = [...document.querySelectorAll('[aria-label="Session 分頁"] [role="tab"]')]
+  const tabs = [...document.querySelectorAll('[aria-label="${copy('sessions.tabs')}"] [role="tab"]')]
   const last = tabs[tabs.length - 1]
-  const plus = document.querySelector('[aria-label="新增 session"]')
+  const plus = document.querySelector('[aria-label="${copy('sessions.new')}"]')
   if (!last || !plus) return null
   return Math.round(plus.getBoundingClientRect().left - last.getBoundingClientRect().right)
 })()`
@@ -464,7 +475,7 @@ const MENU_IN_VIEWPORT = `(() => {
 
 /** 只讀「當前顯示中」的那個終端 —— 其餘 session 的終端仍掛載，只是 display:none。 */
 const TERMINAL_TEXT = `(() => {
-  const host = [...document.querySelectorAll('section[aria-label="Terminal"] > div')]
+  const host = [...document.querySelectorAll('section[aria-label="${copy('stage.terminal')}"] > div')]
     .find((d) => !d.classList.contains('hidden'))
   const rows = host?.querySelector('.xterm-rows')
   return rows ? rows.innerText : ''
@@ -482,7 +493,7 @@ const TERMINAL_TEXT = `(() => {
  * 期望值同樣交給**瀏覽器**求值：`font-size` 是有型別的屬性，其 computed value 必為絕對 px。
  */
 const TERMINAL_FONT = `(() => {
-  const host = [...document.querySelectorAll('section[aria-label="Terminal"] > div')]
+  const host = [...document.querySelectorAll('section[aria-label="${copy('stage.terminal')}"] > div')]
     .find((d) => !d.classList.contains('hidden'))
   const rows = host?.querySelector('.xterm-rows')
   if (!rows) return null
@@ -516,18 +527,18 @@ const TYPE_SCALE = `(() => {
   }
 })()`
 
-const TERMINAL_RECT = RECT_OF('section[aria-label="Terminal"]')
-const NEW_SESSION_RECT = RECT_OF('[aria-label="新增 session"]')
-const SEPARATOR_RECT = RECT_OF('main[aria-label="主舞台"] [role="separator"]')
+const TERMINAL_RECT = RECT_OF(`section[aria-label="${copy('stage.terminal')}"]`)
+const NEW_SESSION_RECT = RECT_OF(`[aria-label="${copy('sessions.new')}"]`)
+const SEPARATOR_RECT = RECT_OF(`main[aria-label="${copy('stage.label')}"] [role="separator"]`)
 
 const CLOSE_FIRST_TAB = `(() => {
-  const btn = document.querySelector('[aria-label^="關閉 session"]')
+  const btn = document.querySelector('[aria-label^="${prefixOf('sessions.closeSession')}"]')
   if (!btn) return false
   btn.click()
   return true
 })()`
 
-const RAIL_SESSION_ROWS = `[...document.querySelectorAll('aside[aria-label="工作區"] ul[aria-label$="的 session"] li')]
+const RAIL_SESSION_ROWS = `[...document.querySelectorAll('aside[aria-label="${copy('rail.label')}"] ul[aria-label^="${prefixOf('rail.folderSessions')}"] li')]
   .map((li) => li.innerText.replace(/\\s+/g, ' ').trim())`
 
 // ── 輸入 ────────────────────────────────────────────────────────────────────
@@ -662,7 +673,7 @@ async function runMode(label, { port, rendererUrl }) {
     check(results, `${label}：初始沒有任何 session 分頁`, emptyTabs.length === 0)
 
     // ── 開一個 login shell session（真事件：按鈕 → 選單 → 選單項）
-    const menu = await openSessionViaMenu(app.client, '進 login shell')
+    const menu = await openSessionViaMenu(app.client, copy('sessions.spawnShell'))
     check(
       results,
       `${label}：spawn 選單完整落在 viewport 內`,
@@ -783,7 +794,7 @@ async function runMode(label, { port, rendererUrl }) {
     )
 
     // 此刻沒有選取內容 —— 「複製」應為停用（停用而非隱藏）
-    const copyDisabled = await app.client.evaluate(MENU_ITEM_DISABLED('複製'))
+    const copyDisabled = await app.client.evaluate(MENU_ITEM_DISABLED(copy('sessions.copy')))
     check(
       results,
       `${label}：無選取內容時右鍵選單的「複製」為停用`,
@@ -791,7 +802,7 @@ async function runMode(label, { port, rendererUrl }) {
       `disabled=${copyDisabled}`,
     )
 
-    const pasteRect = await app.client.evaluate(MENU_ITEM_RECT('貼上'))
+    const pasteRect = await app.client.evaluate(MENU_ITEM_RECT(copy('sessions.paste')))
     await realClick(app.client, pasteRect)
 
     // 貼上只是把文字送進 pty 的輸入，還要按下 Enter 才會執行。
@@ -832,8 +843,8 @@ async function runMode(label, { port, rendererUrl }) {
     await realMouse(app.client, termAt.x, termAt.y, 'right')
     await pollUntil(app.client, MENU_IN_VIEWPORT, (value) => value !== null, 4000)
 
-    const copyEnabled = await app.client.evaluate(MENU_ITEM_DISABLED('複製'))
-    const copyRect = await app.client.evaluate(MENU_ITEM_RECT('複製'))
+    const copyEnabled = await app.client.evaluate(MENU_ITEM_DISABLED(copy('sessions.copy')))
+    const copyRect = await app.client.evaluate(MENU_ITEM_RECT(copy('sessions.copy')))
     await realClick(app.client, copyRect)
     await sleep(300)
 
@@ -955,7 +966,7 @@ async function runMode(label, { port, rendererUrl }) {
     )
 
     // ── 第二個 session（多開）
-    await openSessionViaMenu(app.client, '進 login shell')
+    await openSessionViaMenu(app.client, copy('sessions.spawnShell'))
     const tabs2 = await pollUntil(app.client, TABS, (value) => value.length === 2, 8000)
     check(results, `${label}：可多開 session`, tabs2.length === 2, JSON.stringify(tabs2.map((t) => t.label)))
 
@@ -984,7 +995,7 @@ async function runMode(label, { port, rendererUrl }) {
 
     // ── 切回第一個 session：先前的輸出仍在（scrollback 未因切換而遺失）
     const firstTabRect = await app.client.evaluate(`(() => {
-      const tab = document.querySelector('[aria-label="Session 分頁"] [role="tab"]')
+      const tab = document.querySelector('[aria-label="${copy('sessions.tabs')}"] [role="tab"]')
       if (!tab) return null
       const r = tab.getBoundingClientRect()
       return { x: r.x, y: r.y, width: r.width, height: r.height }
@@ -1047,7 +1058,7 @@ async function runMode(label, { port, rendererUrl }) {
       tabMenu ? JSON.stringify(tabMenu.rect) : '選單未開啟',
     )
 
-    await realClick(app.client, await app.client.evaluate(MENU_ITEM_RECT('重新命名')))
+    await realClick(app.client, await app.client.evaluate(MENU_ITEM_RECT(copy('sessions.rename'))))
     await pollUntil(app.client, RENAME_INPUT_RECT, (value) => value !== null, 4000)
 
     // 對話框開啟時輸入框已 focus 且全選 —— 直接打字即取代。
@@ -1200,7 +1211,7 @@ async function runMode(label, { port, rendererUrl }) {
     )
 
     // ── 自 rail 的 folder 列建立 session（不必先切到主舞台）
-    await openSessionViaRail(app.client, '進 login shell')
+    await openSessionViaRail(app.client, copy('sessions.spawnShell'))
     const tabsAfterRailCreate = await pollUntil(app.client, TABS, (value) => value.length === 2, 8000)
     const pidsAfterRailCreate = await waitForPtyCount(marker, 2)
     check(
@@ -1258,7 +1269,7 @@ async function runMode(label, { port, rendererUrl }) {
     // 這一整段的載體是 PATH 上的 stub `claude`（見 `makeStubClaude`）—— 產品從 PATH spawn
     // `claude`，那正是它的正常行為，探針動的是環境而非產品程式碼。stub 是個互動 shell，
     // 因此下面的 `printf '\033]0;…'` 就是「pty 內的程式宣告自己的身分」。
-    await openSessionViaMenu(app.client, '跑 claude')
+    await openSessionViaMenu(app.client, copy('sessions.spawnClaude'))
     const tabsClaude = await pollUntil(app.client, TABS, (value) => value.length === 1, 8000)
     check(
       results,
@@ -1334,7 +1345,7 @@ async function runMode(label, { port, rendererUrl }) {
     const claudeTab0 = center(await app.client.evaluate(TAB_RECT(0)))
     await realMouse(app.client, claudeTab0.x, claudeTab0.y, 'right')
     await pollUntil(app.client, MENU_IN_VIEWPORT, (value) => value !== null, 4000)
-    await realClick(app.client, await app.client.evaluate(MENU_ITEM_RECT('重新命名')))
+    await realClick(app.client, await app.client.evaluate(MENU_ITEM_RECT(copy('sessions.rename'))))
     await sleep(300) // 對話框開啟時輸入框已 focus 且全選 —— 直接打字即取代
     await app.client.send('Input.insertText', { text: 'my-claude' })
     await pressEnter(app.client)
@@ -1385,7 +1396,7 @@ async function runMode(label, { port, rendererUrl }) {
     //（於是「沒跳對話框」是真的沒跳，不是根本沒送）；以及接管期間 pty 的標題**持續被記錄**，
     // 交還是即時的，不必空等 pty 下一次宣告（design D3）。
     await openTabMenu(app.client, 0)
-    await realClick(app.client, await app.client.evaluate(MENU_ITEM_RECT('重新命名')))
+    await realClick(app.client, await app.client.evaluate(MENU_ITEM_RECT(copy('sessions.rename'))))
     await sleep(300)
     await app.client.send('Input.insertText', { text: '' }) // 輸入框已全選 —— 送出空字串＝清空
     await pressEnter(app.client)
@@ -1415,7 +1426,7 @@ async function runMode(label, { port, rendererUrl }) {
     const truncated = await pollUntil(
       app.client,
       `(() => {
-        const tab = document.querySelector('[aria-label="Session 分頁"] [role="tab"]')
+        const tab = document.querySelector('[aria-label="${copy('sessions.tabs')}"] [role="tab"]')
         if (!tab) return null
         return { label: tab.innerText.replace(/\\s+/g, ' ').trim(), title: tab.getAttribute('title') ?? '' }
       })()`,
@@ -1435,13 +1446,13 @@ async function runMode(label, { port, rendererUrl }) {
     // ── 清空名稱 ＝ 交還命名權（claude 的往返已於上面的對照組驗過）
     //
     // login shell 的 session：回到**本地標籤**，即使它的 pty 曾宣告過標題（那些標題一律被丟棄）。
-    await openSessionViaMenu(app.client, '進 login shell')
+    await openSessionViaMenu(app.client, copy('sessions.spawnShell'))
     await pollUntil(app.client, TABS, (value) => value.length === 2, 8000)
 
     const shellTab = center(await app.client.evaluate(TAB_RECT(1)))
     await realMouse(app.client, shellTab.x, shellTab.y, 'right')
     await pollUntil(app.client, MENU_IN_VIEWPORT, (value) => value !== null, 4000)
-    await realClick(app.client, await app.client.evaluate(MENU_ITEM_RECT('重新命名')))
+    await realClick(app.client, await app.client.evaluate(MENU_ITEM_RECT(copy('sessions.rename'))))
     await sleep(300)
     await app.client.send('Input.insertText', { text: 'named-shell' })
     await pressEnter(app.client)
@@ -1449,7 +1460,7 @@ async function runMode(label, { port, rendererUrl }) {
 
     await realMouse(app.client, shellTab.x, shellTab.y, 'right')
     await pollUntil(app.client, MENU_IN_VIEWPORT, (value) => value !== null, 4000)
-    await realClick(app.client, await app.client.evaluate(MENU_ITEM_RECT('重新命名')))
+    await realClick(app.client, await app.client.evaluate(MENU_ITEM_RECT(copy('sessions.rename'))))
     await sleep(300)
     await app.client.send('Input.insertText', { text: '' })
     await pressEnter(app.client)
@@ -1515,7 +1526,7 @@ async function runMode(label, { port, rendererUrl }) {
 
     // ── 關閉視窗：所有 pty 必須被清掉（真的關窗，再回查行程表）
     await sleep(300)
-    await openSessionViaMenu(app.client, '進 login shell')
+    await openSessionViaMenu(app.client, copy('sessions.spawnShell'))
     const tabsAfterCreate = await pollUntil(
       app.client,
       TABS,
@@ -1587,7 +1598,7 @@ async function runRestore(label, { port, rendererUrl }) {
     await pollUntil(app.client, SELECT_FOLDER('repo-a'), (value) => value === true, 10_000)
     await sleep(300)
 
-    await openSessionViaMenu(app.client, '跑 claude')
+    await openSessionViaMenu(app.client, copy('sessions.spawnClaude'))
     await pollUntil(app.client, TABS, (value) => value.length === 1, 8000)
 
     // claude 目標：以我們指定的對話識別碼啟動（--session-id）—— 於是它可以被持久化並在下次續接。
@@ -1603,14 +1614,14 @@ async function runRestore(label, { port, rendererUrl }) {
 
     // 使用者命名 —— 重建後必須原樣回來。
     await openTabMenu(app.client, 0)
-    await realClick(app.client, await app.client.evaluate(MENU_ITEM_RECT('重新命名')))
+    await realClick(app.client, await app.client.evaluate(MENU_ITEM_RECT(copy('sessions.rename'))))
     await sleep(300)
     await app.client.send('Input.insertText', { text: 'agent-a' })
     await pressEnter(app.client)
     await pollUntil(app.client, TAB_LABELS, (value) => value[0]?.includes('agent-a'), 6000)
 
     // shell 目標：cd 到子目錄、留一行可辨識的輸出 —— 兩者都要跨重啟活下來。
-    await openSessionViaMenu(app.client, '進 login shell')
+    await openSessionViaMenu(app.client, copy('sessions.spawnShell'))
     await pollUntil(app.client, TABS, (value) => value.length === 2, 8000)
     await realClick(app.client, await app.client.evaluate(TERMINAL_RECT))
     await typeLine(app.client, `cd ${sub}`)
@@ -1655,7 +1666,7 @@ async function runRestore(label, { port, rendererUrl }) {
     check(
       results,
       `${label}：休眠的 session 不被呈現為「已結束」`,
-      !dormantTab?.title?.includes('已結束') && dormantTab?.dot !== danger,
+      !dormantTab?.title?.includes(copy('sessions.statusExited')) && dormantTab?.dot !== danger,
       `tooltip=${JSON.stringify(dormantTab?.title)} 狀態燈=${dormantTab?.dot}（danger=${danger}）`,
     )
 
@@ -1683,7 +1694,7 @@ async function runRestore(label, { port, rendererUrl }) {
     check(
       results,
       `${label}：claude session 不重播快照（否則歷史會出現兩份）`,
-      !claudeText.includes('以上為上次的內容'),
+      !claudeText.includes(copy('sessions.replaySeparator')),
       `終端內容=${JSON.stringify(claudeText.slice(0, 80))}`,
     )
 
@@ -1740,7 +1751,7 @@ async function runRestore(label, { port, rendererUrl }) {
     // 只斷言 `includes('MARK_42')` 的版本，對一個把畫面弄壞的實作照樣是綠的：`?1049l` 曾把游標
     // 拉回左上角，於是分隔線蓋掉了歷史的第二行、live 的 prompt 又蓋掉第三行 —— `MARK_42` 仍然
     // 「存在」（雖然它變成了 `RK_42` 且跑到分隔線後面）。**歷史必須完整，且整段在分隔線之前。**
-    const historyEnd = replayed.indexOf('以上為上次的內容')
+    const historyEnd = replayed.indexOf(copy('sessions.replaySeparator'))
     const history = historyEnd === -1 ? '' : replayed.slice(0, historyEnd)
     check(
       results,
@@ -1756,7 +1767,7 @@ async function runRestore(label, { port, rendererUrl }) {
     )
 
     // 經過兩次「重建但不喚醒」之後，分隔線仍然**恰好一條**。
-    const separators = replayed.split('以上為上次的內容').length - 1
+    const separators = replayed.split(copy('sessions.replaySeparator')).length - 1
     check(
       results,
       `${label}：休眠期間不把重播的歷史再序列化回快照（分隔線不累積）`,
@@ -1811,7 +1822,7 @@ async function runRestore(label, { port, rendererUrl }) {
     await pollUntil(
       app.client,
       TABS,
-      (value) => value.some((tab) => tab.label?.includes('已結束') || true),
+      (value) => value.some((tab) => tab.label?.includes(copy('sessions.exitedBadge')) || true),
       3000,
     ).catch(() => {})
     await sleep(800)
@@ -1880,13 +1891,13 @@ async function runHealAndCrash(label, { port, rendererUrl }) {
     await pollUntil(app.client, SELECT_FOLDER('repo-a'), (value) => value === true, 10_000)
     await sleep(300)
 
-    await openSessionViaMenu(app.client, '跑 claude')
+    await openSessionViaMenu(app.client, copy('sessions.spawnClaude'))
     await pollUntil(app.client, TABS, (value) => value.length === 1, 8000)
     await waitForPtyCount(marker, 1)
     const created = stub.calls()[0]?.split(' ')[1] ?? ''
 
     await openTabMenu(app.client, 0)
-    await realClick(app.client, await app.client.evaluate(MENU_ITEM_RECT('重新命名')))
+    await realClick(app.client, await app.client.evaluate(MENU_ITEM_RECT(copy('sessions.rename'))))
     await sleep(300)
     await app.client.send('Input.insertText', { text: 'healme' })
     await pressEnter(app.client)
@@ -2003,7 +2014,7 @@ async function runHealAndCrash(label, { port, rendererUrl }) {
     await pollUntil(app.client, SELECT_FOLDER('repo-a'), (value) => value === true, 10_000)
     await pollUntil(app.client, TABS, (value) => value.length === 1, 10_000)
 
-    await openSessionViaMenu(app.client, '進 login shell')
+    await openSessionViaMenu(app.client, copy('sessions.spawnShell'))
     await pollUntil(app.client, TABS, (value) => value.length === 2, 8000)
     await realClick(app.client, await app.client.evaluate(TERMINAL_RECT))
     await typeLine(app.client, 'echo CRASH_$((8*8))')
@@ -2073,7 +2084,7 @@ async function runAltScreen(label, { port, rendererUrl }) {
     await pollUntil(app.client, SELECT_FOLDER('repo-a'), (value) => value === true, 10_000)
     await sleep(300)
 
-    await openSessionViaMenu(app.client, '進 login shell')
+    await openSessionViaMenu(app.client, copy('sessions.spawnShell'))
     await pollUntil(app.client, TABS, (value) => value.length === 1, 8000)
     await realClick(app.client, await app.client.evaluate(TERMINAL_RECT))
 
@@ -2176,7 +2187,7 @@ async function runDormantHint(label, { port, rendererUrl }) {
     const hint = await pollUntil(
       app.client,
       `(() => {
-        const term = document.querySelector('section[aria-label="Terminal"]')
+        const term = document.querySelector('section[aria-label="${copy('stage.terminal')}"]')
         if (!term) return null
         const box = term.getBoundingClientRect()
         // 終端正中央實際被畫在最上層的是誰？
@@ -2199,7 +2210,7 @@ async function runDormantHint(label, { port, rendererUrl }) {
     check(
       results,
       `${label}：喚醒失敗時說明原因，而不是靜默地什麼都不發生`,
-      Boolean(hint?.text?.includes('無法恢復')),
+      Boolean(hint?.text?.includes(prefixOf('sessions.wakeFailed'))),
       `提示內容=${JSON.stringify(hint?.text)}`,
     )
     check(

@@ -1,6 +1,7 @@
 import { useCallback, useState } from 'react'
 import { ContextMenu, type MenuItem } from '../files/dialogs'
 import type { SpawnTarget } from '../types'
+import { useTranslation } from 'react-i18next'
 
 interface SpawnMenu {
   /** 掛在建立入口的 onClick 上。自該按鈕的左下角展開。 */
@@ -19,6 +20,7 @@ interface SpawnMenu {
  * 開了選單、錨點卻是分頁列的按鈕」這種錯位變得可能。
  */
 export function useSpawnMenu(onSelect: (target: SpawnTarget) => void): SpawnMenu {
+  const { t } = useTranslation()
   const [at, setAt] = useState<{ x: number; y: number } | null>(null)
 
   const open = useCallback((event: React.MouseEvent<HTMLElement>) => {
@@ -32,14 +34,14 @@ export function useSpawnMenu(onSelect: (target: SpawnTarget) => void): SpawnMenu
 
   const items: MenuItem[] = [
     {
-      label: '跑 claude',
+      label: t('sessions.spawnClaude'),
       onSelect: () => {
         close()
         onSelect('claude')
       },
     },
     {
-      label: '進 login shell',
+      label: t('sessions.spawnShell'),
       onSelect: () => {
         close()
         onSelect('shell')

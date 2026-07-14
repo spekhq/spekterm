@@ -6,6 +6,7 @@ import { StatusDot, sessionLabel, sessionTitle, statusTitle } from './session-ba
 import type { SessionState } from './sessions'
 import { useDragReorder } from './useDragReorder'
 import { useSpawnMenu } from './useSpawnMenu'
+import { useTranslation } from 'react-i18next'
 
 interface SessionTabsProps {
   sessions: SessionState[]
@@ -32,6 +33,8 @@ export function SessionTabs({
   onReorder,
   error,
 }: SessionTabsProps): React.JSX.Element {
+  const { t } = useTranslation()
+
   const spawn = useSpawnMenu(onCreate)
   const [menu, setMenu] = useState<{ x: number; y: number; session: SessionState } | null>(null)
   const [renaming, setRenaming] = useState<SessionState | null>(null)
@@ -46,14 +49,14 @@ export function SessionTabs({
   const items: MenuItem[] = menu
     ? [
         {
-          label: '重新命名',
+          label: t('sessions.rename'),
           onSelect: () => {
             setRenaming(menu.session)
             setMenu(null)
           },
         },
         {
-          label: '關閉',
+          label: t('sessions.close'),
           tone: 'danger',
           onSelect: () => {
             onClose(menu.session.id)
@@ -66,11 +69,11 @@ export function SessionTabs({
   if (sessions.length === 0) {
     return (
       <div className="flex items-center gap-3 border-b border-hairline bg-panel px-3 py-2">
-        <span className="text-sm text-ink-faint">尚無 session</span>
+        <span className="text-sm text-ink-faint">{t('sessions.empty')}</span>
         <button
           type="button"
           onClick={spawn.open}
-          aria-label="新增 session"
+          aria-label={t('sessions.new')}
           className={NEW_BUTTON_CLASS}
         >
           + session
@@ -89,7 +92,7 @@ export function SessionTabs({
       */}
       <div
         role="tablist"
-        aria-label="Session 分頁"
+        aria-label={t('sessions.tabs')}
         className="flex min-w-0 items-stretch overflow-x-auto"
       >
         {sessions.map((session, index) => {
@@ -135,14 +138,14 @@ export function SessionTabs({
                 <StatusDot session={session} />
                 <span className="whitespace-nowrap font-mono">{label}</span>
                 {session.status === 'exited' && (
-                  <span className="text-2xs text-ink-faint">已結束</span>
+                  <span className="text-2xs text-ink-faint">{t('sessions.exitedBadge')}</span>
                 )}
               </button>
 
               <button
                 type="button"
-                aria-label={`關閉 session ${label}`}
-                title={`關閉 session ${full}`}
+                aria-label={t('sessions.closeSession', { label })}
+                title={t('sessions.closeSession', { label: full })}
                 onClick={() => onClose(session.id)}
                 className="rounded px-1 text-sm text-ink-faint opacity-0 group-hover:opacity-100 hover:text-danger"
               >
@@ -156,7 +159,7 @@ export function SessionTabs({
       <button
         type="button"
         onClick={spawn.open}
-        aria-label="新增 session"
+        aria-label={t('sessions.new')}
         className={`${NEW_BUTTON_CLASS} mx-2`}
       >
         + session

@@ -14,6 +14,7 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { check, connect, pollUntil, waitForPageTarget } from './lib/cdp.mjs'
+import { copy } from './lib/copy.mjs'
 
 const DEBUG_PORT = 9222
 const STARTUP_TIMEOUT_MS = 30_000
@@ -21,8 +22,10 @@ const STARTUP_TIMEOUT_MS = 30_000
 /** renderer 內求值：全部取自真實的 DOM 與 preload 介面，沒有專為驗收而生的鉤子。 */
 const PROBE_EXPRESSION = `(async () => {
   const root = document.getElementById('root')
-  const nav = document.querySelector('nav[aria-label="活動列"]')
+  const nav = document.querySelector('nav[aria-label="${copy('activityBar.label')}"]')
   if (!root || root.children.length === 0 || !nav) return { mounted: false }
+
+  const lang = document.documentElement.lang
 
   const navStyle = getComputedStyle(nav)
   const api = globalThis.workspace
@@ -37,13 +40,14 @@ const PROBE_EXPRESSION = `(async () => {
 
   return {
     mounted: true,
+    lang,
     title: document.title,
     navDisplay: navStyle.display,
     navBackground: navStyle.backgroundColor,
     regions: {
       activityBar: Boolean(nav),
-      rail: Boolean(document.querySelector('aside[aria-label="工作區"]')),
-      mainStage: Boolean(document.querySelector('main[aria-label="主舞台"]')),
+      rail: Boolean(document.querySelector('aside[aria-label="${copy('rail.label')}"]')),
+      mainStage: Boolean(document.querySelector('main[aria-label="${copy('stage.label')}"]')),
     },
     requireExposed: typeof require !== 'undefined',
     processExposed: typeof process !== 'undefined',
@@ -161,6 +165,14 @@ try {
   check(results, 'webPreferences 明確宣告信任模型', declaresTrustModel,
     'contextIsolation: true, nodeIntegration: false')
   check(results, '主行程開啟視窗且 renderer 載入', Boolean(r?.title), `title="${r?.title ?? ''}"`)
+
+  // 文件宣告的語言必須與 UI 一致（`ui-localization`）。`lang` 不只是形式 —— 它決定字型的
+  // fallback 與螢幕閱讀器的發音。
+  //
+  // **量測必須併進 `PROBE_EXPRESSION`** —— `client` 在它之後就 `close()` 了。對已關閉的
+  // WebSocket 呼叫 `evaluate`，訊息沒有人接、`send` 的 Promise **永遠不會 resolve**：
+  // 不拋錯、不逾時，探針就這樣無限等待下去（實測：卡死十分鐘，看起來像 electron 啟動很慢）。
+  check(results, '文件宣告的語言與 UI 一致', r?.lang === 'en', `lang="${String(r?.lang)}"`)
   check(results, 'React 根元件掛載（#root 有子節點）', r?.mounted === true)
   check(results, '三個版面區域同時存在', Boolean(r?.regions?.activityBar && r?.regions?.rail && r?.regions?.mainStage),
     JSON.stringify(r?.regions ?? {}))

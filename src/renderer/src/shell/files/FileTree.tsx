@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next'
 import type { TreeRow } from './useFileTree'
 import { formatRelativeTime } from './relative-time'
 
@@ -20,6 +21,7 @@ interface FileRowProps {
 }
 
 function FileRow({ row, now, dirty, onActivate, onContextMenu }: FileRowProps): React.JSX.Element {
+  const { t } = useTranslation()
   const isDirectory = row.kind === 'directory'
 
   return (
@@ -55,7 +57,11 @@ function FileRow({ row, now, dirty, onActivate, onContextMenu }: FileRowProps): 
       </span>
       {/* side panel 沒有分頁列。少了這個點，使用者無從得知自己還有未存的變更。 */}
       {dirty && (
-        <span aria-label="有未存的變更" title="有未存的變更" className="shrink-0 text-accent">
+        <span
+          aria-label={t('files.unsaved')}
+          title={t('files.unsaved')}
+          className="shrink-0 text-accent"
+        >
           ●
         </span>
       )}
@@ -86,8 +92,10 @@ export function FileTree({
   onActivate,
   onContextMenu,
 }: FileTreeProps): React.JSX.Element {
+  const { t } = useTranslation()
+
   return (
-    <div role="tree" aria-label="檔案樹" className="flex flex-col font-mono">
+    <div role="tree" aria-label={t('files.tree')} className="flex flex-col font-mono">
       {rows.map((row) => (
         <FileRow
           key={row.relPath}

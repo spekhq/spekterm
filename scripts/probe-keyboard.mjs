@@ -20,6 +20,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { check, connect, pollUntil, waitForPageTarget } from './lib/cdp.mjs'
+import { copy, prefixOf } from './lib/copy.mjs'
 
 const BUILD_PORT = 9234
 const DEV_PORT = 9235
@@ -67,7 +68,7 @@ function seedProfile(repos) {
 // ── app 啟動 ────────────────────────────────────────────────────────────────
 
 const MOUNTED = `Boolean(
-  document.querySelector('aside[aria-label="工作區"]') &&
+  document.querySelector('aside[aria-label="${copy('rail.label')}"]') &&
   document.getElementById('root')?.children.length &&
   document.visibilityState === 'visible'
 )`
@@ -141,7 +142,7 @@ async function launch({ port, profileDir, rendererUrl }) {
 // ── renderer 內的量測（一律 role／aria，不掛 data-*）─────────────────────────
 
 const SELECT_FOLDER = (name) => `(() => {
-  const rows = [...document.querySelectorAll('aside[aria-label="工作區"] li > div[role="button"]')]
+  const rows = [...document.querySelectorAll('aside[aria-label="${copy('rail.label')}"] li > div[role="button"]')]
   const row = rows.find((r) => r.innerText.includes(${JSON.stringify(name)}))
   if (!row) return false
   row.click()
@@ -150,21 +151,21 @@ const SELECT_FOLDER = (name) => `(() => {
 
 /** 當前選中的 repo（rail 上被標示的那一列）。 */
 const SELECTED_FOLDER = `(() => {
-  const row = [...document.querySelectorAll('aside[aria-label="工作區"] li > div[role="button"]')]
+  const row = [...document.querySelectorAll('aside[aria-label="${copy('rail.label')}"] li > div[role="button"]')]
     .find((r) => r.getAttribute('aria-current') === 'true' || r.dataset.selected === 'true')
   if (row) return row.innerText.split('\\n')[0].trim()
   // 退路：主舞台的 repo header 就是當前 repo
-  const header = document.querySelector('main[aria-label="主舞台"] header')
+  const header = document.querySelector('main[aria-label="${copy('stage.label')}"] header')
   return header ? header.innerText.split('\\n')[0].trim() : null
 })()`
 
-const TABS = `[...document.querySelectorAll('[aria-label="Session 分頁"] [role="tab"]')].map((tab) => ({
+const TABS = `[...document.querySelectorAll('[aria-label="${copy('sessions.tabs')}"] [role="tab"]')].map((tab) => ({
   label: tab.innerText.replace(/\\s+/g, ' ').trim(),
   selected: tab.getAttribute('aria-selected') === 'true',
 }))`
 
 const FOCUSED_TAB = `(() => {
-  const tab = [...document.querySelectorAll('[aria-label="Session 分頁"] [role="tab"]')]
+  const tab = [...document.querySelectorAll('[aria-label="${copy('sessions.tabs')}"] [role="tab"]')]
     .find((t) => t.getAttribute('aria-selected') === 'true')
   return tab ? tab.innerText.replace(/\\s+/g, ' ').trim() : null
 })()`
@@ -177,8 +178,8 @@ const RECT_OF = (selector) => `(() => {
   return { x: r.x, y: r.y, width: r.width, height: r.height }
 })()`
 
-const NEW_SESSION_RECT = RECT_OF('[aria-label="新增 session"]')
-const TERMINAL_RECT = RECT_OF('section[aria-label="Terminal"]')
+const NEW_SESSION_RECT = RECT_OF(`[aria-label="${copy('sessions.new')}"]`)
+const TERMINAL_RECT = RECT_OF(`section[aria-label="${copy('stage.terminal')}"]`)
 
 const MENU_ITEM_RECT = (label) => `(() => {
   const menu = document.querySelector('[role="menu"]')
@@ -190,7 +191,7 @@ const MENU_ITEM_RECT = (label) => `(() => {
 })()`
 
 const TAB_RECT = (index) => `(() => {
-  const tabs = [...document.querySelectorAll('[aria-label="Session 分頁"] [role="tab"]')]
+  const tabs = [...document.querySelectorAll('[aria-label="${copy('sessions.tabs')}"] [role="tab"]')]
   const tab = tabs[${index}]
   if (!tab) return null
   const r = tab.getBoundingClientRect()
@@ -199,7 +200,7 @@ const TAB_RECT = (index) => `(() => {
 
 /** 只讀「當前顯示中」的那個終端 —— 其餘 session 的終端仍掛載，只是 display:none。 */
 const TERMINAL_TEXT = `(() => {
-  const host = [...document.querySelectorAll('section[aria-label="Terminal"] > div')]
+  const host = [...document.querySelectorAll('section[aria-label="${copy('stage.terminal')}"] > div')]
     .find((d) => !d.classList.contains('hidden'))
   const rows = host?.querySelector('.xterm-rows')
   return rows ? rows.innerText : ''
@@ -220,7 +221,7 @@ const MENU_STATE = `(() => {
 })()`
 
 const IDENTITY_FILES = `(() => {
-  const btn = [...document.querySelectorAll('[role="tablist"][aria-label="side panel 身分切換"] button[role="tab"]')]
+  const btn = [...document.querySelectorAll('[role="tablist"][aria-label="${copy('panelSwitch.label')}"] button[role="tab"]')]
     .find((b) => b.innerText.includes('Files'))
   if (!btn) return false
   btn.click()
@@ -228,7 +229,7 @@ const IDENTITY_FILES = `(() => {
 })()`
 
 const OPEN_FILE = (name) => `(() => {
-  const row = [...document.querySelectorAll('section[aria-label="Files"] [role="treeitem"]')]
+  const row = [...document.querySelectorAll('section[aria-label="${copy('files.label')}"] [role="treeitem"]')]
     .find((r) => r.innerText.includes(${JSON.stringify(name)}))
   if (!row) return false
   row.click()
@@ -236,7 +237,7 @@ const OPEN_FILE = (name) => `(() => {
 })()`
 
 const EDITOR_TEXTAREA_FOCUSED = `(() => {
-  const ta = document.querySelector('section[aria-label="Files"] textarea')
+  const ta = document.querySelector('section[aria-label="${copy('files.label')}"] textarea')
   if (!ta) return false
   ta.focus()
   return document.activeElement === ta
@@ -316,7 +317,7 @@ async function createSession(client) {
   if (!btn) throw new Error('找不到「+ session」按鈕')
   await realClick(client, btn)
 
-  const item = await pollUntil(client, MENU_ITEM_RECT('shell'), (value) => value !== null, 3000)
+  const item = await pollUntil(client, MENU_ITEM_RECT(copy('sessions.spawnShell')), (value) => value !== null, 3000)
   if (!item) throw new Error('選單中找不到 shell')
   await realClick(client, item)
 }
@@ -653,9 +654,9 @@ async function runMode(label, { port, rendererUrl }) {
 
     // 關掉當前 focused（第三個）的那個分頁
     await app.client.evaluate(`(() => {
-      const tabs = [...document.querySelectorAll('[aria-label="Session 分頁"] [role="tab"]')]
+      const tabs = [...document.querySelectorAll('[aria-label="${copy('sessions.tabs')}"] [role="tab"]')]
       const group = tabs[2]?.closest('div[role="presentation"]')
-      const close = group?.querySelector('[aria-label^="關閉 session"]')
+      const close = group?.querySelector('[aria-label^="${prefixOf('sessions.closeSession')}"]')
       if (!close) return false
       close.click()
       return true
@@ -680,7 +681,7 @@ async function runMode(label, { port, rendererUrl }) {
     const tab0 = center(await app.client.evaluate(TAB_RECT(0)))
     await realMouse(app.client, tab0.x, tab0.y, 'right')
     await pollUntil(app.client, `Boolean(document.querySelector('[role="menu"]'))`, (v) => v === true, 4000)
-    await realClick(app.client, await app.client.evaluate(MENU_ITEM_RECT('重新命名')))
+    await realClick(app.client, await app.client.evaluate(MENU_ITEM_RECT(copy('sessions.rename'))))
     await pollUntil(app.client, DIALOG_OPEN, (value) => value === true, 4000)
 
     await pressKey(app.client, 'Tab', ['ctrl'])
@@ -721,7 +722,7 @@ async function runMode(label, { port, rendererUrl }) {
     const fileRow = await pollUntil(
       app.client,
       `(() => {
-        const rows = [...document.querySelectorAll('section[aria-label="Files"] [role="treeitem"]')]
+        const rows = [...document.querySelectorAll('section[aria-label="${copy('files.label')}"] [role="treeitem"]')]
         const row = rows.find((r) => r.innerText.includes('notes.txt'))
         if (!row) return null
         const r = row.getBoundingClientRect()
@@ -733,7 +734,7 @@ async function runMode(label, { port, rendererUrl }) {
     const rowAt = center(fileRow)
     await realMouse(app.client, rowAt.x, rowAt.y, 'right')
     await pollUntil(app.client, `Boolean(document.querySelector('[role="menu"]'))`, (v) => v === true, 4000)
-    await realClick(app.client, await app.client.evaluate(MENU_ITEM_RECT('重新命名')))
+    await realClick(app.client, await app.client.evaluate(MENU_ITEM_RECT(copy('sessions.rename'))))
     const filesDialog = await pollUntil(app.client, DIALOG_OPEN, (value) => value === true, 4000)
     check(results, `${label}：files 的對話框帶有 role="dialog"`, filesDialog === true)
 

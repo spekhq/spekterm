@@ -4,6 +4,7 @@ import { type IPty, spawn } from 'node-pty'
 import { isWithin } from './fs-boundary'
 import { isUuid } from './session-store'
 import type { FolderLookup } from './workspace-store'
+import { t } from '@shared/i18n'
 
 /** 新 session 的 spawn 目標。兩者都經 login shell 啟動（design D6）。 */
 export type SpawnTarget = 'claude' | 'shell'
@@ -132,7 +133,7 @@ function spawnArgs(target: SpawnTarget, conversation: ClaudeConversation | undef
   if (target !== 'claude' || !conversation) return ['-l']
 
   const { id, mode } = conversation
-  if (!isUuid(id)) throw new TerminalError('SPAWN_FAILED', 'conversation id 不是合法的 UUID')
+  if (!isUuid(id)) throw new TerminalError('SPAWN_FAILED', t('terminalError.invalidConversationId'))
 
   const flag = mode === 'resume' ? '--resume' : '--session-id'
   return ['-l', '-c', `claude ${flag} ${id}`]
@@ -229,9 +230,9 @@ export class TerminalService {
    */
   create(folderId: string, target: SpawnTarget, options: SpawnOptions = {}): SpawnResult {
     const folder = this.store.list().find((candidate) => candidate.id === folderId)
-    if (!folder) throw new TerminalError('UNKNOWN_FOLDER', `unknown folder: ${folderId}`)
+    if (!folder) throw new TerminalError('UNKNOWN_FOLDER', t('terminalError.unknownFolder', { folderId }))
     if (folder.status !== 'ok') {
-      throw new TerminalError('FOLDER_UNAVAILABLE', `folder is unavailable: ${folder.path}`)
+      throw new TerminalError('FOLDER_UNAVAILABLE', t('terminalError.folderUnavailable', { path: folder.path }))
     }
 
     const sessionId = options.sessionId ?? randomUUID()
@@ -241,7 +242,7 @@ export class TerminalService {
     // 識別碼不進入命令」）。
     const resumable = target === 'claude' && isUuid(options.resumeConversationId)
     if (target === 'claude' && options.resumeConversationId && !resumable) {
-      console.error('[terminal] 持久化的對話識別碼不合法，改以全新對話啟動')
+      console.error('[terminal] the persisted conversation id is invalid; starting a fresh conversation')
     }
 
     const conversation: ClaudeConversation | undefined =
@@ -304,7 +305,7 @@ export class TerminalService {
       // **shell 路徑無效不走這裡。** 實測：node-pty 對 execvp 失敗不同步拋錯 —— 它成功
       // 回傳一個 pty，該 pty 隨即以非零碼 exit，`execvp(3) failed.` 由 onData 送出。
       // 於是「shell 路徑錯」與「claude 找不到」殊途同歸，都經 onExit 呈現。
-      throw new TerminalError('SPAWN_FAILED', `failed to allocate pty: ${String(error)}`)
+      throw new TerminalError('SPAWN_FAILED', t('terminalError.spawnFailed', { reason: String(error) }))
     }
 
     this.#sessions.set(sessionId, {

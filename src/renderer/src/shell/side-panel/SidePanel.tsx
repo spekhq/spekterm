@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next'
 import { FilesPanel } from '../files/FilesPanel'
 import { OpenSpecPanel } from '../openspec/OpenSpecPanel'
 import type { VizKind } from '../openspec/VizOverlay'
@@ -33,6 +34,8 @@ export function SidePanel({
   openSpecRequest,
   onOpenViz,
 }: SidePanelProps): React.JSX.Element {
+  const { t } = useTranslation()
+
   if (identity === 'files') {
     // key：換 folder 等於換一棵樹，讓它重新掛載，展開狀態與開啟的檔案自然歸零
     return (
@@ -48,10 +51,10 @@ export function SidePanel({
   if (!folder) {
     return (
       <section
-        aria-label="OpenSpec"
+        aria-label={t('panelSwitch.openSpec')}
         className="flex h-full items-center justify-center px-6 text-center text-sm text-ink-faint"
       >
-        尚未選擇 repo —— 於左側的 workspace 選一個，或加入新的 folder
+        {t('stage.noRepoHint')}
       </section>
     )
   }

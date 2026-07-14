@@ -240,7 +240,7 @@ const workspaceApi = {
 export type WorkspaceApi = typeof workspaceApi
 
 if (!process.contextIsolated) {
-  throw new Error('contextIsolation 必須啟用，否則 preload 白名單形同虛設')
+  throw new Error('contextIsolation must be enabled, otherwise the preload allowlist is meaningless')
 }
 
 contextBridge.exposeInMainWorld('workspace', workspaceApi)

@@ -18,7 +18,7 @@ import EditorWorker from 'monaco-editor/esm/vs/editor/editor.worker?worker'
 /** worker script 若載入失敗，錯誤只會出現在 worker 的 error 事件，不會拋到主執行緒 */
 function reportErrors(worker: Worker, label: string): Worker {
   worker.addEventListener('error', (event) => {
-    console.error(`[monaco] worker "${label}" 載入失敗：${event.message || 'unknown error'}`)
+    console.error(`[monaco] worker "${label}" failed to load: ${event.message || 'unknown error'}`)
   })
   return worker
 }

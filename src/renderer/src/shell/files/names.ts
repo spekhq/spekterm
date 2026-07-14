@@ -1,3 +1,5 @@
+import { t } from '@shared/i18n'
+
 /**
  * 新項目名稱的驗證，與主行程 `fs-service.validateName` 同一組規則。
  *
@@ -25,12 +27,12 @@ function hasControlChar(name: string): boolean {
 
 /** 回傳可直接呈現的錯誤訊息；名稱合法時回傳 `null`。 */
 export function validateName(name: string): string | null {
-  if (name.length === 0) return '名稱不能是空的'
-  if (name === '.' || name === '..') return `名稱不能是「${name}」`
+  if (name.length === 0) return t('files.name.empty')
+  if (name === '.' || name === '..') return t('files.name.dotted', { name })
   if (FORBIDDEN_CHARS.test(name) || hasControlChar(name)) {
-    return '名稱含有不允許的字元（例如 / \\ : * ? " < > |）'
+    return t('files.name.forbiddenChars')
   }
-  if (/[ .]$/.test(name)) return '名稱不能以空白或句點結尾'
-  if (WINDOWS_RESERVED.test(name.split('.')[0] ?? '')) return '這是作業系統的保留名稱'
+  if (/[ .]$/.test(name)) return t('files.name.trailing')
+  if (WINDOWS_RESERVED.test(name.split('.')[0] ?? '')) return t('files.name.reserved')
   return null
 }

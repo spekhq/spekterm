@@ -130,7 +130,7 @@ export function parseSessions(raw: string): PersistedSession[] | null {
   for (const entry of sessions) {
     const session = parseSessionEntry(entry)
     if (session) parsed.push(session)
-    else console.error('[sessions] 丟棄一筆無法解讀的 session')
+    else console.error('[sessions] discarded an unreadable session entry')
   }
   return parsed
 }
@@ -211,7 +211,7 @@ export class SessionStore {
       raw = fs.readFileSync(this.filePath, 'utf8')
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-        console.error(`[sessions] 無法讀取，以空清單啟動：${String(error)}`)
+        console.error(`[sessions] unreadable, starting with an empty list: ${String(error)}`)
       }
       this.#sessions = []
       // 孤兒快照仍要清 —— 設定檔不見了，那些快照就更沒有歸屬了。
@@ -223,8 +223,8 @@ export class SessionStore {
     if (!parsed) {
       const kept = quarantine(this.filePath)
       console.error(
-        `[sessions] 無法解析，以空清單啟動` +
-          (kept ? `；原檔保留於 ${kept}` : `；原檔保留失敗`),
+        `[sessions] unparsable, starting with an empty list` +
+          (kept ? `; the original was kept at ${kept}` : `; the original could not be kept`),
       )
       this.#sessions = []
       this.pruneScrollback()
@@ -337,7 +337,7 @@ export class SessionStore {
       writeFileAtomic(file, clampScrollback(data))
     } catch (error) {
       // 快照寫不進去不是致命的 —— 下次還會再寫一份。絕不因此中斷任何事。
-      console.error(`[sessions] 快照寫入失敗：${String(error)}`)
+      console.error(`[sessions] snapshot write failed: ${String(error)}`)
     }
   }
 
@@ -376,7 +376,7 @@ export class SessionStore {
   /** 檔名由 UUID 構成，因此不可能逸出 `scrollbackDir`。非 UUID 一律拒絕。 */
   private scrollbackPath(sessionId: string): string | null {
     if (!isUuid(sessionId)) {
-      console.error('[sessions] 拒絕以非 UUID 的識別碼組成快照路徑')
+      console.error('[sessions] refused to build a snapshot path from a non-UUID id')
       return null
     }
     return path.join(this.scrollbackDir, `${sessionId}.scrollback`)
@@ -387,7 +387,7 @@ export class SessionStore {
     try {
       writeFileAtomic(this.filePath, `${JSON.stringify(payload, null, 2)}\n`)
     } catch (error) {
-      console.error(`[sessions] 寫入失敗：${String(error)}`)
+      console.error(`[sessions] write failed: ${String(error)}`)
     }
   }
 }

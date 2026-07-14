@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { DirEntry, DirEntryKind, FsFailure } from '../types'
 import { ROOT_PATH, joinRelPath, parentOf } from './paths'
+import { t } from '@shared/i18n'
 
 export interface TreeRow {
   relPath: string
@@ -43,9 +44,9 @@ function sortEntries(entries: DirEntry[]): DirEntry[] {
 }
 
 function describeFailure(failure: FsFailure): string {
-  if (failure.code === 'ESCAPES_ROOT') return '超出 workspace 邊界，無法展開'
-  if (failure.code === 'NOT_FOUND') return '已不存在'
-  if (failure.code === 'FOLDER_UNAVAILABLE') return 'folder 路徑已失效'
+  if (failure.code === 'ESCAPES_ROOT') return t('files.failure.expandEscapesRoot')
+  if (failure.code === 'NOT_FOUND') return t('files.failure.expandNotFound')
+  if (failure.code === 'FOLDER_UNAVAILABLE') return t('files.failure.folderUnavailable')
   return failure.message
 }
 

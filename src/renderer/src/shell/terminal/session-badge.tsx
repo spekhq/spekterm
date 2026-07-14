@@ -1,3 +1,4 @@
+import { t } from '@shared/i18n'
 import type { SpawnTarget } from '../types'
 import type { SessionState } from './sessions'
 
@@ -33,11 +34,13 @@ export function sessionLabel(session: SessionState): string {
 }
 
 export function statusTitle(session: SessionState): string {
-  if (session.status === 'running') return '運作中'
+  if (session.status === 'running') return t('sessions.statusRunning')
   // **休眠不是結束。** 少了這一條，重建出來的 session 會被說成「已結束（代碼 0）」——
   // 而那是使用者重開 app 後看到的第一個畫面，等於在告訴他「你的 session 都死了」。
-  if (session.status === 'dormant') return '休眠中 · 顯示即恢復'
-  return session.exitCode === 0 ? '已結束' : `已結束（代碼 ${session.exitCode ?? 0}）`
+  if (session.status === 'dormant') return t('sessions.statusDormant')
+  return session.exitCode === 0
+    ? t('sessions.statusExited')
+    : t('sessions.statusExitedWithCode', { code: session.exitCode ?? 0 })
 }
 
 /**

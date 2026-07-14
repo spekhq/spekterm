@@ -1,4 +1,5 @@
 import { useCallback, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { ContextMenu, type MenuItem } from './files/dialogs'
 import { SessionNameDialog } from './terminal/SessionNameDialog'
 import { StatusDot, sessionLabel, sessionTitle, statusTitle } from './terminal/session-badge'
@@ -61,6 +62,7 @@ function FolderRow({
   onReorderSessions: (fromIndex: number, toIndex: number) => void
   onRemove: () => void
 }): React.JSX.Element {
+  const { t } = useTranslation()
   // 每個 folder 各持有自己的選單狀態 —— rail 上有很多列，共用一份會錨錯位置。
   const spawn = useSpawnMenu(onCreateSession)
   const [menu, setMenu] = useState<{ x: number; y: number; session: SessionState } | null>(null)
@@ -82,20 +84,22 @@ function FolderRow({
    */
   const subtitle =
     folder.status === 'missing'
-      ? '路徑失效'
-      : [folder.branch, folder.hasOpenSpec ? null : '無 openspec/'].filter(Boolean).join(' · ')
+      ? t('rail.pathMissing')
+      : [folder.branch, folder.hasOpenSpec ? null : t('rail.noOpenspec')]
+          .filter(Boolean)
+          .join(' · ')
 
   const items: MenuItem[] = menu
     ? [
         {
-          label: '重新命名',
+          label: t('sessions.rename'),
           onSelect: () => {
             setRenaming(menu.session)
             setMenu(null)
           },
         },
         {
-          label: '關閉',
+          label: t('sessions.close'),
           tone: 'danger',
           onSelect: () => {
             onCloseSession(menu.session.id)
@@ -124,8 +128,12 @@ function FolderRow({
           <button
             type="button"
             aria-expanded={expanded}
-            aria-label={expanded ? `收合 ${folder.name} 的 session` : `展開 ${folder.name} 的 session`}
-            title={expanded ? '收合 session' : '展開 session'}
+            aria-label={
+              expanded
+                ? t('rail.collapseSessions', { name: folder.name })
+                : t('rail.expandSessions', { name: folder.name })
+            }
+            title={expanded ? t('rail.collapseTooltip') : t('rail.expandTooltip')}
             onClick={(event) => {
               // 展開／收合不該順手改變選中的 repo。
               event.stopPropagation()
@@ -155,7 +163,7 @@ function FolderRow({
 
         {sessions.length > 0 && (
           <span
-            title={`${sessions.length} 個 session`}
+            title={t('rail.sessionCount', { count: sessions.length })}
             className="shrink-0 rounded bg-hover px-1 text-2xs text-ink-faint"
           >
             {sessions.length}
@@ -164,10 +172,10 @@ function FolderRow({
 
         {folder.status === 'missing' && (
           <span
-            title={`路徑已不存在或不是目錄：${folder.path}`}
+            title={t('rail.missingTooltip', { path: folder.path })}
             className="shrink-0 rounded border border-danger/40 px-1 text-2xs text-danger"
           >
-            失效
+            {t('rail.missingBadge')}
           </span>
         )}
 
@@ -175,8 +183,8 @@ function FolderRow({
         <button
           type="button"
           disabled={folder.status !== 'ok'}
-          aria-label={`新增 session — ${folder.name}`}
-          title={folder.status === 'ok' ? '新增 session' : '路徑失效，無法開啟 session'}
+          aria-label={t('rail.newSessionIn', { name: folder.name })}
+          title={folder.status === 'ok' ? t('sessions.new') : t('rail.newSessionDisabled')}
           onClick={spawn.open}
           className={`${ICON_BUTTON_CLASS} ${
             folder.status === 'ok' ? 'text-ink-faint hover:text-accent' : 'text-ink-faint opacity-40'
@@ -193,8 +201,8 @@ function FolderRow({
         */}
         <button
           type="button"
-          aria-label={`自 workspace 移除 ${folder.name}`}
-          title={`自 workspace 移除 ${folder.name}（不會刪除磁碟上的目錄）`}
+          aria-label={t('rail.removeFolder', { name: folder.name })}
+          title={t('rail.removeFolderTooltip', { name: folder.name })}
           onClick={(event) => {
             event.stopPropagation()
             onRemove()
@@ -206,7 +214,7 @@ function FolderRow({
       </div>
 
       {expanded && sessions.length > 0 && (
-        <ul aria-label={`${folder.name} 的 session`} className="pb-1">
+        <ul aria-label={t('rail.folderSessions', { name: folder.name })} className="pb-1">
           {sessions.map((session, index) => {
             const isFocused = session.id === focusedSessionId
             const label = sessionLabel(session)
@@ -249,8 +257,8 @@ function FolderRow({
 
                   <button
                     type="button"
-                    aria-label={`關閉 session ${label}`}
-                    title={`關閉 session ${full}`}
+                    aria-label={t('sessions.closeSession', { label })}
+                    title={t('sessions.closeSession', { label: full })}
                     onClick={(event) => {
                       event.stopPropagation()
                       onCloseSession(session.id)
@@ -289,6 +297,7 @@ export function WorkspaceRail({
   onAdd,
   onRemove,
 }: WorkspaceRailProps): React.JSX.Element {
+  const { t } = useTranslation()
   const sessions = useSessions()
   // 預設展開；記錄的是「被收合的」，因此新出現的 folder 自然是展開的。
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set())
@@ -322,15 +331,17 @@ export function WorkspaceRail({
 
   return (
     <aside
-      aria-label="工作區"
+      aria-label={t('rail.label')}
       className="flex h-full min-w-0 flex-col overflow-hidden border-r border-hairline bg-rail"
     >
       {/* 標題不會自己截斷，於是它會撐住 rail 的 min-content —— 拖到最小寬度時就溢出到分界之外。 */}
-      <h2 className="truncate px-3 pt-3 pb-2 text-xs tracking-widest text-ink-faint">WORKSPACE</h2>
+      <h2 className="truncate px-3 pt-3 pb-2 text-xs tracking-widest text-ink-faint">
+        {t('rail.heading')}
+      </h2>
 
       <ul className="flex-1 overflow-y-auto">
         {folders.length === 0 ? (
-          <li className="px-3 py-6 text-sm text-ink-faint">尚未加入任何 folder</li>
+          <li className="px-3 py-6 text-sm text-ink-faint">{t('rail.empty')}</li>
         ) : (
           folders.map((folder) => (
             <FolderRow
@@ -360,7 +371,7 @@ export function WorkspaceRail({
         onClick={onAdd}
         className="m-2 rounded border border-dashed border-hairline px-3 py-2 text-sm text-ink-dim hover:border-accent/40 hover:text-accent"
       >
-        + Add folder
+        {t('rail.addFolder')}
       </button>
     </aside>
   )
