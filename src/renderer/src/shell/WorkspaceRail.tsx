@@ -4,7 +4,7 @@ import { ContextMenu, type MenuItem } from './files/dialogs'
 import { SessionNameDialog } from './terminal/SessionNameDialog'
 import { StatusDot, sessionLabel, sessionTitle, statusTitle } from './terminal/session-badge'
 import { type SessionState, useSessions } from './terminal/sessions'
-import { useDragReorder } from './terminal/useDragReorder'
+import { useDragReorder } from './useDragReorder'
 import { useSpawnMenu } from './terminal/useSpawnMenu'
 import type { SpawnTarget, WorkspaceFolder } from './types'
 
@@ -14,9 +14,15 @@ interface WorkspaceRailProps {
   onSelect: (id: string) => void
   onAdd: () => void
   onRemove: (id: string) => void
+  /** 把某個 folder 移到清單的第 `toIndex` 個位置。**以 id 指定，不以位置**（design D5）。 */
+  onReorder: (id: string, toIndex: number) => void
 }
 
-const ICON_BUTTON_CLASS = 'shrink-0 rounded px-1.5 py-0.5 text-sm opacity-0 group-hover:opacity-100'
+// `cursor-pointer` 不是多餘的：瀏覽器的 UA 樣式給 `button` 一條 `cursor: default`，而 Tailwind v4
+// 的 preflight **不再**把它改回 `pointer`（v3 會）—— 於是按鈕會蓋掉外層那一列設的 `cursor-pointer`，
+// 滑鼠停在 ＋／✕ 上看到的是箭頭，儘管它們就在一列食指之中。
+const ICON_BUTTON_CLASS =
+  'shrink-0 cursor-pointer rounded px-1.5 py-0.5 text-sm opacity-0 group-hover:opacity-100'
 
 function FolderIcon(): React.JSX.Element {
   return (
@@ -47,6 +53,11 @@ function FolderRow({
   onRenameSession,
   onReorderSessions,
   onRemove,
+  blockRef,
+  onDragStart,
+  dropTarget,
+  dropAtEnd,
+  dragged,
 }: {
   folder: WorkspaceFolder
   selected: boolean
@@ -61,6 +72,14 @@ function FolderRow({
   onRenameSession: (sessionId: string, name: string) => void
   onReorderSessions: (fromIndex: number, toIndex: number) => void
   onRemove: () => void
+  /** 整個 repo 區塊（含展開的 session 子列）—— repo 拖曳的命中判定以它為準（design D6）。 */
+  blockRef: (element: HTMLLIElement | null) => void
+  /** 掛在**標題列**上，不掛在整塊上：否則於 session 子列按下會同時啟動兩個拖曳（design D6）。 */
+  onDragStart: (event: React.MouseEvent) => void
+  dropTarget: boolean
+  /** 指示線畫在這一列**之後**（此刻放開會落到 rail 的最後一格）。只有最後一列會拿到 true。 */
+  dropAtEnd: boolean
+  dragged: boolean
 }): React.JSX.Element {
   const { t } = useTranslation()
   // 每個 folder 各持有自己的選單狀態 —— rail 上有很多列，共用一份會錨錯位置。
@@ -110,17 +129,34 @@ function FolderRow({
     : []
 
   return (
-    <li className="group">
+    <li
+      ref={blockRef}
+      className={
+        'group ' +
+        // 插入指示：拖到這裡放開，就會插在它前面。畫在**整塊**上，因為命中判定也是整塊。
+        (dropTarget ? 'border-t-2 border-t-accent ' : '') +
+        // 插到最後一格 —— 少了它，「拖到 rail 最下面」這個落點沒有任何指示線。
+        (dropAtEnd ? 'border-b-2 border-b-accent ' : '') +
+        (dragged ? 'opacity-40 ' : '')
+      }
+    >
       <div
         role="button"
         tabIndex={0}
+        onMouseDown={onDragStart}
         onClick={onSelect}
         onKeyDown={(event) => {
           if (event.key === 'Enter' || event.key === ' ') onSelect()
         }}
         title={folder.path}
         className={
-          'flex cursor-pointer items-center gap-2 px-3 py-2 text-base ' +
+          // select-none：拖曳時不該把名稱與分支反白選起來。
+          'flex items-center gap-2 px-3 py-2 text-base select-none ' +
+          // 靜止時是 pointer（食指）—— 這一列**點一下是有作用的**（選中這個 repo），而那是
+          // 使用者在它身上最常做的事；拖曳是偶爾為之。游標宣告主要的可供性（design D8）。
+          // 拖曳中的 grabbing 由 `index.css` 的 `body[data-dragging]` 全域覆蓋（它必須蓋過
+          // 這裡的 pointer 與按鈕的 UA `default`，否則游標會在拖曳途中閃爍）。
+          'cursor-pointer ' +
           (selected ? 'bg-hover text-ink' : 'text-ink-dim hover:bg-hover/60')
         }
       >
@@ -139,7 +175,7 @@ function FolderRow({
               event.stopPropagation()
               onToggle()
             }}
-            className="w-3 shrink-0 text-2xs text-ink-faint hover:text-ink"
+            className="w-3 shrink-0 cursor-pointer text-2xs text-ink-faint hover:text-ink"
           >
             {expanded ? '▾' : '▸'}
           </button>
@@ -245,9 +281,14 @@ function FolderRow({
                     // 縮排造出樹狀層次（mockup 的 .ws-session-row）
                     // select-none：拖曳時不該把標籤的文字反白選起來（實測體感很差）。
                     'flex items-center gap-2 py-1.5 pr-1 pl-9 text-xs select-none ' +
-                    (reorder.dragging ? 'cursor-grabbing ' : 'cursor-grab ') +
+                    // 靜止時 pointer：點一下會切換 focused session —— 那才是主要的可供性
+                    // （design D8）。拖曳中的 grabbing 由 `body[data-dragging]` 全域覆蓋。
+                    'cursor-pointer ' +
                     // 插入指示：拖到這裡放開，就會插在它前面
                     (reorder.isDropTarget(index) ? 'border-t-2 border-t-accent ' : '') +
+                    (reorder.dropAtEnd && index === sessions.length - 1
+                      ? 'border-b-2 border-b-accent '
+                      : '') +
                     (dragging ? 'opacity-40 ' : '') +
                     (isFocused ? 'bg-stage text-ink' : 'text-ink-dim hover:bg-hover/60')
                   }
@@ -263,7 +304,7 @@ function FolderRow({
                       event.stopPropagation()
                       onCloseSession(session.id)
                     }}
-                    className="shrink-0 rounded px-1 text-ink-faint opacity-0 group-hover/session:opacity-100 hover:text-danger"
+                    className="shrink-0 cursor-pointer rounded px-1 text-ink-faint opacity-0 group-hover/session:opacity-100 hover:text-danger"
                   >
                     ✕
                   </button>
@@ -296,11 +337,37 @@ export function WorkspaceRail({
   onSelect,
   onAdd,
   onRemove,
+  onReorder,
 }: WorkspaceRailProps): React.JSX.Element {
   const { t } = useTranslation()
   const sessions = useSessions()
   // 預設展開；記錄的是「被收合的」，因此新出現的 folder 自然是展開的。
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set())
+
+  const blockRefs = useRef(new Map<number, HTMLLIElement>())
+  // **量整個 `<li>`**（含展開的 session 子列），不是標題列 —— 那是使用者眼中「這個 repo 佔的
+  // 地盤」，插入點以它判定才跟手（design D6）。
+  const folderRectOf = useCallback((index: number) => {
+    return blockRefs.current.get(index)?.getBoundingClientRect() ?? null
+  }, [])
+
+  // 拖曳給的是位置，但送出去的必須是**識別碼** —— 清單的權威在主行程（design D5）。
+  const foldersRef = useRef(folders)
+  foldersRef.current = folders
+  const commitFolderOrder = useCallback(
+    (fromIndex: number, toIndex: number) => {
+      const moved = foldersRef.current[fromIndex]
+      if (moved) onReorder(moved.id, toIndex)
+    },
+    [onReorder],
+  )
+
+  const folderReorder = useDragReorder(
+    folders.length,
+    'vertical',
+    folderRectOf,
+    commitFolderOrder,
+  )
 
   const toggle = useCallback((folderId: string) => {
     setCollapsed((previous) => {
@@ -343,9 +410,17 @@ export function WorkspaceRail({
         {folders.length === 0 ? (
           <li className="px-3 py-6 text-sm text-ink-faint">{t('rail.empty')}</li>
         ) : (
-          folders.map((folder) => (
+          folders.map((folder, index) => (
             <FolderRow
               key={folder.id}
+              blockRef={(element) => {
+                if (element) blockRefs.current.set(index, element)
+                else blockRefs.current.delete(index)
+              }}
+              onDragStart={(event) => folderReorder.onMouseDown(index, event)}
+              dropTarget={folderReorder.isDropTarget(index)}
+              dropAtEnd={folderReorder.dropAtEnd && index === folders.length - 1}
+              dragged={folderReorder.drag?.fromIndex === index}
               folder={folder}
               selected={folder.id === selectedId}
               sessions={sessions.forFolder(folder.id)}
@@ -369,7 +444,7 @@ export function WorkspaceRail({
       <button
         type="button"
         onClick={onAdd}
-        className="m-2 rounded border border-dashed border-hairline px-3 py-2 text-sm text-ink-dim hover:border-accent/40 hover:text-accent"
+        className="m-2 cursor-pointer rounded border border-dashed border-hairline px-3 py-2 text-sm text-ink-dim hover:border-accent/40 hover:text-accent"
       >
         {t('rail.addFolder')}
       </button>

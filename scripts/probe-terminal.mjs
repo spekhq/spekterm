@@ -385,6 +385,18 @@ const TAB_RECT = (index) => `(() => {
   return { x: r.x, y: r.y, width: r.width, height: r.height }
 })()`
 
+/**
+ * 第 n 個分頁**實際生效**的游標。
+ *
+ * 分頁是「可點擊也可拖曳」的項目 —— 靜止時必須是 `pointer`（點一下會切換 focused session，
+ * 那是它主要的可供性），只有拖曳進行中才是 `grabbing`。
+ */
+const TAB_CURSOR = (index) => `(() => {
+  const tabs = [...document.querySelectorAll('[aria-label="${copy('sessions.tabs')}"] [role="tab"]')]
+  const tab = tabs[${index}]
+  return tab ? getComputedStyle(tab).cursor : null
+})()`
+
 /** 分頁的標籤依序。 */
 /**
  * 每個分頁的 tooltip（`<完整標題> — <狀態>`）與狀態燈的實際顏色。
@@ -1119,15 +1131,78 @@ async function runMode(label, { port, rendererUrl }) {
     )
 
     // ── 拖曳排序：分頁與 rail 共用同一個順序
-    const before = await app.client.evaluate(TAB_LABELS)
     const firstTab = await app.client.evaluate(TAB_RECT(0))
     const secondTab = await app.client.evaluate(TAB_RECT(1))
 
-    // 把第一個分頁拖到第二個的右半邊 → 它應該落到第二個之後
+    // ── 游標：分頁**點一下是有作用的**（切換 focused session），拖曳是偶爾為之 ——
+    // 靜止時必須是 `pointer`（食指），不是 `grab`（張開的手，宣告「這東西只能被拖」）。
+    const idleCursor = await app.client.evaluate(TAB_CURSOR(0))
+    check(
+      results,
+      `${label}：分頁靜止時的游標為 pointer（不是 grab）`,
+      idleCursor === 'pointer',
+      String(idleCursor),
+    )
+
+    // 拖曳**進行中**才是 `grabbing`。這一半不能省：元素自己的 cursor 會贏過 `useDragReorder`
+    // 設在 body 上的 grabbing —— 少了它，滑鼠底下（正是被拖的那一個分頁）會顯示食指。
+    await app.client.send('Input.dispatchMouseEvent', {
+      type: 'mouseMoved',
+      ...center(firstTab),
+      button: 'none',
+      buttons: 0,
+    })
+    await app.client.send('Input.dispatchMouseEvent', {
+      type: 'mousePressed',
+      ...center(firstTab),
+      button: 'left',
+      buttons: 1,
+      clickCount: 1,
+    })
+    await app.client.send('Input.dispatchMouseEvent', {
+      type: 'mouseMoved',
+      x: center(firstTab).x + 10,
+      y: center(firstTab).y,
+      button: 'left',
+      buttons: 1,
+    })
+    await sleep(200)
+    const draggingCursor = await app.client.evaluate(TAB_CURSOR(0))
+    await app.client.send('Input.dispatchMouseEvent', {
+      type: 'mouseReleased',
+      x: center(firstTab).x + 10,
+      y: center(firstTab).y,
+      button: 'left',
+      buttons: 0,
+      clickCount: 1,
+    })
+    await sleep(300)
+    check(
+      results,
+      `${label}：拖曳進行中的游標為 grabbing`,
+      draggingCursor === 'grabbing',
+      String(draggingCursor),
+    )
+
+    // 上面那次拖曳沒有跨過任何分頁的中線 —— 順序不變，接著才是真正的拖曳排序。
+    //
+    // **第三個分頁不是裝飾。** 只有兩個項目時，「落在指示線之處」與「多跳一格」給出的結果**完全
+    // 相同** —— 分頁列的拖曳因此長年只用兩個分頁驗收，而那個 off-by-one（往下／往右拖時，東西
+    // 落在指示線的下一格）就這樣躲過了每一輪全綠。三個才分得出來。
+    await openSessionViaMenu(app.client, copy('sessions.spawnShell'))
+    const three = await pollUntil(app.client, TAB_LABELS, (value) => value.length === 3, 10_000)
+    check(results, `${label}：分頁列有三個 session（拖曳精度的驗收需要）`, three.length === 3, JSON.stringify(three))
+
+    const beforeThree = await app.client.evaluate(TAB_LABELS)
+    const firstTabAgain = await app.client.evaluate(TAB_RECT(0))
+    const secondTabAgain = await app.client.evaluate(TAB_RECT(1))
+
+    // 把第一個分頁拖到第二個的右半邊 → 指示線落在第二個之後 → 它應該停在**第二與第三之間**，
+    // 而不是被丟到最後。
     await dragMouse(
       app.client,
-      center(firstTab),
-      { x: Math.round(secondTab.x + secondTab.width - 4), y: center(secondTab).y },
+      center(firstTabAgain),
+      { x: Math.round(secondTabAgain.x + secondTabAgain.width - 4), y: center(secondTabAgain).y },
     )
     await sleep(400)
 
@@ -1135,12 +1210,24 @@ async function runMode(label, { port, rendererUrl }) {
     const railAfterDrag = await app.client.evaluate(RAIL_LABELS)
     check(
       results,
-      `${label}：拖曳分頁改變順序，且 rail 同步呈現相同順序`,
-      afterDrag[0] === before[1] &&
-        afterDrag[1] === before[0] &&
-        railAfterDrag[0]?.includes(afterDrag[0]?.split(' ')[0] ?? '__none__'),
-      `拖曳前=${JSON.stringify(before)} 拖曳後=${JSON.stringify(afterDrag)} rail=${JSON.stringify(railAfterDrag)}`,
+      `${label}：拖曳分頁改變順序，落點與指示線一致，且 rail 同步呈現相同順序`,
+      afterDrag[0] === beforeThree[1] &&
+        afterDrag[1] === beforeThree[0] &&
+        afterDrag[2] === beforeThree[2] &&
+        JSON.stringify(railAfterDrag) === JSON.stringify(afterDrag),
+      `拖曳前=${JSON.stringify(beforeThree)} 拖曳後=${JSON.stringify(afterDrag)}（多跳一格的話第一個分頁會跑到最後）rail=${JSON.stringify(railAfterDrag)}`,
     )
+
+    // 關掉多開的那一個，讓後續段落回到它原本預期的兩個 session。
+    await app.client.evaluate(`(() => {
+      const tabs = [...document.querySelectorAll('[aria-label="${copy('sessions.tabs')}"] [role="tab"]')]
+      const group = tabs[2]?.closest('div[role="presentation"]')
+      const close = group?.querySelector('[aria-label^="${prefixOf('sessions.closeSession')}"]')
+      if (!close) return false
+      close.click()
+      return true
+    })()`)
+    await pollUntil(app.client, TAB_LABELS, (value) => value.length === 2, 8000)
 
     // ── 自 rail 拖曳，順序同樣改變，分頁列同步
     const railBefore = await app.client.evaluate(RAIL_LABELS)

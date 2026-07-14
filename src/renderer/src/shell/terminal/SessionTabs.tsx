@@ -4,7 +4,7 @@ import type { SpawnTarget } from '../types'
 import { SessionNameDialog } from './SessionNameDialog'
 import { StatusDot, sessionLabel, sessionTitle, statusTitle } from './session-badge'
 import type { SessionState } from './sessions'
-import { useDragReorder } from './useDragReorder'
+import { useDragReorder } from '../useDragReorder'
 import { useSpawnMenu } from './useSpawnMenu'
 import { useTranslation } from 'react-i18next'
 
@@ -117,9 +117,16 @@ export function SessionTabs({
               className={
                 // select-none：拖曳時不該把分頁的文字反白選起來。
                 'group flex shrink-0 items-center gap-1 border-b-2 pr-1 select-none ' +
-                (reorder.dragging ? 'cursor-grabbing ' : 'cursor-grab ') +
+                // 靜止時 pointer：分頁**點一下是有作用的**（切換 focused session），拖曳是偶爾
+                // 為之 —— 游標宣告主要的可供性（design D8；VS Code 與瀏覽器的分頁亦然）。
+                // 拖曳中的 grabbing 由 `index.css` 的 `body[data-dragging]` 全域覆蓋。
+                'cursor-pointer ' +
                 // 插入指示：拖到這個位置放開，就會插在它前面
                 (reorder.isDropTarget(index) ? 'border-l-2 border-l-accent ' : '') +
+                // 插到最後一格 —— 少了它，「拖到最右邊」這個落點沒有任何指示線
+                (reorder.dropAtEnd && index === sessions.length - 1
+                  ? 'border-r-2 border-r-accent '
+                  : '') +
                 (dragging ? 'opacity-40 ' : '') +
                 (selected
                   ? 'border-accent bg-stage text-ink'
@@ -133,7 +140,12 @@ export function SessionTabs({
                 // 截斷的是呈現，不是資料 —— 完整標題在這裡拿得到。
                 title={`${full} — ${statusTitle(session)}`}
                 onClick={() => onFocus(session.id)}
-                className="flex items-center gap-2 py-2 pr-1 pl-3 text-sm"
+                // **游標必須掛在按鈕自己身上，掛在外層 wrapper 上到不了這裡。**
+                // `cursor` 雖然是可繼承的屬性，但瀏覽器的 UA 樣式給了 `button` 一條
+                // `cursor: default` —— 而 Tailwind v4 的 preflight **不再**像 v3 那樣把它改回
+                // `pointer`。於是外層設的 `cursor-pointer` 被它蓋掉，滑鼠停在分頁上看到的是箭頭
+                // （實測：探針量到 `default`）。
+                className="flex cursor-pointer items-center gap-2 py-2 pr-1 pl-3 text-sm"
               >
                 <StatusDot session={session} />
                 <span className="whitespace-nowrap font-mono">{label}</span>
@@ -147,7 +159,7 @@ export function SessionTabs({
                 aria-label={t('sessions.closeSession', { label })}
                 title={t('sessions.closeSession', { label: full })}
                 onClick={() => onClose(session.id)}
-                className="rounded px-1 text-sm text-ink-faint opacity-0 group-hover:opacity-100 hover:text-danger"
+                className="cursor-pointer rounded px-1 text-sm text-ink-faint opacity-0 group-hover:opacity-100 hover:text-danger"
               >
                 ✕
               </button>

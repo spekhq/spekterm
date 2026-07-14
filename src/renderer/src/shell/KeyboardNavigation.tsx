@@ -7,6 +7,8 @@ interface KeyboardNavigationProps {
   folders: WorkspaceFolder[]
   selectedId: string | null
   onSelectFolder: (id: string) => void
+  /** 把某個 folder 移到第 `toIndex` 個位置。**以 id 指定，不以位置**（design D5）。 */
+  onReorderFolder: (id: string, toIndex: number) => void
 }
 
 /** 下一個／上一個，到末端就繞回去。清單為空時回傳 `null`。 */
@@ -17,13 +19,36 @@ function cycle<T>(items: T[], currentIndex: number, delta: number): T | null {
 }
 
 /**
- * 導航快捷鍵。**沒有 UI** —— 它只是把按鍵接到既有的切換動作上。
+ * 焦點是否落在**可編輯文字**上 —— 排序快捷鍵在那裡必須讓路。
+ *
+ * `Shift+arrow` **就是文字選取鍵**。全域攔截它會讓 side panel 的編輯器連「選一個字元」都做不到。
+ *
+ * **終端不算可編輯文字。** 這是本判準的整個重點：xterm 的輸入路徑是一個隱形的 `<textarea>`
+ * （`.xterm-helper-textarea`），而 Monaco 的輸入路徑**也是** `<textarea>`（我們刻意關掉了它的
+ * native EditContext）—— 若判準寫成「activeElement 是不是 textarea」，排序快捷鍵會在終端持有
+ * 焦點時（也就是這個 app 絕大多數的時間）**靜默失效**。
+ *
+ * 因此先問「在不在終端之內」，再問「是不是可編輯文字」。第二問寫成通則而非列舉 Monaco，是為了
+ * 讓任何新的輸入框自動被尊重（比照 `[role="dialog"]` 的判定哲學）。
+ */
+function editableTextHasFocus(): boolean {
+  const active = document.activeElement
+  if (!(active instanceof HTMLElement)) return false
+  if (active.closest('.xterm')) return false
+  if (active.isContentEditable) return true
+  return active.tagName === 'INPUT' || active.tagName === 'TEXTAREA'
+}
+
+/**
+ * 導航與排序的快捷鍵。**沒有 UI** —— 它只是把按鍵接到既有的動作上。
  *
  * | | |
  * |---|---|
  * | `Ctrl+Tab` / `Ctrl+Shift+Tab` | 當前 repo 內的下一個／上一個 session（**分頁位置序**，可循環） |
  * | `Ctrl+↓` / `Ctrl+↑` | rail 上的下一個／上一個 repo（可循環） |
  * | `Ctrl+T` | 開啟建立 session 的入口（spawn 選單） |
+ * | `Shift+↓` / `Shift+↑` | 把選中的 repo 在 rail 上往下／往上移動一格（**不循環**） |
+ * | `Shift+→` / `Shift+←` | 把 focused session 在分頁列上往右／往左移動一格（**不循環**） |
  *
  * ## 為什麼是 capture 階段
  *
@@ -49,24 +74,88 @@ function cycle<T>(items: T[], currentIndex: number, delta: number): T | null {
  *   claude session 是這個 app 的主場。**此結論有前提**：日後若 claude 開始用它，本裁決即失效
  *   （退路是 `Ctrl+Shift+T`，零成本）。詳見 design D8。
  * - **`Ctrl+C` 絕不挪用**：它必須維持中斷訊號。
+ * - **`Shift+arrow` 的代價與前幾顆不同種**：它同樣送得出去（`CSI 1;2A`–`D`，實測 zsh／bash 皆未
+ *   綁定），但**已知的犧牲者正是 `claude` 自己的 agents view** —— 也就是說這個 app 的**主場**在
+ *   用它。`Ctrl+T` 之所以能拿，關鍵前提是「claude 沒在用它」；這一顆是**明知它在用，仍然拿走**
+ *   （使用者在知情下的裁決：在 rail 上排 repo 的頻率遠高於在 agents view 裡按 `Shift+↑↓`）。
+ *   **此裁決有前提**，前提若不再成立，退路是 `Ctrl+Shift+arrow`（同樣未被 shell 綁定，且與
+ *   `Ctrl+↑↓`／`Ctrl+Tab` 成對：Ctrl ＝ 移動游標，加 Shift ＝ 移動東西）。詳見 design D1。
+ * - **排序快捷鍵有一條導航快捷鍵沒有的例外**：焦點在**可編輯文字**上時它讓路（見
+ *   `editableTextHasFocus`）—— `Shift+arrow` 就是文字選取鍵。導航快捷鍵不受此限（`Ctrl+Tab` 在
+ *   編輯器裡沒有這種代價，而 spec 明文要求它在編輯器持有焦點時仍生效）。
  */
 export function KeyboardNavigation({
   folders,
   selectedId,
   onSelectFolder,
+  onReorderFolder,
 }: KeyboardNavigationProps): null {
   const sessions = useSessions()
 
   useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent): void => {
-      if (!event.ctrlKey || event.altKey || event.metaKey) return
+    /**
+     * 排序：`Shift+↑↓` 移動選中的 repo、`Shift+←→` 移動 focused session。
+     *
+     * **端點不循環**（無操作）。導航是巡覽 —— 越過末端繞回開頭什麼都沒被改變；排序是**改變
+     * 資料**，繞回去等於「把第一名丟到最後一名」，那是使用者按過頭時最不想發生的事，而且要
+     * 再按 N-1 次才回得來（design D3）。
+     *
+     * 回傳「是否處理了這顆按鍵」—— 未處理時**完全不攔**（不 preventDefault、不 stopPropagation），
+     * 該按鍵照常抵達它本來要去的地方。
+     */
+    const handleReorder = (event: KeyboardEvent): boolean => {
+      const isUp = event.key === 'ArrowUp'
+      const isDown = event.key === 'ArrowDown'
+      const isLeft = event.key === 'ArrowLeft'
+      const isRight = event.key === 'ArrowRight'
+      if (!isUp && !isDown && !isLeft && !isRight) return false
 
-      // 對話框與選單正在等使用者的裁決 —— 導航一律讓位。對話框：否則使用者會在回答問題的同時
-      // 把畫面切走。選單：否則他正用方向鍵挑選項時，一個 Ctrl+Tab 就把畫面切走了（design D9）。
+      // 文字選取優先 —— 這一顆鍵在編輯器與輸入框裡有它自己的、更根本的意義。
+      if (editableTextHasFocus()) return false
+
+      if (!selectedId) return true
+
+      if (isUp || isDown) {
+        const index = folders.findIndex((folder) => folder.id === selectedId)
+        if (index === -1) return true
+
+        const toIndex = index + (isDown ? 1 : -1)
+        if (toIndex < 0 || toIndex >= folders.length) return true
+        onReorderFolder(selectedId, toIndex)
+        return true
+      }
+
+      const list = sessions.forFolder(selectedId)
+      const focusedId = sessions.focusedIdFor(selectedId)
+      const index = list.findIndex((session) => session.id === focusedId)
+      if (index === -1) return true
+
+      const toIndex = index + (isRight ? 1 : -1)
+      if (toIndex < 0 || toIndex >= list.length) return true
+      sessions.reorder(selectedId, index, toIndex)
+      return true
+    }
+
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.altKey || event.metaKey) return
+
+      // 對話框與選單正在等使用者的裁決 —— 快捷鍵一律讓位。對話框：否則使用者會在回答問題的同時
+      // 把畫面切走、或把清單重排。選單：否則他正用方向鍵挑選項時，一個 Ctrl+Tab 就把畫面切走了
+      // （design D9）。
       //
       // 以 `role` 判定：任何遵守這個無障礙慣例的新對話框／選單都自動被尊重，不必記得去某份清單
       // 註冊（design D5）。
       if (document.querySelector('[role="dialog"], [role="menu"]')) return
+
+      // 排序：純 Shift（`Ctrl+Shift+Tab` 仍是導航，因此這裡要求 `!ctrlKey`）。
+      if (event.shiftKey && !event.ctrlKey) {
+        if (!handleReorder(event)) return
+        event.preventDefault()
+        event.stopPropagation()
+        return
+      }
+
+      if (!event.ctrlKey) return
 
       const isTab = event.key === 'Tab'
       const isUp = event.key === 'ArrowUp'
@@ -116,7 +205,7 @@ export function KeyboardNavigation({
 
     window.addEventListener('keydown', onKeyDown, true)
     return () => window.removeEventListener('keydown', onKeyDown, true)
-  }, [folders, selectedId, onSelectFolder, sessions])
+  }, [folders, selectedId, onSelectFolder, onReorderFolder, sessions])
 
   return null
 }

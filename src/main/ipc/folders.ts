@@ -8,6 +8,7 @@ export const FOLDER_CHANNELS = {
   list: 'workspace:folders:list',
   add: 'workspace:folders:add',
   remove: 'workspace:folders:remove',
+  reorder: 'workspace:folders:reorder',
   /** 主行程 → renderer。目前唯一的推送來源是 git 分支變動（使用者在 terminal 裡切 branch）。 */
   changed: 'workspace:folders:changed',
 } as const
@@ -70,6 +71,17 @@ export function registerFolderHandlers(store: WorkspaceStore): void {
     branchServiceFor(store, event.sender).sync()
     return store.list()
   })
+
+  // 順序是 workspace 狀態的一部分（不是 rail 的裝飾），因此權威在 store，落盤走它既有的原子寫。
+  // **以識別碼定位而非位置** —— renderer 手上的清單是一份可能已經過期的複本（design D5）。
+  ipcMain.handle(
+    FOLDER_CHANNELS.reorder,
+    (event, id: string, toIndex: number): WorkspaceFolder[] => {
+      store.reorder(id, toIndex)
+      branchServiceFor(store, event.sender).sync()
+      return store.list()
+    },
+  )
 
   ipcMain.handle(FOLDER_CHANNELS.remove, (event, id: string): WorkspaceFolder[] => {
     // 先釋放 watcher 再改動 store —— 反過來的話，watcher 服務已經查不到這個 folder 了

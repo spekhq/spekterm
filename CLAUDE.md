@@ -81,6 +81,25 @@ session、叫什麼名字、什麼順序、錨定哪個 change」都沒了** —
 被結構性地消滅。`npm test` 228/228，六支 probe 全綠（15 / 42 / 101 / 162 / 64 / 146）。
 詳見下文「UI 文案與 i18n」—— 那裡記著五個**會靜默失敗**的實測踩雷。
 
+`workspace-reordering`（不屬於任何 Phase）是**第四次 dogfooding 的回饋**——「repo 的順序不能改，而
+排序只有滑鼠一條路」。rail 的 repo 一律照「加入的先後」排（那是一次性的偶然），而 session 雖然能拖曳
+排序，卻**沒有鍵盤對應** —— 在一個「終端幾乎永遠持有焦點」的 app 裡，那代表每次調整順序都得把手從
+鍵盤上拿開。它交付：**repo 的拖曳排序 + 順序落盤**（`folders.reorder`，**以識別碼定位而非位置** ——
+清單的權威在主行程，飛行中的索引可能已指向另一個 folder）、**四顆排序快捷鍵**（`Shift+↑↓` 移動選中的
+repo、`Shift+←→` 移動 focused session，**端點不循環**），以及**可拖曳項目的游標**（靜止 `pointer`、
+拖曳中 `grabbing` —— 原本是 `grab`，那宣告的是「這東西只能被拖」，但它們點一下是有作用的）。
+
+`Shift+arrow` 的代價**與前三顆鍵不同種**：**已知的犧牲者正是 `claude` 自己的 agents view** ——
+`Ctrl+T` 能拿的關鍵前提是「claude 沒在用它」，這一顆是**明知它在用仍然拿走**（使用者在知情下的裁決；
+退路 `Ctrl+Shift+arrow` 成本為零）。它也帶來一條導航快捷鍵**沒有**的例外：**可編輯文字讓路**
+（`Shift+arrow` 就是文字選取鍵）。
+
+**最重要的收穫來自 `/opsx:verify` 的獨立稽核**：它抓出一個**既有**的 off-by-one —— 拖曳往下放時，
+東西落在**指示線的下一格**（把 repo 拖到第二個 repo 的下半部，它會飛到清單末端）。那個 bug 從
+`session-rename-and-reorder` 起就在，卻通過了每一輪驗收，**因為分頁列的拖曳只用兩個分頁測 —— 兩個
+項目時，兩種語意的結果完全相同**。而我寫探針時**撞見了它、卻把準心移開去閃避它**。詳見下文「拖曳的
+落點」與「游標」兩節。`npm test` 238/238，六支 probe 全綠（16 / 56 / 102 / 168 / 104 / 146）。
+
 尚未開始：打包（Phase 6）、handoff（Phase 7+）。**session 常駐**（讓 pty 活過 app 的生命）已排入
 路線圖但**刻意不做** —— 見 `docs/PRD.md` §11 的「session 常駐」，那裡記著 tmux 與自寫 daemon 的取捨。
 
@@ -92,10 +111,10 @@ npm run build           # 建置至 out/
 npm run typecheck       # tsc：main / preload（node）+ renderer（web）
 npm test                # node:test 單元測試（fs 邊界、workspace store、listDir/readFile、watcher、外部 URL、pty 管理器、git 分支解析、字級不得寫死、舊產品名不得殘留、UI 文案不得含 CJK、aria-label 不得硬編、字典 key 的型別安全）
 npm run probe:shell     # 驗收 workspace-app-shell（開視窗 + 信任模型 + preload 白名單，走 CDP）
-npm run probe:workspace # 驗收 workspace-folders / filesystem-access / workspace-layout / repo-branch（rail 呈現分支、於 app 之外切 branch 後自己更新、detached HEAD、執行期間變成 git repo、rail 不呈現不可操作的控制項）
+npm run probe:workspace # 驗收 workspace-folders / filesystem-access / workspace-layout / repo-branch（rail 呈現分支、於 app 之外切 branch 後自己更新、detached HEAD、執行期間變成 git repo、rail 不呈現不可操作的控制項；**repo 的拖曳排序** —— 落點與指示線一致、末端拖得到、拖 session 子列不會連 repo 一起搬、未位移的按下＝點擊、順序跨重啟還原、可拖曳項目的靜止游標為 pointer）
 npm run probe:files     # 驗收 file-explorer / file-viewer / 編輯 / 存檔 / 衝突 / CRUD / 導航防護 / 編輯器 worker / CSP（遠端圖片可載入、script-src 僅 self、注入點對 file:// 生效，dev + build 兩模式）
 npm run probe:terminal  # 驗收 terminal-sessions + session-persistence（pty 雙向／cwd／resize／多開／關分頁・reload・關窗皆不留孤兒；剪貼簿畸形輸入防禦；OSC 標題與命名權；**關掉 app 再開後 session 原樣重建**、只喚醒被顯示的那一個、claude 以 --resume 續接同一個對話、續接失敗自癒為全新對話、shell 於最後 cwd 重生並重播畫面、kill -9 後快照仍在、損毀韌性、被竄改的識別碼不進命令 —— 皆以 PATH 上的 stub claude 承載，dev + build 兩模式）
-npm run probe:keyboard  # 驗收 keyboard-navigation（Ctrl+Tab 切 session／Ctrl+↑↓ 切 repo／位置序非 MRU／按鍵不流進 pty／編輯器與對話框的行為，dev + build 兩模式）
+npm run probe:keyboard  # 驗收 keyboard-navigation（Ctrl+Tab 切 session／Ctrl+↑↓ 切 repo／位置序非 MRU／按鍵不流進 pty／編輯器與對話框的行為；**Shift+↑↓ 排 repo、Shift+←→ 排 session** —— 端點不循環、移動後仍選中／focused、終端持有焦點時仍生效且按鍵不進 pty、**編輯器持有焦點時 Shift+→ 仍是文字選取**，dev + build 兩模式）
 npm run probe:openspec  # 驗收 openspec-data-access / openspec-panel（兩個視圖／兩棵樹／artifact 分頁／agent 改檔即更新／錨定／交叉導覽／Graph・Timeline 的 overlay，dev + build 兩模式）
 npm run probe:native    # 驗收 native-module-toolchain（Electron 主行程載入 node-pty + spawn pty）
 npm run probe:core      # 驗收 spek-core-integration（主行程掃描 OpenSpec，且不開 TCP 埠）
@@ -374,6 +393,15 @@ org 名**不是**凍結身分的一部分 —— repo 改名與 transfer 皆自�
   **6 支 probe 的 97 處選擇器 + `Ctrl+T` 的 `querySelector` 全部改為自字典取字串** ——
   `aria-label` 在這個 repo 裡同時是**選擇器**，硬編它，一次文案改動就會讓探針**靜默地選不到元素**
   （而 `Ctrl+T` 連紅燈都不會有）。詳見上文「UI 文案與 i18n」。
+- **排序（拖曳與快捷鍵）** — `workspace-reordering`（**不屬於任何 Phase**）：第四次 dogfooding 的
+  回饋。**repo 的拖曳排序 + 順序落盤**（`workspace-folders` 的新 requirement，`folders.reorder`
+  **以識別碼定位而非位置** —— 權威在主行程，飛行中的索引可能已指向另一個 folder）、**四顆排序快捷鍵**
+  （`keyboard-navigation`：`Shift+↑↓` 排 repo、`Shift+←→` 排 session，**端點不循環**；外加一條導航
+  快捷鍵**沒有**的例外 —— **可編輯文字讓路**，且判準**不能寫成「是不是 textarea」**：xterm 與 Monaco
+  的輸入路徑**都是** textarea）、**可拖曳項目的游標**（靜止 `pointer`、拖曳中 `grabbing`）。
+  連帶（獨立稽核抓到）：修掉一個**既有**的 off-by-one —— **拖曳往下放時，東西落在指示線的下一格**
+  （`session-rename-and-reorder` 起就在，卻通過每一輪驗收 —— **分頁列只用兩個分頁測，而兩個項目時
+  兩種語意結果相同**）。詳見上文「拖曳的落點」「游標」與「四顆鍵，四種代價」三節。
 - Phase 6 打包與發佈，Phase 7+ 建立護城河（handoff）。**session 常駐**已排入路線圖但刻意不做
   （PRD §11）。
 
@@ -548,6 +576,8 @@ provider 驗證：它為 `language: '*'` 註冊，呼叫 worker 端的 `$compute
 | `Ctrl+Tab` / `Ctrl+Shift+Tab` | 當前 repo 內的下／上一個 session（**分頁位置序**，可循環） |
 | `Ctrl+↓` / `Ctrl+↑` | rail 上的下／上一個 repo（可循環） |
 | `Ctrl+T` | 開啟建立 session 的入口（spawn 選單，可全鍵盤操作） |
+| `Shift+↓` / `Shift+↑` | 把**選中的 repo** 在 rail 上往下／往上移動一格（**不循環**） |
+| `Shift+→` / `Shift+←` | 把 **focused session** 在分頁列上往右／往左移動一格（**不循環**） |
 | `Ctrl+Shift+C` / `Ctrl+Shift+V` | 終端的複製貼上（macOS 用 `Cmd`） |
 | `Cmd/Ctrl+S` | 存檔 |
 | `Esc` | 關閉 overlay／對話框／選單 |
@@ -583,7 +613,7 @@ Timeline 的全視窗 overlay**（`probe:openspec`）—— 只驗一種就宣�
 > **把一筆隱藏的技術債換成了資產** —— 而不是把「三種」默默改成「兩種」。這條紀律現在也寫進了
 > `keyboard-navigation` 的 spec 本身，不再只活在這份 CLAUDE.md 裡。
 
-### 三顆鍵，三種代價 —— 不要混為一談
+### 四顆鍵，四種代價 —— 不要混為一談
 
 - **`Ctrl+Tab` 是白撿的。** 它在標準終端編碼下**送不出去**（`Tab` 就是 `Ctrl+I`＝`0x09`）——
   沒有任何 shell 或 agent 綁得了它。拿走它，pty 內**零損失**。這正是 GNOME Terminal、iTerm2
@@ -599,9 +629,78 @@ Timeline 的全視窗 overlay**（`probe:openspec`）—— 只驗一種就宣�
   > **此結論有前提。** 日後若 `claude`（或其他常駐 pty 的 agent）開始使用 `Ctrl+T`，本裁決即失效。
   > 退路是 **`Ctrl+Shift+T`**，成本為零（`Ctrl+Shift+字母` 在終端協定裡編碼不出來 —— 這正是複製
   > 貼上用 `Ctrl+Shift+C/V` 的理由）。
+- **`Shift+arrow`（排序，`workspace-reordering` 起）的代價與上面三顆不同種 —— 它是「明知主場在用，
+  仍然拿走」。** 它送得出去（`CSI 1;2A`–`D`），實測 zsh 與 bash 皆未綁定；但**已知的犧牲者正是
+  `claude` 自己的 agents view**（使用者指出它用 `Shift+↑↓`）。**`Ctrl+T` 能拿的關鍵前提是「claude
+  沒在用它」，這一顆正好相反** —— 使用者在知情下裁決採用（在 rail 上排 repo 的頻率遠高於在 agents
+  view 裡按 `Shift+↑↓`）。
+  > **此裁決有前提。** claude 的 `Shift+↑↓` 若變成常用路徑，本裁決即失效。退路是 **`Ctrl+Shift+arrow`**
+  > （`CSI 1;6A`–`D`，實測 shell 亦未綁定，且與 `Ctrl+↑↓`／`Ctrl+Tab` 成對：Ctrl ＝ 移動游標，加
+  > Shift ＝ 移動東西）。**改鍵位只動 `KeyboardNavigation.tsx` 的一個判斷 + spec + probe** —— 沒有
+  > 任何資料格式綁在鍵位上。
 - **`Ctrl+Alt+↑/↓` 不能用** —— Linux 上被 GNOME 拿去切工作區，按鍵到不了我們。（被 WM 拿走的是
   `Ctrl+**Alt**+方向鍵`，不是 `Ctrl+方向鍵`。）
 - **`Ctrl+C` 絕不挪用** —— 它必須維持中斷訊號。
+
+### 排序快捷鍵有一條導航快捷鍵**沒有**的例外：可編輯文字讓路
+
+**`Shift+arrow` 就是文字選取鍵。** 全域 capture 攔下它，side panel 的 Monaco 連「選一個字元」都做不到。
+因此排序快捷鍵在**可編輯文字持有焦點**時完全不攔（不 `preventDefault`、不 `stopPropagation`）——
+而導航快捷鍵**不受此限**（spec 明文要求 `Ctrl+Tab` 在編輯器裡仍生效）。兩條規格必須各自寫明它作用於
+哪一組鍵，否則它們自相矛盾。
+
+- **判準不能寫成「activeElement 是不是 textarea」。** xterm 的輸入路徑是一個隱形的 `<textarea>`，而
+  Monaco 的輸入路徑**也是**（我們刻意關掉了它的 native EditContext）—— 那樣寫，排序快捷鍵會在終端
+  持有焦點時（也就是這個 app 絕大多數的時間）**靜默失效**。判準是兩段式的：**先問「在不在 `.xterm`
+  之內」**（在 → 不算可編輯文字），再問「是不是 input／textarea／contenteditable」。
+- **兩個相反的失效方向都要驗**（`probe:keyboard`）：終端持有焦點時 `Shift+↓` 仍移動 repo 且按鍵不進
+  pty；編輯器持有焦點時 `Shift+→` 仍選取文字且不排序。**對照組已證明後者有鑑別力**（拿掉讓路判準，
+  那兩條如期變紅）。
+- **Monaco 的選取不是 DOM selection**（與 xterm 同源的坑）—— `window.getSelection()` 讀不到，要看
+  view overlay 的 `.selected-text` 元素。
+- **但原生 `<input>` 的選取，CDP 驅動不了**（實測）：`rawKeyDown` 跳過預設動作，而 `keyDown` 的編輯
+  命令在 Linux 上來自平台的 key-binding 層，合成事件繞過它 —— 兩種送法的選取長度都恆為 0，**與 app
+  有沒有攔截這顆鍵無關**。那條斷言已移除（留著就是一盞測不到自己宣稱在測的東西的燈），「讓位＝完全
+  不攔」由 Monaco 那條承擔。比照 OSC 8 `linkHandler` 的處理。
+
+### 游標：`<button>` 不繼承父層的 `cursor`（Tailwind v4）
+
+可拖曳且可點擊的項目（rail 的 repo 列與 session 子列、session 分頁），**靜止時的游標是 `pointer`
+（食指），只有拖曳進行中才是 `grabbing`** —— `grab`（張開的手）宣告的是「這東西只能被拖」，但它們
+**點一下是有作用的**（選中 repo／切換 focused session），而那是使用者最常做的事。游標該宣告主要的
+可供性（VS Code 與瀏覽器的分頁亦然）。
+
+**兩個會靜默失敗的地方：**
+
+- **`cursor` 雖是可繼承屬性，但元素自己的宣告會贏過繼承來的值；而 `<button>` 帶著一條 UA 的
+  `cursor: default`，Tailwind v4 的 preflight 不再像 v3 那樣把它改回 `pointer`** —— 於是外層
+  wrapper 上的 `cursor-pointer` **到不了裡面的按鈕**（分頁的 `role="tab"` 正是一顆 button）。實測：
+  探針量到 `default`。**靜止的游標要掛在使用者真正滑過的那個元素上。**
+- **拖曳中的 `grabbing` 不能靠 `body.style.cursor`，也不該由每個呼叫端各自加一個三元式。** 同一條
+  「元素自己的宣告會贏」的規則，讓 body 上的 grabbing 被沿路每一個元素蓋掉（可拖曳的列是 pointer、
+  按鈕是 UA 的 default）—— 而 repo 的拖曳判定**刻意涵蓋整個區塊**（含 session 子列與 ▾／＋／✕），
+  游標一定會掃過它們，於是一路閃爍。**呼叫端逐一補三元式是修不完的**（獨立稽核抓到的）。作法是
+  `useDragReorder` 在 `body` 掛上 `data-dragging`，由 `index.css` 的一條 `!important` 規則覆蓋
+  **整棵子樹**。
+
+### 拖曳的落點：插入點與提交序位差一格 —— 而**兩個項目時看不出來**
+
+`useDragReorder` 的命中判定回傳**插入點**（「插在第 i 個之前」，指示線畫的也是它），但提交端是
+「**先移除、再插入**」（`splice(from,1)` → `splice(to,0,moved)`）—— 移除會讓被拖曳項目**之後**的元素
+前移一格。於是**往下／往右拖時，落點比指示線多一格**（把 repo 拖到第二個 repo 的下半部，它會**飛到
+清單最後**）。換算集中在 `commitIndex()` 一處，state 裡存的**永遠是插入點**。
+
+- **這個 bug 在 session 的拖曳上是既有的**（`session-rename-and-reorder` 起），卻通過了每一輪驗收 ——
+  **分頁列的拖曳只用兩個分頁測，而兩個項目時兩種語意的結果完全相同**；rail 子列則只測了往上拖（不受
+  影響）。**驗收拖曳排序必須用至少三個項目，且往下／往右拖。** 這條紀律已寫進 `workspace-layout` 的
+  spec 本身。
+- **末端要拖得到**：命中判定在「游標落在所有中線之後」時必須回 `count`（不是 `count - 1`，那會讓使用者
+  永遠拖不到最後一格），並在最後一個項目**之後**畫指示線（`dropAtEnd`）。
+- **無操作時不畫指示線** —— 一條說「放開會移動」的線，放開卻什麼都不動，是在騙人。
+
+> **探針曾經是繞過它、不是抓到它。** 我寫 `probe:workspace` 時撞見了「repo 飛到最後」，處置卻是把
+> 準心移到區塊頂端 3px 去遷就它（註解裡還留著「實測踩過」）—— 驗收於是永遠是綠的，而使用者的拖曳是
+> 錯的。**探針撞到怪現象時，先問「這是不是產品的 bug」，不要先調整探針去閃避它。**
 
 > **探針送 `Enter` 必須用 `keyDown` + `text`，不能用 `rawKeyDown`。** `<button>` 是靠 Enter 的
 > **預設動作**被觸發的，而 `rawKeyDown` 刻意跳過預設動作 —— 用它送 Enter，按鈕完全沒反應（實測：

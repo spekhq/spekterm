@@ -11,7 +11,8 @@ import { useWorkspaceFolders } from './useWorkspaceFolders'
 const SEPARATOR_CLASS = 'w-[3px] cursor-col-resize bg-hairline transition-colors hover:bg-accent'
 
 export function AppShell(): React.JSX.Element {
-  const { folders, selectedId, select, addFolder, removeFolder } = useWorkspaceFolders()
+  const { folders, selectedId, select, addFolder, removeFolder, reorderFolders } =
+    useWorkspaceFolders()
   const selected = folders.find((folder) => folder.id === selectedId) ?? null
 
   // Provider 在此 —— 未存的變更必須活過切換 folder（FilesPanel 以 folder.id 為 key 掛載）。
@@ -28,7 +29,12 @@ export function AppShell(): React.JSX.Element {
             必須在 `SessionsProvider` 之內（它要 `useSessions()`），而 `AppShell` 本身正是渲染
             那個 Provider 的元件 —— 掛在這一層才拿得到 context。它不渲染任何東西。
           */}
-          <KeyboardNavigation folders={folders} selectedId={selectedId} onSelectFolder={select} />
+          <KeyboardNavigation
+            folders={folders}
+            selectedId={selectedId}
+            onSelectFolder={select}
+            onReorderFolder={(id, toIndex) => void reorderFolders(id, toIndex)}
+          />
 
           <Group orientation="horizontal" className="h-full w-full">
             <Panel defaultSize="56px" minSize="48px" maxSize="120px">
@@ -51,6 +57,7 @@ export function AppShell(): React.JSX.Element {
                 onSelect={select}
                 onAdd={() => void addFolder()}
                 onRemove={(id) => void removeFolder(id)}
+                onReorder={(id, toIndex) => void reorderFolders(id, toIndex)}
               />
             </Panel>
 

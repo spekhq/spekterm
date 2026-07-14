@@ -113,6 +113,14 @@ const workspaceApi = {
     remove: (id: string): Promise<WorkspaceFolder[]> =>
       ipcRenderer.invoke('workspace:folders:remove', id),
     /**
+     * 重排 folder 的順序，回傳重排後的清單。
+     *
+     * **以識別碼指定要移動的 folder，不以它此刻的位置** —— renderer 手上的清單是主行程推送的
+     * 複本，隨時可能已經過期；以位置指定時，一個飛行中的索引可能已經指向另一個 folder。
+     */
+    reorder: (id: string, toIndex: number): Promise<WorkspaceFolder[]> =>
+      ipcRenderer.invoke('workspace:folders:reorder', id, toIndex),
+    /**
      * folder 清單的推送更新（目前唯一的來源是 git 分支變動 —— 使用者在 terminal 裡切 branch）。
      * 回傳取消訂閱的函式：renderer 拿不到 `ipcRenderer`，因此也無從自行解除其他監聽器。
      */

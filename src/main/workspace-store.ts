@@ -174,6 +174,28 @@ export class WorkspaceStore {
     return describeFolder(folder)
   }
 
+  /**
+   * 重排 folder 的順序。**清單的順序就是 rail 上的呈現順序**，它是 workspace 狀態的一部分。
+   *
+   * **以識別碼定位，不以位置。** 這份清單的權威在主行程，renderer 手上是一份經推送的複本，而
+   * `workspace:folders:changed` 隨時可能推來新的一份（分支變動、另一處移除了 folder）——
+   * 一個飛行中的位置索引因此可能已經指向**另一個** folder。以 id 定位時，最壞情況只是落點偏
+   * 一格，不會**移錯一個 repo**（design D5）。
+   *
+   * 未知的 id 靜默返回（比照 `remove`）；越界的目標位置夾制於清單範圍內。
+   */
+  reorder(id: string, toIndex: number): void {
+    const from = this.folders.findIndex((folder) => folder.id === id)
+    if (from === -1) return
+
+    const to = Math.min(Math.max(Math.trunc(toIndex), 0), this.folders.length - 1)
+    if (Number.isNaN(to) || to === from) return
+
+    const [moved] = this.folders.splice(from, 1)
+    this.folders.splice(to, 0, moved)
+    this.save()
+  }
+
   /** 只影響 workspace 設定，不更動磁碟上的檔案或目錄。 */
   remove(id: string): void {
     const next = this.folders.filter((folder) => folder.id !== id)

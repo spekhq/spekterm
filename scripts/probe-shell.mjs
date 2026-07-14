@@ -97,8 +97,12 @@ const PROBE_EXPRESSION = `(async () => {
     //
     // onChanged 於 rail-legibility-and-repo-row 引入（repo-branch 規格）：分支在 app 之外
     // 被切換時，rail 必須自己更新 —— 那需要一個推送通道。它只送 folder 清單，不含任何路徑。
+    //
+    // reorder 於 workspace-reordering 引入（workspace-folders 規格）：folder 的順序是使用者
+    // 決定的 workspace 狀態，權威在主行程。它只收識別碼與目標位置 —— 沒有路徑詞彙，也不能
+    // 藉此加入或移除 folder（加入 folder 的唯一路徑仍是原生對話框）。
     surplusFolderKeys: Object.keys(api?.folders ?? {}).filter(
-      (key) => !['list', 'add', 'remove', 'onChanged'].includes(key),
+      (key) => !['list', 'add', 'remove', 'reorder', 'onChanged'].includes(key),
     ),
     // terminal 的能力。這個 namespace 一度也完全沒有守衛（同 folders 當年的漏洞）——
     // 於是 session-restore 往它加了四個 method 而不會被任何東西擋下。補上。

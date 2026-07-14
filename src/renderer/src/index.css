@@ -147,6 +147,21 @@ body {
 }
 
 /*
+ * 拖曳排序進行中的游標（`useDragReorder` 於 body 掛上 `data-dragging`）。
+ *
+ * **必須覆蓋整棵子樹，而且必須是 `!important`。** `cursor` 雖然是可繼承屬性，但**元素自己的
+ * 宣告會贏過繼承來的值** —— 而滑鼠在拖曳途中掃過的東西幾乎都自己宣告了 cursor：可拖曳的列與
+ * 分頁靜止時是 `cursor-pointer`，`<button>` 更帶著一條 UA 的 `cursor: default`（Tailwind v4 的
+ * preflight 不再像 v3 那樣把它改回 `pointer`）。只在 body 上設 `cursor: grabbing`，游標會在
+ * 「握拳」與「食指」之間閃爍 —— 而 repo 的拖曳判定刻意涵蓋整個區塊（含 session 子列與 ▾／＋／✕），
+ * 那條路上一定會掃過它們。
+ */
+body[data-dragging='true'],
+body[data-dragging='true'] * {
+  cursor: grabbing !important;
+}
+
+/*
  * markdown 檢視的排版。本 repo 沒有 @tailwindcss/typography，這裡只補最低限度的
  * 節奏與層級 —— side panel 的寬度不適合完整的 prose 樣式。
  */

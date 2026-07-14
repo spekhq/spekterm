@@ -219,6 +219,79 @@ const callListDir = (folderId, relPath) => `(async () => {
     : { ok: false, message: result.code + ': ' + result.message }
 })()`
 
+/** 頂層的 repo 列（**不含 session 子列** —— 子列在 DOM 上同樣是 `li > div[role="button"]`）。 */
+const FOLDER_ROW_RECT = (index) => `(() => {
+  const row = [...document.querySelectorAll('aside[aria-label="${copy('rail.label')}"] > ul > li > div[role="button"]')][${index}]
+  if (!row) return null
+  const r = row.getBoundingClientRect()
+  return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) }
+})()`
+
+/** 整個 repo 區塊（`<li>`，含展開的 session 子列）—— 拖曳的命中判定以它為準。 */
+const FOLDER_BLOCK_RECT = (index) => `(() => {
+  const li = [...document.querySelectorAll('aside[aria-label="${copy('rail.label')}"] > ul > li')][${index}]
+  if (!li) return null
+  const r = li.getBoundingClientRect()
+  return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2), top: Math.round(r.y), height: Math.round(r.height) }
+})()`
+
+const SESSION_ROW_RECT = (index) => `(() => {
+  const rows = [...document.querySelectorAll('aside[aria-label="${copy('rail.label')}"] > ul > li > ul > li > div[role="button"]')]
+  const row = rows[${index}]
+  if (!row) return null
+  const r = row.getBoundingClientRect()
+  return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) }
+})()`
+
+const SESSION_ROW_LABELS = `[...document.querySelectorAll('aside[aria-label="${copy('rail.label')}"] > ul > li > ul > li > div[role="button"]')]
+  .map((row) => row.innerText.split('\\n')[0].trim())`
+
+/** 當前選中的 repo —— 主舞台的 header 就是它。 */
+const SELECTED_FOLDER = `(() => {
+  const header = document.querySelector('main[aria-label="${copy('stage.label')}"] header')
+  return header ? header.innerText.split('\\n')[0].trim() : null
+})()`
+
+/**
+ * 一次**真的**按下再放開，中間不移動。
+ *
+ * 不能用 `.click()`：合成事件不走 mousedown → mouseup 這條路，而拖曳排序的「未位移就視為點擊」
+ * 正是靠這兩顆事件之間有沒有位移來判定的。用合成 click 驗它，等於什麼都沒驗。
+ */
+async function realPressRelease(client, at) {
+  const base = { x: at.x, y: at.y, button: 'left', clickCount: 1 }
+  await client.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: at.x, y: at.y, button: 'none', buttons: 0 })
+  await client.send('Input.dispatchMouseEvent', { type: 'mousePressed', ...base, buttons: 1 })
+  await client.send('Input.dispatchMouseEvent', { type: 'mouseReleased', ...base, buttons: 0 })
+}
+
+/** 靜止時的游標 —— 可拖曳且可點擊的項目必須是 `pointer`，不是 `grab`（呈現契約）。 */
+const CURSOR_OF = (selector) => `(() => {
+  const el = document.querySelector(${JSON.stringify(selector)})
+  return el ? getComputedStyle(el).cursor : null
+})()`
+
+const RAIL_ROW_SELECTOR = `aside[aria-label="${copy('rail.label')}"] > ul > li > div[role="button"]`
+const RAIL_SESSION_SELECTOR = `aside[aria-label="${copy('rail.label')}"] > ul > li > ul > li > div[role="button"]`
+
+/** 自 rail 建立一個 login shell 的 session（拖曳的驗收需要一個**展開著子列**的 repo）。 */
+const OPEN_SPAWN_MENU = (folderName) => `(() => {
+  const button = document.querySelector('button[aria-label="${copy('rail.newSessionIn', { name: '%NAME%' })}"]'
+    .replace('%NAME%', ${JSON.stringify(folderName)}))
+  if (!button) return false
+  button.click()
+  return true
+})()`
+
+const CLICK_MENU_ITEM = (label) => `(() => {
+  const menu = document.querySelector('[role="menu"]')
+  if (!menu) return false
+  const item = [...menu.querySelectorAll('button')].find((b) => b.innerText.includes(${JSON.stringify(label)}))
+  if (!item) return false
+  item.click()
+  return true
+})()`
+
 // 不以 aria-label 選取：它會隨收合狀態改變，而狀態的更新比 DOM 寬度晚一個 frame，
 // 依 label 選取會在競態下找不到按鈕，讓「展開」靜默地沒有發生。
 // 以 aria-expanded 選取而非「header 的第一顆按鈕」—— 身分切換的分頁排在它前面。
@@ -428,14 +501,133 @@ try {
     activity.slice(1).every((item) => item.disabled && item.title.includes(suffixOf('activityBar.comingSoon'))),
     activity.slice(1).map((i) => i.label).join(', '))
 
+  // ── workspace-layout：可拖曳項目的游標宣告其主要可供性 ─────────────────────
+  //
+  // rail 的列**點一下是有作用的**（選中這個 repo／切換 focused session），拖曳是偶爾為之 ——
+  // `grab`（張開的手）宣告的是「這個東西只能被拖」，那是錯的可供性。
+  console.log('\n拖曳排序與游標')
+
+  // 先在 repo-openspec 底下開一個 session —— 拖曳的驗收**必須有一個展開著 session 子列的 repo**
+  // （命中判定以整個區塊為準，而巢狀的兩種拖曳必須互不誤觸；子列收合著就測不到這件事）。
+  check(results, '自 rail 開啟 spawn 選單', (await app.client.evaluate(OPEN_SPAWN_MENU('repo-openspec'))) === true)
+  await pollUntil(app.client, `Boolean(document.querySelector('[role="menu"]'))`, (v) => v === true, 4000)
+  await app.client.evaluate(CLICK_MENU_ITEM(copy('sessions.spawnShell')))
+  await pollUntil(app.client, SESSION_ROW_LABELS, (v) => v.length === 1, 10_000)
+
+  check(results, '自 rail 開啟 spawn 選單', (await app.client.evaluate(OPEN_SPAWN_MENU('repo-openspec'))) === true)
+  await pollUntil(app.client, `Boolean(document.querySelector('[role="menu"]'))`, (v) => v === true, 4000)
+  await app.client.evaluate(CLICK_MENU_ITEM(copy('sessions.spawnShell')))
+  const sessionRows = await pollUntil(app.client, SESSION_ROW_LABELS, (v) => v.length === 2, 10_000)
+  check(results, 'repo-openspec 底下有兩個 session 子列', sessionRows.length === 2, JSON.stringify(sessionRows))
+
+  check(results, 'repo 列靜止時的游標為 pointer（不是 grab）',
+    (await app.client.evaluate(CURSOR_OF(RAIL_ROW_SELECTOR))) === 'pointer',
+    String(await app.client.evaluate(CURSOR_OF(RAIL_ROW_SELECTOR))))
+  check(results, 'session 子列靜止時的游標為 pointer（不是 grab）',
+    (await app.client.evaluate(CURSOR_OF(RAIL_SESSION_SELECTOR))) === 'pointer',
+    String(await app.client.evaluate(CURSOR_OF(RAIL_SESSION_SELECTOR))))
+
+  // ── workspace-layout：未位移的按下視為點擊（repo 列現在也掛著 onMouseDown）
+  //
+  // 這條守的是「加了拖曳之後，點擊還在不在」。**必須送真的 mousedown → mouseup**：合成的
+  // `.click()` 不走那條路，用它驗等於什麼都沒驗。
+  const orderBeforeClick = (await app.client.evaluate(RAIL_ROWS)).map((r) => r.name).join(',')
+  await realPressRelease(app.client, await app.client.evaluate(FOLDER_ROW_RECT(0)))
+  await sleep(300)
+  const selectedByClick = await app.client.evaluate(SELECTED_FOLDER)
+  check(results, '於 repo 列按下再放開（未位移）＝點擊，選中該 repo 且順序不變',
+    selectedByClick?.includes('repo-openspec') &&
+      (await app.client.evaluate(RAIL_ROWS)).map((r) => r.name).join(',') === orderBeforeClick,
+    `選中=${selectedByClick} 順序=${(await app.client.evaluate(RAIL_ROWS)).map((r) => r.name).join(', ')}`)
+
+  // ── workspace-layout：拖曳 repo 改變 rail 的順序
+  //
+  // 起點是 repo-openspec 的**標題列**（拖曳的起點只掛在那裡），落點以**整個區塊**判定。
+  //
+  // **落點的期望值一律以「指示線畫在哪裡」為準，不以實作的內部索引為準。** 這裡曾經反過來 ——
+  // 探針把準心移到區塊頂端 3px 去遷就一個 off-by-one（往下拖時東西會落在指示線的下一格，拖到
+  // 第二個 repo 的下半部就飛到清單末端），於是驗收永遠是綠的，而使用者的拖曳是錯的。
+  const railNames = async () => (await app.client.evaluate(RAIL_ROWS)).map((r) => r.name).join(',')
+  const dragBlockToY = async (index, y) => {
+    const from = await app.client.evaluate(FOLDER_ROW_RECT(index))
+    await dragMouse(app.client, from, { x: from.x, y })
+    await sleep(400)
+  }
+
+  // (a) 拖到 plain 的**上半** ＝ 指示線在 plain 之前 ＝ openspec 現在的位置 → 放開是無操作。
+  const plainBlockA = await app.client.evaluate(FOLDER_BLOCK_RECT(1))
+  await dragBlockToY(0, plainBlockA.top + 3)
+  check(results, '拖到下一個 repo 的上半（＝插在它之前）＝ 原地不動',
+    (await railNames()) === 'repo-openspec,repo-plain,repo-missing',
+    await railNames())
+
+  // (b) 拖到 plain 的**下半** ＝ 指示線在 plain 之後 → openspec 落到 plain 與 missing 之間。
+  //     **這條才是那個 off-by-one 的照妖鏡**：修正前它會越過 missing、飛到清單末端。
+  const plainBlockB = await app.client.evaluate(FOLDER_BLOCK_RECT(1))
+  await dragBlockToY(0, plainBlockB.top + plainBlockB.height - 3)
+  const afterDrag = await pollUntil(app.client, RAIL_ROWS, (rows) => rows[0]?.name === 'repo-plain', 4000)
+  check(results, '拖曳 repo 改變 rail 的順序，且落點與指示線一致（不多跳一格）',
+    afterDrag.map((r) => r.name).join(',') === 'repo-plain,repo-openspec,repo-missing',
+    `${afterDrag.map((r) => r.name).join(', ')}（多跳一格的話會是 repo-plain, repo-missing, repo-openspec）`)
+
+  // (c) 拖到 rail 的**最下方** → 落到清單末端（末端必須拖得到）。
+  const missingBlock = await app.client.evaluate(FOLDER_BLOCK_RECT(2))
+  await dragBlockToY(1, missingBlock.top + missingBlock.height - 3)
+  check(results, '拖到最下方 → 落到清單末端',
+    (await railNames()) === 'repo-plain,repo-missing,repo-openspec',
+    await railNames())
+
+  // (d) 拖回中間，順便把順序帶回 (b) 的結果 —— 下面的重啟斷言以它為期望值。
+  const missingBlockD = await app.client.evaluate(FOLDER_BLOCK_RECT(1))
+  await dragBlockToY(2, missingBlockD.top + 3)
+  check(results, '往上拖：落在指示線之處',
+    (await railNames()) === 'repo-plain,repo-openspec,repo-missing',
+    await railNames())
+
+  // 選中的是**那個 repo**，不是那個位置 —— 它移動之後，主舞台呈現的仍該是它。
+  check(results, '被移動的 repo 於新位置仍為選中',
+    (await app.client.evaluate(SELECTED_FOLDER))?.includes('repo-openspec'),
+    String(await app.client.evaluate(SELECTED_FOLDER)))
+
+  check(results, '展開中的 repo 連同其 session 子列一起移動',
+    (await app.client.evaluate(SESSION_ROW_LABELS)).length === 2 &&
+      (await app.client.evaluate(`[...document.querySelectorAll('aside[aria-label="${copy('rail.label')}"] > ul > li')][1].querySelectorAll('ul li').length`)) === 2,
+    'session 子列必須跟著它所屬的 repo 走')
+
+  // ── 於 session 子列上拖曳，**只移動 session，repo 的順序不動**
+  //
+  // 兩種拖曳在 DOM 上是巢狀的。起點若沒有互斥（repo 的 onMouseDown 掛在整個 `<li>` 上），
+  // 一次拖曳會**同時移動 session 與 repo** —— 而 fixture 若沒有展開的子列，這個 bug 會躲過
+  // 整輪全綠的驗收。
+  const railOrderBeforeSessionDrag = (await app.client.evaluate(RAIL_ROWS)).map((r) => r.name).join(',')
+  const sessionsBefore = await app.client.evaluate(SESSION_ROW_LABELS)
+  const sessionFrom = await app.client.evaluate(SESSION_ROW_RECT(1))
+  const sessionTo = await app.client.evaluate(SESSION_ROW_RECT(0))
+  await dragMouse(app.client, sessionFrom, { x: sessionTo.x, y: sessionTo.y - 4 })
+  const sessionsAfter = await pollUntil(
+    app.client,
+    SESSION_ROW_LABELS,
+    (v) => v[0] === sessionsBefore[1],
+    4000,
+  )
+  check(results, '於 session 子列上拖曳只移動 session',
+    JSON.stringify(sessionsAfter) === JSON.stringify([...sessionsBefore].reverse()),
+    `${JSON.stringify(sessionsBefore)} → ${JSON.stringify(sessionsAfter)}`)
+  check(results, '於 session 子列上拖曳時，repo 的順序不變',
+    (await app.client.evaluate(RAIL_ROWS)).map((r) => r.name).join(',') === railOrderBeforeSessionDrag,
+    (await app.client.evaluate(RAIL_ROWS)).map((r) => r.name).join(', '))
+
   await app.close()
 
-  // ── workspace-folders：重啟後還原 ────────────────────────────────────────
+  // ── workspace-folders：重啟後還原**使用者排定的順序** ─────────────────────
+  //
+  // 這條同時守住兩件事：清單跨重啟還原，且順序是**使用者排出來的**（不是加入的先後）——
+  // 上面那次拖曳把 repo-plain 換到了第一個。
   console.log('\n重啟後還原')
   app = await launch(profile)
   const afterRestart = await app.client.evaluate(RAIL_ROWS)
-  check(results, '清單與順序於重啟後一致',
-    afterRestart.map((r) => r.name).join(',') === 'repo-openspec,repo-plain,repo-missing',
+  check(results, '清單與使用者排定的順序於重啟後一致',
+    afterRestart.map((r) => r.name).join(',') === 'repo-plain,repo-openspec,repo-missing',
     afterRestart.map((r) => r.name).join(', '))
   await app.close()
 

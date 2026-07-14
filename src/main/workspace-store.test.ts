@@ -116,6 +116,68 @@ describe('移除', () => {
   })
 })
 
+describe('重排', () => {
+  function seeded(): { store: WorkspaceStore; ids: Record<string, string> } {
+    const store = new WorkspaceStore(configPath)
+    store.load()
+    const ids: Record<string, string> = {}
+    for (const name of ['alpha', 'beta', 'gamma']) {
+      ids[name] = store.add(makeDir(name)).id
+    }
+    return { store, ids }
+  }
+
+  const names = (store: WorkspaceStore): string[] => store.list().map((folder) => folder.name)
+
+  it('改變順序，且不改動任何 folder 的內容', () => {
+    const { store, ids } = seeded()
+    const before = store.list().find((folder) => folder.id === ids.gamma)
+
+    store.reorder(ids.gamma, 0)
+
+    assert.deepEqual(names(store), ['gamma', 'alpha', 'beta'])
+    assert.deepEqual(store.list().find((folder) => folder.id === ids.gamma), before)
+  })
+
+  it('未知的識別碼為無操作', () => {
+    const { store } = seeded()
+    store.reorder('no-such-id', 0)
+    assert.deepEqual(names(store), ['alpha', 'beta', 'gamma'])
+  })
+
+  it('越界的目標位置被夾制於清單範圍', () => {
+    const { store, ids } = seeded()
+
+    store.reorder(ids.beta, 99)
+    assert.deepEqual(names(store), ['alpha', 'gamma', 'beta'], '超出長度：移至最後')
+
+    store.reorder(ids.beta, -5)
+    assert.deepEqual(names(store), ['beta', 'alpha', 'gamma'], '負數：移至最前')
+  })
+
+  it('非整數與 NaN 的目標位置不使清單損毀', () => {
+    const { store, ids } = seeded()
+
+    store.reorder(ids.gamma, Number.NaN)
+    assert.deepEqual(names(store), ['alpha', 'beta', 'gamma'], 'NaN：無操作')
+
+    // 位置是序位，不是量 —— 小數截斷即可，重點是**不得**算出 undefined 的插入點而弄丟 folder。
+    store.reorder(ids.gamma, 0.7)
+    assert.deepEqual(names(store), ['gamma', 'alpha', 'beta'])
+    assert.equal(store.list().length, 3, '不得因為越界索引而弄丟任何 folder')
+  })
+
+  it('重排後的順序立即落盤', () => {
+    const { store, ids } = seeded()
+    store.reorder(ids.gamma, 0)
+
+    const reopened = new WorkspaceStore(configPath)
+    reopened.load()
+
+    assert.deepEqual(names(reopened), ['gamma', 'alpha', 'beta'], '重啟後仍是使用者排定的順序')
+  })
+})
+
 describe('持久化', () => {
   it('設定檔帶有版本欄位', () => {
     const store = new WorkspaceStore(configPath)
