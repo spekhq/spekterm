@@ -58,6 +58,11 @@
     "openSpecDisabled": "This repo has no openspec/ — only the Files identity is available",
     "filesTooltip": "Files — the file tree of this repo"
   },
+  "panelSource": {
+    "change": "Change side panel source",
+    "foreign": "Showing {{name}} — not the session repo",
+    "backToOwn": "Back to the session repo"
+  },
   "files": {
     "label": "Files",
     "pathNav": "Path",

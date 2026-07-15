@@ -64,7 +64,7 @@ export function AppShell(): React.JSX.Element {
             <Separator className={SEPARATOR_CLASS} />
 
             <Panel minSize="360px">
-              <MainStage folder={selected} />
+              <MainStage folder={selected} folders={folders} />
             </Panel>
           </Group>
         </OpenSpecProvider>

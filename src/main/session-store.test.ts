@@ -114,6 +114,22 @@ describe('parseSessions', () => {
     )
     assert.equal(parsed?.[0].cwd, undefined)
   })
+
+  it('側欄來源（panelFolderId）被保留；空字串與非字串丟成 undefined', () => {
+    const parsed = parseSessions(
+      JSON.stringify({
+        version: 1,
+        sessions: [
+          { id: UUID_A, folderId: 'f1', spawnTarget: 'shell', ordinal: 1, panelFolderId: 'f2' },
+          { id: UUID_B, folderId: 'f1', spawnTarget: 'shell', ordinal: 2, panelFolderId: '' },
+          { id: UUID_C, folderId: 'f1', spawnTarget: 'shell', ordinal: 3, panelFolderId: 123 },
+        ],
+      }),
+    )
+    assert.equal(parsed?.[0].panelFolderId, 'f2')
+    assert.equal(parsed?.[1].panelFolderId, undefined)
+    assert.equal(parsed?.[2].panelFolderId, undefined)
+  })
 })
 
 describe('SessionStore 的損毀韌性', () => {
@@ -253,5 +269,13 @@ describe('SessionStore：已結束的 session 不得被復活', () => {
       { id: UUID_A, folderId: 'f1', spawnTarget: 'claude', ordinal: 1, anchoredChange: 'my-change' },
     ])
     assert.equal(kept.list()[0].anchoredChange, 'my-change')
+  })
+
+  it('側欄來源（panelFolderId）跨 replace 保留', () => {
+    const kept = store()
+    kept.replace([
+      { id: UUID_A, folderId: 'f1', spawnTarget: 'claude', ordinal: 1, panelFolderId: 'f2' },
+    ])
+    assert.equal(kept.list()[0].panelFolderId, 'f2')
   })
 })

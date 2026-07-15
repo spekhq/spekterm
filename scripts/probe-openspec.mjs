@@ -608,6 +608,29 @@ const MENU_ITEM_RECT = (label) => `(() => {
   return { x: r.x, y: r.y, width: r.width, height: r.height }
 })()`
 
+// ── 側欄來源指示器（side-panel-source）──────────────────────────────────────
+
+const PANEL_SOURCE_RECT = `(() => {
+  const el = document.querySelector('[aria-label="${copy('panelSource.change')}"]')
+  if (!el) return null
+  const r = el.getBoundingClientRect()
+  return { x: r.x, y: r.y, width: r.width, height: r.height }
+})()`
+
+const PANEL_SOURCE_LABEL = `(() => {
+  const el = document.querySelector('[aria-label="${copy('panelSource.change')}"]')
+  return el ? el.innerText.trim() : null
+})()`
+
+const BACK_TO_OWN_RECT = `(() => {
+  const el = document.querySelector('[aria-label="${copy('panelSource.backToOwn')}"]')
+  if (!el) return null
+  const r = el.getBoundingClientRect()
+  return { x: r.x, y: r.y, width: r.width, height: r.height }
+})()`
+
+const HAS_BACK_TO_OWN = `Boolean(document.querySelector('[aria-label="${copy('panelSource.backToOwn')}"]'))`
+
 const FOCUS_SESSION_TAB = (index) => `(() => {
   const tabs = [...document.querySelectorAll('[role="tablist"][aria-label="${copy('sessions.tabs')}"] button[role="tab"]')]
   const tab = tabs[${index}]
@@ -1277,6 +1300,135 @@ async function runMode(label, { port, rendererUrl }) {
       '重新載入後，agent 改檔側欄仍自己更新（watcher 未成孤兒）',
       liveAfterReload?.now === 3,
       JSON.stringify(liveAfterReload),
+    )
+
+    // ── 側欄來源可與 rail focus 解耦（side-panel-source）─────────────────────
+    //
+    // agent 在一個 session 裡跨 repo 工作時（claude 自己 cd、或拿絕對路徑改別的 repo），側欄要能
+    // 指到另一個 repo，而**不切走正在跑的 session**。側欄來源是 per-session（focused session 的
+    // 屬性），切換來源時重置錨定（change 的 slug 隸屬於某個 repo）。
+    //
+    // **放在最後** —— 它會把 repo-single 的 session 來源指到別處，不宜污染前面的測試。
+    console.log('\n側欄來源可與 rail focus 解耦')
+    await pollUntil(app.client, SELECT_FOLDER('repo-single'), (v) => v === true, 8000)
+    await pollUntil(app.client, IDENTITY, (v) => v === 'openspec', 8000)
+    await createSession(app.client)
+
+    const ownAnchor = await pollUntil(app.client, ANCHORED_SLUG, (v) => v === 'solo-change', 10_000)
+    check(results, '側欄預設呈現 session 自己的 repo', ownAnchor === 'solo-change', String(ownAnchor))
+    // 一次 evaluate 存起來 —— 來源列的 innerText 是 `▸\n<name>\n▾`（三個 span），兩次 evaluate
+    // 可能拿到不同幀。
+    const srcLabel = String(await app.client.evaluate(PANEL_SOURCE_LABEL))
+    check(results, '來源列標示側欄來源為 repo-single', srcLabel.includes('repo-single'), srcLabel)
+    check(
+      results,
+      '來源即自身時不顯示「回到自身」捷徑',
+      (await app.client.evaluate(HAS_BACK_TO_OWN)) === false,
+    )
+
+    // 開來源列下拉，把側欄來源改到 repo-many
+    const srcBtn = await stableRect(app.client, PANEL_SOURCE_RECT)
+    check(results, '來源列有可操作的來源指示器', srcBtn !== null)
+    await realClick(app.client, srcBtn)
+    const manyItem = await pollUntil(app.client, MENU_ITEM_RECT('repo-many'), (v) => v !== null, 3000)
+    check(results, '下拉列出其他 folder 作為候選來源', manyItem !== null)
+    await realClick(app.client, manyItem)
+
+    // repo-many 有兩個 active change → 切來源後錨定重置 → 空狀態
+    const resetEmpty = await pollUntil(app.client, CHANGE_EMPTY_TEXT, (v) => v !== null, 10_000)
+    check(
+      results,
+      '切換側欄來源後錨定被重置（repo-many 無自動錨定 → 空狀態）',
+      typeof resetEmpty === 'string' && resetEmpty.includes(copy('openspec.noAnchoredChange')),
+      String(resetEmpty).split('\n').filter(Boolean)[0],
+    )
+
+    // terminal 那半不受影響：分頁列仍是 repo-single 的那個 session
+    const tabsIntact = await app.client.evaluate(SESSION_TABS)
+    check(
+      results,
+      '側欄跨 repo 時 terminal 分頁不受影響',
+      Array.isArray(tabsIntact) && tabsIntact.length === 1,
+      JSON.stringify(tabsIntact),
+    )
+
+    // 瀏覽視圖呈現的是 repo-many 的 change
+    await app.client.evaluate(CLICK_VIEW(copy('openspec.tabBrowse')))
+    const foreignActive = await pollUntil(app.client, CHANGE_TREE_ROWS('Active'), (l) => l.length === 2, 8000)
+    check(
+      results,
+      '側欄改指向 repo-many：瀏覽視圖呈現它的 change',
+      foreignActive.some((r) => r.slug === 'add-oauth') && foreignActive.some((r) => r.slug === 'add-invoice'),
+      foreignActive.map((r) => r.slug).join(', '),
+    )
+
+    // 「回到自身」捷徑出現，點它回到 repo-single
+    check(
+      results,
+      '來源非自身時顯示「回到自身」捷徑',
+      (await app.client.evaluate(HAS_BACK_TO_OWN)) === true,
+    )
+    await realClick(app.client, await stableRect(app.client, BACK_TO_OWN_RECT))
+    const backHome = await pollUntil(app.client, ANCHORED_SLUG, (v) => v === 'solo-change', 8000)
+    check(results, '「回到自身」把側欄帶回 session 自己的 repo', backHome === 'solo-change', String(backHome))
+
+    // 側欄來源為 per-session：第二個 session 指到 repo-many，切 session 側欄來源跟著走
+    await createSession(app.client)
+    await realClick(app.client, await stableRect(app.client, PANEL_SOURCE_RECT))
+    await realClick(app.client, await pollUntil(app.client, MENU_ITEM_RECT('repo-many'), (v) => v !== null, 3000))
+    await pollUntil(app.client, CHANGE_EMPTY_TEXT, (v) => v !== null, 10_000)
+
+    check(results, '切回第一個 session', (await app.client.evaluate(FOCUS_SESSION_TAB(0))) === true)
+    const s1 = await pollUntil(app.client, ANCHORED_SLUG, (v) => v === 'solo-change', 8000)
+    check(results, '每個 session 各自保有側欄來源（session 1 仍為 repo-single）', s1 === 'solo-change', String(s1))
+
+    check(results, '切到第二個 session', (await app.client.evaluate(FOCUS_SESSION_TAB(1))) === true)
+    const s2 = await pollUntil(app.client, PANEL_SOURCE_LABEL, (v) => String(v).includes('repo-many'), 8000)
+    check(results, '側欄來源跟隨 focused session（session 2 為 repo-many）', String(s2).includes('repo-many'), String(s2))
+
+    // OpenSpec 與 Files 共用同一側欄來源：切 Files，樹是 repo-many 的（有 openspec、無 notes.txt）
+    await app.client.evaluate(CLICK_IDENTITY('▤'))
+    const foreignTree = await pollUntil(app.client, TREE_ROWS, (paths) => paths.includes('openspec'), 8000)
+    check(
+      results,
+      'OpenSpec 與 Files 共用側欄來源（Files 呈現 repo-many 的樹）',
+      foreignTree.includes('openspec') && !foreignTree.includes('notes.txt'),
+      foreignTree.join(', '),
+    )
+
+    // ── 側欄來源跨重建還原（session-persistence）────────────────────────────
+    //
+    // reload 走與「關 app 重開」**同一條** persist→restore 落盤路徑（sessions.json）。此刻
+    // session 1 的來源是自身 repo-single、session 2 指向 repo-many —— 重建後兩者都該原樣回來。
+    await app.client.send('Page.reload', {})
+    await sleep(1500)
+    await pollUntil(app.client, MOUNTED, (v) => v === true, 20_000)
+    await pollUntil(app.client, SELECT_FOLDER('repo-single'), (v) => v === true, 15_000)
+    await pollUntil(app.client, IDENTITY, (v) => v === 'openspec', 10_000)
+    const rebuiltTabs = await pollUntil(app.client, SESSION_TABS, (l) => l.length === 2, 15_000)
+    check(results, '重新載入後兩個 session 原樣重建', rebuiltTabs.length === 2, JSON.stringify(rebuiltTabs))
+
+    await app.client.evaluate(FOCUS_SESSION_TAB(1))
+    const restoredForeign = await pollUntil(
+      app.client,
+      PANEL_SOURCE_LABEL,
+      (v) => String(v).includes('repo-many'),
+      10_000,
+    )
+    check(
+      results,
+      '側欄來源跨重建還原（session 2 仍指向 repo-many）',
+      String(restoredForeign).includes('repo-many'),
+      String(restoredForeign),
+    )
+
+    await app.client.evaluate(FOCUS_SESSION_TAB(0))
+    const restoredOwn = await pollUntil(app.client, ANCHORED_SLUG, (v) => v === 'solo-change', 10_000)
+    check(
+      results,
+      '側欄來源跨重建還原（session 1 仍指向自身 repo）',
+      restoredOwn === 'solo-change',
+      String(restoredOwn),
     )
   } finally {
     await app.close()

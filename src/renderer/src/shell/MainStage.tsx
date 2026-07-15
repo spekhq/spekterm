@@ -12,10 +12,13 @@ import { useSessions } from './terminal/sessions'
 import type { PanelIdentity, SpawnTarget, WorkspaceFolder } from './types'
 
 interface MainStageProps {
+  /** rail 的 focused folder —— 「駕駛」那半（header、session 分頁、terminal）。 */
   folder: WorkspaceFolder | null
+  /** workspace 的所有 folder —— 來源指示器的下拉清單。 */
+  folders: WorkspaceFolder[]
 }
 
-export function MainStage({ folder }: MainStageProps): React.JSX.Element {
+export function MainStage({ folder, folders }: MainStageProps): React.JSX.Element {
   const { t } = useTranslation()
   const sidePanelRef = usePanelRef()
   const [collapsed, setCollapsed] = useState(false)
@@ -36,21 +39,35 @@ export function MainStage({ folder }: MainStageProps): React.JSX.Element {
   /** 全視窗 overlay 的 Graph／Timeline（design D12）。null＝沒開。 */
   const [viz, setViz] = useState<VizKind | null>(null)
 
-  // 換 folder 就把待處理的跨身分請求丟掉 —— 它是**上一個 repo** 的座標。
-  //
-  // 少了這步，切到新 repo 時側欄會停在「顯示某個 spec」的視圖，而那個 spec 屬於前一個 repo
-  //（側欄的兩個面板都以 folder.id 為 key 重新掛載，於是又把舊請求當成初始值套用了一次）。
-  const [seenFolder, setSeenFolder] = useState<string | null>(folder?.id ?? null)
-  if ((folder?.id ?? null) !== seenFolder) {
-    setSeenFolder(folder?.id ?? null)
+  const sessions = useSessions()
+
+  // **「駕駛」那半：focusedFolder。** header 的 name/path、session 分頁與 terminal 一律以它為準
+  // —— 側欄指向另一個 repo 時，這一半完全不受影響（`side-panel-source`）。
+  const focusedFolder = folder
+  const folderSessions = focusedFolder ? sessions.forFolder(focusedFolder.id) : []
+  const focusedId = focusedFolder ? sessions.focusedIdFor(focusedFolder.id) : null
+
+  // **「讀」那半：panelFolder。** side panel 呈現 focused session 的側欄來源；沒有 session 時
+  // 退回 focusedFolder。來源指向的 folder 已被移除時（`find` 找不到）同樣退回 focusedFolder ——
+  // 那正是 session 自己的 folder（focused session 屬於 focusedFolder），與 spec 的 fallback 一致。
+  const panelSourceId = sessions.panelSourceOf(focusedId)
+  const panelFolder =
+    (panelSourceId ? folders.find((candidate) => candidate.id === panelSourceId) : null) ??
+    focusedFolder
+
+  // 換側欄來源（切 rail focus 或改 panelSource 皆會改變 panelFolder）就把待處理的跨身分請求丟掉
+  // —— 它是**上一個側欄來源**的座標。少了這步，切到新來源時側欄會停在「顯示某個 spec」的視圖，
+  // 而那個 spec 屬於前一個 repo（側欄兩個面板都以 panelFolder.id 為 key 重新掛載，於是又把舊請求
+  // 當成初始值套用了一次）。
+  const [seenPanelFolder, setSeenPanelFolder] = useState<string | null>(panelFolder?.id ?? null)
+  if ((panelFolder?.id ?? null) !== seenPanelFolder) {
+    setSeenPanelFolder(panelFolder?.id ?? null)
     setFileRequest(null)
     setOpenSpecRequest(null)
   }
 
-  const sessions = useSessions()
-
-  const openSpecEnabled = folder?.hasOpenSpec ?? false
-  // 選中的 repo 若沒有 openspec/，OpenSpec 身分不可用 —— 由衍生值退回 Files，
+  const openSpecEnabled = panelFolder?.hasOpenSpec ?? false
+  // 側欄來源若沒有 openspec/，OpenSpec 身分不可用 —— 由衍生值退回 Files，
   // 而不是用一個 effect 去改狀態（那會多渲染一次，且順序難以推理）。
   const activeIdentity: PanelIdentity =
     identity === 'openspec' && !openSpecEnabled ? 'files' : identity
@@ -81,9 +98,6 @@ export function MainStage({ folder }: MainStageProps): React.JSX.Element {
     [expandSidePanel],
   )
 
-  const folderSessions = folder ? sessions.forFolder(folder.id) : []
-  const focusedId = folder ? sessions.focusedIdFor(folder.id) : null
-
   /**
    * **休眠的 session 於首次被顯示時才 spawn**（design D11）。
    *
@@ -100,52 +114,55 @@ export function MainStage({ folder }: MainStageProps): React.JSX.Element {
     if (displayed?.status === 'dormant' && !displayed.wakeError) wake(displayed.id)
   }, [displayed?.id, displayed?.status, displayed?.wakeError, wake])
 
-  // 新 session 的初始錨定：該 folder **恰有一個** active change 時錨定它，否則留空。
-  // 多個候選之間不猜 —— 猜錯的側欄比沒有側欄更糟（design D3）。
-  const { data: changes } = useChanges(folder?.hasOpenSpec ? folder.id : null)
-  const soleActiveChange =
-    changes && changes.active.length === 1 ? changes.active[0].slug : undefined
+  // 新 session 的初始錨定：新 session 建在 **focusedFolder**，該 folder 恰有一個 active change
+  // 時錨定它，否則留空。多個候選之間不猜 —— 猜錯的側欄比沒有側欄更糟（design D3）。
+  const { data: focusedChanges } = useChanges(focusedFolder?.hasOpenSpec ? focusedFolder.id : null)
+  const soleActiveChangeForCreate =
+    focusedChanges && focusedChanges.active.length === 1 ? focusedChanges.active[0].slug : undefined
+
+  // 側欄「本 change」的衍生預設：以 **panelFolder**（側欄來源）為準 —— 側欄來源恰有一個 active
+  // change 時就是它。跨 repo 時，這與「新 session 建在 focusedFolder」是兩個不同的 folder。
+  const { data: panelChanges } = useChanges(panelFolder?.hasOpenSpec ? panelFolder.id : null)
+  const soleActiveChangeForPanel =
+    panelChanges && panelChanges.active.length === 1 ? panelChanges.active[0].slug : undefined
 
   const createSession = useCallback(
     (spawnTarget: SpawnTarget) => {
-      if (!folder) return
+      if (!focusedFolder) return
       setSessionError(null)
-      void sessions.create(folder.id, spawnTarget, soleActiveChange).then((outcome) => {
-        if (outcome.status === 'failed') setSessionError(outcome.failure.message)
-      })
+      void sessions.create(focusedFolder.id, spawnTarget, soleActiveChangeForCreate).then(
+        (outcome) => {
+          if (outcome.status === 'failed') setSessionError(outcome.failure.message)
+        },
+      )
     },
-    [folder, sessions, soleActiveChange],
+    [focusedFolder, sessions, soleActiveChangeForCreate],
   )
 
   const focusSession = useCallback(
     (sessionId: string) => {
-      if (!folder) return
-      sessions.focus(folder.id, sessionId)
+      if (!focusedFolder) return
+      sessions.focus(focusedFolder.id, sessionId)
     },
-    [folder, sessions],
+    [focusedFolder, sessions],
   )
 
   /**
    * 側欄「本 change」看的是哪個 change。三層優先序：
    *
-   * 1. **focused session 的錨定**（使用者在 Changes 點的那個）。
-   * 2. 沒有 session 時，folder 層的檢視狀態（同樣是使用者點的）。
-   * 3. **該 folder 恰有一個 active change 時，就是它。**
+   * 1. **focused session 的錨定**（使用者在 Changes 點的那個；隸屬於 session 的側欄來源）。
+   * 2. 沒有 session 時，panelFolder 層的檢視狀態（同樣是使用者點的）。
+   * 3. **側欄來源恰有一個 active change 時，就是它。**
    *
-   * 第 3 層是**衍生的預設值，不是建立 session 時的快照**。原本只在 `sessions.create` 時帶入
-   * 初始錨定 —— 於是「選了 repo 但還沒開 session」時側欄一片空白，即使那個 repo 只有一個
-   * active change（實測踩到）。而且它還與資料載入賽跑：session 建得比 `useChanges` 回來還快，
-   * 就什麼都錨不到。
-   *
-   * 「恰有一個」不算猜（design D3）—— 有多個候選時仍然留空，讓使用者自己挑。
+   * 第 3 層是**衍生的預設值**，以 panelFolder 為準（見上 `soleActiveChangeForPanel`）。
    */
   const explicitAnchor = focusedId
     ? sessions.anchoredChangeOf(focusedId)
-    : folder
-      ? (viewing.get(folder.id) ?? null)
+    : panelFolder
+      ? (viewing.get(panelFolder.id) ?? null)
       : null
 
-  const anchoredChange = explicitAnchor ?? soleActiveChange ?? null
+  const anchoredChange = explicitAnchor ?? soleActiveChangeForPanel ?? null
 
   const anchorChange = useCallback(
     (slug: string) => {
@@ -153,10 +170,24 @@ export function MainStage({ folder }: MainStageProps): React.JSX.Element {
         sessions.anchorChange(focusedId, slug)
         return
       }
-      if (!folder) return
-      setViewing((previous) => new Map(previous).set(folder.id, slug))
+      if (!panelFolder) return
+      setViewing((previous) => new Map(previous).set(panelFolder.id, slug))
     },
-    [focusedId, folder, sessions],
+    [focusedId, panelFolder, sessions],
+  )
+
+  /**
+   * 來源指示器選了一個 folder：設定 focused session 的側欄來源。
+   *
+   * 只在有 focused session 時有效 —— 側欄來源是 per-session 的狀態，沒有 session 就沒地方存
+   *（此時側欄本就退回 focusedFolder，見 `side-panel-source`）。
+   */
+  const changePanelSource = useCallback(
+    (folderId: string) => {
+      if (!focusedId) return
+      sessions.setPanelSource(focusedId, folderId)
+    },
+    [focusedId, sessions],
   )
 
   /** OpenSpec → Files：切到 Files 身分並開啟該檔。 */
@@ -190,10 +221,12 @@ export function MainStage({ folder }: MainStageProps): React.JSX.Element {
   return (
     <main aria-label={t('stage.label')} className="flex h-full flex-col bg-stage">
       <header className="flex items-center gap-3 border-b border-hairline px-4 py-2 text-base">
-        <span className={folder ? 'text-ink' : 'text-ink-faint'}>
-          {folder ? folder.name : t('stage.noRepo')}
+        <span className={focusedFolder ? 'text-ink' : 'text-ink-faint'}>
+          {focusedFolder ? focusedFolder.name : t('stage.noRepo')}
         </span>
-        {folder && <span className="truncate text-sm text-ink-faint">{folder.path}</span>}
+        {focusedFolder && (
+          <span className="truncate text-sm text-ink-faint">{focusedFolder.path}</span>
+        )}
 
         <span className="flex-1" />
 
@@ -216,7 +249,7 @@ export function MainStage({ folder }: MainStageProps): React.JSX.Element {
       </header>
 
       {/* 分頁列只屬於當前選中的 repo（mockup 的 .session-tabs）。 */}
-      {folder && (
+      {focusedFolder && (
         <SessionTabs
           sessions={folderSessions}
           focusedId={focusedId}
@@ -224,7 +257,9 @@ export function MainStage({ folder }: MainStageProps): React.JSX.Element {
           onClose={sessions.close}
           onCreate={createSession}
           onRename={sessions.rename}
-          onReorder={(fromIndex, toIndex) => sessions.reorder(folder.id, fromIndex, toIndex)}
+          onReorder={(fromIndex, toIndex) =>
+            sessions.reorder(focusedFolder.id, fromIndex, toIndex)
+          }
           error={sessionError}
         />
       )}
@@ -252,13 +287,13 @@ export function MainStage({ folder }: MainStageProps): React.JSX.Element {
                   spawnTarget={session.spawnTarget}
                   status={session.status}
                   wakeError={session.wakeError}
-                  active={session.folderId === folder?.id && session.id === focusedId}
+                  active={session.folderId === focusedFolder?.id && session.id === focusedId}
                 />
               ))}
 
             {!focusedId && (
               <div className="flex h-full items-center justify-center text-sm text-ink-faint">
-                {folder ? t('stage.noSession') : t('stage.noRepo')}
+                {focusedFolder ? t('stage.noSession') : t('stage.noRepo')}
               </div>
             )}
           </section>
@@ -278,7 +313,11 @@ export function MainStage({ folder }: MainStageProps): React.JSX.Element {
           <section aria-label={t('openspec.sidePanel')} className="h-full overflow-hidden bg-panel">
             <SidePanel
               identity={activeIdentity}
-              folder={folder}
+              folder={panelFolder}
+              folders={folders}
+              sourceOwnerId={focusedFolder?.id ?? null}
+              canSelectSource={focusedId !== null}
+              onSelectSource={changePanelSource}
               anchoredChange={anchoredChange}
               onAnchor={anchorChange}
               onOpenFile={openFileFromOpenSpec}
@@ -291,10 +330,10 @@ export function MainStage({ folder }: MainStageProps): React.JSX.Element {
         </Panel>
       </Group>
 
-      {viz && folder && (
+      {viz && panelFolder && (
         <VizOverlay
-          folderId={folder.id}
-          folderName={folder.name}
+          folderId={panelFolder.id}
+          folderName={panelFolder.name}
           kind={viz}
           onChangeKind={setViz}
           onClose={() => setViz(null)}

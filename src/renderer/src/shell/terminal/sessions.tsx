@@ -60,6 +60,14 @@ export interface SessionState {
    * 唯一的自動值來自建立時：該 folder 恰有一個 active change 時錨定它，否則留空。
    */
   anchoredChange?: string
+  /**
+   * 側欄來源：這個 session 的 side panel 呈現哪個 repo（folderId）。
+   *
+   * per-session（比照 `anchoredChange`），使用者透過來源指示器選定（`side-panel-source`）。
+   * `undefined` ＝ 未曾改動 —— 解析時退回自己的 `folderId`（見 `panelSourceOf`）。指向的 folder
+   * 可能已被移除，該退回由 `MainStage`（它手上有 folder 清單）處理。
+   */
+  panelFolderId?: string
 }
 
 export type CreateOutcome =
@@ -93,6 +101,14 @@ export interface SessionsApi {
   anchorChange(sessionId: string, slug: string | null): void
   /** 該 session 錨定的 change。 */
   anchoredChangeOf(sessionId: string | null): string | null
+  /** 該 session 的側欄來源 folderId。未曾設定時退回 session 自己的 `folderId`。 */
+  panelSourceOf(sessionId: string | null): string | null
+  /**
+   * 設定某個 session 的側欄來源。切換來源時**一併重置該 session 的 `anchoredChange`** ——
+   * change 的 slug 隸屬於某個 repo，換 repo 後舊 slug 在新 repo 不存在（`side-panel-source` D2）。
+   * `folderId` 等於 session 自身的 folder 時清為預設（不占欄位）。
+   */
+  setPanelSource(sessionId: string, folderId: string): void
   /**
    * 喚醒一個休眠的 session（＝為它 spawn pty）。
    *
@@ -246,6 +262,7 @@ export function SessionsProvider({ children }: { children: React.ReactNode }): R
               title: entry.title,
               customTitle: entry.customTitle,
               anchoredChange: entry.anchoredChange,
+              panelFolderId: entry.panelFolderId,
             }))
           // 重建的排在前面 —— 它們是上次的順序，而在它們之前建立的那些是「新的」。
           return [...restoredSessions, ...previous]
@@ -275,15 +292,27 @@ export function SessionsProvider({ children }: { children: React.ReactNode }): R
       sessions
         // 已結束的 session 不持久化：重開時不該把一個死掉的分頁重建回來（使用者裁決）。
         .filter((session) => session.status !== 'exited')
-        .map(({ id, folderId, spawnTarget, ordinal, title, customTitle, anchoredChange }) => ({
-          id,
-          folderId,
-          spawnTarget,
-          ordinal,
-          title,
-          customTitle,
-          anchoredChange,
-        })),
+        .map(
+          ({
+            id,
+            folderId,
+            spawnTarget,
+            ordinal,
+            title,
+            customTitle,
+            anchoredChange,
+            panelFolderId,
+          }) => ({
+            id,
+            folderId,
+            spawnTarget,
+            ordinal,
+            title,
+            customTitle,
+            anchoredChange,
+            panelFolderId,
+          }),
+        ),
     )
   }, [sessions, restored])
 
@@ -359,6 +388,19 @@ export function SessionsProvider({ children }: { children: React.ReactNode }): R
       previous.map((session) =>
         session.id === sessionId ? { ...session, anchoredChange: slug ?? undefined } : session,
       ),
+    )
+  }, [])
+
+  const setPanelSource = useCallback((sessionId: string, folderId: string) => {
+    setSessions((previous) =>
+      previous.map((session) => {
+        if (session.id !== sessionId) return session
+        // 來源等於自己的 folder ＝ 回到預設，存 undefined（不占欄位、不落盤）。
+        const next = folderId === session.folderId ? undefined : folderId
+        if (session.panelFolderId === next) return session
+        // 切換來源＝重置錨定：舊 repo 的 change slug 在新 repo 不存在（`side-panel-source` D2）。
+        return { ...session, panelFolderId: next, anchoredChange: undefined }
+      }),
     )
   }, [])
 
@@ -502,6 +544,12 @@ export function SessionsProvider({ children }: { children: React.ReactNode }): R
         sessionId === null
           ? null
           : (sessions.find((session) => session.id === sessionId)?.anchoredChange ?? null),
+      panelSourceOf: (sessionId) => {
+        if (sessionId === null) return null
+        const session = sessions.find((candidate) => candidate.id === sessionId)
+        return session ? (session.panelFolderId ?? session.folderId) : null
+      },
+      setPanelSource,
       focus,
       create,
       wake,
@@ -523,6 +571,7 @@ export function SessionsProvider({ children }: { children: React.ReactNode }): R
       setTitle,
       rename,
       anchorChange,
+      setPanelSource,
       reorder,
       attach,
       restoredScrollbackOf,

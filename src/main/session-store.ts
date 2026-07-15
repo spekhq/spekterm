@@ -54,6 +54,16 @@ export interface PersistedSession {
   title?: string
   anchoredChange?: string
   /**
+   * 側欄來源：這個 session 的 side panel 呈現哪個 repo（folderId）。
+   *
+   * per-session（比照 `anchoredChange`），**renderer 供應、主行程原樣保存** —— 它是使用者在
+   * renderer 上做的選擇（`side-panel-source`）。`undefined` ＝ 未曾改動，解析時退回 session
+   * 自己的 `folderId`。指向的 folder 於重建時可能已不在 workspace（使用者重開前移除了它）——
+   * 那道退回在 renderer 解析側欄來源時處理（重建 effect 跑時 folder 清單尚未必載入），主行程
+   * 只負責原樣保存。
+   */
+  panelFolderId?: string
+  /**
    * claude 的**對話**識別碼。與 `id`（spekterm 的 session identity）**刻意分離**：
    * 續接失敗時必須換一個全新的對話 id（沿用舊的會撞上 `Session ID … is already in use.`），
    * 若兩者是同一個欄位，換號就等於換掉 session 的身分（design D1）。
@@ -106,6 +116,7 @@ export function parseSessionEntry(entry: unknown): PersistedSession | null {
     customTitle: optionalString(raw.customTitle),
     title: optionalString(raw.title),
     anchoredChange: optionalString(raw.anchoredChange),
+    panelFolderId: optionalString(raw.panelFolderId),
     claudeSessionId,
     // 絕對路徑才有意義；相對路徑無從解讀，丟棄後退回 folder 根目錄。
     cwd: typeof raw.cwd === 'string' && path.isAbsolute(raw.cwd) ? raw.cwd : undefined,
