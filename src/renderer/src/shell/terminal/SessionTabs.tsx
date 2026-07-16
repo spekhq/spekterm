@@ -76,7 +76,7 @@ export function SessionTabs({
           aria-label={t('sessions.new')}
           className={NEW_BUTTON_CLASS}
         >
-          + session
+          +
         </button>
         {error && <span className="truncate text-xs text-danger">{error}</span>}
         {spawn.menu}
@@ -174,7 +174,7 @@ export function SessionTabs({
         aria-label={t('sessions.new')}
         className={`${NEW_BUTTON_CLASS} mx-2`}
       >
-        + session
+        +
       </button>
 
       {/* 剩餘空間由它吸收，好讓建立入口留在分頁旁邊。 */}

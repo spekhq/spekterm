@@ -1,6 +1,6 @@
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { app, BrowserWindow, session } from 'electron'
+import { app, BrowserWindow, Menu, session } from 'electron'
 import { applyContentSecurityPolicy } from './content-security-policy'
 import { DirtyStateStore } from './dirty-state'
 import { registerAppHandlers } from './ipc/app'
@@ -29,11 +29,15 @@ const trustModel = {
 } as const
 
 function createWindow(dirty: DirtyStateStore): BrowserWindow {
+  // 完全移除 menu —— 這個 app 不定義任何 menu 內容，一條空的 menu bar 只會擋住畫面。
+  // **不是 `autoHideMenuBar`**（那只是平時隱藏、按 `Alt` 仍浮出）：要的是按 `Alt` 什麼都不發生
+  //（design D2）。setApplicationMenu 是 app 層的，設一次即涵蓋整個應用程式。
+  Menu.setApplicationMenu(null)
+
   const window = new BrowserWindow({
     width: 1280,
     height: 800,
     show: false,
-    autoHideMenuBar: true,
     backgroundColor: '#0a0c0f',
     webPreferences: {
       preload: join(currentDir, '../preload/index.mjs'),

@@ -47,6 +47,7 @@ function editableTextHasFocus(): boolean {
  * | `Ctrl+Tab` / `Ctrl+Shift+Tab` | 當前 repo 內的下一個／上一個 session（**分頁位置序**，可循環） |
  * | `Ctrl+↓` / `Ctrl+↑` | rail 上的下一個／上一個 repo（可循環） |
  * | `Ctrl+T` | 開啟建立 session 的入口（spawn 選單） |
+ * | `Ctrl+Shift+W` | 關閉當前 focused 的 session |
  * | `Shift+↓` / `Shift+↑` | 把選中的 repo 在 rail 上往下／往上移動一格（**不循環**） |
  * | `Shift+→` / `Shift+←` | 把 focused session 在分頁列上往右／往左移動一格（**不循環**） |
  *
@@ -161,7 +162,11 @@ export function KeyboardNavigation({
       const isUp = event.key === 'ArrowUp'
       const isDown = event.key === 'ArrowDown'
       const isNewSession = event.key.toLowerCase() === 't'
-      if (!isTab && !isUp && !isDown && !isNewSession) return
+      // `Ctrl+Shift+W` 關閉當前 session。選 Shift 版而非 `Ctrl+W`：後者是 zsh／bash 的高頻刪字鍵，
+      // 且沒有 `Ctrl+T` 的「GNOME Terminal 早已拿走」豁免；`Ctrl+Shift+<字母>` 編碼不出來，pty 內
+      // 收不到，代價為零（design D1）。
+      const isCloseSession = event.shiftKey && event.key.toLowerCase() === 'w'
+      if (!isTab && !isUp && !isDown && !isNewSession && !isCloseSession) return
       if ((isUp || isDown || isNewSession) && event.shiftKey) return
 
       // **早於 xterm 與 Monaco 攔下它。** stopPropagation 讓事件到不了它們綁在 DOM 節點上的
@@ -181,6 +186,15 @@ export function KeyboardNavigation({
         // （`ui-localization`：以文案定位介面元素的程式碼自字典取得該文案）。
         const entry = document.querySelector<HTMLElement>(`[aria-label="${t('sessions.new')}"]`)
         entry?.click()
+        return
+      }
+
+      if (isCloseSession) {
+        // 關閉當前 focused 的 session。沒有選中的 repo 或該 repo 沒有 session 時為無操作。
+        // 走既有的 `close` 路徑（Phase 4 的生命週期，不留孤兒 pty）—— 與點分頁的 ✕ 無異。
+        if (!selectedId) return
+        const focusedId = sessions.focusedIdFor(selectedId)
+        if (focusedId) sessions.close(focusedId)
         return
       }
 

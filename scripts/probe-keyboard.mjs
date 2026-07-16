@@ -317,6 +317,7 @@ const KEYS = {
   ArrowLeft: { key: 'ArrowLeft', code: 'ArrowLeft', vk: 37 },
   ArrowRight: { key: 'ArrowRight', code: 'ArrowRight', vk: 39 },
   t: { key: 't', code: 'KeyT', vk: 84 },
+  w: { key: 'w', code: 'KeyW', vk: 87 },
   Enter: { key: 'Enter', code: 'Enter', vk: 13 },
   Escape: { key: 'Escape', code: 'Escape', vk: 27 },
 }
@@ -835,6 +836,107 @@ async function runMode(label, { port, rendererUrl }) {
       `${label}：編輯器持有焦點時，Ctrl+Tab 仍切換 session`,
       afterEditorKey !== beforeEditorKey && afterEditorKey !== null,
       `${beforeEditorKey} → ${afterEditorKey}`,
+    )
+
+    // ── Ctrl+Shift+W 關閉當前 session ──────────────────────────────────────
+    //
+    // 這個 app 沒有對應 Ctrl+T 的關閉快捷鍵，只能點分頁的 ✕。選 Shift 版而非 `Ctrl+W`：後者是
+    // zsh／bash 的高頻刪字鍵，且沒有 `Ctrl+T` 的「GNOME Terminal 早已拿走」豁免；`Ctrl+Shift+<字母>`
+    // 編碼不出來，pty 內收不到，代價為零（本 change 的 design D1）。
+    //
+    // **放在 runMode 最後** —— 前面的既有測試對 `shell 1` 等具名分頁有假設（序號不重用，關掉就
+    // 回不來，見 CLAUDE.md）。這段跑完 runMode 就 teardown，不會污染任何後續斷言。用相對數字
+    // （nBefore/nAfter），不寫死絕對值。
+    //
+    // 先切回 OpenSpec 身分並選 repo-a —— 前一段既有測試把身分切成了 Files、focus 在編輯器。
+    await pollUntil(app.client, SELECT_FOLDER('repo-a'), (value) => value === true, 6000)
+    await sleep(400)
+    const tabsBeforeClose = await app.client.evaluate(TABS)
+    check(
+      results,
+      `${label}：Ctrl+Shift+W 前置條件（repo-a 至少有 2 個 session）`,
+      tabsBeforeClose.length >= 2,
+      `tabs=${tabsBeforeClose.length}`,
+    )
+    const nBeforeClose = tabsBeforeClose.length
+
+    // (1) 關掉當前 focused
+    const focusedBeforeClose = await app.client.evaluate(FOCUSED_TAB)
+    await pressKey(app.client, 'w', ['ctrl', 'shift'])
+    const tabsAfterClose = await pollUntil(
+      app.client,
+      TABS,
+      (list) => list.length === nBeforeClose - 1,
+      6000,
+    )
+    check(
+      results,
+      `${label}：Ctrl+Shift+W 關閉當前 focused 的 session`,
+      tabsAfterClose.length === nBeforeClose - 1 &&
+        !tabsAfterClose.some((t) => t.label === focusedBeforeClose),
+      `之前 focused=${focusedBeforeClose}、之後 tabs=${JSON.stringify(tabsAfterClose.map((t) => t.label))}`,
+    )
+
+    // (2) 終端持有焦點時仍生效，且按鍵不進 pty（capture 攔截的核心保證）
+    //     對照組：純 w 進 pty 會改變終端內容 —— 這條的鑑別力承擔了「Ctrl+Shift+W 沒進 pty」
+    //     的證明（若它進 pty，終端會多一個 w）。
+    const termRect = await pollUntil(app.client, TERMINAL_RECT, (v) => v !== null, 6000)
+    await realClick(app.client, termRect)
+    await sleep(400)
+    const baseWText = String(await app.client.evaluate(TERMINAL_TEXT))
+    await pressKey(app.client, 'w')
+    const echoedW = await pollUntil(
+      app.client,
+      TERMINAL_TEXT,
+      (v) => String(v) !== baseWText,
+      4000,
+    )
+    check(
+      results,
+      `${label}：對照組 —— 未攔截的 w 確實抵達 pty`,
+      String(echoedW) !== baseWText,
+      '（沒有這條，下一條的意義降為零）',
+    )
+
+    // 攔截組：終端仍持有焦點，按 Ctrl+Shift+W —— 應該關掉當前 session
+    const focusedInTerm = await app.client.evaluate(FOCUSED_TAB)
+    const nBeforeTermW = (await app.client.evaluate(TABS)).length
+    await pressKey(app.client, 'w', ['ctrl', 'shift'])
+    const tabsAfterTermW = await pollUntil(
+      app.client,
+      TABS,
+      (list) => list.length === nBeforeTermW - 1,
+      6000,
+    )
+    check(
+      results,
+      `${label}：終端持有焦點時 Ctrl+Shift+W 仍關閉 session`,
+      tabsAfterTermW.length === nBeforeTermW - 1 &&
+        !tabsAfterTermW.some((t) => t.label === focusedInTerm),
+      `focused=${focusedInTerm}、剩=${JSON.stringify(tabsAfterTermW.map((t) => t.label))}`,
+    )
+
+    // (3) 對話框開啟時不生效 —— 沿用 `[role="dialog"]` 判定
+    const nBeforeCreate = (await app.client.evaluate(TABS)).length
+    await createSession(app.client)
+    await pollUntil(app.client, TABS, (list) => list.length === nBeforeCreate + 1, 8000)
+    const tab0RectForDialog = center(await app.client.evaluate(TAB_RECT(0)))
+    await realMouse(app.client, tab0RectForDialog.x, tab0RectForDialog.y, 'right')
+    await pollUntil(app.client, `Boolean(document.querySelector('[role="menu"]'))`, (v) => v === true, 4000)
+    await realClick(app.client, await app.client.evaluate(MENU_ITEM_RECT(copy('sessions.rename'))))
+    await pollUntil(app.client, DIALOG_OPEN, (value) => value === true, 4000)
+
+    const tabsBeforeCtrlShiftWinDialog = await app.client.evaluate(TABS)
+    await pressKey(app.client, 'w', ['ctrl', 'shift'])
+    await sleep(400)
+    const tabsAfterCtrlShiftWinDialog = await app.client.evaluate(TABS)
+    const dialogStillOpenForW = await app.client.evaluate(DIALOG_OPEN)
+    check(
+      results,
+      `${label}：對話框開啟時 Ctrl+Shift+W 不生效`,
+      tabsAfterCtrlShiftWinDialog.length === tabsBeforeCtrlShiftWinDialog.length &&
+        dialogStillOpenForW === true,
+      `前=${tabsBeforeCtrlShiftWinDialog.length} 後=${tabsAfterCtrlShiftWinDialog.length} 對話框=${dialogStillOpenForW}`,
     )
   } finally {
     await app.destroy()

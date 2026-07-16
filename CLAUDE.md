@@ -100,6 +100,15 @@ repo、`Shift+←→` 移動 focused session，**端點不循環**），以及**
 項目時，兩種語意的結果完全相同**。而我寫探針時**撞見了它、卻把準心移開去閃避它**。詳見下文「拖曳的
 落點」與「游標」兩節。`npm test` 238/238，六支 probe 全綠（16 / 56 / 102 / 168 / 104 / 146）。
 
+`shell-affordance-tweaks`（不屬於任何 Phase）是**第五次 dogfooding 的三個殼層小毛病** —— 按 `Alt`
+會浮出一條**空的原生 menu bar**（app 從未定義任何 menu 內容，只擋畫面）；建立 session 的按鈕寫著
+`+ session`，一顆 `+` 已足夠表意；有 `Ctrl+T` 開建立入口，卻沒有對應的關閉快捷鍵，關 session 只能
+點分頁的 ✕。三條各自獨立、都便宜，一起收：`Menu.setApplicationMenu(null)`（**不是**
+`autoHideMenuBar` —— 那只是隱藏、按 `Alt` 仍浮出）、`+ session` → `+`（**`aria-label` 不動** ——
+它是 6 支 probe 與 `Ctrl+T` 的選擇器）、`Ctrl+Shift+W` 關當前 session（**代價為零**：`Ctrl+Shift+<字母>`
+在終端協定裡編碼不出來，pty 內收不到；與 GNOME Terminal 的關分頁一致）。`probe:keyboard` 114/114
+（+10 條，兩模式各 5）、`probe:terminal` 168/168（`+ session` → `+` 不打到既有選擇器）。
+
 尚未開始：打包（Phase 6）、handoff（Phase 7+）。**session 常駐**（讓 pty 活過 app 的生命）已排入
 路線圖但**刻意不做** —— 見 `docs/PRD.md` §11 的「session 常駐」，那裡記著 tmux 與自寫 daemon 的取捨。
 
@@ -402,6 +411,13 @@ org 名**不是**凍結身分的一部分 —— repo 改名與 transfer 皆自�
   連帶（獨立稽核抓到）：修掉一個**既有**的 off-by-one —— **拖曳往下放時，東西落在指示線的下一格**
   （`session-rename-and-reorder` 起就在，卻通過每一輪驗收 —— **分頁列只用兩個分頁測，而兩個項目時
   兩種語意結果相同**）。詳見上文「拖曳的落點」「游標」與「四顆鍵，四種代價」三節。
+- **殼層小毛病** — `shell-affordance-tweaks`（**不屬於任何 Phase**）：第五次 dogfooding 的三條殼層
+  微調 —— **移除原生 menu bar**（`Menu.setApplicationMenu(null)`，`workspace-app-shell` 新增
+  requirement；**不是** `autoHideMenuBar` 隱藏，那按 `Alt` 仍浮出）、**建立 session 的按鈕文字
+  `+ session` → `+`**（純呈現，`aria-label` 保持不動 —— 它是 6 支 probe 與 `Ctrl+T` 的選擇器）、
+  **`Ctrl+Shift+W` 關當前 session**（`keyboard-navigation` 新增 requirement，攔截於 window capture
+  階段，對話框開啟時不生效；代價為零，見下文「四顆鍵，四種代價」補上的第五顆）。詳見下文
+  「shell-affordance-tweaks 的實測與踩雷」。
 - Phase 6 打包與發佈，Phase 7+ 建立護城河（handoff）。**session 常駐**已排入路線圖但刻意不做
   （PRD §11）。
 
@@ -576,6 +592,7 @@ provider 驗證：它為 `language: '*'` 註冊，呼叫 worker 端的 `$compute
 | `Ctrl+Tab` / `Ctrl+Shift+Tab` | 當前 repo 內的下／上一個 session（**分頁位置序**，可循環） |
 | `Ctrl+↓` / `Ctrl+↑` | rail 上的下／上一個 repo（可循環） |
 | `Ctrl+T` | 開啟建立 session 的入口（spawn 選單，可全鍵盤操作） |
+| `Ctrl+Shift+W` | 關閉當前 focused 的 session（沒有選中的 repo 或該 repo 無 session 時無操作） |
 | `Shift+↓` / `Shift+↑` | 把**選中的 repo** 在 rail 上往下／往上移動一格（**不循環**） |
 | `Shift+→` / `Shift+←` | 把 **focused session** 在分頁列上往右／往左移動一格（**不循環**） |
 | `Ctrl+Shift+C` / `Ctrl+Shift+V` | 終端的複製貼上（macOS 用 `Cmd`） |
@@ -641,6 +658,12 @@ Timeline 的全視窗 overlay**（`probe:openspec`）—— 只驗一種就宣�
 - **`Ctrl+Alt+↑/↓` 不能用** —— Linux 上被 GNOME 拿去切工作區，按鍵到不了我們。（被 WM 拿走的是
   `Ctrl+**Alt**+方向鍵`，不是 `Ctrl+方向鍵`。）
 - **`Ctrl+C` 絕不挪用** —— 它必須維持中斷訊號。
+- **`Ctrl+Shift+W`（關 session，`shell-affordance-tweaks` 起）是唯一「代價確定為零」的一顆。**
+  `Ctrl+Shift+<字母>` 在終端協定裡編碼不出來，pty 內沒有任何程式收得到它 —— 這正是複製貼上用
+  `Ctrl+Shift+C/V` 的理由。它就是 GNOME Terminal 關分頁的鍵，與使用者的肌肉記憶一致。**選 Shift 版
+  而非 `Ctrl+W`**：後者在 zsh 是 `backward-kill-word`、bash 是 `unix-word-rubout`（終端裡的高頻
+  刪字鍵，實測），且它沒有 `Ctrl+T` 的「GNOME Terminal 早已把它拿去開新分頁」豁免。開／關的不對稱
+  （`Ctrl+T` 開、`Ctrl+Shift+W` 關）反映的正是真實的代價差 —— `Ctrl+T` 是白撿的，`Ctrl+W` 不是。
 
 ### 排序快捷鍵有一條導航快捷鍵**沒有**的例外：可編輯文字讓路
 
@@ -1144,6 +1167,63 @@ npm 會先印幾行 `>` 開頭的腳本回顯與**空行**；`npm run typecheck 
 只顯示那幾個空行，**真正的錯誤被擠出視窗**。我因此一度以為「typecheck 抓不到未定義的函式」而去懷疑
 `tsconfig` —— 對照組證明它抓得到（`TS2304`），是我自己把眼睛遮住了。**要看 exit code，不要看被截斷
 的前幾行。**
+
+## shell-affordance-tweaks 的實測與踩雷
+
+三條殼層小毛病（`Alt` 空 menu、`+ session` → `+`、`Ctrl+Shift+W` 關 session）。前兩條實作各一行，
+真正的實測踩雷都在**第三條的 probe 驗收**上 —— 該怎麼在既有 probe 裡塞新斷言而不害到自己。
+
+### `autoHideMenuBar` 只是隱藏，不是移除 —— 兩者按 `Alt` 的行為天差地遠
+
+原本 `BrowserWindow` 設 `autoHideMenuBar: true`，我起初以為它就是「不呈現 menu」—— 錯了，那只是
+「平時隱藏、按 `Alt` 浮出」。使用者要的是**按 `Alt` 什麼都不發生**，所以必須真正移除 menu：
+`Menu.setApplicationMenu(null)`（app 層，設一次涵蓋整個應用程式）。連帶要把 `autoHideMenuBar` 從
+`BrowserWindow` 選項裡拿掉 —— 沒有 menu 之後，那個選項是死代碼。
+
+**macOS 未實測**（`shell-affordance-tweaks` 的 design D2 已列為 Phase 6 打包前確認項）：macOS 的
+應用程式 menu 是系統層的（不在視窗內），`setApplicationMenu(null)` 的行為與 Linux／Windows 不同。
+
+### 插入新 probe 斷言：位置與相對數字，兩件事都會靜默毀掉既有測試
+
+`probe:keyboard` 已經是一串按時序流動的狀態機（`fixture` 從 3 個 session 開始，中間段落建 session、
+關 session、切 folder），每段測試對狀態有明確的假設。加新斷言時**兩件事都會靜默毀掉既有測試**，
+而且症狀看起來像「新斷言壞掉」：
+
+- **寫死絕對數字必死。** 我第一版寫「repo-a 有 3 個 session」當前置條件 —— 實測是 4 個。原因：中間
+  段落有一條「Enter 觸發選項，真的建立了一個 session」的驗收，那條為了驗 Enter 而**多建了一個**。
+  這種「順手建的 session」以後還會有，寫死數字是把測試綁在**每個中間段落的內部細節**上。改為
+  相對數字 —— `nBefore = (await evaluate(TABS)).length` 存下來，斷言 `length === nBefore - 1`
+  —— 前面段落淨變化多少都自我修復。
+- **插入段的位置也是承重的。** 我第二版把段落插在 runMode 中間，斷言全綠了但**下一段既有測試變紅**
+  —— 那段依賴 `shell 1` 存在（`nextOrdinal` 單調遞增，關掉不重用；shell 1 一被關就再也回不來）。
+  正解：**插在 runMode 最後、finally 之前**。前面所有既有測試跑完後才動 session 狀態，不會污染任何
+  後續斷言。
+
+**兩個規則加起來的教訓：** 新加的 probe 斷言，內部要用相對數字，外部要放在最後。這與 CLAUDE.md 已有
+的「一支永遠紅的探針等於沒有探針」是同源的紀律 —— 加斷言時要問「這條斷言假設了什麼、那個假設會不會
+被誰改動」。
+
+### 「按鍵不進 pty」由對照組的鑑別力承擔，不由「文字有沒有變」直接證明
+
+`Ctrl+Shift+W` 的核心保證是「終端持有焦點時它關 session、且**不流進 pty**」。直覺會想：按下去、
+斷言終端文字沒變。**但那被關掉的 session，terminal 元素直接不存在了** —— `TERMINAL_TEXT` 讀不到，
+斷言恆為 undefined，證明不了任何事。
+
+解法是**對照組**：先按純 `w`（不帶修飾鍵）—— 若攔截失敗、Ctrl+Shift+W 也進 pty，那顆按下去終端會多
+一個 `w`。所以：
+
+- 對照組驗「純 `w` 確實抵達 pty」（終端文字變）
+- 攔截組驗「Ctrl+Shift+W 關掉 session」（tab 數 nBefore-1）
+
+兩條合起來承擔「Ctrl+Shift+W 沒進 pty」的證明 —— **若它進了 pty，對照組的鑑別力保證我們看得見**。
+這是既有 Ctrl+T 驗收（`beforeCtrlT` / `afterCtrlT` 對比終端文字）的變體：Ctrl+T 不改變 session 數，
+可以直接比對；Ctrl+Shift+W 改變 session 數（terminal 元素被切走），只能靠對照組間接證明。
+
+### `aria-label` 是選擇器（既有事實再驗一次）
+
+改「+ session」→「+」時直覺會擔心 probe 破 —— 實測 168/168 全綠。因為既有選擇器全都靠
+`aria-label`（`t('sessions.new')`）定位，可見文字改動不影響。這條老紀律（`ui-copy-i18n` 的
+「aria-label 同時是選擇器」）在這裡以另一個方向被驗證：**你可以自由改可見文字，只要 aria-label 不動**。
 
 ## UI 文案與 i18n（`ui-copy-i18n` 起）
 
