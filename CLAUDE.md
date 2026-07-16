@@ -100,6 +100,22 @@ repo、`Shift+←→` 移動 focused session，**端點不循環**），以及**
 項目時，兩種語意的結果完全相同**。而我寫探針時**撞見了它、卻把準心移開去閃避它**。詳見下文「拖曳的
 落點」與「游標」兩節。`npm test` 238/238，六支 probe 全綠（16 / 56 / 102 / 168 / 104 / 146）。
 
+`side-panel-repo-anchor`（不屬於任何 Phase）是**第五次 dogfooding 的三大痛之首**——「我在 repo A
+的 session 裡叫 claude 去改 repo B，但側欄還停在 repo A、看不到 repo B 的 openspec 與 files」。
+根因是 `MainStage` 的 `folder` prop 一路灌到底，同時決定「駕駛誰」（terminal）與「讀誰」（側欄）——
+在單 repo 世界這永遠是同一個 folder（**巧合，非設計**），agent 一旦跨 repo 就破了。它把側欄的來源
+與 rail 的 focus **解耦**：側欄的來源是 **per-session** 的屬性（比照 `anchoredChange` 的自然擴展 ——
+粒度從「一個 change」放大為「一個 (repo, change)」，共用同一條「側欄跟隨 focused session」的線）、
+隨 session 一併落盤（`sessions.json` 加 `panelFolderId?`）、可指向 workspace 中任一 folder，
+terminal 那半完全不受影響；重開 app 上次側欄看哪個 repo原樣還原（folder 若已被移除則退回自身
+folder）。切換來源時**重置 `anchoredChange`**（change 的 slug 隸屬於某個 repo，換 repo 後舊 slug
+不存在）。**proposal 一度設想的「跟隨/釘住」toggle 被取消**：session 掛在哪個 folder 不隨 pty 的
+cwd 浮動，「跟隨」退化為「釘在自身 folder」，一個 toggle 無事可做（design D1）—— 側欄來源指向非
+自身時提供「回到自身 repo」一鍵捷徑取代它。**「側欄選一個 repo 而非聚合多個」的決定性理由**：Files
+的檔案樹是單一 repo 的階層，本就一次只能呈現一個來源；若 OpenSpec 聚合而 Files 只能選一個，兩個
+身分的來源語意會分裂。`probe:openspec` 182/182（+18 條：15 條跨 repo + 3 條 reload 還原）、
+`npm test` 240/240。
+
 `shell-affordance-tweaks`（不屬於任何 Phase）是**第五次 dogfooding 的三個殼層小毛病** —— 按 `Alt`
 會浮出一條**空的原生 menu bar**（app 從未定義任何 menu 內容，只擋畫面）；建立 session 的按鈕寫著
 `+ session`，一顆 `+` 已足夠表意；有 `Ctrl+T` 開建立入口，卻沒有對應的關閉快捷鍵，關 session 只能
@@ -411,6 +427,14 @@ org 名**不是**凍結身分的一部分 —— repo 改名與 transfer 皆自�
   連帶（獨立稽核抓到）：修掉一個**既有**的 off-by-one —— **拖曳往下放時，東西落在指示線的下一格**
   （`session-rename-and-reorder` 起就在，卻通過每一輪驗收 —— **分頁列只用兩個分頁測，而兩個項目時
   兩種語意結果相同**）。詳見上文「拖曳的落點」「游標」與「四顆鍵，四種代價」三節。
+- **側欄來源解耦 rail focus** — `side-panel-repo-anchor`（**不屬於任何 Phase**）：第五次 dogfooding
+  的主痛。`SessionState` / `PersistedSession` 新增 `panelFolderId?`（renderer 供應、主行程原樣保存，
+  比照 `anchoredChange`）；`openspec-panel` / `file-explorer` / `session-persistence` 三個 delta：
+  兩條「側欄跟隨 focused session」與「隨檔案變更更新」改以**側欄來源** repo 為準；Files「呈現當前
+  folder」的當前 folder 定義為側欄來源；持久化事實清單納入側欄來源，重建時指向的 folder 若已被移除
+  則退回自身 folder。新 capability `side-panel-source`：來源指示器（`ContextMenu` 下拉可選任一
+  folder，鍵盤全操作）、來源非自身時的「回到自身 repo」一鍵捷徑、OpenSpec 與 Files 兩身分共用同一
+  來源、切換來源時重置錨定。詳見下文「side-panel-repo-anchor 的實測與踩雷」。
 - **殼層小毛病** — `shell-affordance-tweaks`（**不屬於任何 Phase**）：第五次 dogfooding 的三條殼層
   微調 —— **移除原生 menu bar**（`Menu.setApplicationMenu(null)`，`workspace-app-shell` 新增
   requirement；**不是** `autoHideMenuBar` 隱藏，那按 `Alt` 仍浮出）、**建立 session 的按鈕文字
@@ -1167,6 +1191,77 @@ npm 會先印幾行 `>` 開頭的腳本回顯與**空行**；`npm run typecheck 
 只顯示那幾個空行，**真正的錯誤被擠出視窗**。我因此一度以為「typecheck 抓不到未定義的函式」而去懷疑
 `tsconfig` —— 對照組證明它抓得到（`TS2304`），是我自己把眼睛遮住了。**要看 exit code，不要看被截斷
 的前幾行。**
+
+## side-panel-repo-anchor 的實測與踩雷
+
+跨 repo 側欄。實作本身是「拆一個 prop」，真正承重的思考在**要不要「跟隨/釘住」toggle**（決定不要，
+見 D1）與**確認式對話框的教訓再次應用**（換個議題但同樣的答案：可預測答案的高頻問題，不該問）。
+
+### 「一堵拿不到 pid 的牆」逼出正確的框架
+
+痛點看起來是「側欄跟不上 agent」—— 直覺會想「側欄自動跟隨 agent 實際在動的 repo」。**這條路技術上
+是死的**：Linux 的 inotify **不回報 pid**（事件裡沒這欄位），fanotify 需 `CAP_SYS_ADMIN`（root）。
+一個桌面 app 不可能要求那個。於是「哪個 session 改了哪個 repo」在核心層面就拿不到。
+
+被這堵牆逼一下之後，回頭看使用者的原話「無法在這個 repo **看到** repo B 的 openspec 與 files」——
+他要的其實是「一邊盯著 repo A 的 agent、一邊**讀** repo B 的 spec」。這個框架不需要偵測、不需要
+歸因：**把側欄的來源與 rail focus 解耦就好** —— 側欄自己有一個來源選擇器，terminal 那半照常。
+
+**這條「拿不到 pid」寫進 change 的 design 是承重的**：它擋住未來想「加點自動化」的衝動 —— 那條路
+沒有可靠的入口，除非願意讀 claude 的 transcript（`~/.claude/projects/*.jsonl` 裡確實有每一次 Edit
+的絕對路徑），而那是把設計綁在 claude 的內部檔案佈局上，`session-restore` 已留下教訓（別做）。
+
+### 「跟隨/釘住」toggle 是可預測答案的高頻問題 —— 不要問
+
+proposal 一度設計了「跟隨（預設）/ 釘住」toggle。**它其實無事可做**：那顆 toggle 的「跟隨」本意是
+「側欄 = 我正在駕駛的 repo」，但在這個 app 裡「正在駕駛的 repo」＝ `session.folderId`，而它**不隨
+pty 的 cwd 浮動**（session 掛在哪個 repo 是固定的，見「一堵拿不到 pid 的牆」）。於是「跟隨」退化
+為「釘在自身 folder」，與「釘住」在行為上完全一樣。
+
+**這與 `session-title-authority` 移除「pty 想改名要問過」對話框是同源的教訓**：都是「一個可預測
+答案的高頻問題不該被問」。那個對話框在 agent 持續改標題的情境下無限重跳，且答案永遠是「保留我
+命名的」；這顆 toggle 在正常使用下永遠停在同一態，且答案永遠是「跟自身走」。**優先序的裁決**
+（`customTitle` > `title`、`panelSource` 隨 focused session 走）本身就是那個問題的答案，不需要在
+UI 上再問第二次。
+
+真正有意義的差別只剩「切走再切回，記不記得指向 repoB」—— 而 per-session 的裁決已經決定「記得」。
+於是 toggle 被取消，改用**來源指示器 + 「回到自身 repo」一鍵捷徑**：把 toggle 的唯一有用部分
+（「回到預設」）留下、不假裝有動態跟隨。
+
+### 切換來源時 `anchoredChange` **必須重置** —— slug 是綁在 repo 上的
+
+`change` 的 slug 隸屬於某個 repo（`openspec/changes/<slug>`）。切側欄來源時若沿用舊 slug，「本
+change」視圖會對著一個在新 repo 不存在的 change 顯示空狀態，**看起來像壞掉**。所以 `setPanelSource`
+一併把 `anchoredChange` 重置為 undefined，讓既有的衍生預設接手（新 repo 恰有一個 active change
+就是它，否則呈現空狀態讓使用者自己挑）。「一個 (repo, change)」在資料上是「`panelFolderId` +
+隸屬於它的 `anchoredChange`」，不是一個獨立的複合鍵 —— 切 repo，change 歸零重解析。
+
+### `PanelSourceBar` 的 `session's` 單引號炸掉 probe（`aria-label` 是選擇器再一次咬人）
+
+第一版文案寫 `"Back to this session's repo"`。**probe 的選擇器是 `[aria-label="…session's repo"]`**
+—— 那個單引號提前關閉了 probe 的字串字面值，整個 evaluate throw、build 模式 exit 1、沒有紅的斷言，
+只有一個 Uncaught error。改為 `"Back to the session repo"` 就過了。這正是「aria-label 是選擇器」
+再演一次 —— 而這次的教訓比先前更緊：**寫 aria-label 文案時也要避開 shell 引號會咬到的字元**
+（單引號、雙引號、反引號），因為 probe 選擇器是用字串拼的。
+
+順帶：那次 exit 是我 pipe 到 `tail -50` 讀 stdout 尾巴，`tail` 自己的 exit code 覆蓋了 probe 的。
+**要看真的 exit code，別讓 pipe 蓋掉它**（與 CLAUDE.md 已記的「用 `head -N` 過濾 typecheck」同源）。
+
+### CSP 「build 模式拿到 dev 政策」的紅是**環境串擾**、不是產品 bug
+
+`probe:files` 曾有一條「CSP 的 script-src 僅 self」在 build 模式紅、detail 是 `'self' 'unsafe-inline'`
+（dev 政策）。CSP 切換依 `ELECTRON_RENDERER_URL` 是否存在（見 `renderer-security-hardening` 的
+「CSP 切換依據」），而我當時剛跑過 `npm run dev` —— 那條命令把 `ELECTRON_RENDERER_URL`、
+`NODE_ENV_ELECTRON_VITE` 等變數**繼承到我 shell 的 env 裡**，之後起的 electron 一律讀到它。
+另有 3 個 files-profile 電子殭屍佔著 debugging port（前一次 probe 失敗沒清乾淨）。
+
+**修法**：清 env（`env -u ELECTRON_RENDERER_URL -u NODE_ENV_ELECTRON_VITE -u ELECTRON_MAJOR_VER
+-u ELECTRON_CLI_ARGS -u ELECTRON_EXEC_PATH -u npm_lifecycle_script npm run probe:files`）+ 精準
+`kill <pid>` 殺殭屍（不用 `pkill -f` 的 pattern —— 那會匹配到執行它自己的那條 shell 命令，把整個
+清理 shell 也一起殺掉，看起來像「清完就沒事」，其實一個殭屍都沒殺到）。
+
+**這條要寫進 CLAUDE.md 而非 change design**，因為它是**跨 change 的紀律**：以後任何 dogfood 中途要
+跑 probe，都要**先確認 dev 是否還在跑，並用 env -u 清 env**。
 
 ## shell-affordance-tweaks 的實測與踩雷
 

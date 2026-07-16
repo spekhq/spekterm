@@ -40,4 +40,4 @@
 
 ## 7. 文件
 
-- [ ] 7.1 更新 `CLAUDE.md`：新增 side-panel-source 的段落與實測踩雷，快捷鍵/probe 說明若有影響一併更新
+- [x] 7.1 更新 `CLAUDE.md`：開頭段介紹 side-panel-repo-anchor 與 probe 統計、路線圖加 change 條目、新增獨立節「side-panel-repo-anchor 的實測與踩雷」（拿不到 pid 的牆逼出正確框架、跟隨/釘住 toggle 與 session-title-authority 同源的教訓、切來源時 anchoredChange 必須重置、單引號炸 probe、CSP 環境串擾）
