@@ -2,6 +2,7 @@ import { Group, Panel, Separator } from 'react-resizable-panels'
 import { ActivityBar } from './ActivityBar'
 import { KeyboardNavigation } from './KeyboardNavigation'
 import { MainStage } from './MainStage'
+import { PreferencesProvider } from './PreferencesProvider'
 import { WorkspaceRail } from './WorkspaceRail'
 import { DirtyBuffersProvider } from './files/dirty-buffers'
 import { OpenSpecProvider } from './openspec/data'
@@ -22,53 +23,55 @@ export function AppShell(): React.JSX.Element {
   // OpenSpecProvider 必須在 MainStage 之上：MainStage 要知道當前 folder 的 active change
   // 才能決定新 session 的錨定（`openspec-side-panel` 的 design D3）。
   return (
-    <DirtyBuffersProvider folders={folders}>
-      <SessionsProvider>
-        <OpenSpecProvider>
-          {/*
-            必須在 `SessionsProvider` 之內（它要 `useSessions()`），而 `AppShell` 本身正是渲染
-            那個 Provider 的元件 —— 掛在這一層才拿得到 context。它不渲染任何東西。
-          */}
-          <KeyboardNavigation
-            folders={folders}
-            selectedId={selectedId}
-            onSelectFolder={select}
-            onReorderFolder={(id, toIndex) => void reorderFolders(id, toIndex)}
-          />
-
-          <Group orientation="horizontal" className="h-full w-full">
-            <Panel defaultSize="56px" minSize="48px" maxSize="120px">
-              <ActivityBar />
-            </Panel>
-
-            <Separator className={SEPARATOR_CLASS} />
-
+    <PreferencesProvider>
+      <DirtyBuffersProvider folders={folders}>
+        <SessionsProvider>
+          <OpenSpecProvider>
             {/*
-              `min-w-0` 不是裝飾：flex item 的 `min-width` 預設是 `auto`，於是 Panel 會被它的
-              **內容**撐住，縮不到 `minSize` —— 宣告的最小寬度就兌現不了（spec 要求「拖動 SHALL
-              被夾制於該下限」）。字級小的時候 rail 的 min-content 恰好小於 180px，這個缺陷因此
-              一直看不出來；`--text-base` 一調到 17px，rail 就再也縮不到 180px（實測卡在 240px，
-              是探針抓到的）。**最小寬度是版面契約，不該隨字級浮動** —— 所以修 Panel，不是調高 180。
+              必須在 `SessionsProvider` 之內（它要 `useSessions()`），而 `AppShell` 本身正是渲染
+              那個 Provider 的元件 —— 掛在這一層才拿得到 context。它不渲染任何東西。
             */}
-            <Panel defaultSize="260px" minSize="180px" className="min-w-0">
-              <WorkspaceRail
-                folders={folders}
-                selectedId={selectedId}
-                onSelect={select}
-                onAdd={() => void addFolder()}
-                onRemove={(id) => void removeFolder(id)}
-                onReorder={(id, toIndex) => void reorderFolders(id, toIndex)}
-              />
-            </Panel>
+            <KeyboardNavigation
+              folders={folders}
+              selectedId={selectedId}
+              onSelectFolder={select}
+              onReorderFolder={(id, toIndex) => void reorderFolders(id, toIndex)}
+            />
 
-            <Separator className={SEPARATOR_CLASS} />
+            <Group orientation="horizontal" className="h-full w-full">
+              <Panel defaultSize="56px" minSize="48px" maxSize="120px">
+                <ActivityBar />
+              </Panel>
 
-            <Panel minSize="360px">
-              <MainStage folder={selected} folders={folders} />
-            </Panel>
-          </Group>
-        </OpenSpecProvider>
-      </SessionsProvider>
-    </DirtyBuffersProvider>
+              <Separator className={SEPARATOR_CLASS} />
+
+              {/*
+                `min-w-0` 不是裝飾：flex item 的 `min-width` 預設是 `auto`，於是 Panel 會被它的
+                **內容**撐住，縮不到 `minSize` —— 宣告的最小寬度就兌現不了（spec 要求「拖動 SHALL
+                被夾制於該下限」）。字級小的時候 rail 的 min-content 恰好小於 180px，這個缺陷因此
+                一直看不出來；`--text-base` 一調到 17px，rail 就再也縮不到 180px（實測卡在 240px，
+                是探針抓到的）。**最小寬度是版面契約，不該隨字級浮動** —— 所以修 Panel，不是調高 180。
+              */}
+              <Panel defaultSize="260px" minSize="180px" className="min-w-0">
+                <WorkspaceRail
+                  folders={folders}
+                  selectedId={selectedId}
+                  onSelect={select}
+                  onAdd={() => void addFolder()}
+                  onRemove={(id) => void removeFolder(id)}
+                  onReorder={(id, toIndex) => void reorderFolders(id, toIndex)}
+                />
+              </Panel>
+
+              <Separator className={SEPARATOR_CLASS} />
+
+              <Panel minSize="360px">
+                <MainStage folder={selected} folders={folders} />
+              </Panel>
+            </Group>
+          </OpenSpecProvider>
+        </SessionsProvider>
+      </DirtyBuffersProvider>
+    </PreferencesProvider>
   )
 }

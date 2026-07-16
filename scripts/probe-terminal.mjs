@@ -24,7 +24,7 @@ import {
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
-import { check, connect, dragMouse, pollUntil, waitForPageTarget } from './lib/cdp.mjs'
+import { check, connect, dragMouse, pollUntil, pressKey, waitForPageTarget } from './lib/cdp.mjs'
 import { copy, prefixOf } from './lib/copy.mjs'
 
 const BUILD_PORT = 9226
@@ -615,6 +615,62 @@ async function typeLine(client, text) {
   await pressEnter(client)
 }
 
+/**
+ * 經**設定對話框**設定終端字型大小 —— 走的是使用者真正的路徑。
+ *
+ * **不可改用 `window.workspace.settings.setTerminalFont(...)` 直接打 IPC**：那會繞過
+ * `PreferencesProvider`，store 更新了但 renderer 的狀態沒有 —— 字型 effect 不會重跑，終端不會變
+ * （實測踩過，一度誤判為產品 bug）。偏好沒有推送通道，因為產品的唯一寫入者就是這個對話框。
+ *
+ * `size` 傳空字串＝清除偏好（回到字級尺度的預設）。以 Enter 送出（對話框的輸入框綁了它）。
+ */
+async function setFontSizeViaSettings(client, size) {
+  const rect = await client.evaluate(`(() => {
+    const b = document.querySelector('nav[aria-label="${copy('activityBar.label')}"] button[aria-label="${copy('activityBar.settings')}"]')
+    if (!b) return null
+    const r = b.getBoundingClientRect()
+    return { x: r.x, y: r.y, width: r.width, height: r.height }
+  })()`)
+  await realClick(client, rect)
+  await pollUntil(
+    client,
+    `Boolean(document.querySelector('[role="dialog"][aria-label="${copy('settings.title')}"]'))`,
+    (value) => value === true,
+    4000,
+  )
+
+  // React 受控元件：直接設 `value` 不會觸發 onChange —— 要走原生 setter 再派發 input 事件。
+  await client.evaluate(`(() => {
+    const i = document.querySelector('[role="dialog"] input[aria-label="${copy('settings.fontSize')}"]')
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set
+    setter.call(i, ${JSON.stringify(String(size))})
+    i.dispatchEvent(new Event('input', { bubbles: true }))
+    i.focus()
+  })()`)
+  await pressEnter(client)
+  await pollUntil(client, `document.querySelector('[role="dialog"]') === null`, (v) => v === true, 4000)
+}
+
+/**
+ * 送一個真的 `Ctrl+C` 給終端 —— 用來清掉輸入行上的殘留。
+ *
+ * mouse reporting 開啟期間，一次點擊會被 xterm 轉成滑鼠序列送進 pty，那些位元組會落在 shell 的
+ * 輸入行上變成垃圾；不清掉的話，下一個 `typeLine` 會被接在它後面而執行失敗。
+ *
+ * `rawKeyDown` + `text: '\\x03'`：Ctrl+C 要真的抵達 pty（產品刻意不攔它 —— 它必須維持中斷訊號）。
+ */
+async function pressCtrlC(client) {
+  const key = {
+    key: 'c',
+    code: 'KeyC',
+    windowsVirtualKeyCode: 67,
+    nativeVirtualKeyCode: 67,
+    modifiers: 2, // Ctrl
+  }
+  await client.send('Input.dispatchKeyEvent', { type: 'keyDown', ...key, text: '\x03' })
+  await client.send('Input.dispatchKeyEvent', { type: 'keyUp', ...key })
+}
+
 /** Enter 必須是一次真的按鍵事件（見 `typeLine` 的註解）。對話框的送出也走這裡。 */
 async function pressEnter(client) {
   const key = {
@@ -754,6 +810,48 @@ async function runMode(label, { port, rendererUrl }) {
     await dragMouse(app.client, { x: knobSep.x - 40, y: knobSep.y }, knobSep)
     await sleep(400)
 
+    // ── typography-scale：**字型大小偏好覆蓋尺度推導的預設**
+    //
+    // 上面兩條驗的是「未設偏好時，字級源自尺度」。這條驗相反的方向 —— 設了偏好，終端就用偏好的值。
+    // **鑑別力來自 `actual !== fromScale`**：只斷言「等於 22px」是不夠的，那無法區分「偏好生效」與
+    // 「尺度剛好也是 22px」；必須同時證明它**不再**等於尺度推導出來的值。
+    //
+    // 這條之所以在 `probe:terminal` 而不是 `probe:workspace`：**只有這裡有終端**。workspace 那邊
+    // 驗的是 store 的來回（夾制／落盤／還原），驗不到「偏好真的改變了終端」（verify 稽核抓到的缺口）。
+    //
+    // **必須走使用者的路徑（開 Settings → 填 → 存），不能直接打 `settings.*` IPC** —— 那會繞過
+    // `PreferencesProvider`：store 更新了但 renderer 的狀態沒有，字型 effect 不會重跑，終端當然
+    // 不變（實測踩過，一度誤判為產品 bug）。產品的唯一寫入者就是這個對話框。
+    await setFontSizeViaSettings(app.client, '22')
+    const fontWithPref = await pollUntil(
+      app.client,
+      TERMINAL_FONT,
+      (value) => value?.actual === '22px',
+      4000,
+    ).catch(() => null)
+    check(
+      results,
+      `${label}：字型大小偏好覆蓋尺度推導的預設`,
+      fontWithPref?.actual === '22px' && fontWithPref?.actual !== fontWithPref?.fromScale,
+      `偏好=22px → 實際=${fontWithPref?.actual}；尺度推導=${fontWithPref?.fromScale}（兩者必須不同，否則此條沒有鑑別力）`,
+    )
+
+    // **清回預設（同樣走使用者的路徑：把欄位清空即為未設定），並等它真的生效** —— 字級會改 cell
+    // 尺寸與行列數，而後續斷言是以真滑鼠座標點擊的（CLAUDE.md：版面一動，對時序敏感的斷言就開始點空）。
+    await setFontSizeViaSettings(app.client, '')
+    const fontRestored = await pollUntil(
+      app.client,
+      TERMINAL_FONT,
+      (value) => value?.actual === value?.fromScale,
+      4000,
+    ).catch(() => null)
+    check(
+      results,
+      `${label}：清除字型大小偏好後，字級回到尺度推導的預設`,
+      fontRestored?.actual === fontRestored?.fromScale,
+      `實際=${fontRestored?.actual} 尺度=${fontRestored?.fromScale}`,
+    )
+
     // ── 雙向串流：回顯 ≠ 執行
     const terminalRect = await app.client.evaluate(TERMINAL_RECT)
     await realClick(app.client, terminalRect) // 讓 xterm 取得焦點
@@ -872,6 +970,55 @@ async function runMode(label, { port, rendererUrl }) {
     // 清掉選取，免得干擾後續的輸入
     await realMouse(app.client, termAt.x, termAt.y, 'left')
     await sleep(150)
+
+    // ── terminal-sessions：右鍵 gate 在 mouse reporting ──────────────────────
+    //
+    // pty 內的程式開了 mouse reporting 時（**claude 的常態**），右鍵 SHALL 讓位給它 —— 我們不開自己
+    // 的選單，讓程式自身的右鍵慣例（claude 的貼上）生效。上面那條「右鍵選單開得起來」驗的正是**未
+    // 開啟**的情況（login shell 不送 DECSET 1000）。
+    //
+    // 以 shell 送 `DECSET 1000` 模擬「程式接管滑鼠」—— 那正是 claude 做的事，而且**不必真的跑
+    // claude**（比照 OSC 標題改用 stub 的理由：動的是 pty 送出的序列，不是被出貨的程式碼）。
+    await typeLine(app.client, `printf '\\033[?1000h'`)
+    await sleep(400)
+
+    await realMouse(app.client, termAt.x, termAt.y, 'right')
+    await sleep(500)
+    const menuUnderMouseMode = await app.client.evaluate(MENU_IN_VIEWPORT)
+    check(
+      results,
+      `${label}：mouse reporting 開啟時，右鍵讓位給 pty 內的程式（不開我們的選單）`,
+      menuUnderMouseMode === null,
+      menuUnderMouseMode ? '選單仍開啟 —— 右鍵未讓位' : '未開啟選單',
+    )
+
+    // **對照組**：關掉 mouse reporting，右鍵必須回到我們的選單。
+    // 少了它，上一條可能只是在驗「右鍵永遠不開選單」（例如座標點空），那就沒有鑑別力。
+    //
+    // mouse mode 開啟期間，剛才那次右鍵已被 xterm 轉成滑鼠序列送進 shell 的輸入行 —— 先 Ctrl+C
+    // 清掉那行垃圾，否則接下來的命令會被接在它後面而執行失敗。
+    await pressCtrlC(app.client)
+    await sleep(200)
+    await typeLine(app.client, `printf '\\033[?1000l'`)
+    await sleep(400)
+
+    await realMouse(app.client, termAt.x, termAt.y, 'right')
+    const menuAfterReset = await pollUntil(
+      app.client,
+      MENU_IN_VIEWPORT,
+      (value) => value !== null,
+      4000,
+    ).catch(() => null)
+    check(
+      results,
+      `${label}：mouse reporting 關閉後，右鍵恢復我們的選單（對照組）`,
+      menuAfterReset?.inside === true,
+      menuAfterReset ? '選單開啟' : '選單未開啟 —— 上一條因此沒有鑑別力',
+    )
+    await pressKey(app.client, 'Escape')
+    await sleep(150)
+    await pressCtrlC(app.client)
+    await sleep(200)
 
     // ── clipboard：主行程對畸形輸入防禦，不因非字串而崩潰 ────────────────────
     // `writeText` 是 fire-and-forget 的 ipcMain.on、無回應通道；非字串會讓 clipboard.writeText

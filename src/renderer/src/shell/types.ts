@@ -66,3 +66,6 @@ type WorkspaceTerminal = Window['workspace']['terminal']
 
 /** 新 session 的 spawn 目標。同樣由白名單回推 —— renderer 不 import 主行程模組。 */
 export type SpawnTarget = Parameters<WorkspaceTerminal['create']>[1]
+
+/** 終端外觀偏好（字型 family / size）。由白名單回推 —— renderer 不 import 主行程模組。 */
+export type TerminalPreferences = Awaited<ReturnType<Window['workspace']['settings']['get']>>

@@ -4,6 +4,7 @@ import type { DirtyEntry } from '../main/dirty-state'
 import type { FsResult, WriteResponse } from '../main/ipc/fs'
 import type { RestoredSession } from '../main/ipc/terminal'
 import type { DirEntry, FileContent } from '../main/fs-service'
+import type { TerminalPreferences } from '../main/preferences-store'
 import type { RendererSession } from '../main/session-store'
 import type {
   ChangeDetailView,
@@ -181,6 +182,24 @@ const workspaceApi = {
     writeText: (text: string): void => {
       ipcRenderer.send('workspace:clipboard:writeText', text)
     },
+  },
+  /**
+   * 使用者偏好的讀寫。本輪只有終端字型（family + size）。
+   *
+   * 值的驗證在主行程的 store（清理 family、夾制 size）—— preload 與 renderer 同屬一個行程樹，
+   * 在這裡檢查等同沒有檢查。`setTerminalFont` 回傳套用後的偏好，供 renderer 立即更新終端。
+   */
+  settings: {
+    get: (): Promise<TerminalPreferences> => ipcRenderer.invoke('workspace:settings:get'),
+    setTerminalFont: (
+      fontFamily: string | null,
+      fontSize: number | null,
+      lineHeight: number | null,
+    ): Promise<TerminalPreferences> =>
+      ipcRenderer.invoke('workspace:settings:setTerminalFont', fontFamily, fontSize, lineHeight),
+    /** 系統的等寬字型清單，給設定對話框的下拉選單（Linux 走 fontconfig；其他平台回空陣列）。 */
+    listMonospaceFonts: (): Promise<string[]> =>
+      ipcRenderer.invoke('workspace:settings:listMonospaceFonts'),
   },
   /**
    * terminal 的邊界要求見 `terminal-agent-sessions` 的 `design.md` D5：`create` **只收

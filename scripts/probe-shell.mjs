@@ -125,6 +125,12 @@ const PROBE_EXPRESSION = `(async () => {
           'onExit',
         ].includes(key),
     ),
+    // settings 的能力（terminal-rendering-and-preferences，terminal-preferences 規格）。同一條
+    // 白名單原則 —— 從第一天就補上守衛，避免重蹈 folders.*／terminal.* 當年「整個 namespace 沒有
+    // 守衛」的覆轍。get／setTerminalFont：值由主行程的 store 清理／夾制，介面上沒有任何路徑詞彙。
+    surplusSettingsKeys: Object.keys(api?.settings ?? {}).filter(
+      (key) => !['get', 'setTerminalFont', 'listMonospaceFonts'].includes(key),
+    ),
     // symlink 絕不可出現在白名單上。
     //
     // 寫入邊界的 TOCTOU 論證（file-editing-and-crud 的 design D3）整個建立在「renderer 既造不出、
@@ -205,6 +211,9 @@ try {
   check(results, 'terminal 介面只暴露已定義邊界要求的能力',
     r?.surplusTerminalKeys?.length === 0,
     r?.surplusTerminalKeys?.length ? `多出：${r.surplusTerminalKeys.join(', ')}` : '無多餘能力')
+  check(results, 'settings 介面只暴露已定義邊界要求的能力',
+    r?.surplusSettingsKeys?.length === 0,
+    r?.surplusSettingsKeys?.length ? `多出：${r.surplusSettingsKeys.join(', ')}` : '無多餘能力')
 
   exitCode = results.every(Boolean) ? 0 : 1
 } catch (error) {

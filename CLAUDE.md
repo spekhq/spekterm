@@ -125,6 +125,20 @@ cwd 浮動，「跟隨」退化為「釘在自身 folder」，一個 toggle 無�
 在終端協定裡編碼不出來，pty 內收不到；與 GNOME Terminal 的關分頁一致）。`probe:keyboard` 114/114
 （+10 條，兩模式各 5）、`probe:terminal` 168/168（`+ session` → `+` 不打到既有選擇器）。
 
+`terminal-rendering-and-preferences`（不屬於任何 Phase）是**第六次 dogfooding 的三個 terminal 痛點** ——
+claude session 裡按右鍵會**同時**貼上又彈出選單；claude 輸出的**表格**捲動時破版；終端的**字型不是**
+使用者終端的那個（emoji 與框線斷字）。它交付四件事：**右鍵 gate 在 mouse reporting**（xterm 公開
+`term.modes.mouseTrackingMode` —— 程式接管滑鼠時右鍵**讓位給它**，使 claude 的右鍵貼上生效；沒接管時
+才開我們的複製／貼上選單）、**中鍵一律由終端擁有且恰好貼一次**（capture 階段接管 —— 兇手是 Chromium
+**原生**的中鍵貼上，見下文）、**終端字型的系統預設 + 可設定**（新 capability `terminal-preferences`：
+`preferences.json` + `settings.*` IPC + 下拉選字型 + 即時預覽 + size + 行高），以及**行高 1.3 → 1.0**。
+
+**它刻意不修好表格。** 完整的修復要 GPU renderer，而那條**延後到下一個 change** —— 因為它會廢掉
+`probe:terminal` 的觀測策略。這個 change 對表格的貢獻只有行高（dogfood 實測「好不少」，但捲動時仍可能
+破）。延後的完整調查見下文「GPU renderer 為什麼延後」—— **那是資產，下一個 change 直接接手**。
+`npm test` 265/265、`probe:terminal` 176/176、`probe:workspace` 66/66、`probe:keyboard` 118/118、
+`probe:shell` 17/17、`probe:files` 102/102、`probe:openspec` 182/182。
+
 尚未開始：打包（Phase 6）、handoff（Phase 7+）。**session 常駐**（讓 pty 活過 app 的生命）已排入
 路線圖但**刻意不做** —— 見 `docs/PRD.md` §11 的「session 常駐」，那裡記著 tmux 與自寫 daemon 的取捨。
 
@@ -134,12 +148,12 @@ cwd 浮動，「跟隨」退化為「釘在自身 folder」，一個 toggle 無�
 npm run dev             # electron-vite dev（開發模式）
 npm run build           # 建置至 out/
 npm run typecheck       # tsc：main / preload（node）+ renderer（web）
-npm test                # node:test 單元測試（fs 邊界、workspace store、listDir/readFile、watcher、外部 URL、pty 管理器、git 分支解析、字級不得寫死、舊產品名不得殘留、UI 文案不得含 CJK、aria-label 不得硬編、字典 key 的型別安全）
+npm test                # node:test 單元測試（fs 邊界、workspace store、listDir/readFile、watcher、外部 URL、pty 管理器、git 分支解析、終端偏好 store（字型 family 清理/size 與行高夾制/損毀隔離）、字級不得寫死、舊產品名不得殘留、UI 文案不得含 CJK、aria-label 不得硬編、字典 key 的型別安全）
 npm run probe:shell     # 驗收 workspace-app-shell（開視窗 + 信任模型 + preload 白名單，走 CDP）
-npm run probe:workspace # 驗收 workspace-folders / filesystem-access / workspace-layout / repo-branch（rail 呈現分支、於 app 之外切 branch 後自己更新、detached HEAD、執行期間變成 git repo、rail 不呈現不可操作的控制項；**repo 的拖曳排序** —— 落點與指示線一致、末端拖得到、拖 session 子列不會連 repo 一起搬、未位移的按下＝點擊、順序跨重啟還原、可拖曳項目的靜止游標為 pointer）
+npm run probe:workspace # 驗收 workspace-folders / filesystem-access / workspace-layout / repo-branch / terminal-preferences（rail 呈現分支、於 app 之外切 branch 後自己更新、detached HEAD、執行期間變成 git repo、rail 不呈現不可操作的控制項；**repo 的拖曳排序** —— 落點與指示線一致、末端拖得到、拖 session 子列不會連 repo 一起搬、未位移的按下＝點擊、順序跨重啟還原、可拖曳項目的靜止游標為 pointer；**Settings 入口啟用**且觸發後開啟終端字型設定對話框（family 下拉／size／行高／預覽、首項為系統預設、Esc 關閉）；**終端偏好**寫入時夾制 size・清理 family、跨重啟還原、偏好檔損毀仍以預設啟動且原檔改名保留）
 npm run probe:files     # 驗收 file-explorer / file-viewer / 編輯 / 存檔 / 衝突 / CRUD / 導航防護 / 編輯器 worker / CSP（遠端圖片可載入、script-src 僅 self、注入點對 file:// 生效，dev + build 兩模式）
-npm run probe:terminal  # 驗收 terminal-sessions + session-persistence（pty 雙向／cwd／resize／多開／關分頁・reload・關窗皆不留孤兒；剪貼簿畸形輸入防禦；OSC 標題與命名權；**關掉 app 再開後 session 原樣重建**、只喚醒被顯示的那一個、claude 以 --resume 續接同一個對話、續接失敗自癒為全新對話、shell 於最後 cwd 重生並重播畫面、kill -9 後快照仍在、損毀韌性、被竄改的識別碼不進命令 —— 皆以 PATH 上的 stub claude 承載，dev + build 兩模式）
-npm run probe:keyboard  # 驗收 keyboard-navigation（Ctrl+Tab 切 session／Ctrl+↑↓ 切 repo／位置序非 MRU／按鍵不流進 pty／編輯器與對話框的行為；**Shift+↑↓ 排 repo、Shift+←→ 排 session** —— 端點不循環、移動後仍選中／focused、終端持有焦點時仍生效且按鍵不進 pty、**編輯器持有焦點時 Shift+→ 仍是文字選取**，dev + build 兩模式）
+npm run probe:terminal  # 驗收 terminal-sessions + session-persistence（pty 雙向／cwd／resize／多開／關分頁・reload・關窗皆不留孤兒；剪貼簿畸形輸入防禦；**右鍵 gate 在 mouse reporting**（stub 送 DECSET 1000 時右鍵讓位給程式、關閉後恢復選單 —— 含對照組）；OSC 標題與命名權；**關掉 app 再開後 session 原樣重建**、只喚醒被顯示的那一個、claude 以 --resume 續接同一個對話、續接失敗自癒為全新對話、shell 於最後 cwd 重生並重播畫面、kill -9 後快照仍在、損毀韌性、被竄改的識別碼不進命令 —— 皆以 PATH 上的 stub claude 承載，dev + build 兩模式）
+npm run probe:keyboard  # 驗收 keyboard-navigation（Ctrl+Tab 切 session／Ctrl+↑↓ 切 repo／位置序非 MRU／按鍵不流進 pty／編輯器與對話框的行為 —— 對話框的抑制以 session 命名／files／**終端字型設定**三種各驗一次；**Shift+↑↓ 排 repo、Shift+←→ 排 session** —— 端點不循環、移動後仍選中／focused、終端持有焦點時仍生效且按鍵不進 pty、**編輯器持有焦點時 Shift+→ 仍是文字選取**，dev + build 兩模式）
 npm run probe:openspec  # 驗收 openspec-data-access / openspec-panel（兩個視圖／兩棵樹／artifact 分頁／agent 改檔即更新／錨定／交叉導覽／Graph・Timeline 的 overlay，dev + build 兩模式）
 npm run probe:native    # 驗收 native-module-toolchain（Electron 主行程載入 node-pty + spawn pty）
 npm run probe:core      # 驗收 spek-core-integration（主行程掃描 OpenSpec，且不開 TCP 埠）
@@ -442,6 +456,18 @@ org 名**不是**凍結身分的一部分 —— repo 改名與 transfer 皆自�
   **`Ctrl+Shift+W` 關當前 session**（`keyboard-navigation` 新增 requirement，攔截於 window capture
   階段，對話框開啟時不生效；代價為零，見下文「四顆鍵，四種代價」補上的第五顆）。詳見下文
   「shell-affordance-tweaks 的實測與踩雷」。
+- **終端的渲染與偏好** — `terminal-rendering-and-preferences`（**不屬於任何 Phase**）：第六次 dogfooding
+  的三個 terminal 痛點。`terminal-sessions` 的「終端支援複製與貼上」改為：**右鍵 gate 在 mouse reporting**
+  （程式接管滑鼠時讓位給它，使 claude 的右鍵貼上生效），**中鍵一律由終端擁有且恰好貼一次**（capture 階段
+  攔截 —— 兇手是 Chromium 原生的中鍵貼上，`terminal-clipboard` D5「瀏覽器拿不到 PRIMARY」的假設在 Electron
+  裡不成立）。新 capability **`terminal-preferences`**：終端字型的 family／size／行高可設定並落盤
+  （`preferences.json`，版本 + 原子寫 + 損毀隔離，比照 workspace／session），**預設吃系統等寬字**（此前
+  首選一個沒打包也沒裝的 `JetBrains Mono`，靜默落到系統預設而畫面上看不出來），設定介面自 `fc-list
+  :spacing=100` 列出系統等寬字供**下拉**選取 + **即時預覽**（含 box-drawing —— preview 的框線就是終端的
+  框線）。連帶：`typography-scale`（尺度改為終端字級的**預設**，偏好可覆蓋）、`workspace-layout`
+  （Settings 入口不再是停用的 placeholder）。**行高 1.3 → 1.0** 修掉框線的靜態縫。
+  **GPU renderer 刻意延後到下一個 change**（表格因此只是改善、不算修好）—— 它會廢掉 `probe:terminal`
+  的 14 個觀測點，完整調查見上文「GPU renderer 為什麼延後」。
 - Phase 6 打包與發佈，Phase 7+ 建立護城河（handoff）。**session 常駐**已排入路線圖但刻意不做
   （PRD §11）。
 
@@ -1319,6 +1345,147 @@ change」視圖會對著一個在新 repo 不存在的 change 顯示空狀態，
 改「+ session」→「+」時直覺會擔心 probe 破 —— 實測 168/168 全綠。因為既有選擇器全都靠
 `aria-label`（`t('sessions.new')`）定位，可見文字改動不影響。這條老紀律（`ui-copy-i18n` 的
 「aria-label 同時是選擇器」）在這裡以另一個方向被驗證：**你可以自由改可見文字，只要 aria-label 不動**。
+
+## terminal-rendering-and-preferences 的實測與踩雷
+
+### GPU renderer 為什麼延後 —— 下一個 change 直接接手，不必重踩
+
+原訂以「程式化繪製 box-drawing 的 renderer」修表格破版。四個實測結論讓它延後：
+
+1. **`@xterm/addon-canvas` 對 xterm 6 是死的。** latest **0.7.0**、peer `^5.0.0`、最後發佈 **2023-11**，
+   而我們的 xterm 是 6.0.0；`@xterm/addon-webgl` 反而與其他 addon 同代、維護中（**0.19.0**）。canvas 是
+   xterm.js 官方已 deprecated、改推 webgl 的那一個。**GPU renderer 的唯一可用選項是 webgl。**
+2. **webgl 每個終端一個 context，瀏覽器對並存 context 有上限（約 16）。** 這個 app **同時掛載每個
+   session 的終端**（terminal 的 design D7），全掛會撞上限（最舊的 context 被丟棄、畫面變空）。可行解是
+   **只載給當下 active 的那一個**（切走即 `dispose()`，xterm 自動退回 DOM）—— 已實作並經 dogfood 驗證
+   有效，程式碼可從 git 歷史取回。
+3. **但 webgl 會廢掉 `probe:terminal` 的觀測點 —— 這才是延後的真正原因。** webgl 畫到 `<canvas>`，
+   **`.xterm-rows` 隨即消失**，而 probe 讀終端內容的唯一方式正是它（`TERMINAL_TEXT` / `TERMINAL_FONT`，
+   **14 個呼叫點**）。實測：開 webgl 後 **8 條斷言倒** —— 輸入到 pty、cwd、貼上、resize 讀成 `0 → 0`、
+   切回 session 內容仍在、字級讀成 `undefined`。**終端本身沒壞，是驗收瞎了。**
+4. **兩條候選解（留給下一個 change 裁決）**：
+   - **改寫觀測點**：把「讀畫面文字」換成「讀檔」（`echo X > file` → 讀檔）—— 嚴格更強，因為它**能區分
+     回顯與執行**（CLAUDE.md 早有這條教訓，而讀畫面文字本來就分不清）。但**「切回 session 後 scrollback
+     仍在」找不到可靠的觀測點**（快照檔有 2s debounce，證明不了「切換後還在」）；候選是走產品自己的複製
+     路徑（拖曳選取 + `Ctrl+Shift+C` → 讀剪貼簿），未驗證。
+   - **把「GPU 加速」做成使用者偏好**（VS Code 有 `terminal.integrated.gpuAcceleration` 的先例，且驅動有
+     問題的使用者真的需要這個逃生口）：probe 以 `settings` IPC 關掉它再測 behavior（那是**產品的公開
+     功能**，不是測試分支），另加一條「預設下 active 終端確實是 webgl」。**論點**：那批 behavior 斷言
+     （pty I/O、cwd、cols、buffer 存活）本來就與 renderer 無關 —— renderer 不碰 pty，cell 量測走
+     `CharSizeService`（DOM，非 renderer）—— 且 DOM renderer 是產品真實支援的降級路徑。
+
+> **教訓：一個渲染層的選擇，可以整個廢掉一套驗收策略。** 選 renderer 之前先問「probe 是從哪裡觀測的」。
+
+### 行高不只是可讀性 —— 它決定框線接不接得起來
+
+DOM renderer 下，框線字元（`│` `┌` …）是**靠字型自己的 glyph 去拼**的，而 glyph 只有約 **1em** 高，
+row 的高度卻是 `fontSize × lineHeight` —— **行高大於 1 時，上下兩列的 `│` 接不起來，中間留一條縫**，
+表格看起來就是破的。原本的 `lineHeight: 1.3`（CLAUDE.md 自己都註記「偏高」）正是主因之一，改成 **1.0**
+之後 dogfood 回報「好不少」。**webgl 之所以「修好」表格，有一部分只是把行高的問題蓋掉了**（它把
+box-drawing 畫滿整個 cell）。行高現在是使用者可調的偏好（1–2）。
+
+### 中鍵雙貼：兇手是 Chromium **原生**的中鍵貼上，而 `terminal-clipboard` D5 的假設是錯的
+
+`terminal-clipboard` 的 design D5 當年寫著「X11 的中鍵貼的是 PRIMARY selection，**而瀏覽器拿不到它**
+—— 這裡貼的是 CLIPBOARD」。**那個假設在 Electron 裡不成立**：Chromium 的原生中鍵貼上一直在發生，疊上
+我們自己的 `paste()` 就是**兩次**（dogfood 實測：login shell 與 claude **都**貼兩次）。
+
+- **初版把中鍵 gate 在 mouse mode 是錯的方向** —— 雙貼與 mouse mode 無關（shell 是 mouse off 也雙貼）。
+- **React 的 `onMouseDown`（bubble）擋不掉它**：其一 bubble 晚於 xterm 掛在 `.xterm-screen`（host 子節點）
+  上的 listener —— xterm 已經把中鍵轉發給 claude 了；其二**原生貼上掛在 `auxclick` 而非 mousedown**，
+  mousedown 的 `preventDefault` 打不到它。
+- **正解**：host 上的 **capture 階段**原生 listener，對 button 1 的 `mousedown`／`mouseup`／`auxclick`
+  **一律 `preventDefault`**（不論原生行為掛在哪個事件）+ `stopPropagation`（xterm 收不到、不轉發），並在
+  mousedown 做**唯一一次**貼上。中鍵於是恆為一次乾淨的 CLIPBOARD 貼上。
+- **這條驗不到**：CDP 的合成滑鼠事件**不觸發**那個 native 行為（比照 OSC 8 linkHandler 的先例）——
+  探針既看不到雙貼、也證明不了「只剩一次」。由 code review + design D1／D10 承擔。
+
+### 掛載時「什麼都沒變」卻照樣 resize —— 多送一次 SIGWINCH 會把終端的輸出往上推
+
+**探針抓到的，而且是 baseline 對照組逼我承認的。** 新增的字型偏好 effect 一開始寫成：
+
+```ts
+handle.setFont({ ... })          // 掛載時偏好通常等於預設 —— 什麼都沒改
+const size = handle.fit()
+if (size) terminal.resize(...)   // ← 照樣送
+```
+
+於是每個終端掛載時都對 pty 多送一次 **SIGWINCH**，而 shell 收到它會**重畫 prompt**，把終端既有的
+輸出往上推 —— `probe:terminal` 的「切回 session 後其先前的輸出仍在」因此讀不到早期的 `OUT_42`
+（**且只在 build 模式失敗、dev 模式全過**，第一眼像時序 flaky）。
+
+**修法**：`setFont` 回報「有沒有真的改動 xterm 的選項」，**沒改動就不 `fit()`／`resize()`**。這不只是
+修 bug —— 「什麼都沒變還打擾 pty」本來就不該做。
+
+> **baseline 對照組是這次的關鍵。** 我原本準備怪 `lineHeight: 1.0`（它改變了行數），但 stash 掉改動
+> 後 baseline 是 **168/168** —— 那逼我承認是自己的新程式碼。而推理方向（行高變小 → 可見行數變**多**
+> → `OUT_42` 應該更看得見，不是更看不見）又把矛頭從 lineHeight 轉到真正可疑的地方。**撞到怪現象時，
+> 先問「這是不是我剛加的東西弄的」，而不是先怪一個看起來相關的舊常數。**
+
+### 驗收偏好時，**不能直接打 `settings.*` IPC** —— 那會繞過 `PreferencesProvider`
+
+`/opsx:verify` 的獨立稽核抓到的。探針一度以 `window.workspace.settings.setTerminalFont(null, 22, null)`
+設偏好，然後斷言終端的字級變成 22px —— **紅的**（實際仍是 16px），一度被當成產品 bug。
+
+**真相是探針走了後門**：偏好的權威在主行程的 store，但 renderer 是靠 `PreferencesProvider` 的 state
+驅動字型 effect 的，而那個 state **只在 `updateTerminalFont()` 回來時更新**。直接打 IPC → store 變了、
+renderer 的 state 沒變 → effect 不重跑 → 終端當然不變。
+
+**偏好沒有推送通道，而那是對的**：單視窗、唯一的寫入者就是設定對話框。驗收因此必須走**使用者的路徑**
+（開 Settings → 填欄位 → 送出），那也才是真正該被驗的東西。
+
+> 順帶兩條同一次稽核抓到的**假綠**：
+> - **`count >= 1` 驗不到「下拉列出系統字型」** —— 只有「系統預設」一個選項時 count 就是 1，
+>   `listMonospaceFonts` 整個壞掉回空陣列它照樣過。改成 `count >= 2` 且選項為非空字串才有鑑別力
+>   （改完立刻抓到下一個問題 ↓）。
+> - **字型清單是非同步的（主行程還要 spawn `fc-list`）** —— 對話框一出現就 evaluate 會讀到「只有系統
+>   預設」。`pollUntil` 等的必須是「選項載入完成」，不是「對話框存在」。
+
+### `pkill -f` 會把執行它的那條命令自己殺掉 —— 症狀是「輸出全空、exit 1」
+
+這條 CLAUDE.md 早就寫著（見上文「收尾殺行程時」），我還是踩了：
+
+```bash
+pkill -9 -f 'electron/dist/electron'   # ← 這條 shell 自己的 cmdline 就含這個字串
+npm run probe:terminal                  # ← 從來沒執行
+```
+
+**`-f` 比對整條 command line，而 pattern 就寫在上面** → 它殺掉自己那個 shell，後面的東西完全不跑。
+**症狀是背景命令的輸出檔是空的、exit 1** —— 看起來像「probe 失敗了」，其實 probe 一秒都沒跑。
+自我豁免的寫法（把 `-`／`/` 包成字元類別）不是可有可無的講究：`pkill -9 -f 'electron/dist[/]electron'`。
+
+同一個根因也讓 `pgrep -f` 的計數多一（它匹配到自己），於是「殘留: 2」其實可能是 0 —— 用
+`ps -eo cmd | grep -c '[e]lectron/dist/electron'` 這種自我豁免的寫法才數得準。
+
+### 字型：預設不該是一個「不存在的字型」
+
+fontFamily 首選 `'JetBrains Mono'` —— **這台機器沒裝、專案也沒打包**，於是靜默落到系統預設等寬字。
+字型從此與宣告不符，而且**畫面上看不出來**（它就是「一個等寬字」）。預設收斂為誠實的
+`ui-monospace, monospace`；與使用者終端一致由**偏好**達成，不是靠猜一個字型名。
+
+- **列舉系統等寬字用 `fc-list :spacing=100 family`** —— `:spacing=100` 正是 fontconfig 的 monospace
+  判準，直接拿到等寬字，**不必在 renderer 自己量測**。這是使用者開設定的一次性動作，不是熱路徑，
+  spawn 一次 `fc-list` 可接受（與「分支偵測不 spawn git」的熱路徑紀律不同）。目前只支援 Linux。
+- **UI 是純 `<select>`，不是可打字的 combobox** —— dogfood 兩次否決：free-text「要我硬記字型名太難用」，
+  datalist combobox「要先把文字清空才能換，很不方便」。
+- **preview 要含 box-drawing**：終端與 preview 同為 DOM renderer，框線一樣靠字型 glyph 拼、一樣受行高
+  影響 —— **preview 裡框線接不接得起來，就是終端裡表格會不會破**。（若日後 GPU renderer 進來，這條就
+  反了：那時 preview 的框線不再代表終端，得重新想。）
+
+### `aria-label` 是選擇器（又一次）
+
+`PanelSourceBar` 的單引號炸掉 probe 之後，這次是另一種：**寫 aria-label 文案時避開 shell 引號會咬到的
+字元**仍然成立。另外 —— **改可見文字是安全的，只要 `aria-label` 不動**（`+ session` → `+` 那次已驗過）。
+
+### dev 模式下，改 `en.json` 或 preload／主行程**不會**熱套用
+
+兩個都在這次咬過：
+
+- **`en.json` 一改，vite 觸發 full page reload，而導航防護會擋掉它**（`[navigation] blocked renderer
+  navigation to http://localhost:5173/`）—— renderer 於是**留著舊字典**。新增的 key 會變成 `t()` 回傳
+  key 字面（畫面上印出 `settings.preview`）。**必須重啟 dev。**
+- **`electron-vite dev` 實測沒有在主行程／preload 改動時重啟 electron** —— 新的 preload 方法（如
+  `listMonospaceFonts`）不會出現在 `window.workspace`，renderer 呼叫它會炸。**同樣必須重啟 dev。**
 
 ## UI 文案與 i18n（`ui-copy-i18n` 起）
 

@@ -221,5 +221,18 @@
     "dormantShell": "Dormant · reopening a shell in its last working directory (the previous processes are gone)",
     "dormantClaude": "Dormant · restoring the conversation…",
     "replaySeparator": "end of previous content · spekterm restarted"
+  },
+  "settings": {
+    "title": "Terminal font",
+    "fontFamily": "Font family",
+    "fontFamilyPlaceholder": "System default",
+    "fontSize": "Font size",
+    "fontSizePlaceholder": "Default",
+    "lineHeight": "Line height",
+    "lineHeightPlaceholder": "Default",
+    "preview": "Preview",
+    "previewSample": "The quick brown fox 0123456789\nil1 | oO0 {}[]() => != === <= >=\n┌──────┬──────┐\n│ cell │ cell │\n└──────┴──────┘",
+    "reset": "Reset to default",
+    "save": "Save"
   }
 }

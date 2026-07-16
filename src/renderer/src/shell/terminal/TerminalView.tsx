@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { SpawnTarget } from '../types'
 import { ContextMenu, type MenuItem } from '../files/dialogs'
+import { usePreferences } from '../PreferencesProvider'
 import { type SessionStatus, useSessions } from './sessions'
 import { type XtermHandle, createXterm } from './xterm'
 import { useTranslation } from 'react-i18next'
@@ -50,6 +51,7 @@ export function TerminalView({
   // 解構出穩定的 callback。若依賴整個 api 物件，session 清單一變動就會重建 xterm
   // （連同 scrollback 一起消失）。
   const { attach, setTitle, restoredScrollbackOf } = useSessions()
+  const { terminal: termPrefs } = usePreferences()
   const hostRef = useRef<HTMLDivElement | null>(null)
   const handleRef = useRef<XtermHandle | null>(null)
   const [menu, setMenu] = useState<{ x: number; y: number; hasSelection: boolean } | null>(null)
@@ -208,6 +210,43 @@ export function TerminalView({
     if (size) window.workspace.terminal.resize(sessionId, size.cols, size.rows)
   }, [status, sessionId])
 
+  // 中鍵貼上：**在 capture 階段完全接管中鍵**，只貼一次。
+  //
+  // 中鍵貼上是**終端的**慣例，不是 pty 內程式的慣例 —— 由我們擁有它、只貼一次，才是確定的行為。
+  // dogfood 抓到：login shell（mouse off）與 claude（mouse on）中鍵**都貼兩次** —— 兇手是 Chromium 的
+  // native 中鍵貼上（X11 PRIMARY selection）一直在發生，加上我們自己的貼上就是兩次。原本走 React 的
+  // `onMouseDown`（bubble 階段）擋不掉它：其一 bubble 晚於 xterm 掛在 `.xterm-screen`（host 子節點）
+  // 上的 listener（xterm 已把中鍵轉發給 claude）；其二 native 貼上掛在 `auxclick` 而非 mousedown，
+  // mousedown 的 `preventDefault` 打不到它。
+  //
+  // capture 由 host 往下傳、早於子節點的 listener：對中鍵的 mousedown／mouseup／auxclick 一律
+  // `preventDefault`（擋掉 native 貼上，不論它掛在哪個事件）+ `stopPropagation`（xterm 收不到、不會
+  // 轉發給 claude），並在 mousedown 時做**唯一一次**我們的貼上。於是中鍵恆為一次乾淨的貼上，與
+  // mouse reporting 開不開無關（貼的是 CLIPBOARD，與快捷鍵同源，design D5）。
+  useEffect(() => {
+    const host = hostRef.current
+    if (!host) return
+    const suppress = (event: MouseEvent): void => {
+      if (event.button !== 1) return
+      event.preventDefault()
+      event.stopPropagation()
+    }
+    const onDown = (event: MouseEvent): void => {
+      if (event.button !== 1) return
+      event.preventDefault()
+      event.stopPropagation()
+      paste()
+    }
+    host.addEventListener('mousedown', onDown, true)
+    host.addEventListener('mouseup', suppress, true)
+    host.addEventListener('auxclick', suppress, true)
+    return () => {
+      host.removeEventListener('mousedown', onDown, true)
+      host.removeEventListener('mouseup', suppress, true)
+      host.removeEventListener('auxclick', suppress, true)
+    }
+  }, [paste])
+
   // 由隱藏轉為顯示的那一刻，容器才第一次有尺寸 —— 必須重新 fit 一次（design D7 的代價）。
   useEffect(() => {
     if (!active) return
@@ -215,6 +254,25 @@ export function TerminalView({
     if (size) window.workspace.terminal.resize(sessionId, size.cols, size.rows)
     handleRef.current?.focus()
   }, [active, sessionId])
+
+  // 套用終端字型偏好。掛載時套一次（偏好通常已由 `PreferencesProvider` 早載入備妥），偏好變更時再套。
+  //
+  // **只有 `setFont` 真的改動了選項才 `fit()`／`resize()`。** 掛載時偏好通常等於預設 —— 什麼都沒變卻
+  // 照樣 resize，等於對 pty 多送一次無謂的 SIGWINCH，而 shell 收到它會重畫 prompt，把終端既有的輸出
+  // 往上推（probe 抓到：「切回 session 後其先前的輸出仍在」讀不到早期內容，baseline 168/168 卻是綠的）。
+  useEffect(() => {
+    const handle = handleRef.current
+    if (!handle) return
+    const changed = handle.setFont({
+      family: termPrefs.fontFamily ?? null,
+      size: termPrefs.fontSize ?? null,
+      lineHeight: termPrefs.lineHeight ?? null,
+    })
+    if (!changed) return
+    // 字級與行高改變會改 cell 尺寸 —— 新的行列數必須告知 pty。
+    const size = handle.fit()
+    if (size) window.workspace.terminal.resize(sessionId, size.cols, size.rows)
+  }, [termPrefs.fontFamily, termPrefs.fontSize, termPrefs.lineHeight, sessionId])
 
   const items: MenuItem[] = [
     {
@@ -248,21 +306,18 @@ export function TerminalView({
       // 看起來就是一塊空白終端 —— 正是 spec 明文禁止的那件事。提示因此必須明確拿到 z-index。
       className={active ? 'relative h-full w-full' : 'hidden'}
       onContextMenu={(event) => {
+        // 原生選單一律擋掉。
         event.preventDefault()
+        // **mouse reporting 開啟時（claude 接管滑鼠），右鍵讓位給程式** —— 不開我們的選單，
+        // 讓 claude 的右鍵貼上等慣例生效（xterm 已把 mousedown 轉發給它）。未接管時才用我們的
+        // 複製／貼上選單（design D1）。狀態在事件當下讀取 —— 程式會動態開關 mouse mode。
+        if (handleRef.current?.mouseTrackingActive()) return
         // 選取狀態要在開啟選單的當下取樣 —— 選單一旦開啟，焦點就離開終端了。
         setMenu({
           x: event.clientX,
           y: event.clientY,
           hasSelection: handleRef.current?.hasSelection() ?? false,
         })
-      }}
-      onMouseDown={(event) => {
-        // 中鍵貼上（Linux 慣例）。preventDefault 以免 Chromium 進入自動捲動模式。
-        // X11 的中鍵貼的是 PRIMARY selection，而瀏覽器拿不到它 —— 這裡貼的是 CLIPBOARD
-        // （與快捷鍵同一個來源，design D5）。
-        if (event.button !== 1) return
-        event.preventDefault()
-        paste()
       }}
     >
       {/*

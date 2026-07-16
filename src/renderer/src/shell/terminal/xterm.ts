@@ -69,6 +69,25 @@ export interface XtermHandle {
   hasSelection(): boolean
   /** 把文字送進 pty。xterm 會處理 bracketed paste（程式若啟用了它）。 */
   paste(text: string): void
+  /**
+   * pty 內的程式當下是否啟用了 mouse reporting（`CSI ? 1000 h` 等）。
+   *
+   * 為 true 時，右鍵與中鍵應**讓位給該程式**（xterm 會把滑鼠事件轉發給它，claude 的右鍵貼上
+   * 等慣例才成立）；為 false 時，終端才用自己的右鍵選單與中鍵貼上。**狀態在事件當下讀取** ——
+   * 程式會隨畫面進出動態開關（design D1）。
+   */
+  mouseTrackingActive(): boolean
+  /**
+   * 套用終端字型偏好。`null` 代表該欄未設定 —— family 退回系統等寬字、size 退回字級尺度的預設、
+   * lineHeight 退回預設行高。
+   *
+   * **回傳「是否真的改動了 xterm 的選項」** —— 沒改動時呼叫端就不該 `fit()`／`resize()`：那會對 pty
+   * 多送一次無謂的 SIGWINCH，而 shell 收到它會重畫 prompt（實測：掛載時無條件 resize 會把終端既有的
+   * 輸出往上推，探針「切回 session 後其先前的輸出仍在」因此讀不到早期的內容）。
+   *
+   * 有改動時，由呼叫端在其後 `fit()` 並把新的行列數告知 pty（字級與行高都會改 cell 尺寸）。
+   */
+  setFont(font: { family: string | null; size: number | null; lineHeight: number | null }): boolean
   focus(): void
   dispose(): void
 }
@@ -135,6 +154,29 @@ function terminalFontSize(): number {
 }
 
 /**
+ * 未設定字型偏好時的預設字型鏈。
+ *
+ * **刻意不寫任何特定字型名**（先前首選 `'JetBrains Mono'` 這台機器沒裝、專案也沒打包，於是靜默
+ * 落到系統預設等寬字）。`ui-monospace` 在 macOS 解析為 SF Mono，在 Linux 落到 `monospace`（系統
+ * 預設等寬字）—— 預設的職責只是「是一個**真實存在**的等寬字，開箱不破」；與使用者終端一致由使用者
+ * 設定偏好達成（design D3）。使用者設定的 family 會前置於這條鏈之前，鏈本身作為缺字時的退路。
+ */
+const DEFAULT_FONT_FAMILY = 'ui-monospace, monospace'
+
+/**
+ * 未設定偏好時的行高。**1.0，而非先前的 1.3。**
+ *
+ * xterm 的 DOM renderer 下，框線字元（`│` `┌` …）是**靠字型自己的 glyph 去拼**的，而 glyph 只有約
+ * 1em 高，row 的高度卻是 `fontSize × lineHeight` —— 行高大於 1 時，上下兩列的 `│` 接不起來，中間留
+ * 一條縫，表格看起來就是破的。**這是 dogfood 回報「表格破版」的主因之一**（實測：1.3 → 1.0 之後
+ * 「好不少」）。
+ *
+ * 行高因此不只是可讀性，它是框線能不能接起來的前提。使用者仍可用偏好調整（有人偏好鬆一點的行距，
+ * 代價是框線的縫）。
+ */
+const DEFAULT_LINE_HEIGHT = 1.0
+
+/**
  * 快照保留的行數。xterm 的 scrollback 是 5000 行，但快照要寫進磁碟、每個 session 一份 ——
  * 全部序列化並不划算。1000 行足以讓使用者認出「上次做到哪」。
  */
@@ -153,10 +195,24 @@ const RESET_MODES = '\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?25h\x1b[0
 
 export function createXterm(options: XtermOptions): XtermHandle {
   const { openLink, onCopy, onPaste } = options
+
+  // 字型偏好。`null` ＝該欄未設定 → 退回預設（系統字型 / 字級尺度）。使用者設定的 family 前置於預設鏈
+  // 之前作為首選（加引號以容納含空白的字型名，如 `MesloLGS NF`），size 直接覆蓋；未設偏好時 size 仍
+  // 由 `terminalFontSize()` 跟隨字級尺度（dev 的 HMR 轉旋鈕即時反映的行為保留）。
+  const fontOverride: { family: string | null; size: number | null; lineHeight: number | null } = {
+    family: null,
+    size: null,
+    lineHeight: null,
+  }
+  const resolveFamily = (): string =>
+    fontOverride.family ? `"${fontOverride.family}", ${DEFAULT_FONT_FAMILY}` : DEFAULT_FONT_FAMILY
+  const resolveSize = (): number => fontOverride.size ?? terminalFontSize()
+  const resolveLineHeight = (): number => fontOverride.lineHeight ?? DEFAULT_LINE_HEIGHT
+
   const term = new Terminal({
-    fontFamily: "'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace",
-    fontSize: terminalFontSize(),
-    lineHeight: 1.3,
+    fontFamily: resolveFamily(),
+    fontSize: resolveSize(),
+    lineHeight: resolveLineHeight(),
     cursorBlink: true,
     // 換行由 pty 內的程式自理，不要 xterm 代為轉換。
     convertEol: false,
@@ -216,8 +272,8 @@ export function createXterm(options: XtermOptions): XtermHandle {
       // 字級決定 cell 尺寸，cell 尺寸決定行列數 —— 字級變了而不重新量測，pty 手上的 cols/rows
       // 就與畫面錯位。在這裡（而不是另開一個 API）重新讀取，是因為 fit 本來就在 attach 與
       // 每次 resize 時被呼叫；於是尺度的旋鈕一轉（dev 的 HMR 會即時改寫 CSS 變數），終端
-      // 下一次 fit 就跟上，不必重啟。
-      const fontSize = terminalFontSize()
+      // 下一次 fit 就跟上，不必重啟。**用 `resolveSize()`**：未設偏好時跟隨尺度，設了則用偏好。
+      const fontSize = resolveSize()
       if (fontSize !== term.options.fontSize) term.options.fontSize = fontSize
 
       // 容器為 display:none（未 focused 的 session）時尺寸為 0，proposeDimensions 會給出
@@ -289,6 +345,33 @@ export function createXterm(options: XtermOptions): XtermHandle {
       // 原封不動送交 pty。xterm 會處理 bracketed paste（程式若啟用了它，shell 就知道
       // 這是「貼上」而非逐鍵輸入）。
       term.paste(text)
+    },
+    mouseTrackingActive() {
+      return term.modes.mouseTrackingMode !== 'none'
+    },
+    setFont(font) {
+      fontOverride.family = font.family
+      fontOverride.size = font.size
+      fontOverride.lineHeight = font.lineHeight
+
+      const family = resolveFamily()
+      const size = resolveSize()
+      const lineHeight = resolveLineHeight()
+
+      let changed = false
+      if (term.options.fontFamily !== family) {
+        term.options.fontFamily = family
+        changed = true
+      }
+      if (term.options.fontSize !== size) {
+        term.options.fontSize = size
+        changed = true
+      }
+      if (term.options.lineHeight !== lineHeight) {
+        term.options.lineHeight = lineHeight
+        changed = true
+      }
+      return changed
     },
     focus() {
       term.focus()

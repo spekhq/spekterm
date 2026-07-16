@@ -8,11 +8,13 @@ import { registerClipboardHandlers } from './ipc/clipboard'
 import { registerFsHandlers } from './ipc/fs'
 import { registerFolderHandlers } from './ipc/folders'
 import { registerOpenSpecHandlers } from './ipc/openspec'
+import { registerSettingsHandlers } from './ipc/settings'
 import { registerShellHandlers } from './ipc/shell'
 import { registerTerminalHandlers } from './ipc/terminal'
 import { applyNavigationGuards } from './navigation'
 import { formatScanSummary, scanRepo } from './openspec'
 import { guardUnsavedChanges } from './unsaved-changes'
+import { PreferencesStore } from './preferences-store'
 import { SessionStore } from './session-store'
 import { WorkspaceStore } from './workspace-store'
 
@@ -107,6 +109,10 @@ void app.whenReady().then(() => {
   )
   sessionStore.load()
 
+  // 使用者偏好與 workspace 同一個落點，理由也一樣（`--user-data-dir` 可隔離驗收）。
+  const preferencesStore = new PreferencesStore(join(app.getPath('userData'), 'preferences.json'))
+  preferencesStore.load()
+
   const dirty = new DirtyStateStore()
 
   // 在建立視窗、載入任何 renderer 內容之前施加 CSP —— renderer 從第一幀起就會渲染使用者
@@ -123,6 +129,7 @@ void app.whenReady().then(() => {
   registerAppHandlers(dirty)
   registerTerminalHandlers(store, sessionStore)
   registerClipboardHandlers()
+  registerSettingsHandlers(preferencesStore)
 
   createWindow(dirty)
 

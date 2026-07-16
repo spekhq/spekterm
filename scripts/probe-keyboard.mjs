@@ -813,6 +813,45 @@ async function runMode(label, { port, rendererUrl }) {
     })
     await pollUntil(app.client, DIALOG_OPEN, (value) => value === false, 4000)
 
+    // (3) 終端字型設定對話框（`terminal-preferences`）
+    //
+    // 抑制以 `[role="dialog"]` 的**存在**判定，因此任何遵守這個慣例的新對話框都自動被尊重 ——
+    // 但代價是「漏掉 role 的對話框會靜默失效」，所以每一種對話框都要各驗一次（這條紀律寫在
+    // `keyboard-navigation` 的 spec 裡）。這是第三個受測載體。
+    const settingsAt = center(
+      await app.client.evaluate(`(() => {
+        const b = document.querySelector('nav[aria-label="${copy('activityBar.label')}"] button[aria-label="${copy('activityBar.settings')}"]')
+        if (!b) return null
+        const r = b.getBoundingClientRect()
+        return { x: r.x, y: r.y, width: r.width, height: r.height }
+      })()`),
+    )
+    await realClick(app.client, { x: settingsAt.x, y: settingsAt.y, width: 1, height: 1 })
+    const settingsDialogOpen = await pollUntil(
+      app.client,
+      `Boolean(document.querySelector('[role="dialog"][aria-label="${copy('settings.title')}"]'))`,
+      (value) => value === true,
+      4000,
+    ).catch(() => false)
+    check(results, `${label}：終端字型設定對話框帶有 role="dialog"`, settingsDialogOpen === true)
+
+    const focusedBeforeSettings = await app.client.evaluate(FOCUSED_TAB)
+    const repoBeforeSettings = await app.client.evaluate(SELECTED_FOLDER)
+    await pressKey(app.client, 'Tab', ['ctrl'])
+    await pressKey(app.client, 'ArrowDown', ['ctrl'])
+    await sleep(400)
+    const duringSettings = await app.client.evaluate(FOCUSED_TAB)
+    const repoDuringSettings = await app.client.evaluate(SELECTED_FOLDER)
+    check(
+      results,
+      `${label}：終端字型設定對話框開啟時，導航快捷鍵不生效`,
+      duringSettings === focusedBeforeSettings && repoDuringSettings === repoBeforeSettings,
+      `focused=${duringSettings} repo=${repoDuringSettings}`,
+    )
+
+    await pressKey(app.client, 'Escape')
+    await pollUntil(app.client, DIALOG_OPEN, (value) => value === false, 4000)
+
     // ── 編輯器持有焦點時，快捷鍵仍生效（Monaco 會吃鍵 —— capture 階段才攔得到）
     check(results, `${label}：開啟檔案`, (await app.client.evaluate(OPEN_FILE('notes.txt'))) === true)
     const editorFocused = await pollUntil(

@@ -185,8 +185,10 @@ const LAYOUT = `(() => {
   }
 })()`
 
+// label 取自 `aria-label`（`terminal-rendering-and-preferences` 起）—— 入口的無障礙名稱由它供應，
+// 先前那個 `.sr-only` span 已移除。`aria-label` 同時是探針的選擇器（自字典取字串，不硬編）。
 const ACTIVITY_BAR = `[...document.querySelectorAll('nav[aria-label="${copy('activityBar.label')}"] button')].map((b) => ({
-  label: b.querySelector('.sr-only')?.textContent ?? '',
+  label: b.getAttribute('aria-label') ?? '',
   disabled: b.disabled,
   current: b.getAttribute('aria-current'),
   title: b.getAttribute('title') ?? '',
@@ -497,9 +499,97 @@ try {
   check(results, '呈現雛型的全部入口', activity.length === 4, `${activity.length} 個`)
   check(results, 'Sessions 可用且預設選取',
     activity[0]?.disabled === false && activity[0]?.current === 'page', activity[0]?.label)
+  // **尚未實作的入口自 `terminal-rendering-and-preferences` 起只剩 Handoffs 與 Search** —— Settings
+  // 已實作（開啟終端字型設定介面），因此不再是停用的 placeholder（`workspace-layout` 的 MODIFIED
+  // requirement）。斷言隨規格走：只檢查中間那兩個。
+  const pending = activity.slice(1, 3)
   check(results, '尚未實作的入口停用且附提示',
-    activity.slice(1).every((item) => item.disabled && item.title.includes(suffixOf('activityBar.comingSoon'))),
-    activity.slice(1).map((i) => i.label).join(', '))
+    pending.length === 2 &&
+      pending.every((item) => item.disabled && item.title.includes(suffixOf('activityBar.comingSoon'))),
+    pending.map((i) => `${i.label}(disabled=${i.disabled})`).join(', '))
+  check(results, 'Settings 入口為可用狀態（已實作，不再是 placeholder）',
+    activity[3]?.disabled === false,
+    `${activity[3]?.label}(disabled=${activity[3]?.disabled})`)
+
+  // ── terminal-preferences：Settings 入口開啟終端字型設定介面
+  //
+  // 以**真按下放開**觸發（合成 `.click()` 不走 mousedown → mouseup，見 realPressRelease 的註解）。
+  // 介面以 `role="dialog"` 呈現 —— 那不只是無障礙標記，導航快捷鍵正是以它的存在整體不生效。
+  const SETTINGS_RECT = `(() => {
+    const b = document.querySelector('nav[aria-label="${copy('activityBar.label')}"] button[aria-label="${copy('activityBar.settings')}"]')
+    if (!b) return null
+    const r = b.getBoundingClientRect()
+    return { x: r.x + r.width / 2, y: r.y + r.height / 2 }
+  })()`
+  const FONT_DIALOG = `(() => {
+    const d = document.querySelector('[role="dialog"][aria-label="${copy('settings.title')}"]')
+    if (!d) return null
+    return {
+      family: !!d.querySelector('select[aria-label="${copy('settings.fontFamily')}"]'),
+      size: !!d.querySelector('input[aria-label="${copy('settings.fontSize')}"]'),
+      lineHeight: !!d.querySelector('input[aria-label="${copy('settings.lineHeight')}"]'),
+      preview: !!d.querySelector('[aria-label="${copy('settings.preview')}"]'),
+    }
+  })()`
+
+  const settingsAt = await app.client.evaluate(SETTINGS_RECT)
+  if (settingsAt) await realPressRelease(app.client, settingsAt)
+  const dialog = await pollUntil(app.client, FONT_DIALOG, (v) => v !== null, 4000).catch(() => null)
+  check(results, '觸發 Settings 開啟終端字型設定介面（含 family／size／行高與預覽）',
+    dialog?.family === true && dialog?.size === true && dialog?.lineHeight === true && dialog?.preview === true,
+    JSON.stringify(dialog))
+
+  // 字型 family 以**下拉選單**呈現系統的等寬字，且含「系統預設」選項（dogfood：硬打字型名太難用）。
+  //
+  // **`count >= 2` 而不是 `>= 1`**：只有「系統預設」那一個選項時 count 就是 1 —— 若 `listMonospaceFonts`
+  // 整個壞掉（回空陣列），`>= 1` 照樣會過，那就驗不到「以**系統的等寬字**為選項」這件事（verify 稽核
+  // 抓到的假綠）。真實選項至少要有一個，且必須是非空字串。
+  const FONT_OPTIONS = `(() => {
+    const s = document.querySelector('[role="dialog"] select[aria-label="${copy('settings.fontFamily')}"]')
+    if (!s) return null
+    const values = [...s.options].map((o) => o.value)
+    return { count: values.length, firstValue: values[0], sample: values.slice(1, 4) }
+  })()`
+  // **必須輪詢**：字型清單是一次非同步 IPC（主行程還要 spawn `fc-list`），對話框出現的那一刻它
+  // 還沒回來 —— 只 evaluate 一次會讀到「只有系統預設」而誤判為空（實測踩過）。
+  const options = await pollUntil(app.client, FONT_OPTIONS, (v) => v?.count >= 2, 6000).catch(
+    () => null,
+  )
+  check(results, '字型 family 為下拉選單：首項為系統預設（空值），其後為系統的等寬字型',
+    options?.firstValue === '' &&
+      options?.count >= 2 &&
+      options.sample.every((v) => typeof v === 'string' && v.length > 0),
+    JSON.stringify(options))
+
+  // ── terminal-preferences：預覽隨選取即時更新
+  //
+  // **只驗「預覽存在」是不夠的**（verify 稽核抓到）：spec 說的是「隨選取即時更新」。選一個真實的
+  // 字型，斷言預覽 computed 的 `font-family` 真的變成它 —— 那才是使用者「套用前就看得到」的依據。
+  const PREVIEW_FONT = `(() => {
+    const p = document.querySelector('[role="dialog"] [aria-label="${copy('settings.preview')}"]')
+    return p ? getComputedStyle(p).fontFamily : null
+  })()`
+  const previewBefore = await app.client.evaluate(PREVIEW_FONT)
+  const picked = options?.sample?.[0]
+  if (picked) {
+    // 以真實的 change 事件驅動 —— 直接設 value 不會觸發 React 的 onChange。
+    await app.client.evaluate(`(() => {
+      const s = document.querySelector('[role="dialog"] select[aria-label="${copy('settings.fontFamily')}"]')
+      const setter = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set
+      setter.call(s, ${JSON.stringify(picked)})
+      s.dispatchEvent(new Event('change', { bubbles: true }))
+    })()`)
+    await sleep(300)
+  }
+  const previewAfter = await app.client.evaluate(PREVIEW_FONT)
+  check(results, '預覽隨選取即時更新（以選定的字型呈現）',
+    Boolean(picked) && previewAfter !== previewBefore && String(previewAfter).includes(picked),
+    `選 ${picked}：${previewBefore} → ${previewAfter}`)
+
+  await pressKey(app.client, 'Escape')
+  await sleep(200)
+  const dismissed = await app.client.evaluate(`document.querySelector('[role="dialog"]') === null`)
+  check(results, 'Esc 關閉終端字型設定介面', dismissed === true)
 
   // ── workspace-layout：可拖曳項目的游標宣告其主要可供性 ─────────────────────
   //
@@ -617,6 +707,20 @@ try {
     (await app.client.evaluate(RAIL_ROWS)).map((r) => r.name).join(',') === railOrderBeforeSessionDrag,
     (await app.client.evaluate(RAIL_ROWS)).map((r) => r.name).join(', '))
 
+  // ── terminal-preferences：偏好經主行程清理／夾制後回傳，並落盤 ───────────────
+  //
+  // 送一個**超出範圍**的 size 與一個**含雙引號**的 family —— 主行程 SHALL 夾制／清理，SHALL NOT
+  // 原樣寫入（雙引號會破壞 xterm 的 CSS font-family 字串）。回傳值就是套用後的偏好。
+  const applied = await app.client.evaluate(
+    `window.workspace.settings.setTerminalFont('Bad"Font', 999, 1.2)`,
+  )
+  check(results, '寫入偏好時，主行程夾制 size、清理 family、保留合法行高',
+    applied?.fontFamily === 'BadFont' && applied?.fontSize === 32 && applied?.lineHeight === 1.2,
+    JSON.stringify(applied))
+
+  // 定成一組合法的值，供下面的重啟斷言使用。
+  await app.client.evaluate(`window.workspace.settings.setTerminalFont('Fira Code', 15, 1.1)`)
+
   await app.close()
 
   // ── workspace-folders：重啟後還原**使用者排定的順序** ─────────────────────
@@ -629,6 +733,28 @@ try {
   check(results, '清單與使用者排定的順序於重啟後一致',
     afterRestart.map((r) => r.name).join(',') === 'repo-plain,repo-openspec,repo-missing',
     afterRestart.map((r) => r.name).join(', '))
+
+  // ── terminal-preferences：字型偏好跨重啟還原 ──────────────────────────────
+  const prefsAfterRestart = await app.client.evaluate('window.workspace.settings.get()')
+  check(results, '終端字型偏好於重啟後還原',
+    prefsAfterRestart?.fontFamily === 'Fira Code' &&
+      prefsAfterRestart?.fontSize === 15 &&
+      prefsAfterRestart?.lineHeight === 1.1,
+    JSON.stringify(prefsAfterRestart))
+  await app.close()
+
+  // ── terminal-preferences：偏好設定檔損毀不得阻止啟動 ──────────────────────
+  //
+  // 與 workspace.json 同一條紀律：無法信任的內容改名保留、以**預設**偏好啟動，絕不讓 app 開不起來。
+  const badPrefsProfile = mkTemp('spekterm-badprefs-')
+  writeFileSync(join(badPrefsProfile, 'preferences.json'), '{ not json at all')
+  app = await launch(badPrefsProfile)
+  check(results, '偏好設定檔損毀時應用程式仍正常啟動', app.mounted === true)
+  const defaultPrefs = await app.client.evaluate('window.workspace.settings.get()')
+  check(results, '損毀的偏好以預設啟動（空偏好）',
+    defaultPrefs && Object.keys(defaultPrefs).length === 0, JSON.stringify(defaultPrefs))
+  const keptPrefs = readdirSync(badPrefsProfile).filter((n) => n.includes('preferences.json.corrupt-'))
+  check(results, '損毀的偏好原檔改名保留而非刪除', keptPrefs.length === 1, keptPrefs[0] ?? '(無)')
   await app.close()
 
   // ── workspace-folders：設定檔損毀 ────────────────────────────────────────

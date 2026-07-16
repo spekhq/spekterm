@@ -367,11 +367,18 @@ spekterm
 | App framework | **Electron** + **electron-vite** | 與 spek 既有 Vite 建置一致 |
 | 打包 | **electron-builder** | 產出 mac / win / linux |
 | 編輯器 | **Monaco Editor** | VS Code 同款；需處理 Vite worker 設定。替代：CodeMirror 6（更輕、Vite 整合單純）——先以 Monaco 技術驗證，視打包大小再定 |
-| Terminal UI | **@xterm/xterm** | 搭配 fit / web-links addon |
+| Terminal UI | **@xterm/xterm** | 搭配 fit / web-links / serialize addon；**webgl renderer 只載給當下 active 的終端**（box-drawing 程式化繪製，且避開瀏覽器對並存 WebGL context 的上限 —— 所有 session 的終端同時掛載）。**canvas addon 不採**：它停在 xterm 5 時代（latest 0.7.0、peer `^5.0.0`、2023 年後未再發佈） |
 | PTY | **node-pty**（釘死 `1.2.0-beta.14`） | Node-API 模組，prebuilt 的 `.node` 可直接被 Electron 載入，**不需 `electron-rebuild`**。須採用 prebuilds 涵蓋全部目標平台的 1.2.0-beta 系列——npm `latest`（1.1.0）缺 Linux prebuild |
 | 檔案監控 | **chokidar** | spek 已用，主行程沿用 |
-| 設定持久化 | **electron-store** 或 userData JSON | 多 folder、開啟 tab、layout |
+| 設定持久化 | userData JSON | `workspace.json`（folder 清單與順序）／`sessions.json` + `sessions/<id>.scrollback`（session 狀態與畫面快照）／`preferences.json`（使用者偏好）。三者同一套紀律：**版本欄位 + 原子寫（temp+rename）+ 損毀隔離**（無法信任即改名保留、以預設啟動，絕不讓 app 開不起來） |
 | UI 技術棧 | React 19 + Tailwind v4 + react-markdown | 與 spek 完全一致，最大化重用 |
+
+> **終端字型：預設吃系統字型，且由使用者設定**（`terminal-rendering-and-preferences`）。字型**不打包、也不
+> 寫死特定字型名** —— 這個 app 要給一般使用者，預設必須是「一個**真實存在**的系統等寬字」
+> （`ui-monospace, monospace`），開箱即正常。（此前預設首選 `JetBrains Mono` —— 一個既沒打包、多數機器也
+> 沒裝的字型，於是靜默落到系統預設，字型從此與宣告不符。）與使用者自己的終端一致，由**偏好設定**達成：
+> Settings 入口 → 自**系統的等寬字型清單**挑選（下拉，非硬打字）+ **即時預覽** + 字型大小。
+> 字級的**預設**仍由字級尺度推導（單一旋鈕 `--text-base`），使用者偏好可覆蓋它。
 
 ---
 

@@ -1,4 +1,6 @@
+import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { TerminalFontDialog } from './settings/TerminalFontDialog'
 
 const ICON_PROPS = {
   viewBox: '0 0 24 24',
@@ -60,7 +62,7 @@ const ITEMS: ActivityItem[] = [
   {
     id: 'settings',
     labelKey: 'activityBar.settings',
-    enabled: false,
+    enabled: true,
     atBottom: true,
     icon: (
       <svg {...ICON_PROPS}>
@@ -73,6 +75,13 @@ const ITEMS: ActivityItem[] = [
 
 export function ActivityBar(): React.JSX.Element {
   const { t } = useTranslation()
+  const [settingsOpen, setSettingsOpen] = useState(false)
+
+  // 目前只有 Settings 入口有動作（開終端字型設定）。Sessions 恆為當前 view，其餘仍是停用的
+  // placeholder（`workspace-layout`：尚未實作的入口為停用狀態）。
+  const activate = (id: string): void => {
+    if (id === 'settings') setSettingsOpen(true)
+  }
 
   return (
     <nav
@@ -87,7 +96,10 @@ export function ActivityBar(): React.JSX.Element {
             <button
               type="button"
               disabled={!item.enabled}
+              // `aria-label` 同時是探針的選擇器（自字典取字串，不硬編）—— 見「aria-label 是選擇器」。
+              aria-label={label}
               aria-current={item.enabled ? 'page' : undefined}
+              onClick={item.enabled ? () => activate(item.id) : undefined}
               title={item.enabled ? label : t('activityBar.comingSoon', { label })}
               className={
                 'flex h-9 w-9 items-center justify-center rounded-md transition-colors ' +
@@ -97,11 +109,12 @@ export function ActivityBar(): React.JSX.Element {
               }
             >
               {item.icon}
-              <span className="sr-only">{label}</span>
             </button>
           </div>
         )
       })}
+
+      {settingsOpen && <TerminalFontDialog onClose={() => setSettingsOpen(false)} />}
     </nav>
   )
 }
