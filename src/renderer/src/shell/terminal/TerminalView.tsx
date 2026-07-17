@@ -51,7 +51,7 @@ export function TerminalView({
   // 解構出穩定的 callback。若依賴整個 api 物件，session 清單一變動就會重建 xterm
   // （連同 scrollback 一起消失）。
   const { attach, setTitle, restoredScrollbackOf } = useSessions()
-  const { terminal: termPrefs } = usePreferences()
+  const { terminal: termPrefs, gpuEnabled } = usePreferences()
   const hostRef = useRef<HTMLDivElement | null>(null)
   const handleRef = useRef<XtermHandle | null>(null)
   const [menu, setMenu] = useState<{ x: number; y: number; hasSelection: boolean } | null>(null)
@@ -254,6 +254,24 @@ export function TerminalView({
     if (size) window.workspace.terminal.resize(sessionId, size.cols, size.rows)
     handleRef.current?.focus()
   }, [active, sessionId])
+
+  /**
+   * GPU 加速：**只給當下顯示的那一個終端**，且使用者可以整個關掉。
+   *
+   * **「只給顯示中的」不是優化，是正確性要求。** 所有 session 的終端同時掛載（保留各自的
+   * scrollback，見 design D7），而並存的 webgl context 有上限（實測恰為 16）—— **超出時最舊的
+   * 會被靜默丟棄，不觸發任何事件**。若每個終端各持有一份，開了夠多 session 的使用者會看到較舊
+   * 的終端**無聲地變成空白**，而 wrapper 裡那條 `onContextLoss` 的自癒救不了他（它倚賴一個
+   * 通知，而那裡根本沒有通知）。
+   *
+   * 切走即釋放、切回即取得 —— 並存恆為 1。而「需要框線正確」的地方，恰好就是「看得見」的地方。
+   *
+   * `gpuEnabled` 是使用者的逃生口（見 `PreferencesProvider`）：自動降級只擋得住「資源取不到」，
+   * 擋不住「取得了、但驅動有缺陷而畫出錯的內容」—— 那只有使用者看得出來，也只有他關得掉。
+   */
+  useEffect(() => {
+    handleRef.current?.setGpuRenderer(active && gpuEnabled)
+  }, [active, gpuEnabled])
 
   // 套用終端字型偏好。掛載時套一次（偏好通常已由 `PreferencesProvider` 早載入備妥），偏好變更時再套。
   //

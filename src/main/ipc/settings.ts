@@ -5,6 +5,7 @@ import type { PreferencesStore, TerminalPreferences } from '../preferences-store
 export const SETTINGS_CHANNELS = {
   get: 'workspace:settings:get',
   setTerminalFont: 'workspace:settings:setTerminalFont',
+  setGpuAcceleration: 'workspace:settings:setGpuAcceleration',
   listMonospaceFonts: 'workspace:settings:listMonospaceFonts',
 } as const
 
@@ -63,6 +64,13 @@ export function registerSettingsHandlers(store: PreferencesStore): void {
       fontSize: number | null,
       lineHeight: number | null,
     ): TerminalPreferences => store.setTerminalFont(fontFamily, fontSize, lineHeight),
+  )
+
+  // 值的驗證同樣在 store（只認真正的布林；其餘一律當成未設定＝預設啟用）。
+  ipcMain.handle(
+    SETTINGS_CHANNELS.setGpuAcceleration,
+    (_event, enabled: boolean | null): TerminalPreferences =>
+      store.setGpuAcceleration(typeof enabled === 'boolean' ? enabled : null),
   )
 
   ipcMain.handle(SETTINGS_CHANNELS.listMonospaceFonts, (): Promise<string[]> =>

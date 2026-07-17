@@ -133,11 +133,25 @@ claude session 裡按右鍵會**同時**貼上又彈出選單；claude 輸出的
 **原生**的中鍵貼上，見下文）、**終端字型的系統預設 + 可設定**（新 capability `terminal-preferences`：
 `preferences.json` + `settings.*` IPC + 下拉選字型 + 即時預覽 + size + 行高），以及**行高 1.3 → 1.0**。
 
-**它刻意不修好表格。** 完整的修復要 GPU renderer，而那條**延後到下一個 change** —— 因為它會廢掉
-`probe:terminal` 的觀測策略。這個 change 對表格的貢獻只有行高（dogfood 實測「好不少」，但捲動時仍可能
-破）。延後的完整調查見下文「GPU renderer 為什麼延後」—— **那是資產，下一個 change 直接接手**。
+**它刻意不修好表格** —— 完整的修復要 GPU renderer，那條延後給了下一個 change（見下）。
 `npm test` 265/265、`probe:terminal` 176/176、`probe:workspace` 66/66、`probe:keyboard` 118/118、
 `probe:shell` 17/17、`probe:files` 102/102、`probe:openspec` 182/182。
+
+`terminal-gpu-renderer`（**不屬於任何 Phase**）接手了那條延後，**表格於 dogfood 確認修好**。它交付
+**webgl renderer**（xterm 唯一可用的 GPU renderer —— canvas addon 對 xterm 6 已死）、**只給當下顯示的
+那一個終端**（並存的 context 上限實測恰為 16，**超出時最舊的靜默被丟棄、不觸發任何事件** —— 於是這是
+正確性要求而非優化），以及**關掉它的開關**（`terminal-preferences` 的新 requirement —— 自動降級只擋得住
+「資源取不到」，擋不住「取得了但驅動畫錯」，那只有使用者看得出來）。
+
+**但它真正的重量在驗收**：webgl 會讓 `.xterm-rows` 消失，而那是 probe 讀終端內容的**唯一**管道 ——
+**2 支 probe、27 個呼叫點、26 條斷言**，且失效方向是**假綠**（讀不到時回空字串，於是否定式斷言保持
+綠燈）。因此本 change 有一半是**把觀測管道換成 renderer-agnostic 的**：A 類 14 條改**讀檔**（嚴格更強
+—— 能區分回顯與執行），B 類 8 條改走**產品自己的複製路徑**（跨 renderer 不變，且把折行接回邏輯行），
+字級 4 條改讀 **pty 的 cols**（證明字級真的改變了 pty 的幾何）。**順序是承重的**：先改觀測點、在 DOM
+renderer 上驗到全綠，再上 webgl —— 於是「改寫弄壞了什麼」與「webgl 弄壞了什麼」分得開。連帶抓到一條
+**從未生效過**的斷言（`Ctrl+Tab` 的外洩偵測 —— `cat -v` 不 escape Tab，`^I` 永不出現）。詳見下文
+「GPU renderer」與「觀測管道」兩節。`npm test` 268/268、`probe:terminal` 186/186、`probe:keyboard`
+118/118、`probe:workspace` 67/67、`probe:shell` 17/17。
 
 尚未開始：打包（Phase 6）、handoff（Phase 7+）。**session 常駐**（讓 pty 活過 app 的生命）已排入
 路線圖但**刻意不做** —— 見 `docs/PRD.md` §11 的「session 常駐」，那裡記著 tmux 與自寫 daemon 的取捨。
@@ -150,9 +164,9 @@ npm run build           # 建置至 out/
 npm run typecheck       # tsc：main / preload（node）+ renderer（web）
 npm test                # node:test 單元測試（fs 邊界、workspace store、listDir/readFile、watcher、外部 URL、pty 管理器、git 分支解析、終端偏好 store（字型 family 清理/size 與行高夾制/損毀隔離）、字級不得寫死、舊產品名不得殘留、UI 文案不得含 CJK、aria-label 不得硬編、字典 key 的型別安全）
 npm run probe:shell     # 驗收 workspace-app-shell（開視窗 + 信任模型 + preload 白名單，走 CDP）
-npm run probe:workspace # 驗收 workspace-folders / filesystem-access / workspace-layout / repo-branch / terminal-preferences（rail 呈現分支、於 app 之外切 branch 後自己更新、detached HEAD、執行期間變成 git repo、rail 不呈現不可操作的控制項；**repo 的拖曳排序** —— 落點與指示線一致、末端拖得到、拖 session 子列不會連 repo 一起搬、未位移的按下＝點擊、順序跨重啟還原、可拖曳項目的靜止游標為 pointer；**Settings 入口啟用**且觸發後開啟終端字型設定對話框（family 下拉／size／行高／預覽、首項為系統預設、Esc 關閉）；**終端偏好**寫入時夾制 size・清理 family、跨重啟還原、偏好檔損毀仍以預設啟動且原檔改名保留）
+npm run probe:workspace # 驗收 workspace-folders / filesystem-access / workspace-layout / repo-branch / terminal-preferences（rail 呈現分支、於 app 之外切 branch 後自己更新、detached HEAD、執行期間變成 git repo、rail 不呈現不可操作的控制項；**repo 的拖曳排序** —— 落點與指示線一致、末端拖得到、拖 session 子列不會連 repo 一起搬、未位移的按下＝點擊、順序跨重啟還原、可拖曳項目的靜止游標為 pointer；**Settings 入口啟用**且觸發後開啟終端偏好設定對話框（family 下拉／size／行高／**GPU 加速開關**／預覽、首項為系統預設、Esc 關閉、**預覽不得含框線字元** —— 那些字元在終端由 GPU 程式化繪製、不經字型）；**終端偏好**寫入時夾制 size・清理 family、跨重啟還原、偏好檔損毀仍以預設啟動且原檔改名保留）
 npm run probe:files     # 驗收 file-explorer / file-viewer / 編輯 / 存檔 / 衝突 / CRUD / 導航防護 / 編輯器 worker / CSP（遠端圖片可載入、script-src 僅 self、注入點對 file:// 生效，dev + build 兩模式）
-npm run probe:terminal  # 驗收 terminal-sessions + session-persistence（pty 雙向／cwd／resize／多開／關分頁・reload・關窗皆不留孤兒；剪貼簿畸形輸入防禦；**右鍵 gate 在 mouse reporting**（stub 送 DECSET 1000 時右鍵讓位給程式、關閉後恢復選單 —— 含對照組）；OSC 標題與命名權；**關掉 app 再開後 session 原樣重建**、只喚醒被顯示的那一個、claude 以 --resume 續接同一個對話、續接失敗自癒為全新對話、shell 於最後 cwd 重生並重播畫面、kill -9 後快照仍在、損毀韌性、被竄改的識別碼不進命令 —— 皆以 PATH 上的 stub claude 承載，dev + build 兩模式）
+npm run probe:terminal  # 驗收 terminal-sessions + session-persistence + GPU renderer（pty 雙向／cwd／resize／多開／關分頁・reload・關窗皆不留孤兒；**GPU renderer 只給顯示中的終端**（代理判準：active 有 canvas 且無 .xterm-rows；隱藏的不得持有 canvas）、關掉 GPU 加速退回 DOM 且不遺失內容、開回來又是 GPU；**觀測管道已 renderer-agnostic** —— 不再從 DOM 讀終端內容：pty 行為走**讀檔**、畫面走**產品的複製路徑**、字級走 **pty 的 cols**；`PROBE_ONLY=<段落>[:<模式>]` 可只跑一部分（迭代用，不設就跑全部）；剪貼簿畸形輸入防禦；**右鍵 gate 在 mouse reporting**（stub 送 DECSET 1000 時右鍵讓位給程式、關閉後恢復選單 —— 含對照組）；OSC 標題與命名權；**關掉 app 再開後 session 原樣重建**、只喚醒被顯示的那一個、claude 以 --resume 續接同一個對話、續接失敗自癒為全新對話、shell 於最後 cwd 重生並重播畫面、kill -9 後快照仍在、損毀韌性、被竄改的識別碼不進命令 —— 皆以 PATH 上的 stub claude 承載，dev + build 兩模式）
 npm run probe:keyboard  # 驗收 keyboard-navigation（Ctrl+Tab 切 session／Ctrl+↑↓ 切 repo／位置序非 MRU／按鍵不流進 pty／編輯器與對話框的行為 —— 對話框的抑制以 session 命名／files／**終端字型設定**三種各驗一次；**Shift+↑↓ 排 repo、Shift+←→ 排 session** —— 端點不循環、移動後仍選中／focused、終端持有焦點時仍生效且按鍵不進 pty、**編輯器持有焦點時 Shift+→ 仍是文字選取**，dev + build 兩模式）
 npm run probe:openspec  # 驗收 openspec-data-access / openspec-panel（兩個視圖／兩棵樹／artifact 分頁／agent 改檔即更新／錨定／交叉導覽／Graph・Timeline 的 overlay，dev + build 兩模式）
 npm run probe:native    # 驗收 native-module-toolchain（Electron 主行程載入 node-pty + spawn pty）
@@ -1348,35 +1362,111 @@ change」視圖會對著一個在新 repo 不存在的 change 顯示空狀態，
 
 ## terminal-rendering-and-preferences 的實測與踩雷
 
-### GPU renderer 為什麼延後 —— 下一個 change 直接接手，不必重踩
+### GPU renderer（`terminal-gpu-renderer` —— **已交付**，dogfood 確認表格修好了）
 
-原訂以「程式化繪製 box-drawing 的 renderer」修表格破版。四個實測結論讓它延後：
+`terminal-rendering-and-preferences` 曾把它延後（理由是「webgl 會廢掉 probe 的觀測點」）。**接手時
+重做了一次獨立實測，那份延後紀錄的三個判斷有兩個是錯的** —— 以下是修正後的版本。
 
-1. **`@xterm/addon-canvas` 對 xterm 6 是死的。** latest **0.7.0**、peer `^5.0.0`、最後發佈 **2023-11**，
-   而我們的 xterm 是 6.0.0；`@xterm/addon-webgl` 反而與其他 addon 同代、維護中（**0.19.0**）。canvas 是
-   xterm.js 官方已 deprecated、改推 webgl 的那一個。**GPU renderer 的唯一可用選項是 webgl。**
-2. **webgl 每個終端一個 context，瀏覽器對並存 context 有上限（約 16）。** 這個 app **同時掛載每個
-   session 的終端**（terminal 的 design D7），全掛會撞上限（最舊的 context 被丟棄、畫面變空）。可行解是
-   **只載給當下 active 的那一個**（切走即 `dispose()`，xterm 自動退回 DOM）—— 已實作並經 dogfood 驗證
-   有效，程式碼可從 git 歷史取回。
-3. **但 webgl 會廢掉 `probe:terminal` 的觀測點 —— 這才是延後的真正原因。** webgl 畫到 `<canvas>`，
-   **`.xterm-rows` 隨即消失**，而 probe 讀終端內容的唯一方式正是它（`TERMINAL_TEXT` / `TERMINAL_FONT`，
-   **14 個呼叫點**）。實測：開 webgl 後 **8 條斷言倒** —— 輸入到 pty、cwd、貼上、resize 讀成 `0 → 0`、
-   切回 session 內容仍在、字級讀成 `undefined`。**終端本身沒壞，是驗收瞎了。**
-4. **兩條候選解（留給下一個 change 裁決）**：
-   - **改寫觀測點**：把「讀畫面文字」換成「讀檔」（`echo X > file` → 讀檔）—— 嚴格更強，因為它**能區分
-     回顯與執行**（CLAUDE.md 早有這條教訓，而讀畫面文字本來就分不清）。但**「切回 session 後 scrollback
-     仍在」找不到可靠的觀測點**（快照檔有 2s debounce，證明不了「切換後還在」）；候選是走產品自己的複製
-     路徑（拖曳選取 + `Ctrl+Shift+C` → 讀剪貼簿），未驗證。
-   - **把「GPU 加速」做成使用者偏好**（VS Code 有 `terminal.integrated.gpuAcceleration` 的先例，且驅動有
-     問題的使用者真的需要這個逃生口）：probe 以 `settings` IPC 關掉它再測 behavior（那是**產品的公開
-     功能**，不是測試分支），另加一條「預設下 active 終端確實是 webgl」。**論點**：那批 behavior 斷言
-     （pty I/O、cwd、cols、buffer 存活）本來就與 renderer 無關 —— renderer 不碰 pty，cell 量測走
-     `CharSizeService`（DOM，非 renderer）—— 且 DOM renderer 是產品真實支援的降級路徑。
+- **`@xterm/addon-canvas` 對 xterm 6 是死的**（這條成立，且證據比原紀錄更乾淨）：latest **0.7.0**、
+  **它是唯一仍宣告 peer `^5.0.0` 的 addon**，2023-11 後未再發佈；我們其餘的 addon（fit 0.11 /
+  serialize 0.14 / web-links 0.12）與 **webgl 0.19** 同代、**皆已不宣告 peer**。**GPU renderer 的唯一
+  可用選項是 webgl，這條不必再查。**
+- **「程式碼可從 git 歷史取回」—— 錯，那份 spike 從未 commit。** `WebglAddon` 在**全歷史（含 9 個
+  dangling commit）搜尋為空**。原紀錄害人去找一個不存在的東西。**教訓：「已實作過」與「已 commit」
+  是兩件事，寫紀錄時不要把前者當成後者。**
+- **「爆炸半徑是 probe:terminal 的 14 個呼叫點、8 條斷言倒」—— 少算一半，而且方向是反的。**
+  實際是 **2 支 probe、27 個呼叫點、26 條斷言** —— **`probe:keyboard` 也讀 `.xterm-rows`**，原紀錄
+  完全沒提到它。更要緊的是**失效模式**：`TERMINAL_TEXT` 讀不到時**回空字串、不丟錯**，於是**否定式**
+  斷言（「被攔下的按鍵**沒有**流進 pty」＝ `leaked.length === 0`）會**保持綠燈**。「斷言倒」聽起來
+  像會變紅，真相是**假綠**。
 
-> **教訓：一個渲染層的選擇，可以整個廢掉一套驗收策略。** 選 renderer 之前先問「probe 是從哪裡觀測的」。
+**`customGlyphs` 是官方的機制**（xterm 6 的公開選項，預設 true）：程式化繪製 block element 與
+box drawing，文件明載「continuous lines, **even when line height is used**」，且**對 DOM renderer 無效**。
+
+**並存的 webgl context 上限實測恰為 16，而超出時最舊的是靜默被丟棄的** —— 建 30 個只有 16 個活著，
+而 **`webglcontextlost` 一次都沒觸發**。這使「只給 active 終端」從優化升級為**正確性要求**：
+`onContextLoss` 的自癒**救不了它**（那條倚賴一個通知，而這裡根本沒有通知）。
+
+### 上一個 change 已經修完「靜態的縫」了 —— 本 change 修的是**分數像素**
+
+**這件事很容易搞混，而搞混會讓人以為 webgl 修的是行高的縫。** 實測（同一張表格、同一字型）：
+
+| | 行高 1.0（出貨的預設） | 行高 1.3 |
+|---|---|---|
+| DOM renderer | **1 段 / 0 空洞** | **7 段 / 30px 空洞** |
+| webgl | 1 段 / 0 空洞 | **1 段 / 0 空洞** |
+
+**行高 1.0 時 DOM 本來就無縫** —— `terminal-rendering-and-preferences` 把行高收到 1.0 就已經把那個縫
+修完了。webgl 在**垂直**方向的貢獻是「**讓行高自由**」，不是「修好縫」。
+
+**webgl 真正修掉的是水平方向的缺陷：分數像素。** 在出貨的預設（fs 16 / 行高 1.0）下：
+
+```
+DOM:   cellW = 9.630434782608695（分數）→ 垂直線佔的 x 數：[1, 2, 2, 1]
+webgl: cellW = 9（整數）              → 垂直線佔的 x 數：[1, 1, 1, 1]
+```
+
+峰值亮度兩者相同（163/152）—— **不是變暗，是被抹開**：外框線恰好落在整數像素而銳利，內部的線落在
+9.63 的倍數上被反鋸齒攤到兩個像素。**同一張表格裡，有的線是一條、有的線是兩條淡的。** 這是靜態就
+存在的、行高修不到的缺陷。
+
+> **行高的預設維持 1.0，而且理由變了。** 直覺是「webgl 讓行高自由了，可以調回 1.3」—— **錯**：行高是
+> 跨 renderer 的偏好，而 **DOM 是真實可達的降級路徑**（context 取不到、驅動有問題、使用者自己關掉
+> GPU）。預設 1.3 的話，落到 DOM 的使用者**開箱就是破的表格**，而他們正是最沒能力自救的一群。
+> **同一個數字 1.0，新的理由是「因為降級路徑存在」** —— 而理由才是 spec 的內容。
+
+### 「捲動時破版」始終沒有被重現 —— 它是由 dogfood 認定的
+
+**本 change 沒能重現使用者原話裡的「捲動時破版」。** 合成 fixture 失敗了：那些內容本身就有合法的
+斷點，量到的是 fixture 的結構而非渲染缺陷；真實的變數（claude 實際輸出的表格、使用者的 MesloLGS NF、
+真 pty 的捲動時序）合成不出來。
+
+因此 design 明文**不宣稱**修好它，tasks 也寫著「若 dogfood 仍破，不得因為『已經上了 webgl』就宣稱
+結案」。**最終由 dogfood 認定：使用者實測通過。** 但這條紀律要留著 —— 下次遇到「只有真實環境才觸發
+的呈現問題」，能驗的就驗，驗不到的就標示清楚交給 dogfood，不要用一個合成的綠燈假裝它被證明了。
+
+### 觀測管道：**probe 不再從 DOM 讀終端內容**（`terminal-gpu-renderer` 起）
+
+`.xterm-rows` 只存在於 DOM renderer。**它的失效方式是這整件事的核心**：讀不到時回**空字串、不丟錯**，
+於是**否定式**斷言（「被攔下的按鍵**沒有**流進 pty」＝ `leaked.length === 0`、「claude session **不**
+重播快照」＝ `!includes(分隔線)`）**在瞎掉的情況下繼續發綠燈**。三條斷言正是如此。
+
+**三條替代管道，而且都比它強：**
+
+| 測什麼 | 管道 | 為什麼更強 |
+|---|---|---|
+| pty 行為（輸入、cwd、cols、貼上） | **讀檔**（`echo X > f` → 讀檔） | 能**區分回顯與執行** —— 讀畫面文字本來就分不清（tty 會回顯輸入行） |
+| 畫面內容（scrollback、重播、alt buffer） | **產品自己的複製路徑**（拖曳選取 → 複製 → 讀剪貼簿） | 跨 renderer 不變；且**把折行接回邏輯行**，`includes()` 不會在折點斷開 |
+| 字級 | **pty 的 `cols`**（固定寬度下字級 ↑ → cols ↓） | 證明字級真的改變了 **pty 的幾何** —— 那才是 requirement 在乎的（computed `fontSize` 只證明「一個 CSS 屬性被設了」） |
+
+**四個會靜默失敗的實測（全部踩過）：**
+
+- **DOM 上沒有任何可用的字級訊號。** `.xterm` 的 computed `fontSize` **恆為 `16px`**、
+  `.xterm-helper-textarea` **恆為 `13.3333px`**（都是瀏覽器預設，不跟 `options.fontSize` 走）——
+  而它們**剛好接近正確值**，換上去就是一條永遠通過的假綠（與 `--text-terminal` 的 `calc()` 陷阱同型）。
+  `.xterm-char-measure-element` 在 webgl 下不存在；`.xterm-screen` 的 rect 還在，但 `= cols × cellW`，
+  而 `cols` 只在 xterm 實例上（probe 碰不到）。
+- **終端的左緣正好是 resizable panel 的分界器。** 從 `.xterm-screen` 的左上角起拖，抓到的是**分界器**：
+  選取是空的，**而且側欄被拉開、終端被擠到視窗右側 —— 版面永久損毀**（實測 `x=322 w=607` → `x=920 w=357`）。
+  **一次錯誤的拖曳讓後面六個對照變體全部誤報失敗**，我因此追錯好幾輪。**抓出它的是「把已知成功的變體排到
+  已知失敗的之後 —— 它也失敗了」** ⇒ 座標不會因執行順序而改變，那一定是污染。**正解：反向拖曳**
+  （右下角元素內 → 左上角第 0 格內），按下的點永遠不碰分界器。
+- **xterm 把座標四捨五入到最近的 cell 邊界**（cellW ≈ 9.6，過半進位）。終點要 `+2` 才落在第 0 格；
+  `+10`（既有那條複製斷言的作法）與超出左緣（`-12`）**都會切掉首字元**。
+- **`cat -v` 不 escape Tab。** `probe:keyboard` 的 `leaked` 檢查 `'^I'`（`Ctrl+Tab` 未被攔截時送出的
+  `\x09`）—— 實測送 `\x09` 到 pty，畫面上是**字面的 tab**，**`^I` 永不出現**。**那條檢查從來沒有生效過**：
+  `Ctrl+Tab` 若外洩進 pty，探針抓不到，而它正是 `keyboard-navigation` 的頭號快捷鍵。修法：**`cat -A`**
+  （＝ `-vET`）。對照組：`cat -v` → 檔案 `"\t\n"`（抓不到）；`cat -A` → `"^I$\n"`（抓得到）。
+
+> **加新的觀測點時，順序是承重的：先改觀測點、在舊 renderer 上驗到全綠，再換 renderer。** 這樣
+> 「改寫弄壞了什麼」與「換 renderer 弄壞了什麼」才分得開；反過來做的話，任何一條紅燈都有兩個嫌疑犯。
+
+> **`probe:terminal` 會開真視窗、送真滑鼠事件，跑完整支約 4 分鐘，而那段期間使用者無法操作自己的
+> 電腦。** 迭代時用 `PROBE_ONLY=<段落>[:<模式>]` 只跑被改到的那一段（例：`PROBE_ONLY=runMode:build`
+> 約 1 分鐘）。**不設就跑全部**，完整驗收與 CI 的行為不變。
 
 ### 行高不只是可讀性 —— 它決定框線接不接得起來
+
 
 DOM renderer 下，框線字元（`│` `┌` …）是**靠字型自己的 glyph 去拼**的，而 glyph 只有約 **1em** 高，
 row 的高度卻是 `fontSize × lineHeight` —— **行高大於 1 時，上下兩列的 `│` 接不起來，中間留一條縫**，

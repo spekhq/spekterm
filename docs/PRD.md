@@ -367,7 +367,7 @@ spekterm
 | App framework | **Electron** + **electron-vite** | 與 spek 既有 Vite 建置一致 |
 | 打包 | **electron-builder** | 產出 mac / win / linux |
 | 編輯器 | **Monaco Editor** | VS Code 同款；需處理 Vite worker 設定。替代：CodeMirror 6（更輕、Vite 整合單純）——先以 Monaco 技術驗證，視打包大小再定 |
-| Terminal UI | **@xterm/xterm** | 搭配 fit / web-links / serialize addon；**webgl renderer 只載給當下 active 的終端**（box-drawing 程式化繪製，且避開瀏覽器對並存 WebGL context 的上限 —— 所有 session 的終端同時掛載）。**canvas addon 不採**：它停在 xterm 5 時代（latest 0.7.0、peer `^5.0.0`、2023 年後未再發佈） |
+| Terminal UI | **@xterm/xterm** | 搭配 fit / web-links / serialize addon；**webgl renderer 只載給當下 active 的終端**（`customGlyphs` 把 box-drawing 程式化繪製，與字型 glyph 及 cell 的分數像素落點都無關；並存的 WebGL context **實測上限恰為 16 且超出時最舊的靜默被丟棄、不觸發任何事件** —— 而所有 session 的終端同時掛載，故「只給 active」是正確性要求而非優化）；使用者可關閉 GPU 加速（逃生口）。**canvas addon 不採**：它停在 xterm 5 時代（latest 0.7.0、peer `^5.0.0`、2023 年後未再發佈） |
 | PTY | **node-pty**（釘死 `1.2.0-beta.14`） | Node-API 模組，prebuilt 的 `.node` 可直接被 Electron 載入，**不需 `electron-rebuild`**。須採用 prebuilds 涵蓋全部目標平台的 1.2.0-beta 系列——npm `latest`（1.1.0）缺 Linux prebuild |
 | 檔案監控 | **chokidar** | spek 已用，主行程沿用 |
 | 設定持久化 | userData JSON | `workspace.json`（folder 清單與順序）／`sessions.json` + `sessions/<id>.scrollback`（session 狀態與畫面快照）／`preferences.json`（使用者偏好）。三者同一套紀律：**版本欄位 + 原子寫（temp+rename）+ 損毀隔離**（無法信任即改名保留、以預設啟動，絕不讓 app 開不起來） |

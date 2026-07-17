@@ -223,15 +223,17 @@
     "replaySeparator": "end of previous content · spekterm restarted"
   },
   "settings": {
-    "title": "Terminal font",
+    "title": "Terminal",
     "fontFamily": "Font family",
     "fontFamilyPlaceholder": "System default",
     "fontSize": "Font size",
     "fontSizePlaceholder": "Default",
     "lineHeight": "Line height",
+    "gpuAcceleration": "GPU acceleration",
+    "gpuAccelerationHint": "Draws the terminal on the GPU. Turn this off if the terminal renders incorrectly on your machine.",
     "lineHeightPlaceholder": "Default",
     "preview": "Preview",
-    "previewSample": "The quick brown fox 0123456789\nil1 | oO0 {}[]() => != === <= >=\n┌──────┬──────┐\n│ cell │ cell │\n└──────┴──────┘",
+    "previewSample": "The quick brown fox 0123456789\nil1 | oO0 {}[]() => != === <= >=\nconst λ = (x) => x ?? 0; // 1lI0O",
     "reset": "Reset to default",
     "save": "Save"
   }

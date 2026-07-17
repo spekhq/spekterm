@@ -15,7 +15,7 @@
  *   **不假裝這裡涵蓋了它**。
  */
 import { execFileSync, spawn } from 'node:child_process'
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
@@ -37,6 +37,9 @@ function mkTemp(prefix) {
   return dir
 }
 
+/** pty 寫檔的觀測落點。刻意在 repo 之外 —— repo 內有 chokidar 在監看。 */
+let ptyOutDir = null
+
 function makeFixture() {
   const base = mkTemp('spekterm-keyboard-fixture-')
   const repos = ['repo-a', 'repo-b', 'repo-c'].map((name) => {
@@ -45,7 +48,43 @@ function makeFixture() {
     writeFileSync(join(repo, 'notes.txt'), `${name} 的內容\n第二行\n`)
     return [name, repo]
   })
+  ptyOutDir = join(base, 'probe-out')
+  mkdirSync(ptyOutDir, { recursive: true })
   return repos
+}
+
+/**
+ * 送一顆 Enter（不打任何字）。
+ *
+ * **這是「讀檔」判定按鍵是否進 pty 的關鍵一步，而它不直觀。** tty 處於 **canonical mode**，
+ * 輸入會停在**行緩衝**裡 —— **沒有換行，`cat` 永遠讀不到那些位元組**，檔案自然是空的
+ * （實測：`cat -A > f` 與 `stdbuf -o0 cat -A > f` 都拿不到，不是緩衝設定的問題，是行紀律）。
+ * 按完待測的鍵之後補一顆 Enter，那一行才會被送進 `cat`，也才會落檔。
+ */
+async function pressEnter(client) {
+  const key = { key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 }
+  await client.send('Input.dispatchKeyEvent', { type: 'keyDown', ...key, text: '\r' })
+  await client.send('Input.dispatchKeyEvent', { type: 'keyUp', ...key })
+}
+
+/**
+ * 等 pty 寫出的檔案出現並滿足條件，回傳內容。
+ *
+ * 判定「按鍵有沒有流進 pty」為什麼要走磁碟：**畫面上那串 caret 記法（`^[[A`）不是 `cat` 印的，
+ * 是 tty 自己的 echo**（canonical mode 的 `echoctl`）—— 實測**完全不跑 `cat`，畫面照樣有它**。
+ * 於是「讀畫面」讀到的是 tty 的行為，而 `cat -A > file` 讓那些位元組真的落到磁碟上，
+ * 且**渲染方式怎麼變都不影響它**。
+ */
+async function waitForPtyFile(name, settled, timeoutMs = 8000) {
+  const path = join(ptyOutDir, name)
+  const deadline = Date.now() + timeoutMs
+  let last = ''
+  while (Date.now() < deadline) {
+    last = existsSync(path) ? readFileSync(path, 'utf8') : ''
+    if (settled(last)) return last
+    await sleep(150)
+  }
+  return last
 }
 
 function seedProfile(repos) {
@@ -198,12 +237,22 @@ const TAB_RECT = (index) => `(() => {
   return { x: r.x, y: r.y, width: r.width, height: r.height }
 })()`
 
-/** 只讀「當前顯示中」的那個終端 —— 其餘 session 的終端仍掛載，只是 display:none。 */
+/**
+ * 只讀「當前顯示中」的那個終端 —— 其餘 session 的終端仍掛載，只是 display:none。
+ *
+ * **讀不到就丟錯，絕不回空字串**（與 `probe-terminal.mjs` 的同名 expression 同源，兩份都要改）。
+ *
+ * **這支探針是假綠的重災區**：它的核心保證「被攔下的按鍵沒有流進 pty」全是否定式斷言
+ * （`leaked.length === 0`）—— 空字串 ⇒ `leaked` 必為空 ⇒ **通過**。也就是說，終端完全讀不到時
+ * 它們照樣是綠的，而它們自稱在測的東西一個字都沒測到。
+ */
 const TERMINAL_TEXT = `(() => {
   const host = [...document.querySelectorAll('section[aria-label="${copy('stage.terminal')}"] > div')]
     .find((d) => !d.classList.contains('hidden'))
-  const rows = host?.querySelector('.xterm-rows')
-  return rows ? rows.innerText : ''
+  if (!host) throw new Error('TERMINAL_TEXT: 找不到顯示中的終端容器（沒有 session？還是版面變了？）')
+  const rows = host.querySelector('.xterm-rows')
+  if (!rows) throw new Error('TERMINAL_TEXT: 終端容器在，但讀不到 .xterm-rows —— 渲染方式換了？這條觀測管道已失效，不可當成「畫面上沒有東西」')
+  return rows.innerText
 })()`
 
 const DIALOG_OPEN = `Boolean(document.querySelector('[role="dialog"]'))`
@@ -464,21 +513,24 @@ async function runMode(label, { port, rendererUrl }) {
     await sleep(2000) // 等 shell 畫出 prompt
     await realClick(app.client, term)
     await sleep(200)
-    await typeLine(app.client, 'cat -v')
+    // **載體是 `cat -A`，不是 `cat -v` —— 這個差別是承重的。**
+    //
+    // `-v` 只處理 nonprinting 字元，**它不 escape Tab**（那要 `-T`）。而 `Ctrl+Tab` 未被攔截時
+    // 送出的正是 `\x09`（Tab ＝ Ctrl+I）—— 實測：送 `\x09` 到 pty，`cat -v` 那邊出現的是**字面的
+    // tab**，`^I` **永不出現**。於是舊版那條 `leaked` 裡的 `'^I'` **從來沒有機會命中**：
+    // **`Ctrl+Tab` 若外洩進 pty，這支探針抓不到**，而 `Ctrl+Tab` 正是本能力的頭號快捷鍵。
+    // `-A` ＝ `-vET`，Tab 才會顯示為 `^I`（行尾則顯示為 `$`）。
+    await typeLine(app.client, `cat -A > ${join(ptyOutDir, 'keys.txt')}`)
     await sleep(1000)
 
     await pressKey(app.client, 'ArrowUp') // 對照組：不帶 Ctrl
-    const controlText = await pollUntil(
-      app.client,
-      TERMINAL_TEXT,
-      (value) => String(value).includes('^[[A'),
-      8000,
-    )
+    await pressEnter(app.client) // 沖掉 tty 的行緩衝，那一行才會進 cat
+    const controlText = await waitForPtyFile('keys.txt', (value) => value.includes('^[[A'))
     check(
       results,
       `${label}：對照組 —— 未攔截的方向鍵確實抵達 pty`,
-      String(controlText).includes('^[[A'),
-      '（沒有這條，下一條的「沒看到垃圾」證明不了任何事）',
+      controlText.includes('^[[A'),
+      `（沒有這條，下一條的「沒看到垃圾」證明不了任何事）檔案=${JSON.stringify(controlText.slice(-24))}`,
     )
 
     await pressKey(app.client, 'ArrowUp', ['ctrl'])
@@ -487,16 +539,23 @@ async function runMode(label, { port, rendererUrl }) {
     await pressKey(app.client, 'Tab', ['ctrl', 'shift'])
     await sleep(1200)
 
-    // 切回原本那個 session 才讀得到它的終端
+    // 切回原本那個 session 才送得出沖行緩衝的 Enter
     await realClick(app.client, await app.client.evaluate(TAB_RECT(1)))
     await sleep(400)
-    const ptyText = String(await app.client.evaluate(TERMINAL_TEXT))
+    await pressEnter(app.client)
+    await sleep(600)
+    const ptyText = await waitForPtyFile('keys.txt', () => true, 1500)
     const leaked = ['^[[1;5A', '^[[1;5B', '^I'].filter((seq) => ptyText.includes(seq))
     check(
       results,
       `${label}：被攔下的按鍵沒有流進 pty`,
-      leaked.length === 0,
-      leaked.length ? `外洩：${leaked.join(' ')}` : '',
+      // **`ptyText !== ''` 不是贅字，是哨兵。** 這是一條**否定式**斷言 —— 觀測管道整個失效時
+      // `leaked` 必為空，於是它會在「什麼都沒觀測到」的情況下發綠燈。必須先證明「這條管道
+      // 讀得到東西」，「沒讀到垃圾」才有意義。（`Shift+arrow` 那條一直有這個哨兵，這條沒有。）
+      leaked.length === 0 && ptyText !== '',
+      leaked.length
+        ? `外洩：${leaked.join(' ')}`
+        : `（檔案 ${ptyText.length} 字元，其中不含被攔下的序列）`,
     )
 
     // ── Ctrl+↓ / Ctrl+↑：切換 repo（可循環）
@@ -630,37 +689,43 @@ async function runMode(label, { port, rendererUrl }) {
     await sleep(2000)
     await realClick(app.client, termForT)
     await sleep(200)
-    await typeLine(app.client, 'cat -v')
+    await typeLine(app.client, `cat -A > ${join(ptyOutDir, 'ctrlt.txt')}`)
     await sleep(1000)
 
-    // **對照組不能用「畫面上有沒有 t」判定** —— 畫面上本來就到處是 t（連 `cat -v` 這行命令
-    // 自己都有）。要比對的是「終端的內容**有沒有因為這一顆按鍵而改變**」。
-    const baseText = String(await app.client.evaluate(TERMINAL_TEXT))
+    // **判準是 pty 寫出的檔案。** 舊版比對「終端內容有沒有變」—— 那是因為畫面上本來就到處是 t
+    // （連命令列自己都有），不能直接找 t。改讀檔之後判準乾淨得多：**每按一次 Enter，`cat` 就多寫
+    // 一行；那一行裡有沒有 t，就是「這顆鍵有沒有進 pty」。**
     await pressKey(app.client, 't') // 對照組：不帶 Ctrl
-    const echoed = await pollUntil(
-      app.client,
-      TERMINAL_TEXT,
-      (value) => String(value) !== baseText,
-      6000,
-    )
+    await pressEnter(app.client)
+    const afterPlainT = await waitForPtyFile('ctrlt.txt', (value) => value.includes('t'))
     check(
       results,
       `${label}：對照組 —— 未攔截的 t 確實抵達 pty`,
-      String(echoed) !== baseText,
-      '（沒有這條，下一條的「終端沒變化」證明不了任何事）',
+      afterPlainT.includes('t'),
+      `（沒有這條，下一條的「沒有 t」證明不了任何事）檔案=${JSON.stringify(afterPlainT.slice(-16))}`,
     )
 
-    const beforeCtrlT = String(await app.client.evaluate(TERMINAL_TEXT))
+    const beforeCtrlT = afterPlainT
     await pressKey(app.client, 't', ['ctrl'])
     await sleep(1000)
     await pressKey(app.client, 'Escape') // 關掉它開出來的選單
     await pollUntil(app.client, MENU_STATE, (v) => v === null, 4000)
-    const afterCtrlT = String(await app.client.evaluate(TERMINAL_TEXT))
+    // **焦點要先還給終端，Enter 才送得進 pty。** 選單關掉之後焦點不在終端上（CLAUDE.md 既有的
+    // 教訓：「自右鍵選單貼上之後按 Enter 不會執行 —— 焦點還在選單那邊」）。少了這一步，下面那顆
+    // Enter 會落空、檔案不會增長 —— 而「沒有新增內容」正是哨兵擋下的東西（實測：它擋下了）。
+    await realClick(app.client, termForT)
+    await sleep(200)
+    await pressEnter(app.client) // 沖行緩衝 —— Ctrl+T 若外洩，那顆 t 就在這一行裡
+    await sleep(600)
+    const afterCtrlT = await waitForPtyFile('ctrlt.txt', (value) => value.length > beforeCtrlT.length, 4000)
+    const addedByCtrlT = afterCtrlT.slice(beforeCtrlT.length)
     check(
       results,
       `${label}：被攔下的 Ctrl+T 沒有流進 pty`,
-      afterCtrlT === beforeCtrlT,
-      afterCtrlT === beforeCtrlT ? '' : `終端內容變了：…${afterCtrlT.trim().slice(-30)}`,
+      // **`length > before` 是哨兵**：它證明那顆 Enter 真的讓 cat 多寫了一行 —— 否則「沒有 t」
+      // 只是因為根本什麼都沒寫進來（否定式斷言的老問題）。
+      !addedByCtrlT.includes('t') && afterCtrlT.length > beforeCtrlT.length,
+      `Ctrl+T 之後新增的內容=${JSON.stringify(addedByCtrlT)}（應只有行尾標記，不含 t）`,
     )
 
     // ── 0 個 / 1 個 session 時，Ctrl+Tab 為無操作且不得產生錯誤
@@ -922,19 +987,16 @@ async function runMode(label, { port, rendererUrl }) {
     const termRect = await pollUntil(app.client, TERMINAL_RECT, (v) => v !== null, 6000)
     await realClick(app.client, termRect)
     await sleep(400)
-    const baseWText = String(await app.client.evaluate(TERMINAL_TEXT))
+    await typeLine(app.client, `cat -A > ${join(ptyOutDir, 'ctrlshiftw.txt')}`)
+    await sleep(800)
     await pressKey(app.client, 'w')
-    const echoedW = await pollUntil(
-      app.client,
-      TERMINAL_TEXT,
-      (v) => String(v) !== baseWText,
-      4000,
-    )
+    await pressEnter(app.client)
+    const echoedW = await waitForPtyFile('ctrlshiftw.txt', (v) => v.includes('w'))
     check(
       results,
       `${label}：對照組 —— 未攔截的 w 確實抵達 pty`,
-      String(echoedW) !== baseWText,
-      '（沒有這條，下一條的意義降為零）',
+      echoedW.includes('w'),
+      `（沒有這條，下一條的意義降為零）檔案=${JSON.stringify(echoedW.slice(-16))}`,
     )
 
     // 攔截組：終端仍持有焦點，按 Ctrl+Shift+W —— 應該關掉當前 session
@@ -1184,11 +1246,10 @@ async function checkReordering(label, { port, rendererUrl }) {
     await sleep(2000)
     await realClick(app.client, term)
     await sleep(200)
-    await typeLine(app.client, 'cat -v')
+    await typeLine(app.client, `cat -A > ${join(ptyOutDir, 'shiftarrow.txt')}`)
     await sleep(1000)
 
     const orderBeforeTerminalKey = await app.client.evaluate(RAIL_ORDER)
-    const textBefore = String(await app.client.evaluate(TERMINAL_TEXT))
     await pressKey(app.client, 'ArrowDown', ['shift'])
     const orderFromTerminal = await pollUntil(
       app.client,
@@ -1203,18 +1264,20 @@ async function checkReordering(label, { port, rendererUrl }) {
       `${JSON.stringify(orderBeforeTerminalKey)} → ${JSON.stringify(orderFromTerminal)}`,
     )
 
-    // `cat -v` 會把 Shift+arrow 印成 `^[[1;2A`–`^[[1;2D`。上面那條「對照組：未攔截的方向鍵
+    // `cat -A` 會把 Shift+arrow 寫成 `^[[1;2A`–`^[[1;2D`。上面那條「對照組：未攔截的方向鍵
     // 確實抵達 pty」在 runMode 已經驗過，這裡驗的是被攔下的那幾顆沒有外洩。
     await pressKey(app.client, 'ArrowRight', ['shift'])
     await pressKey(app.client, 'ArrowLeft', ['shift'])
-    await sleep(1000)
-    const ptyText = String(await app.client.evaluate(TERMINAL_TEXT))
+    await pressEnter(app.client) // 沖行緩衝 —— 外洩的序列就在這一行裡
+    await sleep(800)
+    const ptyText = await waitForPtyFile('shiftarrow.txt', () => true, 2000)
     const leaked = ['^[[1;2A', '^[[1;2B', '^[[1;2C', '^[[1;2D'].filter((seq) => ptyText.includes(seq))
     check(
       results,
       `${label}：被攔下的 Shift+arrow 沒有流進 pty`,
+      // `ptyText !== ''` 是哨兵（這條一直都有，另外兩條否定式斷言先前沒有）。
       leaked.length === 0 && ptyText !== '',
-      leaked.length ? `外洩：${leaked.join(' ')}` : `（終端內容自 ${textBefore.length} 字元起未混入控制序列）`,
+      leaked.length ? `外洩：${leaked.join(' ')}` : `（檔案 ${ptyText.length} 字元，未混入控制序列）`,
     )
 
     await pressKey(app.client, 'ArrowUp', ['shift']) // 還原 rail 的順序

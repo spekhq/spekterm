@@ -12,6 +12,14 @@ export interface TerminalPreferences {
   fontFamily?: string
   fontSize?: number
   lineHeight?: number
+  /**
+   * GPU 加速（＝ webgl renderer）。**未設定＝啟用** —— 省略即預設，與其他欄位同一條規則。
+   *
+   * 它是**逃生口**：終端已有自動降級（渲染資源取不到或執行期失效時退回），但那只擋得住
+   * 「取不到」；擋不住「取得了、但驅動有缺陷而畫出錯的內容」—— 那不觸發任何事件，只有使用者
+   * 看得出來，也只有使用者關得掉。
+   */
+  gpuAcceleration?: boolean
 }
 
 interface PersistedPreferences {
@@ -87,7 +95,7 @@ export function parsePreferences(raw: string): PersistedPreferences | null {
   if (version !== PREFERENCES_VERSION) return null
   if (typeof terminal !== 'object' || terminal === null) return null
 
-  const { fontFamily, fontSize, lineHeight } = terminal as Record<string, unknown>
+  const { fontFamily, fontSize, lineHeight, gpuAcceleration } = terminal as Record<string, unknown>
   const parsed: TerminalPreferences = {}
   const family = sanitizeFamily(fontFamily)
   const size = clampSize(fontSize)
@@ -95,6 +103,9 @@ export function parsePreferences(raw: string): PersistedPreferences | null {
   if (family !== undefined) parsed.fontFamily = family
   if (size !== undefined) parsed.fontSize = size
   if (height !== undefined) parsed.lineHeight = height
+  // 只認真正的布林 —— 檔案裡的 `"false"`／`0` 之類的東西一律當成未設定（＝預設啟用），
+  // 而不是把它們硬轉成 false 而把 GPU 關掉。
+  if (typeof gpuAcceleration === 'boolean') parsed.gpuAcceleration = gpuAcceleration
 
   return { version: PREFERENCES_VERSION, terminal: parsed }
 }
@@ -181,6 +192,30 @@ export class PreferencesStore {
     if (family !== undefined) next.fontFamily = family
     if (size !== undefined) next.fontSize = size
     if (height !== undefined) next.lineHeight = height
+
+    // **GPU 偏好必須明確保留 —— 這個方法從一個空物件開始重建 `terminal`。**
+    // 少了這一行，使用者每改一次字型就會**靜默地把 GPU 偏好重設回預設**：他關掉了 GPU（因為
+    // 驅動有問題、畫面是壞的），接著調一下字級，GPU 就自己開回來了 —— 而那正是他關掉它的原因。
+    // 這個方法只管字型。
+    if (this.preferences.gpuAcceleration !== undefined) {
+      next.gpuAcceleration = this.preferences.gpuAcceleration
+    }
+
+    this.preferences = next
+    this.save()
+    return this.get()
+  }
+
+  /**
+   * 開／關 GPU 加速。`null` ＝清為預設（＝啟用）。
+   *
+   * 與 `setTerminalFont` 分開，是因為它**不是字型偏好** —— 把它塞進那個方法的第四個參數，
+   * 方法名就開始說謊。字型偏好不受此方法影響（反之亦然，見 `setTerminalFont` 的保留邏輯）。
+   */
+  setGpuAcceleration(enabled: boolean | null): TerminalPreferences {
+    const next: TerminalPreferences = { ...this.preferences }
+    if (enabled === null) delete next.gpuAcceleration
+    else next.gpuAcceleration = enabled
 
     this.preferences = next
     this.save()

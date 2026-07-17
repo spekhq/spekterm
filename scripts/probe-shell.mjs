@@ -129,7 +129,7 @@ const PROBE_EXPRESSION = `(async () => {
     // 白名單原則 —— 從第一天就補上守衛，避免重蹈 folders.*／terminal.* 當年「整個 namespace 沒有
     // 守衛」的覆轍。get／setTerminalFont：值由主行程的 store 清理／夾制，介面上沒有任何路徑詞彙。
     surplusSettingsKeys: Object.keys(api?.settings ?? {}).filter(
-      (key) => !['get', 'setTerminalFont', 'listMonospaceFonts'].includes(key),
+      (key) => !['get', 'setTerminalFont', 'setGpuAcceleration', 'listMonospaceFonts'].includes(key),
     ),
     // symlink 絕不可出現在白名單上。
     //

@@ -156,6 +156,53 @@ describe('PreferencesStore：讀寫與持久化', () => {
     assert.equal(readConfig().version, PREFERENCES_VERSION)
   })
 
+  it('GPU 加速：未設定即為啟用（省略而非寫入 true）', () => {
+    const store = new PreferencesStore(configPath)
+    store.load()
+
+    assert.equal(store.get().gpuAcceleration, undefined, '未設定＝預設啟用，不占空間')
+    store.setGpuAcceleration(false)
+    assert.equal(store.get().gpuAcceleration, false)
+    store.setGpuAcceleration(null)
+    assert.equal(store.get().gpuAcceleration, undefined, 'null ＝清回預設')
+  })
+
+  it('設定字型不得抹掉 GPU 偏好', () => {
+    // **這條守的是一個會靜默毀掉使用者設定的陷阱**：`setTerminalFont` 從一個空物件重建
+    // `terminal` —— 少了保留邏輯，使用者關掉 GPU（因為驅動有問題、畫面是壞的）之後，
+    // 只要再調一次字級，GPU 就自己開回來了，而那正是他關掉它的原因。
+    const store = new PreferencesStore(configPath)
+    store.load()
+    store.setGpuAcceleration(false)
+
+    store.setTerminalFont('Fira Code', 14, null)
+    assert.equal(store.get().gpuAcceleration, false, '改字型不該動到 GPU 偏好')
+
+    // 反向：改 GPU 不該抹掉字型。
+    store.setGpuAcceleration(true)
+    assert.deepEqual(store.get(), { fontFamily: 'Fira Code', fontSize: 14, gpuAcceleration: true })
+  })
+
+  it('GPU 偏好跨重啟還原，且只認真正的布林', () => {
+    const first = new PreferencesStore(configPath)
+    first.load()
+    first.setGpuAcceleration(false)
+
+    const second = new PreferencesStore(configPath)
+    second.load()
+    assert.equal(second.get().gpuAcceleration, false)
+
+    // 檔案裡的 `"false"`（字串）不是布林 —— 當成未設定（＝預設啟用），
+    // 而不是硬轉成 false 把 GPU 關掉。
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({ version: PREFERENCES_VERSION, terminal: { gpuAcceleration: 'false' } }),
+    )
+    const third = new PreferencesStore(configPath)
+    third.load()
+    assert.equal(third.get().gpuAcceleration, undefined, '非布林一律視為未設定')
+  })
+
   it('重啟後還原', () => {
     const first = new PreferencesStore(configPath)
     first.load()

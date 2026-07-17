@@ -197,6 +197,13 @@ const workspaceApi = {
       lineHeight: number | null,
     ): Promise<TerminalPreferences> =>
       ipcRenderer.invoke('workspace:settings:setTerminalFont', fontFamily, fontSize, lineHeight),
+    /**
+     * 開／關 GPU 加速（＝終端的 webgl renderer）。`null` ＝回到預設（＝啟用）。
+     *
+     * 與 `setTerminalFont` 分開 —— 它不是字型偏好。字型偏好不受此影響，反之亦然。
+     */
+    setGpuAcceleration: (enabled: boolean | null): Promise<TerminalPreferences> =>
+      ipcRenderer.invoke('workspace:settings:setGpuAcceleration', enabled),
     /** 系統的等寬字型清單，給設定對話框的下拉選單（Linux 走 fontconfig；其他平台回空陣列）。 */
     listMonospaceFonts: (): Promise<string[]> =>
       ipcRenderer.invoke('workspace:settings:listMonospaceFonts'),

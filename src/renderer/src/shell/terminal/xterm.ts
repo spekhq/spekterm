@@ -1,5 +1,6 @@
 import { FitAddon } from '@xterm/addon-fit'
 import { SerializeAddon } from '@xterm/addon-serialize'
+import { WebglAddon } from '@xterm/addon-webgl'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import { Terminal } from '@xterm/xterm'
 import '@xterm/xterm/css/xterm.css'
@@ -88,6 +89,20 @@ export interface XtermHandle {
    * 有改動時，由呼叫端在其後 `fit()` 並把新的行列數告知 pty（字級與行高都會改 cell 尺寸）。
    */
   setFont(font: { family: string | null; size: number | null; lineHeight: number | null }): boolean
+  /**
+   * 開／關 GPU 加速（webgl renderer）。回傳它**當下是否啟用**。
+   *
+   * **只給使用者當下看得見的那一個終端**，切走即關 —— 這不是優化，是正確性要求：所有 session 的
+   * 終端同時掛載（各自保留 scrollback），而並存的 webgl context 有上限（**實測恰為 16**），
+   * **超出時最舊的會被靜默丟棄 —— 不觸發任何事件**（實測建 30 個只有 16 個活著，
+   * `webglcontextlost` 一次都沒觸發）。於是較舊的終端會**無聲地變成空白**，而下面那條
+   * `onContextLoss` 的自癒**救不了它**（它倚賴一個通知，而那裡根本沒有通知）。並存恆為 1，
+   * 就永遠碰不到上限。
+   *
+   * 取不到 context（headless／軟體渲染／驅動問題）時**退回 DOM renderer**，不拋錯 —— 至少不比
+   * 現況差。
+   */
+  setGpuRenderer(enabled: boolean): boolean
   focus(): void
   dispose(): void
 }
@@ -264,6 +279,9 @@ export function createXterm(options: XtermOptions): XtermHandle {
   let lastCols = 0
   let lastRows = 0
 
+  // 當前的 webgl addon（null＝正在用 DOM renderer）。
+  let webgl: WebglAddon | null = null
+
   return {
     open(parent) {
       term.open(parent)
@@ -373,10 +391,42 @@ export function createXterm(options: XtermOptions): XtermHandle {
       }
       return changed
     },
+    setGpuRenderer(enabled) {
+      if (enabled === (webgl !== null)) return webgl !== null
+
+      if (!enabled) {
+        // dispose 之後 xterm 自動退回 DOM renderer —— buffer 不動，scrollback 不受影響。
+        webgl?.dispose()
+        webgl = null
+        return false
+      }
+
+      try {
+        const addon = new WebglAddon()
+        // 驅動重置或分頁背景化造成的 context loss —— 退回 DOM renderer，內容不遺失。
+        //
+        // **注意它擋不住「超出並存上限」**（那時最舊的 context 被靜默丟棄、不觸發此事件）——
+        // 那由「只給 active 終端」承擔，見介面上的說明。
+        addon.onContextLoss(() => {
+          addon.dispose()
+          webgl = null
+        })
+        term.loadAddon(addon)
+        webgl = addon
+        return true
+      } catch (error) {
+        // 取不到 context —— 退回 DOM renderer 就好，這不是錯誤路徑（headless、軟體渲染、
+        // 舊驅動都會走到這裡）。
+        console.warn('[terminal] GPU renderer unavailable, falling back to DOM renderer', error)
+        webgl = null
+        return false
+      }
+    },
     focus() {
       term.focus()
     },
     dispose() {
+      webgl?.dispose()
       serializeAddon.dispose()
       fitAddon.dispose()
       term.dispose()

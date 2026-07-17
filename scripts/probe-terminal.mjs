@@ -47,7 +47,30 @@ function makeFixture() {
   const repo = join(base, 'repo-a')
   mkdirSync(join(repo, 'openspec'), { recursive: true })
   writeFileSync(join(repo, 'README.md'), '# repo-a\n')
-  return { repo }
+  // pty 寫檔的觀測落點。**刻意在 repo 之外** —— repo 內有 chokidar 在監看（檔案樹與檢視器），
+  // 往那裡寫觀測用的檔案會製造與待測行為無關的事件。
+  const out = join(base, 'probe-out')
+  mkdirSync(out, { recursive: true })
+  return { repo, out }
+}
+
+/**
+ * 等 pty 寫出的檔案出現並滿足條件，回傳其內容（逾時則回最後讀到的）。
+ *
+ * **這是比「讀終端畫面」更強的判準，不只是「webgl 之後畫面讀不到」的替代品。**
+ * tty 會回顯輸入行 —— 於是 `echo OUT_42` 這種命令，畫面上在**執行之前**就已經有 `OUT_42` 了
+ * （CLAUDE.md 記著：驗 cols 時因此讀到還沒產生的值，dev 僥倖通過、build 失敗的經典 flaky）。
+ * 檔案只有命令**真的執行**才會出現，回顯不會產生它。
+ */
+async function waitForFile(path, settled = (value) => value.trim().length > 0, timeoutMs = 8000) {
+  const deadline = Date.now() + timeoutMs
+  let last = ''
+  while (Date.now() < deadline) {
+    last = existsSync(path) ? readFileSync(path, 'utf8') : ''
+    if (settled(last)) return last
+    await sleep(150)
+  }
+  return last
 }
 
 /**
@@ -485,39 +508,32 @@ const MENU_IN_VIEWPORT = `(() => {
   }
 })()`
 
-/** 只讀「當前顯示中」的那個終端 —— 其餘 session 的終端仍掛載，只是 display:none。 */
-const TERMINAL_TEXT = `(() => {
-  const host = [...document.querySelectorAll('section[aria-label="${copy('stage.terminal')}"] > div')]
-    .find((d) => !d.classList.contains('hidden'))
-  const rows = host?.querySelector('.xterm-rows')
-  return rows ? rows.innerText : ''
-})()`
+/**
+ * **`TERMINAL_TEXT` 已移除（本 change）—— 本檔不再從 DOM 讀終端內容。**
+ *
+ * 它讀 `.xterm-rows` 的 `innerText`，而那個元素只存在於 DOM renderer —— GPU renderer 把畫面
+ * 畫進 `<canvas>`，它隨即消失。更糟的是它的**失效方式**：讀不到時回空字串，於是**否定式**斷言
+ * （「畫面上**沒有**分隔線」「被攔下的按鍵**沒有**流進 pty」）會在瞎掉的情況下**繼續發綠燈**。
+ *
+ * 兩條替代管道，且**都比它強**：
+ *
+ * - **pty 行為** → **讀檔**（`waitForFile`）：能區分**回顯與執行**，而讀畫面文字本來就分不清。
+ * - **畫面內容** → **產品自己的複製路徑**（`readTerminalText`）：跨 renderer 不變，且**把折行
+ *   接回邏輯行**，於是 `includes()` 不會在折點斷開（讀 `.xterm-rows` 會）。
+ */
 
 /**
- * terminal 實際生效的字級，以及字級尺度所要求的值。
+ * **`TERMINAL_FONT` 已移除（本 change）—— 那條觀測管道從根本上是錯的。**
  *
- * `typography-scale` 要求 terminal 的字級**由尺度推導**，不得是一個與尺度無關的常數。這條
- * 驗收有鑑別力，是因為 **`--text-terminal`（16px）與程式碼裡的 fallback（14px）不同** ——
- * 而那個 fallback 正是這個 bug 曾經藏身的地方：`getPropertyValue('--text-terminal')` 回傳的是
- * 字面的 `"calc(17px - 1px)"`（CSS 自訂屬性的 computed value **不求值 calc()**），`parseFloat`
- * 得到 `NaN`，於是悄悄退回 fallback。當年 fallback 剛好等於正確值，畫面上完全看不出來。
+ * 它讀 `getComputedStyle('.xterm-rows').fontSize`。GPU renderer 之後 `.xterm-rows` 不存在，
+ * 而 DOM 上**沒有任何可替代的字級訊號**（全部實測過）：`.xterm` 與 `.xterm-helper-textarea`
+ * 的 computed `fontSize` **恆為瀏覽器預設**（16px／13.3333px）、不跟 `options.fontSize` 走 ——
+ * 且它們**剛好接近正確值**，換上去只會得到一條永遠通過的假綠（與 `--text-terminal` 的 `calc()`
+ * 陷阱同型：「fallback 剛好等於當時的正確值，畫面上完全看不出來」）。
  *
- * 期望值同樣交給**瀏覽器**求值：`font-size` 是有型別的屬性，其 computed value 必為絕對 px。
+ * 字級改以 **pty 的 `cols`** 觀測（見 runMode 內的 `readFontCols`）—— 那嚴格更強：它證明字級真的
+ * 改變了 pty 的幾何，而不只是「一個 CSS 屬性被設了」。
  */
-const TERMINAL_FONT = `(() => {
-  const host = [...document.querySelectorAll('section[aria-label="${copy('stage.terminal')}"] > div')]
-    .find((d) => !d.classList.contains('hidden'))
-  const rows = host?.querySelector('.xterm-rows')
-  if (!rows) return null
-
-  const el = document.createElement('div')
-  el.style.fontSize = 'var(--text-terminal)'
-  document.body.appendChild(el)
-  const fromScale = getComputedStyle(el).fontSize
-  el.remove()
-
-  return { actual: getComputedStyle(rows).fontSize, fromScale }
-})()`
 
 /** 五級字級 token 求值後的實際 px —— 用來驗「尺度中不存在分不出來的級差」。 */
 const TYPE_SCALE = `(() => {
@@ -624,6 +640,51 @@ async function typeLine(client, text) {
  *
  * `size` 傳空字串＝清除偏好（回到字級尺度的預設）。以 Enter 送出（對話框的輸入框綁了它）。
  */
+/**
+ * 走**使用者的路徑**開／關 GPU 加速（開 Settings → 點勾選框 → 存）。
+ *
+ * **不可改用 `window.workspace.settings.setGpuAcceleration(...)`** —— 那會繞過
+ * `PreferencesProvider`：主行程的 store 更新了，但 renderer 的 state 沒有，於是驅動 renderer 的
+ * effect 不會重跑、終端當然不變（既有教訓，`/opsx:verify` 抓過一次，當時一度誤判為產品 bug）。
+ */
+async function setGpuViaSettings(client, enabled) {
+  const settingsAt = await client.evaluate(`(() => {
+    const b = document.querySelector('nav[aria-label="${copy('activityBar.label')}"] button[aria-label="${copy('activityBar.settings')}"]')
+    if (!b) return null
+    const r = b.getBoundingClientRect()
+    return { x: r.x, y: r.y, width: r.width, height: r.height }
+  })()`)
+  await realClick(client, settingsAt)
+  await pollUntil(
+    client,
+    `Boolean(document.querySelector('[role="dialog"][aria-label="${copy('settings.title')}"]'))`,
+    (value) => value === true,
+    4000,
+  )
+
+  // 勾選框走**真點擊** —— React 的 onChange 對 checkbox 是掛在 click 上的。先讀出當前狀態，
+  // 只有需要改變時才點（點兩次等於沒點）。
+  const box = await client.evaluate(`(() => {
+    const cb = document.querySelector('[role="dialog"] input[aria-label="${copy('settings.gpuAcceleration')}"]')
+    if (!cb) return null
+    const r = cb.getBoundingClientRect()
+    return { checked: cb.checked, x: r.x, y: r.y, width: r.width, height: r.height }
+  })()`)
+  if (!box) throw new Error('設定對話框裡找不到 GPU 加速的勾選框')
+  if (box.checked !== enabled) await realClick(client, box)
+
+  const saveAt = await client.evaluate(`(() => {
+    const b = [...document.querySelectorAll('[role="dialog"] button')]
+      .find((x) => x.innerText.includes(${JSON.stringify(copy('settings.save'))}))
+    if (!b) return null
+    const r = b.getBoundingClientRect()
+    return { x: r.x, y: r.y, width: r.width, height: r.height }
+  })()`)
+  if (!saveAt) throw new Error('設定對話框裡找不到儲存按鈕')
+  await realClick(client, saveAt)
+  await pollUntil(client, `document.querySelector('[role="dialog"]') === null`, (v) => v === true, 4000)
+}
+
 async function setFontSizeViaSettings(client, size) {
   const rect = await client.evaluate(`(() => {
     const b = document.querySelector('nav[aria-label="${copy('activityBar.label')}"] button[aria-label="${copy('activityBar.settings')}"]')
@@ -683,10 +744,115 @@ async function pressEnter(client) {
   await client.send('Input.dispatchKeyEvent', { type: 'keyUp', ...key })
 }
 
-/** 等終端輸出出現某個片段。 */
-async function waitForOutput(client, needle, timeoutMs = 8000) {
-  const text = await pollUntil(client, TERMINAL_TEXT, (value) => String(value).includes(needle), timeoutMs)
-  return String(text)
+/**
+ * **顯示中終端的文字區**（`.xterm-screen`）—— 選取的準心。
+ *
+ * **不是 `TERMINAL_RECT`**：那量的是整個 `section`（含分頁列），從它的角落起拖會落在分頁上。
+ * `.xterm-screen` 在 DOM 與 GPU 兩種 renderer 下都存在（實測）。
+ */
+const SCREEN_RECT = `(() => {
+  const host = [...document.querySelectorAll('section[aria-label="${copy('stage.terminal')}"] > div')]
+    .find((d) => !d.classList.contains('hidden'))
+  if (!host) throw new Error('SCREEN_RECT: 找不到顯示中的終端容器')
+  const el = host.querySelector('.xterm-screen')
+  if (!el) throw new Error('SCREEN_RECT: 終端容器在，但找不到 .xterm-screen')
+  const r = el.getBoundingClientRect()
+  return { x: r.x, y: r.y, width: r.width, height: r.height }
+})()`
+
+/**
+ * 讀終端上**看得見的**內容 —— 走**產品自己的複製路徑**：拖曳選取 → 右鍵選單的複製 →
+ * 讀系統剪貼簿。
+ *
+ * **為什麼不直接讀 DOM。** `.xterm-rows` 只存在於 DOM renderer；GPU renderer 把畫面畫進
+ * `<canvas>`，那個元素隨即消失。而 xterm 的**選取讀的是 buffer、不是 DOM** —— 於是這條管道
+ * **跨 renderer 不變**（lab 實測：兩種 renderer 的拖曳結果逐字元相同）。
+ *
+ * ## 拖曳的方向是**反過來**的，而那不是講究，是必要的（實測，代價慘痛）
+ *
+ * **終端的左緣正好是 resizable panel 的分界器。** 從 `.xterm-screen` 的左上角起拖，抓到的是
+ * **分界器**而不是文字 —— 於是：
+ *
+ * 1. 選取是空的（拖的根本不是終端）
+ * 2. **而且側欄被拉開、終端被擠到視窗右側** —— **版面永久損毀**，其後每一個用舊座標的操作
+ *    全部落空。實測：終端從 `x=322 w=607` 變成 `x=920 w=357`，而**一次錯誤的拖曳就讓後面
+ *    六個對照變體全部誤報失敗**（我因此追錯了好幾輪 —— 那些「失敗」全是同一次錯誤的殘影）。
+ *
+ * 因此：**起點在右下角（元素內 3px），終點在左上角（第 0 格內）** —— 按下的點永遠不碰分界器。
+ *
+ * ## 座標的兩條實測規則
+ *
+ * - **按下的點必須落在元素內**：落在外面（哪怕 6px）＝ 完全選不到（mousedown 沒打到 xterm）。
+ * - **兩端都要落在「該格的前半」**：xterm 把座標**四捨五入到最近的 cell 邊界**（cellW ≈ 9.6，
+ *   過半就算下一格）。終點用 `+2` 才會落在第 0 格；用 `+10`（既有那條複製斷言的作法）會
+ *   **切掉首行的第一個字元**，而超出左緣（`-12`）反而也會切掉它。
+ *
+ * ## 它與 `.xterm-rows` 不是「相等」，而是**更正確**
+ *
+ * 兩者**內容相同**（實測：抽掉空白後 681 字元 vs 681 字元，逐字元相同），差別只在**折行**：
+ * `.xterm-rows` 的 `innerText` 給的是**視覺列** —— 一個超過終端寬度的邏輯行會被截成多列；
+ * 而 `getSelection()` 把折行**接回來**，給的是**邏輯行**（實測同一畫面：15 邏輯行 vs 22 視覺列）。
+ *
+ * **於是 `includes()` 這種判準在剪貼簿上比在 `.xterm-rows` 上更可靠**：長路徑或長命令被折行時，
+ * 讀 `.xterm-rows` 會在折點斷開而找不到（探針的 fixture 路徑動輒七、八十字元，這一點都不理論）。
+ */
+/**
+ * 輪詢終端內容（走複製路徑）直到滿足條件。
+ *
+ * `pollUntil` 吃的是 expression，而複製路徑是一串真滑鼠操作 —— 因此自成一個輪詢。
+ * 每一輪是一次「拖曳 + 複製」（約 0.5 秒），刻意把間隔放寬。
+ */
+async function pollTerminalText(client, settled, timeoutMs = 10_000) {
+  const deadline = Date.now() + timeoutMs
+  let last = ''
+  let lastError = null
+  while (Date.now() < deadline) {
+    try {
+      last = await readTerminalText(client)
+      lastError = null
+      if (settled(last)) return last
+    } catch (error) {
+      // **輪詢中的「選不到東西」是「還沒好」，不是「管道壞了」** —— 終端在重播完成之前是空的，
+      // 而空的終端沒有東西可選。但**逾時之後仍讀不到，就是真的壞了**：那時要把哨兵的錯誤丟出去，
+      // 不可以默默回空字串（那正是本 change 要消滅的東西）。
+      lastError = error
+    }
+    await sleep(400)
+  }
+  if (lastError) throw lastError
+  return last
+}
+
+async function readTerminalText(client) {
+  const r = await client.evaluate(SCREEN_RECT)
+  // 先污染剪貼簿 —— 否則「讀到上一次的內容」會被誤當成這一次複製成功。
+  await client.evaluate(CLIPBOARD_WRITE('__not-copied__'))
+
+  // **反向拖曳**（見上方說明）：右下角（元素內）→ 左上角（第 0 格內）。
+  await dragMouse(
+    client,
+    { x: Math.round(r.x + r.width) - 3, y: Math.round(r.y + r.height) - 3 },
+    { x: Math.round(r.x) + 2, y: Math.round(r.y) + 2 },
+  )
+  await sleep(200)
+
+  // 診斷用：選取到底成立了沒 —— 右鍵選單的「複製」在沒有選取時是停用的。
+  const centre = { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) }
+  await realMouse(client, centre.x, centre.y, 'right')
+  await pollUntil(client, MENU_IN_VIEWPORT, (value) => value !== null, 4000)
+  const copyDisabled = await client.evaluate(MENU_ITEM_DISABLED(copy('sessions.copy')))
+  const copyRect = await client.evaluate(MENU_ITEM_RECT(copy('sessions.copy')))
+  await realClick(client, copyRect)
+  await sleep(300)
+
+  const text = String((await client.evaluate(CLIPBOARD_READ)) ?? '')
+  if (text === '__not-copied__') {
+    throw new Error(
+      `readTerminalText: 複製沒有發生（選單的複製項 disabled=${copyDisabled} —— true 表示拖曳沒有選到任何東西）` +
+        ' —— 不可當成「畫面上沒有東西」',
+    )
+  }
+  return text
 }
 
 /** 自 rail 的 folder 列建立 session（該入口 hover 才顯示，但 rect 與點擊不受 opacity 影響）。 */
@@ -725,7 +891,7 @@ async function runMode(label, { port, rendererUrl }) {
   console.log(`\n── ${label} ──`)
 
   const marker = `spek-term-marker-${process.pid}-${Date.now()}`
-  const { repo } = makeFixture()
+  const { repo, out } = makeFixture()
   const profile = seedProfile([['f1', repo]])
   const stub = makeStubClaude()
   const app = await launch({ port, profileDir: profile, rendererUrl, marker, stub })
@@ -770,13 +936,94 @@ async function runMode(label, { port, rendererUrl }) {
     )
 
     // ── typography-scale：terminal 的字級由尺度推導，不是一個獨立的常數
-    const font = await app.client.evaluate(TERMINAL_FONT)
+    //
+    // **判準是 pty 的 cols，不是任何 DOM 上的字級。** 這不只是「webgl 之後讀不到 `.xterm-rows`」
+    // 的替代品 —— 它嚴格更強：它證明字級真的改變了 **pty 的幾何**，而那正是這條 requirement
+    // 在乎的東西（`typography-scale` 的 scenario 明寫「**AND** pty 收到更新後的行列數」）。
+    // computed `fontSize` 只證明「一個 CSS 屬性被設了」，證明不到它有沒有傳到 pty。
+    //
+    // **DOM 上沒有可用的字級訊號（全部實測過，全是死路）**：`.xterm-rows` 在 GPU renderer 下消失；
+    // `.xterm` 與 `.xterm-helper-textarea` 的 computed `fontSize` **恆為瀏覽器預設**（16px／13.3333px），
+    // 不跟 `options.fontSize` 走 —— 而它們**剛好接近正確值**，是最惡劣的那種假綠；
+    // `.xterm-char-measure-element` 在 GPU renderer 下不存在；`.xterm-screen` 的 rect 還在，
+    // 但 `= cols × cellW`，而 `cols` 只存在於 xterm 實例上，probe 碰不到（暴露它就是測試鉤子）。
+    //
+    // 固定容器寬度下「字級 ↑ → cols ↓」，於是四條斷言全部以 cols 的比較承載。鑑別力充足：
+    // 實測 cellW 於 fontSize 14／16／22 分別為 8.4348／9.6304／13.2391 —— 每一級都不同。
+    const readFontCols = async (tag) => {
+      // **每次都要先把焦點還給終端、並清掉輸入行。** 設定對話框送出後焦點不在終端上（實測：
+      // 少了這一步，`typeLine` 落空、檔案永遠不出現，斷言讀到 cols=0）。`Ctrl+C` 清掉前一次
+      // 可能殘留在輸入行上的字（既有 helper，本來就是為這件事準備的）。
+      await realClick(app.client, await app.client.evaluate(TERMINAL_RECT))
+      await sleep(200)
+      await pressCtrlC(app.client)
+      await sleep(200)
+      const file = join(out, `fontcols-${tag}.txt`)
+      await typeLine(app.client, `stty size | cut -d' ' -f2 > ${file}`)
+      const text = await waitForFile(file, (value) => /\d/.test(value))
+      return Number(text.trim() || 0)
+    }
+
+    // **順序是承重的：所有偏好的比較都排在「會拖動版面」的旋鈕測試之前。**
+    // cols 是容器寬度的函數 —— 而拖曳分界器再拖回來**不保證回到同一個像素**（實測：cols 由 63
+    // 變成 64，一個 off-by-one 讓「清除後回到預設」誤報）。舊的判準比對的是字級，對版面免疫；
+    // 換成 cols 之後就不是了。把偏好的三次比較集中在同一個版面狀態下完成，這個敏感度就消失。
+    const colsDefault = await readFontCols('default')
+
+    // 把偏好設成程式碼裡的 fallback 常數（14）—— 若終端的預設字級「就是」那個 fallback，
+    // 兩者的 cols 會相同，這條就變紅。那正是「`--text-terminal` 根本沒被解析出來」的徵狀。
+    await setFontSizeViaSettings(app.client, '14')
+    const colsAtFallback = await readFontCols('fallback')
     check(
       results,
       `${label}：terminal 的字級來自字級尺度（--text-terminal），不是寫死的常數`,
-      font?.actual === font?.fromScale && font?.actual !== '14px',
-      `實際=${font?.actual} 尺度要求=${font?.fromScale}（14px 是程式碼裡的 fallback —— ` +
-        `讀成它就表示 --text-terminal 沒被解析出來）`,
+      colsDefault > 0 && colsAtFallback > 0 && colsDefault !== colsAtFallback,
+      `預設字級的 cols=${colsDefault}；字級=14（程式碼裡的 fallback）時 cols=${colsAtFallback}` +
+        `（相同就表示 --text-terminal 沒被解析出來，終端一直用著 fallback）`,
+    )
+
+    // ── typography-scale：**字型大小偏好覆蓋尺度推導的預設**
+    //
+    // **鑑別力來自「與未設偏好時不同」**：只斷言「cols 是某個值」無法區分「偏好生效」與「尺度剛好
+    // 也產生同樣的 cols」。
+    //
+    // 這條之所以在 `probe:terminal` 而不是 `probe:workspace`：**只有這裡有終端**。workspace 那邊
+    // 驗的是 store 的來回（夾制／落盤／還原），驗不到「偏好真的改變了終端」（verify 稽核抓到的缺口）。
+    //
+    // **必須走使用者的路徑（開 Settings → 填 → 存），不能直接打 `settings.*` IPC** —— 那會繞過
+    // `PreferencesProvider`：store 更新了但 renderer 的狀態沒有，字型 effect 不會重跑，終端當然
+    // 不變（實測踩過，一度誤判為產品 bug）。產品的唯一寫入者就是這個對話框。
+    await setFontSizeViaSettings(app.client, '22')
+    const colsWithPref = await readFontCols('pref22')
+    check(
+      results,
+      `${label}：字型大小偏好覆蓋尺度推導的預設`,
+      colsWithPref > 0 && colsWithPref !== colsDefault,
+      `偏好=22px → cols=${colsWithPref}；未設偏好時 cols=${colsDefault}` +
+        `（兩者必須不同，否則此條沒有鑑別力）`,
+    )
+
+    // **清回預設（同樣走使用者的路徑：把欄位清空即為未設定）。**
+    //
+    // **判準容許 ±1 欄，而那不是在放水 —— 有實測撐著。** cols 是容器寬度的函數，會被捲軸的
+    // 出現／消失之類與字級無關的像素漂移推動一欄（實測：清除後 64、原本 63）。但**一欄的容差
+    // 擋不住任何真的字級錯誤**：本輪實測 fontSize 14／16／22 → cols 73／63／45，也就是**每 1px
+    // 的字級差會造成 3–5 欄的差**（14→16：10 欄／2px；16→22：18 欄／6px）—— 容差比最小的字級
+    // 錯誤還小 3–5 倍。
+    //
+    // 同時要求它**不等於**剛才那兩個偏好值 —— 「回到預設」不能只是「接近某個數」，它必須明確地
+    // 離開偏好的值。
+    await setFontSizeViaSettings(app.client, '')
+    const colsRestored = await readFontCols('restored')
+    check(
+      results,
+      `${label}：清除字型大小偏好後，字級回到尺度推導的預設`,
+      Math.abs(colsRestored - colsDefault) <= 1 &&
+        colsRestored !== colsAtFallback &&
+        colsRestored !== colsWithPref,
+      `清除後 cols=${colsRestored}；原本未設偏好時 cols=${colsDefault}` +
+        `（偏好 14px 時=${colsAtFallback}、22px 時=${colsWithPref} —— 必須明確離開這兩個值。` +
+        `±1 欄的容差吸收與字級無關的像素漂移；1px 的字級差會造成 3–5 欄）`,
     )
 
     const scale = await app.client.evaluate(TYPE_SCALE)
@@ -792,65 +1039,31 @@ async function runMode(label, { port, rendererUrl }) {
     //
     // 字級決定 cell 尺寸，cell 尺寸決定行列數 —— 字級變了而不重新量測，pty 手上的 cols/rows
     // 就與畫面錯位。字級的重讀掛在 `fit()` 上（它本來就在每次 resize 時被呼叫），所以這裡改完
-    // 旋鈕要真的觸發一次 resize（拖動 side panel 的分界），再斷言 xterm 的字級跟上了。
+    // 旋鈕要真的觸發一次 resize（拖動 side panel 的分界），再斷言 pty 的 cols 跟上了。
+    //
+    // **排在所有偏好比較之後** —— 它會拖動版面（見上方 `readFontCols` 的註解）。它自己的判準
+    // 是「明顯變少」（實測 63 → 44），對一兩欄的漂移免疫。
     await app.client.evaluate(`document.documentElement.style.setProperty('--text-base', '24px')`)
     const knobSep = center(await app.client.evaluate(SEPARATOR_RECT))
     await dragMouse(app.client, knobSep, { x: knobSep.x - 40, y: knobSep.y })
     await sleep(400)
-    const fontAfterKnob = await app.client.evaluate(TERMINAL_FONT)
+    await dragMouse(app.client, { x: knobSep.x - 40, y: knobSep.y }, knobSep)
+    await sleep(400)
+    const colsAfterKnob = await readFontCols('knob')
     check(
       results,
       `${label}：轉動字級旋鈕後，terminal 的字級隨之改變（fit 重新讀取並量測）`,
-      fontAfterKnob?.actual === '23px' && fontAfterKnob?.actual === fontAfterKnob?.fromScale,
-      `--text-base=24px → terminal 應為 23px；實際=${fontAfterKnob?.actual} 尺度=${fontAfterKnob?.fromScale}`,
+      colsAfterKnob > 0 && colsAfterKnob < colsDefault,
+      `--text-base 由預設轉到 24px（字級變大 → 同寬容器容得下的欄數變少）：` +
+        `cols ${colsDefault} → ${colsAfterKnob}（沒變就表示 fit 沒有重新讀取字級）`,
     )
 
     // 還原旋鈕與版面 —— 後續斷言依賴原本的字級與分界位置。
     await app.client.evaluate(`document.documentElement.style.removeProperty('--text-base')`)
+    await dragMouse(app.client, knobSep, { x: knobSep.x - 40, y: knobSep.y })
+    await sleep(400)
     await dragMouse(app.client, { x: knobSep.x - 40, y: knobSep.y }, knobSep)
     await sleep(400)
-
-    // ── typography-scale：**字型大小偏好覆蓋尺度推導的預設**
-    //
-    // 上面兩條驗的是「未設偏好時，字級源自尺度」。這條驗相反的方向 —— 設了偏好，終端就用偏好的值。
-    // **鑑別力來自 `actual !== fromScale`**：只斷言「等於 22px」是不夠的，那無法區分「偏好生效」與
-    // 「尺度剛好也是 22px」；必須同時證明它**不再**等於尺度推導出來的值。
-    //
-    // 這條之所以在 `probe:terminal` 而不是 `probe:workspace`：**只有這裡有終端**。workspace 那邊
-    // 驗的是 store 的來回（夾制／落盤／還原），驗不到「偏好真的改變了終端」（verify 稽核抓到的缺口）。
-    //
-    // **必須走使用者的路徑（開 Settings → 填 → 存），不能直接打 `settings.*` IPC** —— 那會繞過
-    // `PreferencesProvider`：store 更新了但 renderer 的狀態沒有，字型 effect 不會重跑，終端當然
-    // 不變（實測踩過，一度誤判為產品 bug）。產品的唯一寫入者就是這個對話框。
-    await setFontSizeViaSettings(app.client, '22')
-    const fontWithPref = await pollUntil(
-      app.client,
-      TERMINAL_FONT,
-      (value) => value?.actual === '22px',
-      4000,
-    ).catch(() => null)
-    check(
-      results,
-      `${label}：字型大小偏好覆蓋尺度推導的預設`,
-      fontWithPref?.actual === '22px' && fontWithPref?.actual !== fontWithPref?.fromScale,
-      `偏好=22px → 實際=${fontWithPref?.actual}；尺度推導=${fontWithPref?.fromScale}（兩者必須不同，否則此條沒有鑑別力）`,
-    )
-
-    // **清回預設（同樣走使用者的路徑：把欄位清空即為未設定），並等它真的生效** —— 字級會改 cell
-    // 尺寸與行列數，而後續斷言是以真滑鼠座標點擊的（CLAUDE.md：版面一動，對時序敏感的斷言就開始點空）。
-    await setFontSizeViaSettings(app.client, '')
-    const fontRestored = await pollUntil(
-      app.client,
-      TERMINAL_FONT,
-      (value) => value?.actual === value?.fromScale,
-      4000,
-    ).catch(() => null)
-    check(
-      results,
-      `${label}：清除字型大小偏好後，字級回到尺度推導的預設`,
-      fontRestored?.actual === fontRestored?.fromScale,
-      `實際=${fontRestored?.actual} 尺度=${fontRestored?.fromScale}`,
-    )
 
     // ── 雙向串流：回顯 ≠ 執行
     const terminalRect = await app.client.evaluate(TERMINAL_RECT)
@@ -858,30 +1071,29 @@ async function runMode(label, { port, rendererUrl }) {
     await sleep(200)
 
     // 回顯是字面的 `echo OUT_$((6*7))`（不含 42）；只有真的被執行，輸出才會有 OUT_42。
-    await typeLine(app.client, 'echo OUT_$((6*7))')
-    const afterEcho = await waitForOutput(app.client, 'OUT_42')
+    //
+    // **判準是磁碟上的檔案，不是畫面**：檔案只有命令真的執行才會出現，而畫面分不清回顯與執行。
+    // **用 `tee` 而非 `>`** —— 稍後的複製斷言要在畫面上選取 `OUT_42`（它刻意選一個「稍早就確定
+    // 在畫面上」的內容），改成純重導向會把它從畫面上拿掉，那條就跟著壞了。
+    const echoFile = join(out, 'echo.txt')
+    await typeLine(app.client, `echo OUT_$((6*7)) | tee ${echoFile}`)
+    const echoed = await waitForFile(echoFile, (value) => value.includes('OUT_42'))
     check(
       results,
       `${label}：輸入送達 pty 且執行結果回傳（OUT_42）`,
-      afterEcho.includes('OUT_42'),
-      afterEcho.replace(/\s+/g, ' ').slice(-80),
+      echoed.includes('OUT_42'),
+      `檔案內容=${JSON.stringify(echoed.trim().slice(0, 40))}`,
     )
-
     // ── cwd＝folder 根目錄
-    // `$(pwd)` 在回顯裡不會展開，因此畫面上出現 `CWD=<路徑>` 就一定是 shell 真的執行了。
-    const cwdNeedle = `CWD=${repo}`
-    await typeLine(app.client, 'echo CWD=$(pwd)')
-    const afterPwd = await pollUntil(
-      app.client,
-      TERMINAL_TEXT,
-      (value) => String(value).includes(cwdNeedle),
-      12_000,
-    )
+    // `$(pwd)` 的展開結果寫進檔案 —— 回顯不會展開它，檔案更不會憑空出現。
+    const cwdFile = join(out, 'cwd.txt')
+    await typeLine(app.client, `pwd > ${cwdFile}`)
+    const cwdText = await waitForFile(cwdFile, (value) => value.trim().length > 0, 12_000)
     check(
       results,
       `${label}：session 的 cwd 為 folder 根目錄`,
-      String(afterPwd).includes(cwdNeedle),
-      `期待 ${cwdNeedle}；實得 …${String(afterPwd).replace(/\s+/g, ' ').slice(-90)}`,
+      cwdText.trim() === repo,
+      `期待 ${repo}；實得 ${JSON.stringify(cwdText.trim())}`,
     )
 
     // ── 複製與貼上（終端不能複製貼上，等於不能用）
@@ -890,9 +1102,10 @@ async function runMode(label, { port, rendererUrl }) {
     // 關掉」這個只在真實輸入下發生的 bug（CLAUDE.md 已記載）。
     const termAt = center(terminalRect)
 
-    // 貼上：先把一段命令放進系統剪貼簿。回顯是字面的 `echo PASTED_$((3*4))`（不含 12），
-    // 只有它真的被送進 pty 並執行，輸出才會有 `PASTED_12`。
-    await app.client.evaluate(CLIPBOARD_WRITE('echo PASTED_$((3*4))'))
+    // 貼上：先把一段命令放進系統剪貼簿。**判準是它寫出的檔案** —— 回顯是字面的
+    // `echo PASTED_$((3*4))`（不含 12），而檔案只有它真的被送進 pty 並執行才會出現。
+    const pasteFile = join(out, 'pasted.txt')
+    await app.client.evaluate(CLIPBOARD_WRITE(`echo PASTED_$((3*4)) > ${pasteFile}`))
 
     await realMouse(app.client, termAt.x, termAt.y, 'right')
     const termMenu = await pollUntil(app.client, MENU_IN_VIEWPORT, (value) => value !== null, 4000)
@@ -933,12 +1146,12 @@ async function runMode(label, { port, rendererUrl }) {
       nativeVirtualKeyCode: 13,
     })
 
-    const pasted = await waitForOutput(app.client, 'PASTED_12')
+    const pasted = await waitForFile(pasteFile, (value) => value.includes('PASTED_12'))
     check(
       results,
       `${label}：自右鍵選單貼上，內容送達 pty 並被執行`,
       pasted.includes('PASTED_12'),
-      pasted.replace(/\s+/g, ' ').slice(-60),
+      `檔案內容=${JSON.stringify(pasted.trim().slice(0, 40))}`,
     )
 
     // 複製：拖曳選取終端內容 → 右鍵 → 複製 → 自系統剪貼簿讀回
@@ -965,6 +1178,36 @@ async function runMode(label, { port, rendererUrl }) {
       `${label}：選取終端內容後複製，其內容寫入系統剪貼簿`,
       copyEnabled === false && typeof clipboardText === 'string' && clipboardText.includes('OUT_42'),
       `複製項 disabled=${copyEnabled}；剪貼簿＝…${String(clipboardText).replace(/\s+/g, ' ').slice(-50)}`,
+    )
+
+    // ── terminal-sessions：GPU renderer 只給當下顯示的終端 ────────────────────
+    //
+    // **代理判準**：webgl renderer 把畫面畫進 `<canvas>`，並移除 `.xterm-rows`（DOM renderer
+    // 的產物）。斷言「active 終端有 canvas 且沒有 .xterm-rows」＝ GPU renderer 確實生效。
+    //
+    // **像素級的框線對齊驗不到** —— 由 code review + design + dogfood 承擔（比照 OSC 8
+    // linkHandler 的先例）。這條擋的是「GPU renderer 靜默沒有啟用」的回歸：少了它，本檔其餘
+    // 斷言全綠也證明不了 GPU renderer 還活著（它們刻意設計成 renderer-agnostic）。
+    const gpu = await app.client.evaluate(`(() => {
+      const hosts = [...document.querySelectorAll('section[aria-label="${copy('stage.terminal')}"] > div')]
+      const active = hosts.find((d) => !d.classList.contains('hidden'))
+      if (!active) throw new Error('找不到顯示中的終端')
+      return {
+        activeCanvas: active.querySelectorAll('canvas').length,
+        activeHasRows: !!active.querySelector('.xterm-rows'),
+        // 未顯示的終端**不得**持有 canvas —— 並存的 webgl context 有上限（實測 16），
+        // 超出時最舊的會被靜默丟棄，而那不會觸發任何事件。
+        hiddenWithCanvas: hosts
+          .filter((d) => d.classList.contains('hidden'))
+          .filter((d) => d.querySelectorAll('canvas').length > 0).length,
+        hiddenCount: hosts.filter((d) => d.classList.contains('hidden')).length,
+      }
+    })()`)
+    check(
+      results,
+      `${label}：顯示中的終端以 GPU renderer 呈現`,
+      gpu.activeCanvas > 0 && gpu.activeHasRows === false,
+      `canvas=${gpu.activeCanvas} 個、.xterm-rows ${gpu.activeHasRows ? '存在（表示退回了 DOM renderer）' : '不存在'}`,
     )
 
     // 清掉選取，免得干擾後續的輸入
@@ -1059,19 +1302,17 @@ async function runMode(label, { port, rendererUrl }) {
     // 往右推走。標籤因此一律停在本地的 `shell N`（session-navigation-and-labels 的 design D4）。
     //
     // **斷言必須成對**：光看「標籤沒變」證明不了什麼（它本來就可能什麼都沒發生）。先確認那串
-    // OSC 序列**真的抵達了 pty**（`cat -v` 會把它以可見形式印出來），再斷言標籤沒被它改動。
-    await typeLine(app.client, "printf '\\033]0;shell-osc-title\\007' | cat -v")
+    // OSC 序列**真的抵達了 pty**，再斷言標籤沒被它改動。
+    // `cat -v` 把那串 OSC 以可見形式寫進檔案（它會結束 ⇒ 會 flush，無緩衝問題）。
+    const oscFile = join(out, 'osc.txt')
+    await typeLine(app.client, `printf '\\033]0;shell-osc-title\\007' | cat -v > ${oscFile}`)
 
-    const echoed = await pollUntil(
-      app.client,
-      TERMINAL_TEXT,
-      (value) => String(value).includes('^[]0;shell-osc-title^G'),
-      8000,
-    )
+    const oscSeen = await waitForFile(oscFile, (value) => value.includes('^[]0;shell-osc-title^G'))
     check(
       results,
       `${label}：OSC 序列確實抵達 pty（否則此測試空轉）`,
-      String(echoed).includes('^[]0;shell-osc-title^G'),
+      oscSeen.includes('^[]0;shell-osc-title^G'),
+      `檔案內容=${JSON.stringify(oscSeen.trim().slice(0, 40))}`,
     )
 
     await typeLine(app.client, "printf '\\033]0;shell-osc-title\\007'")
@@ -1100,11 +1341,15 @@ async function runMode(label, { port, rendererUrl }) {
     // `C1=`（tty 會回顯它），若只等 `C1=` 出現，會在回顯的那一刻就返回 —— 那時 shell
     // 根本還沒執行，數字尚未產生（實測：build 模式因此讀到 0）。與 OUT_42 同一個陷阱：
     // **回顯不等於執行**。
+    // **判準是磁碟上的檔案。** 這條正是 CLAUDE.md 記載的那個 flaky 的本人：`stty size` 的結果曾以
+    // 「等畫面出現 `COLS=`」判定，而 **tty 會回顯輸入行** —— 畫面上在命令執行之前就已經有 `COLS=` 了，
+    // 於是讀到還沒產生的值（build 模式讀成 0、dev 僥倖通過）。當年的緩解是把 marker 設計成
+    // 「回顯裡不含答案」；改讀檔之後，這個顧慮從根本上消失 —— 檔案只有命令真的執行才會出現。
     const readCols = async (marker) => {
-      await typeLine(app.client, `echo ${marker}=$(stty size | cut -d' ' -f2)`)
-      const pattern = new RegExp(`${marker}=(\\d+)`)
-      const text = await pollUntil(app.client, TERMINAL_TEXT, (value) => pattern.test(String(value)), 8000)
-      return Number(String(text).match(pattern)?.[1] ?? 0)
+      const file = join(out, `cols-${marker}.txt`)
+      await typeLine(app.client, `stty size | cut -d' ' -f2 > ${file}`)
+      const text = await waitForFile(file, (value) => /\d/.test(value))
+      return Number(text.trim() || 0)
     }
 
     const colsBefore = await readCols('C1')
@@ -1131,6 +1376,45 @@ async function runMode(label, { port, rendererUrl }) {
 
     const pids2 = await waitForPtyCount(marker, 2)
     check(results, `${label}：兩個 pty 行程並存`, pids2.length === 2, `pids=${pids2.join(',')}`)
+
+    // **只有顯示中的終端持有 GPU 的渲染資源。**
+    //
+    // **這條必須放在「有第二個 session」之後** —— 放在只有一個 session 的地方，「隱藏的終端」
+    // 是 0 個，斷言恆為真而什麼都沒驗到（實測踩過：我第一版就放錯地方，detail 印出
+    // 「隱藏的終端 0 個」才發現）。
+    //
+    // 為什麼是正確性要求而非優化：並存的 webgl context 有上限（實測恰為 16），**超出時最舊的
+    // 會被靜默丟棄、不觸發任何事件** —— 於是較舊的終端會無聲地變成空白，而 wrapper 裡的
+    // `onContextLoss` 自癒救不了它（它倚賴一個通知，而那裡根本沒有通知）。
+    const GPU_PER_TERMINAL = `(() => {
+      const hosts = [...document.querySelectorAll('section[aria-label="${copy('stage.terminal')}"] > div')]
+      const hidden = hosts.filter((d) => d.classList.contains('hidden'))
+      return {
+        總數: hosts.length,
+        隱藏數: hidden.length,
+        隱藏中仍持有canvas: hidden.filter((d) => d.querySelectorAll('canvas').length > 0).length,
+        顯示中有canvas: hosts.filter((d) => !d.classList.contains('hidden'))
+          .every((d) => d.querySelectorAll('canvas').length > 0),
+      }
+    })()`
+    // **輪詢，不要量一次就斷言** —— 釋放發生在 React 的 effect 裡，而上一步（等 pty 出現）
+    // 一回來就量，很可能早於那次 flush。等不到才是真的沒釋放。
+    const gpuPerTerminal = await pollUntil(
+      app.client,
+      GPU_PER_TERMINAL,
+      (v) => v.隱藏數 > 0 && v.隱藏中仍持有canvas === 0,
+      5000,
+    )
+    check(
+      results,
+      `${label}：GPU 的渲染資源只給顯示中的終端（未顯示的不持有）`,
+      gpuPerTerminal.隱藏數 > 0 &&
+        gpuPerTerminal.隱藏中仍持有canvas === 0 &&
+        gpuPerTerminal.顯示中有canvas === true,
+      `終端 ${gpuPerTerminal.總數} 個、隱藏 ${gpuPerTerminal.隱藏數} 個，其中 ` +
+        `${gpuPerTerminal.隱藏中仍持有canvas} 個仍持有 canvas；顯示中的有 canvas=` +
+        `${gpuPerTerminal.顯示中有canvas}（隱藏數為 0 表示這條沒有鑑別力）`,
+    )
 
     // 兩個 login shell 的 session 都停在本地標籤，且**序號各自不同** —— 序號是 folder 內遞增的。
     //
@@ -1162,12 +1446,14 @@ async function runMode(label, { port, rendererUrl }) {
     await realClick(app.client, firstTabRect)
     await sleep(400)
 
-    const backText = await app.client.evaluate(TERMINAL_TEXT)
+    // 判準走**產品自己的複製路徑**（拖曳選取 → 複製 → 讀剪貼簿），不讀 DOM ——
+    // 那條管道跨 renderer 不變（見 `readTerminalText`）。
+    const backText = await readTerminalText(app.client)
     check(
       results,
       `${label}：切回 session 後其先前的輸出仍在`,
-      String(backText).includes('OUT_42'),
-      String(backText).replace(/\s+/g, ' ').slice(-60),
+      backText.includes('OUT_42'),
+      backText.replace(/\s+/g, ' ').slice(-60),
     )
 
     // ── rail 的 session 子列：點選即聚焦（此刻 focused 是第一個）
@@ -1409,12 +1695,12 @@ async function runMode(label, { port, rendererUrl }) {
     await realClick(app.client, await app.client.evaluate(TAB_RECT(0)))
     await sleep(600)
 
-    const textAfterReorder = await app.client.evaluate(TERMINAL_TEXT)
+    const textAfterReorder = await readTerminalText(app.client)
     check(
       results,
       `${label}：拖曳排序後切回 session，其終端內容仍在（未變空白）`,
-      String(textAfterReorder).includes('OUT_42'),
-      `…${String(textAfterReorder).replace(/\s+/g, ' ').slice(-70)}`,
+      textAfterReorder.includes('OUT_42'),
+      `…${textAfterReorder.replace(/\s+/g, ' ').slice(-70)}`,
     )
 
     // ── 未位移的按下放開仍是點擊（切換 focus，順序不變）
@@ -1774,6 +2060,47 @@ async function runMode(label, { port, rendererUrl }) {
       `分頁數=${tabsAfterCreate.length}（重建了 ${tabsBeforeReload.length} 個）`,
     )
 
+    // ── terminal-preferences：GPU 加速可由使用者關閉（逃生口）
+    //
+    // **插在 runMode 的最後、finally 之前** —— 它會改變偏好與 renderer 狀態，而前面每個段落對
+    // session 與版面都有明確的假設（`shell-affordance-tweaks` 的教訓：插入段的位置是承重的）。
+    //
+    // **走使用者的路徑**（開 Settings → 點勾選 → 存），不打 IPC —— 見 `setGpuViaSettings`。
+    const GPU_STATE = `(() => {
+      const host = [...document.querySelectorAll('section[aria-label="${copy('stage.terminal')}"] > div')]
+        .find((d) => !d.classList.contains('hidden'))
+      if (!host) throw new Error('找不到顯示中的終端')
+      return { canvas: host.querySelectorAll('canvas').length, rows: !!host.querySelector('.xterm-rows') }
+    })()`
+
+    await setGpuViaSettings(app.client, false)
+    const gpuOff = await pollUntil(app.client, GPU_STATE, (v) => v.canvas === 0, 5000)
+    check(
+      results,
+      `${label}：關閉 GPU 加速後，終端退回不倚賴 GPU 的渲染路徑`,
+      gpuOff.canvas === 0 && gpuOff.rows === true,
+      `canvas=${gpuOff.canvas} 個、.xterm-rows ${gpuOff.rows ? '回來了' : '仍不存在（表示沒有真的退回）'}`,
+    )
+
+    // 關掉 GPU **不得遺失終端既有的內容**（spec 明文要求）。判準走複製路徑 —— 它跨 renderer 不變。
+    const afterGpuOff = await readTerminalText(app.client)
+    check(
+      results,
+      `${label}：關閉 GPU 加速不遺失終端既有的內容`,
+      afterGpuOff.trim() !== '',
+      `退回 DOM renderer 後仍讀得到 ${afterGpuOff.length} 字元`,
+    )
+
+    // 開回來 —— 並確認它真的又是 GPU 了（不是「關了就回不去」）。
+    await setGpuViaSettings(app.client, true)
+    const gpuOn = await pollUntil(app.client, GPU_STATE, (v) => v.canvas > 0, 5000)
+    check(
+      results,
+      `${label}：重新開啟 GPU 加速後，終端回到 GPU renderer`,
+      gpuOn.canvas > 0 && gpuOn.rows === false,
+      `canvas=${gpuOn.canvas} 個、.xterm-rows ${gpuOn.rows ? '仍存在（沒有回到 GPU）' : '不存在'}`,
+    )
+
     await app.quitGracefully()
     const pidsAfterQuit = await waitForPtyCount(marker, 0, 10_000)
     check(
@@ -1819,7 +2146,7 @@ async function runRestore(label, { port, rendererUrl }) {
   console.log(`\n── ${label}（session 重建）──`)
 
   const marker = `spek-restore-${process.pid}-${Date.now()}`
-  const { repo } = makeFixture()
+  const { repo, out } = makeFixture()
   const sub = join(repo, 'packages', 'app')
   mkdirSync(sub, { recursive: true })
   const profile = seedProfile([['f1', repo]])
@@ -1859,8 +2186,10 @@ async function runRestore(label, { port, rendererUrl }) {
     await pollUntil(app.client, TABS, (value) => value.length === 2, 8000)
     await realClick(app.client, await app.client.evaluate(TERMINAL_RECT))
     await typeLine(app.client, `cd ${sub}`)
-    await typeLine(app.client, 'echo MARK_$((6*7))')
-    await waitForOutput(app.client, 'MARK_42')
+    // **用 `tee`**：`MARK_42` 必須留在**畫面**上（它正是要被快照序列化、稍後重播的東西），
+    // 而判準走**檔案**（檔案只有命令真的執行才會出現，畫面分不清回顯與執行）。
+    await typeLine(app.client, `echo MARK_$((6*7)) | tee ${join(out, 'mark.txt')}`)
+    await waitForFile(join(out, 'mark.txt'), (v) => v.includes('MARK_42'))
 
     const labelsBefore = await app.client.evaluate(TAB_LABELS)
 
@@ -1924,12 +2253,16 @@ async function runRestore(label, { port, rendererUrl }) {
     )
 
     // claude **不重播快照** —— 它自己會重現對話，重播會讓使用者看到兩份歷史。
-    const claudeText = await app.client.evaluate(TERMINAL_TEXT)
+    //
+    // **這是一條否定式斷言**（「畫面上**沒有**分隔線」）—— 讀不到終端時它會靜默通過。
+    // `readTerminalText` 複製不成就丟錯（哨兵內建），這裡再明寫一次「內容非空」：
+    // 「沒有分隔線」只有在「確實讀到了東西」的前提下才有意義。
+    const claudeText = await readTerminalText(app.client)
     check(
       results,
       `${label}：claude session 不重播快照（否則歷史會出現兩份）`,
-      !claudeText.includes(copy('sessions.replaySeparator')),
-      `終端內容=${JSON.stringify(claudeText.slice(0, 80))}`,
+      !claudeText.includes(copy('sessions.replaySeparator')) && claudeText.trim() !== '',
+      `終端內容（${claudeText.length} 字元）=${JSON.stringify(claudeText.slice(0, 80))}`,
     )
 
     // ── **再關一次、再開一次，全程不碰那個休眠的 shell session。**
@@ -1974,12 +2307,7 @@ async function runRestore(label, { port, rendererUrl }) {
     )
 
     // 上次的畫面被重播，且與 live 明確區分。
-    const replayed = await pollUntil(
-      app.client,
-      TERMINAL_TEXT,
-      (value) => value.includes('MARK_42'),
-      10_000,
-    )
+    const replayed = await pollTerminalText(app.client, (value) => value.includes('MARK_42'), 10_000)
     // **順序也要驗，不能只驗「這些字串都在」。**
     //
     // 只斷言 `includes('MARK_42')` 的版本，對一個把畫面弄壞的實作照樣是綠的：`?1049l` 曾把游標
@@ -2011,18 +2339,14 @@ async function runRestore(label, { port, rendererUrl }) {
 
     // shell 於**最後已知的工作目錄**重生（不是 folder 根目錄）。
     await realClick(app.client, await app.client.evaluate(TERMINAL_RECT))
-    await typeLine(app.client, 'echo CWD=$(pwd)')
-    const cwdText = await pollUntil(
-      app.client,
-      TERMINAL_TEXT,
-      (value) => value.includes('CWD=/'),
-      10_000,
-    )
+    const rebornCwdFile = join(out, 'reborn-cwd.txt')
+    await typeLine(app.client, `pwd > ${rebornCwdFile}`)
+    const cwdText = await waitForFile(rebornCwdFile, (value) => value.trim().startsWith('/'), 10_000)
     check(
       results,
       `${label}：重建的 shell session 於最後已知的工作目錄重生`,
-      cwdText.includes(`CWD=${sub}`),
-      `期待 CWD=${sub}；實得 ${JSON.stringify(cwdText.slice(-100))}`,
+      cwdText.trim() === sub,
+      `期待 ${sub}；實得 ${JSON.stringify(cwdText.trim())}`,
     )
 
     // 喚醒之後，pty 最終要拿到終端真正的尺寸（而不是 spawn 時的 80 欄）。
@@ -2036,14 +2360,11 @@ async function runRestore(label, { port, rendererUrl }) {
     // 的那個 effect，它由 code review 與 design 承擔（比照 OSC 8 linkHandler 的先例）。
     //
     // 判準是「**不等於 spawn 的預設值 80**」，不是「大於 80」—— 探針視窗裡終端的真實寬度是 60 幾欄。
-    // 回顯不含答案：`$(stty size)` 在輸入行的回顯裡不會展開。
-    await typeLine(app.client, "echo COLS=$(stty size | cut -d' ' -f2)")
-    const colsText = String(
-      await pollUntil(app.client, TERMINAL_TEXT, (value) => /COLS=\d+/.test(value), 10_000).catch(
-        () => '',
-      ),
-    )
-    const cols = Number(colsText.match(/COLS=(\d+)/)?.[1] ?? 0)
+    // 判準走檔案（回顯與執行的區別由檔案的存在與否承擔，不再倚賴「回顯裡不含答案」的巧思）。
+    const wakeColsFile = join(out, 'wake-cols.txt')
+    await typeLine(app.client, `stty size | cut -d' ' -f2 > ${wakeColsFile}`)
+    const colsText = await waitForFile(wakeColsFile, (value) => /\d/.test(value), 10_000)
+    const cols = Number(colsText.trim() || 0)
     check(
       results,
       `${label}：喚醒的 session 其 pty 最終取得終端的真實尺寸（不是 spawn 時的 80 欄）`,
@@ -2114,7 +2435,7 @@ async function runHealAndCrash(label, { port, rendererUrl }) {
   console.log(`\n── ${label}（自癒與非正常結束）──`)
 
   const marker = `spek-heal-${process.pid}-${Date.now()}`
-  const { repo } = makeFixture()
+  const { repo, out } = makeFixture()
   const profile = seedProfile([['f1', repo]])
   // 這支 stub 對 `--resume` 一律以非零碼結束 —— 正是「從未與該 session 對話過」時 claude 的行為。
   const stub = makeStubClaude({ resumeFails: true })
@@ -2198,16 +2519,10 @@ async function runHealAndCrash(label, { port, rendererUrl }) {
     //
     // stub claude 自己 `exec "$SHELL" -i`，所以這個 session 是個可以打字的互動 shell。
     await realClick(app.client, await app.client.evaluate(TERMINAL_RECT))
-    await typeLine(app.client, "echo HCOLS=$(stty size | cut -d' ' -f2)")
+    const healedColsFile = join(out, 'healed-cols.txt')
+    await typeLine(app.client, `stty size | cut -d' ' -f2 > ${healedColsFile}`)
     const healedCols = Number(
-      String(
-        await pollUntil(
-          app.client,
-          TERMINAL_TEXT,
-          (value) => /HCOLS=\d+/.test(value),
-          10_000,
-        ).catch(() => ''),
-      ).match(/HCOLS=(\d+)/)?.[1] ?? 0,
+      (await waitForFile(healedColsFile, (value) => /\d/.test(value), 10_000)).trim() || 0,
     )
     check(
       results,
@@ -2251,8 +2566,8 @@ async function runHealAndCrash(label, { port, rendererUrl }) {
     await openSessionViaMenu(app.client, copy('sessions.spawnShell'))
     await pollUntil(app.client, TABS, (value) => value.length === 2, 8000)
     await realClick(app.client, await app.client.evaluate(TERMINAL_RECT))
-    await typeLine(app.client, 'echo CRASH_$((8*8))')
-    await waitForOutput(app.client, 'CRASH_64')
+    await typeLine(app.client, `echo CRASH_$((8*8)) | tee ${join(out, 'crash.txt')}`)
+    await waitForFile(join(out, 'crash.txt'), (v) => v.includes('CRASH_64'))
 
     // 滾動快照是 debounce 落盤的 —— 等過它，然後**不給 app 任何收尾的機會**。
     await sleep(SNAPSHOT_SETTLE_MS)
@@ -2272,12 +2587,7 @@ async function runHealAndCrash(label, { port, rendererUrl }) {
     await pollUntil(app.client, TAB_LABELS, (value) => value.length === 2, 10_000)
     await realClick(app.client, await app.client.evaluate(TAB_RECT(1)))
 
-    const crashText = await pollUntil(
-      app.client,
-      TERMINAL_TEXT,
-      (value) => value.includes('CRASH_64'),
-      10_000,
-    ).catch(() => '')
+    const crashText = await pollTerminalText(app.client, (value) => value.includes('CRASH_64'), 10_000)
     check(
       results,
       `${label}：應用程式被強制結束後，最近一次快照仍可還原畫面`,
@@ -2308,7 +2618,7 @@ async function runAltScreen(label, { port, rendererUrl }) {
   console.log(`\n── ${label}（alternate screen 的殘留）──`)
 
   const marker = `spek-alt-${process.pid}-${Date.now()}`
-  const { repo } = makeFixture()
+  const { repo, out } = makeFixture()
   const profile = seedProfile([['f1', repo]])
   const stub = makeStubClaude()
 
@@ -2323,8 +2633,11 @@ async function runAltScreen(label, { port, rendererUrl }) {
     await realClick(app.client, await app.client.evaluate(TERMINAL_RECT))
 
     // 進入 alternate screen（`?1049h`）並開啟滑鼠追蹤（`?1003h`）—— 這正是 vim 開著時的狀態。
-    await typeLine(app.client, "printf '\\033[?1049h\\033[?1003h'; echo INSIDE_ALT")
-    await waitForOutput(app.client, 'INSIDE_ALT')
+    await typeLine(
+      app.client,
+      `printf '\\033[?1049h\\033[?1003h'; echo INSIDE_ALT | tee ${join(out, 'alt.txt')}`,
+    )
+    await waitForFile(join(out, 'alt.txt'), (v) => v.includes('INSIDE_ALT'))
 
     await sleep(SNAPSHOT_SETTLE_MS)
     await app.quitGracefully()
@@ -2340,9 +2653,7 @@ async function runAltScreen(label, { port, rendererUrl }) {
     // 回顯不含答案 —— 只有真的執行了才會出現 `ALT_OK_81`。
     await typeLine(app.client, 'echo ALT_OK_$((9*9))')
     const text = String(
-      await pollUntil(app.client, TERMINAL_TEXT, (value) => value.includes('ALT_OK_81'), 10_000).catch(
-        () => '',
-      ),
+      await pollTerminalText(app.client, (value) => value.includes('ALT_OK_81'), 10_000),
     )
 
     // **判準是「normal buffer 的歷史看得見」，不是「新 shell 的輸出看得見」。**
@@ -2465,21 +2776,52 @@ async function runDormantHint(label, { port, rendererUrl }) {
   }
 }
 
+/**
+ * 各段落。**這支探針會開真的視窗、送真的滑鼠事件** —— 跑完整支要好幾分鐘，而且那段期間
+ * **使用者無法操作自己的電腦**（視窗會搶走焦點、滑鼠被驅動）。
+ *
+ * 因此提供 `PROBE_ONLY` 讓迭代時只跑被改到的那一段。**不設就跑全部**，完整驗收與 CI 的行為不變。
+ *
+ *   PROBE_ONLY=runMode                    只跑 runMode（build + dev 兩模式）
+ *   PROBE_ONLY=runMode:build              只跑 runMode 的 build 模式
+ *   PROBE_ONLY=runRestore,runAltScreen    跑這兩段
+ */
+const SECTIONS = [
+  ['runMode', runMode],
+  ['runRestore', runRestore],
+  ['runHealAndCrash', runHealAndCrash],
+  ['runAltScreen', runAltScreen],
+  ['runDormantHint', runDormantHint],
+]
+
+const ONLY = (process.env.PROBE_ONLY ?? '')
+  .split(',')
+  .map((x) => x.trim())
+  .filter(Boolean)
+
+function wanted(name, label) {
+  if (ONLY.length === 0) return true
+  return ONLY.some((filter) => {
+    const [section, mode] = filter.split(':')
+    return section === name && (!mode || mode === label)
+  })
+}
+
 async function main() {
   let devServer = null
+  if (ONLY.length > 0) console.log(`（PROBE_ONLY=${ONLY.join(',')} —— 只跑指定的段落，這不是完整驗收）`)
   try {
-    await runMode('build', { port: BUILD_PORT, rendererUrl: null })
-    await runRestore('build', { port: BUILD_PORT, rendererUrl: null })
-    await runHealAndCrash('build', { port: BUILD_PORT, rendererUrl: null })
-    await runAltScreen('build', { port: BUILD_PORT, rendererUrl: null })
-    await runDormantHint('build', { port: BUILD_PORT, rendererUrl: null })
+    for (const [name, fn] of SECTIONS) {
+      if (wanted(name, 'build')) await fn('build', { port: BUILD_PORT, rendererUrl: null })
+    }
 
-    devServer = await startRendererDevServer()
-    await runMode('dev', { port: DEV_PORT, rendererUrl: devServer.url })
-    await runRestore('dev', { port: DEV_PORT, rendererUrl: devServer.url })
-    await runHealAndCrash('dev', { port: DEV_PORT, rendererUrl: devServer.url })
-    await runAltScreen('dev', { port: DEV_PORT, rendererUrl: devServer.url })
-    await runDormantHint('dev', { port: DEV_PORT, rendererUrl: devServer.url })
+    // dev server 起得很慢 —— 沒有任何 dev 段落要跑時就不要起它。
+    if (SECTIONS.some(([name]) => wanted(name, 'dev'))) {
+      devServer = await startRendererDevServer()
+      for (const [name, fn] of SECTIONS) {
+        if (wanted(name, 'dev')) await fn('dev', { port: DEV_PORT, rendererUrl: devServer.url })
+      }
+    }
   } finally {
     if (devServer) {
       try {

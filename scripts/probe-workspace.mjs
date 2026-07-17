@@ -528,16 +528,28 @@ try {
       family: !!d.querySelector('select[aria-label="${copy('settings.fontFamily')}"]'),
       size: !!d.querySelector('input[aria-label="${copy('settings.fontSize')}"]'),
       lineHeight: !!d.querySelector('input[aria-label="${copy('settings.lineHeight')}"]'),
+      gpu: !!d.querySelector('input[aria-label="${copy('settings.gpuAcceleration')}"]'),
       preview: !!d.querySelector('[aria-label="${copy('settings.preview')}"]'),
+      // **預覽不得含 block element／box-drawing 字元。** 終端的框線由 GPU renderer 依 cell 邊界
+      // 程式化繪製、**不經字型**，而預覽是純 DOM、用的就是字型 —— 留著它們，預覽會顯示終端不會
+      // 有的縫，使用者會據此去調一個並不存在的問題。預覽的職責是「這個**字型**長什麼樣」。
+      previewHasBoxDrawing: /[\u2500-\u257F\u2580-\u259F]/.test(
+        d.querySelector('[aria-label="${copy('settings.preview')}"]')?.textContent ?? '',
+      ),
     }
   })()`
 
   const settingsAt = await app.client.evaluate(SETTINGS_RECT)
   if (settingsAt) await realPressRelease(app.client, settingsAt)
   const dialog = await pollUntil(app.client, FONT_DIALOG, (v) => v !== null, 4000).catch(() => null)
-  check(results, '觸發 Settings 開啟終端字型設定介面（含 family／size／行高與預覽）',
-    dialog?.family === true && dialog?.size === true && dialog?.lineHeight === true && dialog?.preview === true,
+  check(results, '觸發 Settings 開啟終端偏好設定介面（含 family／size／行高／GPU 加速與預覽）',
+    dialog?.family === true && dialog?.size === true && dialog?.lineHeight === true &&
+      dialog?.gpu === true && dialog?.preview === true,
     JSON.stringify(dialog))
+
+  check(results, '預覽的範例文字不含框線字元（那些字元在終端不經字型）',
+    dialog?.previewHasBoxDrawing === false,
+    dialog?.previewHasBoxDrawing ? '預覽含 box-drawing —— 它會顯示終端不會有的縫' : '（不含）')
 
   // 字型 family 以**下拉選單**呈現系統的等寬字，且含「系統預設」選項（dogfood：硬打字型名太難用）。
   //

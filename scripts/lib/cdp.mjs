@@ -54,7 +54,15 @@ export async function connect(target) {
         returnByValue: true,
         awaitPromise: true,
       })
-      if (result?.exceptionDetails) throw new Error(result.exceptionDetails.text)
+      if (result?.exceptionDetails) {
+        // **`exceptionDetails.text` 幾乎恆為 `"Uncaught"`** —— 真正的訊息在
+        // `exception.description`（`"Error: …\n    at …"`）。只丟 `text` 的話，頁面裡丟出來的
+        // 錯誤到了這裡就只剩「Uncaught」三個字，等於什麼都沒說（同 CLAUDE.md 那條「一條沒有
+        // `detail` 的 `check()`，失敗時等於什麼都沒說」）。哨兵式的 expression 全靠這條訊息說明
+        // 自己為什麼失效。
+        const { exceptionDetails: d } = result
+        throw new Error(d.exception?.description ?? d.exception?.value ?? d.text)
+      }
       return result?.result?.value
     },
     close: () => ws.close(),
