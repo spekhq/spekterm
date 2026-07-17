@@ -204,6 +204,16 @@ leader，再 `process.kill(-pid)` 殺整組。**另外，面板留有未存變�
 > 其實一個殭屍都沒殺到）。把 `-` 包成字元類別即可自我豁免：`pkill -9 -f 'spekterm[-]files-profile'`
 > —— regex 仍匹配真正的 profile 名，但你自己那條命令的字面不匹配。
 
+> **腳本裡比對 git 的輸出，一律加 `--no-color`（或 `-c color.ui=false`）—— 它已經咬過兩次。**
+> git 在這個環境會強制上色，於是 `git diff | grep '^-'` **匹配不到任何東西**：刪除行的開頭是
+> 一個 ANSI escape，不是字面的 `-`。而失效方式是最壞的那種 —— grep 回 0 個、exit 1，**靜默跳過
+> `&&` 後面的每一步**，看起來就像「0 deletions，乾淨」。第一次是 `naming.test.mjs` 的路徑比對
+> 靜默失準而全綠（見下文「產品身分」）；第二次是 archive 時驗證 spec 同步範圍，靠 diffstat 說
+> 「9 deletions」才戳破。**判準與顏色碼一起流過管線，就是一個假綠。**
+>
+> 同源的還有 **`git log --oneline | grep`**、**`git status | grep`**、**`git grep`** —— 凡是把 git
+> 的輸出餵給另一個程式判讀的地方都適用。（`git grep` 另可用 `-I --no-color`。）
+
 **驗互動時用真事件，不要用 `dispatchEvent(new MouseEvent(...))`。** 合成事件不等於真實
 輸入：它不走完整的 pointer/mouse/contextmenu 序列，也不觸發 React 19 對 trusted discrete
 事件的同步 effect flush。實測踩過：右鍵選單用合成 `contextmenu` 測「全綠」，但真右鍵完全開
@@ -334,7 +344,8 @@ node-pty 1.2.0-beta.14（釘死）、Monaco Editor、chokidar 5、react-markdown
   顯示名稱（Dock、安裝檔名），那些位置的慣例是專有名詞。兩者不同源，不需一致。
 - **`npm test` 有一條守衛**（`scripts/naming.test.mjs`）：版控中不得殘留舊名，`archive/` 除外。
   它的對照組要求「**不排除** archive 時必須命中舊名」—— 少了這條，`git grep` 的 ANSI 顏色碼曾讓
-  路徑比對靜默失準而全綠（實測）。
+  路徑比對靜默失準而全綠（實測）。**那不是這條守衛專屬的坑**，見上文「腳本裡比對 git 的輸出，
+  一律加 `--no-color`」—— 同一個根因後來在 archive 的驗證上又咬了一次。
 - **`probe:identity` 不能傳 `--user-data-dir`**（那會覆寫掉待驗的對象），**也不能寫成 Electron 主
   行程腳本**（`electron <script>` 不讀 repo 的 `package.json`，只會量到 Electron 的預設值 `Electron`）。
   它啟動真正的 `electron .`，再從**子行程的 argv** 讀出解析後的 userData。
