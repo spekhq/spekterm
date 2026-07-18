@@ -265,8 +265,27 @@ ready 事件要等主 script 評估完成才觸發，會死鎖。
 
 ### core 套件的名稱與分發（已定案）
 
-core 對外發佈為 **`@spekjs/core`**（已於 npm public registry 發佈，本 repo 以 `^1.1.1`
+core 對外發佈為 **`@spekjs/core`**（已於 npm public registry 發佈，本 repo 以 `^1.1.3`
 宣告依賴）。Phase 5 抽出的 UI 套件為 **`@spekjs/ui`**（`^1.0.1`）。
+
+> **1.1.3 的 schema-order 快取改為 key 在 schema 而非 change（upstream #19），對側欄是可觀測的
+> 提速。** `readChange` 取 `schemaOrder` 要 spawn 一次 `openspec status --change <slug> --json`
+> （約 1.2 秒），而那個答案是**該 change 所屬 schema 的性質、不是該 change 的**——舊版以 change slug
+> 為 key，於是同一個 repo 裡每個 change 各付一次。實測（三個 active change 的 fixture）：
+> **1.1.1 是 1174 + 1291 + 1243ms，1.1.3 是 1250 + 3 + 1ms**，`schemaOrder` 輸出完全相同。
+> 省下的量隨 active change 數線性成長（本 repo 目前是 0 個，看不出來——**要驗它必須自己造 fixture**）。
+>
+> 同版還有 worktree 的 active change 去重（#17），但**它打不到 spekterm** ——那條修的是
+> **`scanOpenSpecAggregated` / `buildGraphDataAggregated`**，而我們用的是非聚合的
+> `scanOpenSpec` / `buildGraphData`（已 grep 確認 `src/` 與 `scripts/` 從未出現 `Aggregated`、
+> `listWorktrees`、`worktreeKey`、`toWorktreeSource`）。**「repo 有 worktree」不是觸發條件，
+> 「呼叫聚合 API」才是** ——在有 3 個 worktree 的 core-lib 上，新舊版的 `scanOpenSpec`
+> 都回 `active=0`，worktree 裡的 change 根本沒被聚合進來。
+>
+> upstream 的 bug 本身是真的（合成 fixture 重現：main 有一個 active change、worktree 從它分出去
+> → 聚合掃描在 1.1.1 回 `active=2`、graph 3 nodes / 2 edges，1.1.3 回 `active=1` / 2 nodes /
+> 1 edge）。**記在這裡是為了擋住下一次的重複調查**：日後若我們改用聚合 API（例如想讓側欄涵蓋
+> worktree 裡的 change），這條才會開始適用，且屆時 `SpecInfo.historyCount` 會受重複邊影響。
 
 > **`@spekjs/core` 1.1.0 是「minor 版號卻破壞型別」的一版** —— `ChangeInfo` 新增了 **required**
 > 的 `defaultSchema: string | null`。**凡是自己建構 `ChangeInfo` 的程式碼都會 `TS2741` 編譯失敗**
