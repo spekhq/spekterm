@@ -103,6 +103,13 @@ export interface ChangeDetailView {
   defaultSchema: string | null
   artifacts: ChangeArtifactView[]
   schemaOrder?: string[]
+  /**
+   * 這個 change 還缺哪些 artifact，依工作流順序。空陣列＝齊備。
+   *
+   * **不能由 `artifacts` 與 `schemaOrder` 相減得出** —— `schemaOrder` 只列出已存在的 artifact，
+   * 兩者相減恆為空。見 `missingArtifacts()`。
+   */
+  missingArtifacts: string[]
   /** change 的目錄。供交叉導覽。 */
   relPath: string | null
 }
@@ -182,6 +189,26 @@ function sumTaskStats(changes: ChangeInfo[]): TaskStats {
     completed += change.taskStats.completed
   }
   return { total, completed }
+}
+
+/**
+ * 這個 change 還缺哪些 artifact，依 OpenSpec 工作流的順序。
+ *
+ * **來源必須是 `ChangeInfo` 的 `has*` 四個旗標，不能用 `schemaOrder` 去減** ——
+ * `schemaOrder` **只列出已經存在的 artifact**（實測：一個只有 `tasks.md` 的 change，它就只回
+ * `['tasks']`），拿它當「schema 期望的完整清單」去相減，結果恆為空，這個功能就永遠不會出現。
+ *
+ * 這四個名字是 spec-driven 工作流的形狀，也是 core 唯一提供的粒度。**它只是一個提示** ——
+ * 真正要產生哪一個 artifact 由 OpenSpec 自己決定（`artifact-continuation` 的 spec 明文要求
+ * 入口不得承諾特定 artifact），所以即使某個自訂 schema 讓這份提示不準，也不會導致錯誤的動作。
+ */
+function missingArtifacts(info: ChangeInfo): string[] {
+  const missing: string[] = []
+  if (!info.hasProposal) missing.push('proposal')
+  if (!info.hasDesign) missing.push('design')
+  if (!info.hasSpecs) missing.push('specs')
+  if (!info.hasTasks) missing.push('tasks')
+  return missing
 }
 
 /**
@@ -320,6 +347,7 @@ export class OpenSpecService {
       defaultSchema: detail.defaultSchema,
       artifacts,
       schemaOrder: detail.schemaOrder,
+      missingArtifacts: missingArtifacts(info),
       relPath: changeDir,
     }
   }

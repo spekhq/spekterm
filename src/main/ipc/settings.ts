@@ -6,6 +6,7 @@ export const SETTINGS_CHANNELS = {
   get: 'workspace:settings:get',
   setTerminalFont: 'workspace:settings:setTerminalFont',
   setGpuAcceleration: 'workspace:settings:setGpuAcceleration',
+  setAgentStatus: 'workspace:settings:setAgentStatus',
   listMonospaceFonts: 'workspace:settings:listMonospaceFonts',
 } as const
 
@@ -67,6 +68,12 @@ export function registerSettingsHandlers(store: PreferencesStore): void {
   )
 
   // 值的驗證同樣在 store（只認真正的布林；其餘一律當成未設定＝預設啟用）。
+  ipcMain.handle(
+    SETTINGS_CHANNELS.setAgentStatus,
+    (_event, enabled: unknown): TerminalPreferences =>
+      store.setAgentStatus(typeof enabled === 'boolean' ? enabled : null),
+  )
+
   ipcMain.handle(
     SETTINGS_CHANNELS.setGpuAcceleration,
     (_event, enabled: boolean | null): TerminalPreferences =>

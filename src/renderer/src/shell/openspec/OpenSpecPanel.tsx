@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import type { WorkspaceFolder } from '../types'
 import { BrowseView } from './BrowseView'
 import { ChangeView } from './ChangeView'
+import type { ContinuationBlock } from './continuation'
 import { SpecDetail } from './SpecDetail'
 import type { OpenSpecRequest } from './nav'
 import type { VizKind } from './VizOverlay'
@@ -21,6 +22,10 @@ interface OpenSpecPanelProps {
   anchoredChange: string | null
   /** 把一個 change 錨定到當前 focused session。 */
   onAnchor: (slug: string) => void
+  /** 續寫入口不可用的原因；`null` ＝ 可用。 */
+  continuationBlock: ContinuationBlock | null
+  /** 請 agent 續寫下一個 artifact。 */
+  onContinue: () => void
   /** 跳到 Files 身分並開啟該檔（design D7 的跨身分導航）。 */
   onOpenFile: (relPath: string) => void
   /** 自 Files 身分跳過來的目標（「在 OpenSpec 中檢視」）。 */
@@ -44,6 +49,8 @@ export function OpenSpecPanel({
   folder,
   anchoredChange,
   onAnchor,
+  continuationBlock,
+  onContinue,
   onOpenFile,
   request,
   onOpenViz,
@@ -155,6 +162,8 @@ export function OpenSpecPanel({
           <ChangeView
             folderId={folder.id}
             slug={anchoredChange}
+            continuationBlock={continuationBlock}
+            onContinue={onContinue}
             onOpenFile={onOpenFile}
             onGoToChanges={() => {
               setOpenSpec(null)

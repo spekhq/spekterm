@@ -20,6 +20,13 @@ export interface TerminalPreferences {
    * 看得出來，也只有使用者關得掉。
    */
   gpuAcceleration?: boolean
+  /**
+   * 與 agent 的狀態橋接（見 `agent-status.ts`）。**未設定＝啟用** —— 與 `gpuAcceleration` 同一條
+   * 規則。預設啟用的前提是實測的零損失：未自訂 statusline 的使用者，那個位置本來就是空的
+   * （agent 內建的模式提示行**不是** statusLine）。保留這個開關，是給不希望 spekterm 改變
+   * agent 呼叫方式的使用者一條退路 —— 那是本能力唯一會改變 spekterm 之外行為的部分。
+   */
+  agentStatus?: boolean
 }
 
 interface PersistedPreferences {
@@ -216,6 +223,17 @@ export class PreferencesStore {
     const next: TerminalPreferences = { ...this.preferences }
     if (enabled === null) delete next.gpuAcceleration
     else next.gpuAcceleration = enabled
+
+    this.preferences = next
+    this.save()
+    return this.get()
+  }
+
+  /** 與 agent 的狀態橋接。`null` ＝ 清除（回到預設的啟用）。 */
+  setAgentStatus(enabled: boolean | null): TerminalPreferences {
+    const next: TerminalPreferences = { ...this.preferences }
+    if (enabled === null) delete next.agentStatus
+    else next.agentStatus = enabled
 
     this.preferences = next
     this.save()

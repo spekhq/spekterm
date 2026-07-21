@@ -83,6 +83,9 @@ async function waitForFile(path, settled = (value) => value.trim().length > 0, t
  */
 const STUB_CLAUDE_RECEIPT = 'stub-claude-ran'
 
+/** stub 回報的模型顯示名 —— 狀態列上出現它，就是 payload 端到端走通了。 */
+const STUB_MODEL_NAME = 'Stub Model (1M context)'
+
 /**
  * 一支 stub `claude`，供「claude 目標的 session 會採用 pty 宣告的標題」這組驗收使用。
  *
@@ -114,7 +117,7 @@ const STUB_CLAUDE_RECEIPT = 'stub-claude-ran'
  * stub 同時把每次被呼叫的 argv 記進 `calls()` —— 續接（`--resume <id>`）與新建（`--session-id <id>`）
  * 用的是哪個旗標、哪個 id，只有這樣才驗得出來。
  */
-function makeStubClaude({ resumeFails = false } = {}) {
+function makeStubClaude({ resumeFails = false, honorSettings = false, logInput = false } = {}) {
   const home = mkTemp('spekterm-terminal-stubhome-')
   const bin = join(home, '.local', 'bin')
   mkdirSync(bin, { recursive: true })
@@ -123,14 +126,45 @@ function makeStubClaude({ resumeFails = false } = {}) {
   const callLog = join(home, 'claude-calls.log')
   const claude = join(bin, 'claude')
 
+  // stub 若要驗證狀態橋接，就得**照著我們注入的設定真的跑一次 statusLine** —— 只斷言
+  // 「argv 裡有 --settings」證明不了那個命令能用（落點對不對、寫得成不成、env 有沒有到）。
+  // JSON 用 node 解（命令字串裡有跳脫的雙引號，用 sh 解會很痛）；payload 是一份仿造的
+  // claude 狀態，形狀取自實測（見 agent-status.ts）。
+  const payload = join(home, 'payload.json')
+  writeFileSync(
+    payload,
+    JSON.stringify({
+      model: { id: 'claude-stub[1m]', display_name: STUB_MODEL_NAME },
+      effort: { level: 'high' },
+      thinking: { enabled: true },
+      context_window: { context_window_size: 1_000_000, total_input_tokens: 250_000 },
+      cost: { total_cost_usd: 1.25, total_lines_added: 12, total_lines_removed: 3 },
+    }),
+  )
+
+  const honor = [
+    'settings=""; prev=""',
+    'for a in "$@"; do if [ "$prev" = "--settings" ]; then settings="$a"; fi; prev="$a"; done',
+    'if [ -n "$settings" ]; then',
+    `  cmd=$(node -e 'process.stdout.write(JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")).statusLine.command)' "$settings")`,
+    `  cat "${payload}" | sh -c "$cmd" >/dev/null 2>&1`,
+    'fi',
+  ].join('\n')
+
+  // **把 pty 收到的輸入落盤** —— 供「側欄送出的指示真的抵達且真的送出了」那組驗收。
+  // 讀檔是 A 類管道：它能區分**回顯與執行**，而讀畫面本來就分不清（tty 會回顯輸入行）。
+  // 這裡更直接 —— 落下來的是 pty 的輸入串流本身，`\r` 有沒有跟著送出一目了然。
+  const inputLog = join(home, 'claude-input.log')
+
   const lines = [
     '#!/bin/sh',
     `: > "${receipt}"`,
     `echo "$@" >> "${callLog}"`,
+    honorSettings ? honor : '',
     resumeFails
       ? 'if [ "$1" = "--resume" ]; then echo "No conversation found with session ID: $2"; exit 1; fi'
       : '',
-    'exec "$SHELL" -i',
+    logInput ? `exec sh -c 'tee -a "${inputLog}" | "$SHELL" -i'` : 'exec "$SHELL" -i',
   ].filter(Boolean)
 
   writeFileSync(claude, `${lines.join('\n')}\n`)
@@ -140,6 +174,7 @@ function makeStubClaude({ resumeFails = false } = {}) {
     home,
     bin,
     receipt,
+    inputLog,
     calls: () => {
       try {
         return readFileSync(callLog, 'utf8').trim().split('\n').filter(Boolean)
@@ -2776,6 +2811,118 @@ async function runDormantHint(label, { port, rendererUrl }) {
   }
 }
 
+
+/**
+ * agent 狀態橋接（`claude-status-bridge`）。
+ *
+ * 這一段驗的是 spekterm 這半：**注入是否發生、注入的命令能不能用、關掉之後是否真的不注入**。
+ * agent 那半（payload 的欄位怎麼算出來的）不是我們的實作，也不該由這裡負責。
+ *
+ * stub claude 會照著我們注入的 `--settings` 真的跑一次 statusLine 命令（見 `makeStubClaude`）——
+ * 只斷言「argv 裡有 --settings」證明不了那個命令能用：落點對不對、寫不寫得成、環境變數有沒有
+ * 傳到，都要它真的跑過一次才知道。
+ */
+async function runAgentStatus(label, { port, rendererUrl }) {
+  console.log(`\n── ${label}（agent 狀態橋接）──`)
+
+  const { repo } = makeFixture()
+  const profile = seedProfile([['f1', repo]])
+  const stub = makeStubClaude({ honorSettings: true })
+
+  let app = null
+  try {
+    app = await launch({ port, profileDir: profile, rendererUrl, stub })
+    // 選中 folder，分頁列（與「+」）才存在。
+    await pollUntil(app.client, SELECT_FOLDER('repo-a'), (value) => value === true, 10_000)
+
+    // 預設啟用 —— 不動任何偏好，直接建一個 claude session。
+    await openSessionViaMenu(app.client, copy('sessions.spawnClaude'))
+    const injected = await pollUntil(
+      app.client,
+      'true',
+      () => stub.calls().some((line) => line.includes('--settings')),
+      10_000,
+    ).then(() => stub.calls())
+    check(results, '預設啟用：spawn claude 時注入 --settings',
+      injected.some((line) => line.includes('--settings')), injected.join(' | '))
+
+    // 端到端：stub 跑了注入的命令 → payload 落到我們指定的位置 → 狀態列呈現它的欄位。
+    const statusText = await pollUntil(
+      app.client,
+      `document.querySelector('footer[aria-label="${copy('statusBar.label')}"]')?.textContent ?? ''`,
+      (text) => text.includes(STUB_MODEL_NAME),
+      15_000,
+    )
+    check(results, '注入的命令可用：agent 的狀態抵達狀態列',
+      statusText.includes(STUB_MODEL_NAME), statusText)
+    check(results, '狀態列以 payload 回報的 window 大小算出 context 百分比',
+      statusText.includes('25%'), statusText)
+
+    // 關掉偏好 → **其後**建立的 session 不再被注入。
+    //
+    // **這裡直接打 settings IPC 是正確的**，與「驗字型偏好必須走設定對話框」那條教訓不衝突：
+    // 字型的權威在 renderer 的 PreferencesProvider state（effect 靠它驅動），繞過它就驗不到；
+    // 而注入是**主行程在 spawn 當下**讀偏好 store 決定的 —— store 就是權威。
+    await app.client.evaluate('window.workspace.settings.setAgentStatus(false)')
+    const before = stub.calls().length
+    await openSessionViaMenu(app.client, copy('sessions.spawnClaude'))
+    const after = await pollUntil(
+      app.client,
+      'true',
+      () => stub.calls().length > before,
+      10_000,
+    ).then(() => stub.calls())
+    check(results, '關閉偏好後，其後建立的 session 不再注入',
+      after.length > before && !after[after.length - 1].includes('--settings'),
+      after[after.length - 1] ?? '(無)')
+  } finally {
+    if (app) await app.destroy()
+  }
+}
+
+
+/**
+ * 續寫入口把指示送進 pty（`artifact-continuation`）。
+ *
+ * **判準走讀檔，不讀畫面**：stub claude 以 `tee` 把 pty 的輸入串流落盤（見 `makeStubClaude`
+ * 的 `logInput`）。這比讀終端內容強兩層 —— 它跨 renderer 不變，而且**看得到 `\r`**：
+ * spec 要求的是「送出並執行」，不是「填進去」，而那個差別就只是一個字元。
+ */
+async function runContinuation(label, { port, rendererUrl }) {
+  console.log(`\n── ${label}（續寫入口送出指示）──`)
+
+  const { repo } = makeFixture()
+  // 恰一個 active change → 側欄自動錨定它；只有 proposal → **還缺 design／specs**，入口才會出現。
+  const slug = 'add-widget'
+  mkdirSync(join(repo, 'openspec', 'changes', slug), { recursive: true })
+  writeFileSync(join(repo, 'openspec', 'changes', slug, 'proposal.md'), '# Add widget\n\n## Why\n\nBecause.\n')
+
+  const profile = seedProfile([['f1', repo]])
+  const stub = makeStubClaude({ logInput: true })
+
+  let app = null
+  try {
+    app = await launch({ port, profileDir: profile, rendererUrl, stub })
+    await pollUntil(app.client, SELECT_FOLDER('repo-a'), (value) => value === true, 10_000)
+    await openSessionViaMenu(app.client, copy('sessions.spawnClaude'))
+
+    const CONTINUE_RECT = RECT_OF(`[aria-label="${copy('openspec.continueArtifact')}"]`)
+    const btn = await pollUntil(app.client, CONTINUE_RECT, (v) => v !== null, 15_000)
+    check(results, `${label}：change 尚缺 artifact 時，側欄呈現續寫入口`, btn !== null)
+
+    await realClick(app.client, btn)
+
+    // 讀檔：pty 的輸入串流裡必須有這則指示，而且**帶著 Enter**（＝真的送出，不是只填入）。
+    const sent = await waitForFile(stub.inputLog, (value) => value.includes(slug), 10_000)
+    check(results, `${label}：指示抵達 pty，且指名了側欄當下的 change`, sent.includes(slug),
+      JSON.stringify(sent))
+    check(results, `${label}：指示以 Enter 結尾（送出，而不是只填入）`,
+      /\r|\n/.test(sent.slice(sent.indexOf(slug))), JSON.stringify(sent.slice(-40)))
+  } finally {
+    if (app) await app.destroy()
+  }
+}
+
 /**
  * 各段落。**這支探針會開真的視窗、送真的滑鼠事件** —— 跑完整支要好幾分鐘，而且那段期間
  * **使用者無法操作自己的電腦**（視窗會搶走焦點、滑鼠被驅動）。
@@ -2792,6 +2939,8 @@ const SECTIONS = [
   ['runHealAndCrash', runHealAndCrash],
   ['runAltScreen', runAltScreen],
   ['runDormantHint', runDormantHint],
+  ['runAgentStatus', runAgentStatus],
+  ['runContinuation', runContinuation],
 ]
 
 const ONLY = (process.env.PROBE_ONLY ?? '')

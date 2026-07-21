@@ -324,7 +324,11 @@ try {
 
   // ── workspace-folders：rail 呈現三種 folder 狀態 ──────────────────────────
   console.log('\nrail 呈現每個 folder 的名稱與身分')
-  const rows = await app.client.evaluate(RAIL_ROWS)
+  // **必須輪詢，不能只 evaluate 一次。** folder 列來自一次非同步的 `folders.list()`，它比
+  // rail 的 `<aside>` 晚一步才渲染 —— 機器一忙就會讀到 0 列，而後面每一條都跟著紅（看起來
+  // 像 rail 壞了，其實只是還沒畫出來）。`probe:openspec` 記過同一個坑，這支一直沒被觸發，
+  // 直到狀態列讓啟動多做了一點事才現形。
+  const rows = await pollUntil(app.client, RAIL_ROWS, (v) => v.length === 3, 10_000)
   check(results, 'rail 為每個 folder 呈現一列', rows.length === 3, `${rows.length} 列`)
   check(results, '順序與設定檔一致',
     rows.map((r) => r.name).join(',') === 'repo-openspec,repo-plain,repo-missing',
@@ -718,6 +722,82 @@ try {
   check(results, '於 session 子列上拖曳時，repo 的順序不變',
     (await app.client.evaluate(RAIL_ROWS)).map((r) => r.name).join(',') === railOrderBeforeSessionDrag,
     (await app.client.evaluate(RAIL_ROWS)).map((r) => r.name).join(', '))
+
+
+  // ── status-bar：主視窗底部的狀態列 ────────────────────────────────────────
+  //
+  // 這條列是**雛型早已定義、卻從未實作**的元素（`.statusbar`）。它的驗收有兩個面向：版面上的
+  // 存在與穩定（`workspace-layout`），以及內容（`status-bar`）。
+  //
+  // **不驗 agent 回報的那幾段** —— 那需要一個真的會照著注入命令寫檔的 agent，由 `probe:terminal`
+  // 以 stub 承載。這裡驗的是「第一手欄位」與「缺 agent 狀態時照樣可用」。
+  console.log('\n狀態列')
+
+  const STATUS_BAR = `(() => {
+    const bar = document.querySelector('footer[aria-label="${copy('statusBar.label')}"]')
+    if (!bar) return null
+    const rect = bar.getBoundingClientRect()
+    return {
+      text: bar.textContent ?? '',
+      height: Math.round(rect.height),
+      width: Math.round(rect.width),
+      viewportWidth: window.innerWidth,
+      // 單行：內容再長也不得換行或橫向捲動（高度是版面契約的一部分）。
+      scrollsHorizontally: bar.scrollWidth > bar.clientWidth + 1,
+    }
+  })()`
+
+  const bar = await pollUntil(app.client, STATUS_BAR, (v) => v !== null, 5000)
+  check(results, '狀態列存在於主視窗底部', bar !== null)
+  check(results, '狀態列橫跨整個視窗寬度', bar.width === bar.viewportWidth,
+    `${bar.width} / ${bar.viewportWidth}`)
+  check(results, '狀態列呈現當前 repo 的名稱', bar.text.includes('repo-openspec'), bar.text)
+
+  // **不得呈現恆定不變的欄位** —— 雛型的 `UTF-8` 與版本號是佔位內容，不是版面契約。
+  // 一個永遠顯示同一個值的欄位不傳遞任何資訊，只佔位置。
+  check(results, '狀態列不含字元編碼或版本號字樣',
+    !/UTF-8/i.test(bar.text) && !/\b\d+\.\d+\.\d+\b/.test(bar.text), bar.text)
+
+  // 側欄收合不得影響它 —— 它不隸屬於任何一欄。
+  await app.client.evaluate(
+    `document.querySelector('[aria-label="${copy('panelSwitch.openSpec')}"]')?.click()`,
+  )
+  await sleep(300)
+  const afterCollapse = await app.client.evaluate(STATUS_BAR)
+  check(results, '收合 side panel 後狀態列仍在且高度不變',
+    afterCollapse !== null && afterCollapse.height === bar.height,
+    `${bar.height} → ${afterCollapse?.height}`)
+
+  // 視窗變窄時：維持單行、不橫向捲動，且 repo 名稱仍看得見（由右往左省略）。
+  //
+  // **「縮放有沒有真的發生」必須自成一條斷言。** 一開始我把 CDP 的視窗縮放包在 `.catch(() => {})`
+  // 裡——那樣它在 Electron 上若不支援，下面兩條就會**用原本的寬度通過**，是個假綠。
+  // **用 `Emulation.setDeviceMetricsOverride`，不是 `Browser.setWindowBounds`** ——
+  // 後者在 Electron 實測**無效且不報錯**（量到 1280 → 1280）。前者改的是 viewport，會真的
+  // 觸發一次重排，正是我們要驗的東西。
+  const widthBefore = await app.client.evaluate('window.innerWidth')
+  try {
+    await app.client.send('Emulation.setDeviceMetricsOverride', {
+      width: 720, height: 700, deviceScaleFactor: 0, mobile: false,
+    })
+  } catch {
+    // 不支援就讓下面那條前置斷言說話，不要在這裡吞掉。
+  }
+  await sleep(600)
+  const narrow = await app.client.evaluate(STATUS_BAR)
+  const widthAfter = await app.client.evaluate('window.innerWidth')
+  check(results, '（前置）視窗確實縮小了', widthAfter < widthBefore, `${widthBefore} → ${widthAfter}`)
+  check(results, '視窗變窄時狀態列維持單行、不橫向捲動',
+    narrow !== null && narrow.scrollsHorizontally === false,
+    String(narrow?.scrollsHorizontally))
+  check(results, '視窗變窄時 repo 名稱仍可見',
+    narrow !== null && narrow.text.includes('repo-openspec'), narrow?.text)
+  try {
+    await app.client.send('Emulation.clearDeviceMetricsOverride')
+  } catch {
+    // 同上。
+  }
+  await sleep(400)
 
   // ── terminal-preferences：偏好經主行程清理／夾制後回傳，並落盤 ───────────────
   //

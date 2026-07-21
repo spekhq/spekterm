@@ -1,10 +1,16 @@
 import { type WebContents, ipcMain } from 'electron'
+import type { PreferencesStore } from '../preferences-store'
+import { SessionStatusService } from '../session-status'
 import type { RendererSession, SessionStore } from '../session-store'
 import { type SpawnTarget, TerminalError, TerminalService } from '../terminal'
 import type { FolderLookup } from '../workspace-store'
 import type { FsResult } from './fs'
 
 export const TERMINAL_CHANNELS = {
+  /** renderer → main：現在盯著哪個 session（`null` ＝ 停止）。狀態列只對 focused 的那一個求值。 */
+  watchStatus: 'workspace:terminal:watchStatus',
+  /** main → renderer：該 session 的 cwd／git 狀態／agent 回報的用量。 */
+  status: 'workspace:terminal:status',
   create: 'workspace:terminal:create',
   /** 喚醒一個休眠的（已重建但還沒有 pty 的）session。 */
   wake: 'workspace:terminal:wake',
@@ -51,9 +57,26 @@ async function toResult<T>(run: () => T | Promise<T>): Promise<FsResult<T>> {
 /** 每個 renderer 一份 pty 集合。key 是 `webContents.id`（與 watcher 的擁有者記帳同構）。 */
 const services = new Map<number, TerminalService>()
 
+/** 每個 renderer 一份狀態輪詢（只盯它當下 focused 的那一個 session）。 */
+const statusServices = new Map<number, SessionStatusService>()
+
+function statusServiceFor(service: TerminalService, contents: WebContents): SessionStatusService {
+  const existing = statusServices.get(contents.id)
+  if (existing) return existing
+
+  const status = new SessionStatusService(
+    (sessionId) => service.liveCwdOf(sessionId),
+    contents,
+    TERMINAL_CHANNELS.status,
+  )
+  statusServices.set(contents.id, status)
+  return status
+}
+
 function serviceFor(
   store: FolderLookup,
   sessions: SessionStore,
+  preferences: PreferencesStore,
   contents: WebContents,
 ): TerminalService {
   const existing = services.get(contents.id)
@@ -84,11 +107,16 @@ function serviceFor(
     conversation: (sessionId, conversationId) => {
       sessions.update(sessionId, { claudeSessionId: conversationId })
     },
-  })
+  },
+  // 未設定＝啟用（與 gpuAcceleration 同一條規則）。在 spawn 當下求值。
+  () => preferences.get().agentStatus !== false,
+  )
   services.set(contents.id, service)
 
   contents.once('destroyed', () => {
     services.delete(contents.id)
+    statusServices.get(contents.id)?.dispose()
+    statusServices.delete(contents.id)
     flush(service, sessions)
     service.dispose()
   })
@@ -98,6 +126,9 @@ function serviceFor(
   // 'did-navigate' 殺光（design D2）。沿用 watcher 的教訓：用 'did-navigate'（已 commit），
   // 不是 'did-start-navigation'（那對被擋下的導航也會觸發）。
   contents.on('did-navigate', () => {
+    // reload 之後 renderer 會重新告訴我們要盯誰；先停掉，否則它會繼續對一個已消失的頁面推送。
+    statusServices.get(contents.id)?.dispose()
+    statusServices.delete(contents.id)
     flush(service, sessions)
     service.dispose()
   })
@@ -130,10 +161,20 @@ function flush(service: TerminalService, sessions: SessionStore): void {
   refreshCwd(service, sessions)
 }
 
-export function registerTerminalHandlers(store: FolderLookup, sessions: SessionStore): void {
+export function registerTerminalHandlers(
+  store: FolderLookup,
+  sessions: SessionStore,
+  preferences: PreferencesStore,
+): void {
+  ipcMain.on(TERMINAL_CHANNELS.watchStatus, (event, sessionId: unknown) => {
+    const service = serviceFor(store, sessions, preferences, event.sender)
+    const target: string | null = typeof sessionId === 'string' ? sessionId : null
+    statusServiceFor(service, event.sender).watch(target)
+  })
+
   ipcMain.handle(TERMINAL_CHANNELS.create, (event, folderId: string, target: SpawnTarget) =>
     toResult(() => {
-      const result = serviceFor(store, sessions, event.sender).create(folderId, target)
+      const result = serviceFor(store, sessions, preferences, event.sender).create(folderId, target)
 
       // **對話識別碼必須在這裡就落下去。** 它是主行程在 `create` 回傳當下就知道的東西，而 renderer
       // 永遠不會看到它 —— 漏掉這一行，claude session 的對話 id 就從來沒有被持久化過，於是每次
@@ -154,7 +195,7 @@ export function registerTerminalHandlers(store: FolderLookup, sessions: SessionS
       const persisted = sessions.get(sessionId)
       if (!persisted) throw new TerminalError('UNKNOWN_SESSION', `unknown session: ${sessionId}`)
 
-      const service = serviceFor(store, sessions, event.sender)
+      const service = serviceFor(store, sessions, preferences, event.sender)
       const result = service.create(persisted.folderId, persisted.spawnTarget, {
         sessionId: persisted.id,
         resumeConversationId: persisted.claudeSessionId,
@@ -175,7 +216,7 @@ export function registerTerminalHandlers(store: FolderLookup, sessions: SessionS
     }
 
     // 建立 service（若尚未存在）—— 於是 did-navigate／destroyed 的清理鉤子在第一次重建時就掛上。
-    serviceFor(store, sessions, event.sender)
+    serviceFor(store, sessions, preferences, event.sender)
 
     return sessions.list().map(({ claudeSessionId: _c, cwd: _w, ...rest }) => ({
       ...rest,
@@ -187,7 +228,7 @@ export function registerTerminalHandlers(store: FolderLookup, sessions: SessionS
 
   ipcMain.on(TERMINAL_CHANNELS.persist, (event, incoming: RendererSession[]) => {
     if (!Array.isArray(incoming)) return
-    const service = serviceFor(store, sessions, event.sender)
+    const service = serviceFor(store, sessions, preferences, event.sender)
     const contentsId = event.sender.id
 
     const existing = pending.get(contentsId)
@@ -207,7 +248,7 @@ export function registerTerminalHandlers(store: FolderLookup, sessions: SessionS
 
     // 快照大約每兩秒來一次（session 有輸出時）—— 順道把 cwd 一起刷新，於是「使用者 cd 過去、
     // 然後 app 被強制結束」也留得住最後的位置，不必倚賴關窗時的收尾。
-    const service = serviceFor(store, sessions, event.sender)
+    const service = serviceFor(store, sessions, preferences, event.sender)
     const cwd = service.cwdOf(sessionId)
     if (cwd) sessions.update(sessionId, { cwd })
   })
@@ -215,15 +256,15 @@ export function registerTerminalHandlers(store: FolderLookup, sessions: SessionS
   // write／resize／kill 是單向 fire-and-forget（design D4）：逐鍵輸入若每次都等一次
   // round-trip 的回應是浪費。
   ipcMain.on(TERMINAL_CHANNELS.write, (event, sessionId: string, data: string) => {
-    serviceFor(store, sessions, event.sender).write(sessionId, data)
+    serviceFor(store, sessions, preferences, event.sender).write(sessionId, data)
   })
 
   ipcMain.on(TERMINAL_CHANNELS.resize, (event, sessionId: string, cols: number, rows: number) => {
-    serviceFor(store, sessions, event.sender).resize(sessionId, cols, rows)
+    serviceFor(store, sessions, preferences, event.sender).resize(sessionId, cols, rows)
   })
 
   ipcMain.on(TERMINAL_CHANNELS.kill, (event, sessionId: string) => {
-    serviceFor(store, sessions, event.sender).kill(sessionId)
+    serviceFor(store, sessions, preferences, event.sender).kill(sessionId)
     sessions.remove(sessionId)
   })
 }

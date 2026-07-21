@@ -23,7 +23,14 @@ const BUTTON_CLASS = 'rounded border border-hairline px-2 py-[3px] text-xs hover
  */
 export function TerminalFontDialog({ onClose }: { onClose: () => void }): React.JSX.Element {
   const { t } = useTranslation()
-  const { terminal, updateTerminalFont, updateGpuAcceleration, gpuEnabled } = usePreferences()
+  const {
+    terminal,
+    updateTerminalFont,
+    updateGpuAcceleration,
+    gpuEnabled,
+    updateAgentStatus,
+    agentStatusEnabled,
+  } = usePreferences()
   const [family, setFamily] = useState(terminal.fontFamily ?? '')
   const [size, setSize] = useState(terminal.fontSize != null ? String(terminal.fontSize) : '')
   const [lineHeight, setLineHeight] = useState(
@@ -31,6 +38,7 @@ export function TerminalFontDialog({ onClose }: { onClose: () => void }): React.
   )
   // 系統的等寬字型清單，餵給下拉選單（Linux 有；其他平台為空 → 只剩「系統預設」可選）。
   const [gpu, setGpu] = useState(gpuEnabled)
+  const [agentStatus, setAgentStatus] = useState(agentStatusEnabled)
   const [fonts, setFonts] = useState<string[]>([])
   const familyRef = useRef<HTMLSelectElement>(null)
 
@@ -55,12 +63,17 @@ export function TerminalFontDialog({ onClose }: { onClose: () => void }): React.
       Number.isFinite(parsedLineHeight) ? parsedLineHeight : null,
     )
       // `null` ＝回到預設（＝啟用）—— 使用者沒有關掉它時，不要在偏好檔裡留下一個 `true`。
+      // **依序 await，不可並行**：三者是不同的 IPC，而每一個都會覆寫本地 state ——
+      // 並行的話「誰後 resolve，state 就是誰的」，另外兩項會被帶回舊值（磁碟對、畫面錯）。
       .then(() => updateGpuAcceleration(gpu ? null : false))
+      .then(() => updateAgentStatus(agentStatus ? null : false))
     onClose()
   }
 
   const reset = (): void => {
-    void updateTerminalFont(null, null, null).then(() => updateGpuAcceleration(null))
+    void updateTerminalFont(null, null, null)
+      .then(() => updateGpuAcceleration(null))
+      .then(() => updateAgentStatus(null))
     onClose()
   }
 
@@ -176,6 +189,22 @@ export function TerminalFontDialog({ onClose }: { onClose: () => void }): React.
           <span className="text-sm text-ink">{t('settings.gpuAcceleration')}</span>
         </label>
         <p className="mt-1 text-xs text-ink-faint">{t('settings.gpuAccelerationHint')}</p>
+
+        {/*
+          與 agent 的狀態橋接。**提示文字要說出「只影響其後建立或重建的 session」** ——
+          注入發生在 spawn 當下，少了這句話，使用者切換後看不到變化會以為開關壞了。
+        */}
+        <label className="mt-3 flex items-center gap-2">
+          <input
+            type="checkbox"
+            checked={agentStatus}
+            aria-label={t('settings.agentStatus')}
+            onChange={(event) => setAgentStatus(event.target.checked)}
+            className="accent-accent"
+          />
+          <span className="text-sm text-ink">{t('settings.agentStatus')}</span>
+        </label>
+        <p className="mt-1 text-xs text-ink-faint">{t('settings.agentStatusHint')}</p>
 
         <p className="mt-3 block text-xs text-ink-faint">{t('settings.preview')}</p>
         <pre

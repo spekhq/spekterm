@@ -1,6 +1,7 @@
 import { useTranslation } from 'react-i18next'
 import { FilesPanel } from '../files/FilesPanel'
 import { OpenSpecPanel } from '../openspec/OpenSpecPanel'
+import type { ContinuationBlock } from '../openspec/continuation'
 import type { VizKind } from '../openspec/VizOverlay'
 import type { FileRequest, OpenSpecRequest, OpenSpecTarget } from '../openspec/nav'
 import type { PanelIdentity, WorkspaceFolder } from '../types'
@@ -20,6 +21,10 @@ interface SidePanelProps {
   /** 當前 focused session 錨定的 change。 */
   anchoredChange: string | null
   onAnchor: (slug: string) => void
+  /** 續寫入口不可用的原因；`null` ＝ 可用。 */
+  continuationBlock: ContinuationBlock | null
+  /** 請 agent 續寫下一個 artifact。 */
+  onContinue: () => void
   /** OpenSpec → Files 的跨身分導航。 */
   onOpenFile: (relPath: string) => void
   /** Files → OpenSpec 的跨身分導航。 */
@@ -46,6 +51,8 @@ export function SidePanel({
   onSelectSource,
   anchoredChange,
   onAnchor,
+  continuationBlock,
+  onContinue,
   onOpenFile,
   onViewInOpenSpec,
   fileRequest,
@@ -84,6 +91,8 @@ export function SidePanel({
         folder={folder}
         anchoredChange={anchoredChange}
         onAnchor={onAnchor}
+        continuationBlock={continuationBlock}
+        onContinue={onContinue}
         onOpenFile={onOpenFile}
         request={openSpecRequest}
         onOpenViz={onOpenViz}

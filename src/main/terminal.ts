@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import fs from 'node:fs'
 import { type IPty, spawn } from 'node-pty'
+import { type AgentStatusInjection, clearAgentStatus, prepareInjection } from './agent-status'
 import { isWithin } from './fs-boundary'
 import { isUuid } from './session-store'
 import type { FolderLookup } from './workspace-store'
@@ -128,7 +129,11 @@ export function ptyEnv(source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessE
  * （這種東西不值得只擋一層）。新建對話用 `--session-id`（由我們指定 id，於是它可被持久化並在
  * 下次續接）；續接用 `--resume`（實測：它**沿用**原 id，不會換號 —— `--fork-session` 才換）。
  */
-function spawnArgs(target: SpawnTarget, conversation: ClaudeConversation | undefined): string[] {
+function spawnArgs(
+  target: SpawnTarget,
+  conversation: ClaudeConversation | undefined,
+  injection: AgentStatusInjection | null,
+): string[] {
   // claude 目標**恆有**一個對話（`create()` 不是續接就是新建）—— 沒有「不帶 id 的 claude」。
   if (target !== 'claude' || !conversation) return ['-l']
 
@@ -136,7 +141,10 @@ function spawnArgs(target: SpawnTarget, conversation: ClaudeConversation | undef
   if (!isUuid(id)) throw new TerminalError('SPAWN_FAILED', t('terminalError.invalidConversationId'))
 
   const flag = mode === 'resume' ? '--resume' : '--session-id'
-  return ['-l', '-c', `claude ${flag} ${id}`]
+  // 注入的片段已在 `agent-status` 內 shell-quote 過；`null` 代表不注入（偏好關閉，或使用者有
+  // 自訂 statusline 而我們串不上 —— 那時寧可不做，也不弄壞他現有的）。
+  const settings = injection ? `${injection.commandFragment} ` : ''
+  return ['-l', '-c', `claude ${settings}${flag} ${id}`]
 }
 
 interface ClaudeConversation {
@@ -213,7 +221,24 @@ export class TerminalService {
   constructor(
     private readonly store: FolderLookup,
     private readonly sink: TerminalSink,
+    /**
+     * 是否啟用與 agent 的狀態橋接。**在 spawn 的當下求值**（不是建構時）—— 偏好可在執行期改變，
+     * 而注入是每個 session 各自決定的。切換偏好只影響其後建立或重建的 session，這是誠實的限制。
+     */
+    private readonly agentStatusEnabled: () => boolean = () => false,
   ) {}
+
+  /**
+   * pty 當下的工作目錄，**未經 folder 邊界夾制、且不限 spawn 目標** —— 供狀態列**呈現**用。
+   *
+   * 與 `cwdOf()` 的差別是刻意的：那個是為了**持久化**（重建時要 `cd` 回去），因此夾制在 folder
+   * 邊界內；狀態列要的是**事實** —— 使用者 `cd` 到 workspace 之外，狀態列就該誠實地說他在那裡。
+   * 這裡交出去的是一個顯示用的字串，不是可定址的檔案系統詞彙（`folder.path` 早已同樣送給 renderer）。
+   */
+  liveCwdOf(sessionId: string): string | undefined {
+    const session = this.#sessions.get(sessionId)
+    return session ? readPtyCwd(session.pty.pid) : undefined
+  }
 
   /** 還活著的 pty 數量。驗收「關閉／dispose 後確實清理」用得上。 */
   get sessionCount(): number {
@@ -287,9 +312,12 @@ export class TerminalService {
     options: { cwd: string; cols: number; rows: number; healed: boolean },
   ): void {
     const { cwd, cols, rows, healed } = options
+    // 注入只對 claude 目標有意義（statusLine 是它的概念）。
+    const injection =
+      target === 'claude' ? prepareInjection(sessionId, this.agentStatusEnabled()) : null
     let pty: IPty
     try {
-      pty = spawn(resolveShell(), spawnArgs(target, conversation), {
+      pty = spawn(resolveShell(), spawnArgs(target, conversation, injection), {
         name: 'xterm-256color',
         cols,
         rows,
@@ -297,7 +325,7 @@ export class TerminalService {
         // TERM 明確設定以對齊前端 xterm；其餘環境自 process.env 繼承，但抹掉「巢狀 Claude Code」
         // 的標記（見 `ptyEnv` —— 少了那一步，裡面的 claude 不寫 transcript，續接永遠失敗）。
         // encoding 不設，node-pty 預設 utf8，onData 交付 string。
-        env: ptyEnv(),
+        env: { ...ptyEnv(), ...injection?.env },
       })
     } catch (error) {
       // 罕見：底層 pty 配置不出來時 node-pty 才會同步拋錯。
@@ -420,6 +448,8 @@ export class TerminalService {
     if (!session) return
     this.#sessions.delete(sessionId)
     this.#reasons.set(session.pty, 'killed')
+    // 不留下一份沒有主人的狀態 —— 否則同一個 id 日後若被重建，會先看到一份過期的資料。
+    clearAgentStatus(sessionId)
     try {
       session.pty.kill()
     } catch {

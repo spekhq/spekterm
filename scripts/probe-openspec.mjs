@@ -629,6 +629,17 @@ const BACK_TO_OWN_RECT = `(() => {
   return { x: r.x, y: r.y, width: r.width, height: r.height }
 })()`
 
+/**
+ * 續寫入口（`artifact-continuation`）。回傳 `null` 代表整個入口沒有呈現。
+ *
+ * 讀按鈕**與其相鄰的說明文字**：入口不可用時要「停用並說明原因」，只驗 `disabled` 驗不到說明。
+ */
+const CONTINUE_ENTRY = `(() => {
+  const btn = document.querySelector('[aria-label="${copy('openspec.continueArtifact')}"]')
+  if (!btn) return null
+  return { disabled: btn.disabled === true, text: btn.parentElement?.textContent ?? '' }
+})()`
+
 const HAS_BACK_TO_OWN = `Boolean(document.querySelector('[aria-label="${copy('panelSource.backToOwn')}"]'))`
 
 const FOCUS_SESSION_TAB = (index) => `(() => {
@@ -1194,6 +1205,21 @@ async function runMode(label, { port, rendererUrl }) {
       (await app.client.evaluate(ANCHORED_SLUG)) === 'add-invoice',
     )
 
+    // ── artifact-continuation：三個條件全部成立時入口可用 ────────────────────
+    //
+    // 此刻：側欄來源＝session 自身的 folder、focused 是 **claude** 目標（上面那個 stub）、
+    // 且正在執行。fixture 的 add-invoice 只有 proposal 與 tasks —— **還缺 design 與 specs**。
+    const ownEntry = await pollUntil(
+      app.client,
+      CONTINUE_ENTRY,
+      (v) => v !== null && v.disabled === false,
+      8000,
+    )
+    check(results, '條件全部成立時續寫入口可用', ownEntry?.disabled === false, JSON.stringify(ownEntry))
+    check(results, '入口列出尚缺的 artifact（design 與 specs）',
+      ownEntry !== null && ownEntry.text.includes('design') && ownEntry.text.includes('specs'),
+      ownEntry?.text)
+
     // ── 只有 archived change 的 repo：降級到正確的層級 ──────────────────────
     console.log('\n只有 archived change 的 repo')
     await app.client.evaluate(SELECT_FOLDER('repo-archived-only'))
@@ -1334,6 +1360,18 @@ async function runMode(label, { port, rendererUrl }) {
     check(results, '下拉列出其他 folder 作為候選來源', manyItem !== null)
     await realClick(app.client, manyItem)
 
+    // **選單選了項目就該自己關掉。**（`workspace-layout` 的新 requirement）
+    // 這正是本 change 修的那個呼叫端：關閉原本倚賴「點擊冒泡到 window 由 dismiss 順帶關掉」，
+    // 而選取 folder 會讓上層在**同一次事件中**重新 render —— React 同步 flush effect，
+    // dismiss 的 listener 在那次點擊冒到 window 之前就已經被換掉了。
+    const menuGone = await pollUntil(
+      app.client,
+      `document.querySelector('[role="menu"]') === null`,
+      (v) => v === true,
+      3000,
+    )
+    check(results, '於來源下拉選取 folder 後選單關閉', menuGone === true)
+
     // repo-many 有兩個 active change → 切來源後錨定重置 → 空狀態
     const resetEmpty = await pollUntil(app.client, CHANGE_EMPTY_TEXT, (v) => v !== null, 10_000)
     check(
@@ -1362,6 +1400,19 @@ async function runMode(label, { port, rendererUrl }) {
       foreignActive.map((r) => r.slug).join(', '),
     )
 
+    // ── artifact-continuation：入口只在目標 session 能承接時可用 ──────────────
+    //
+    // 此刻側欄來源是 repo-many，而 focused session 屬於 repo-single —— 先在這裡錨定一個
+    // change，才看得到入口（沒有錨定的 change 就沒有「本 change」視圖可談）。
+    await app.client.evaluate(ACTIVATE_TREE_ROW('add-oauth'))
+    await pollUntil(app.client, ANCHORED_SLUG, (v) => v === 'add-oauth', 8000)
+    const foreignEntry = await pollUntil(app.client, CONTINUE_ENTRY, (v) => v !== null, 8000)
+    check(results, '側欄來源指向他處時，續寫入口呈現為停用',
+      foreignEntry !== null && foreignEntry.disabled === true, JSON.stringify(foreignEntry))
+    check(results, '停用時說明原因（而不是讓入口消失）',
+      foreignEntry !== null && foreignEntry.text.includes(copy('openspec.continueBlocked.foreignSource')),
+      foreignEntry?.text)
+
     // 「回到自身」捷徑出現，點它回到 repo-single
     check(
       results,
@@ -1371,6 +1422,15 @@ async function runMode(label, { port, rendererUrl }) {
     await realClick(app.client, await stableRect(app.client, BACK_TO_OWN_RECT))
     const backHome = await pollUntil(app.client, ANCHORED_SLUG, (v) => v === 'solo-change', 8000)
     check(results, '「回到自身」把側欄帶回 session 自己的 repo', backHome === 'solo-change', String(backHome))
+
+    // 來源已回到自身，但這個 repo 的 focused session 是 **login shell** —— 入口仍須停用
+    // （shell 收到 slash command 只會回報一個找不到的命令）。這是 spec 的另一條 scenario。
+    const shellEntry = await pollUntil(app.client, CONTINUE_ENTRY, (v) => v !== null, 8000)
+    check(results, 'focused session 為 shell 時，續寫入口停用',
+      shellEntry !== null && shellEntry.disabled === true, JSON.stringify(shellEntry))
+    check(results, '停用時說明原因（shell）',
+      shellEntry !== null && shellEntry.text.includes(copy('openspec.continueBlocked.notClaude')),
+      shellEntry?.text)
 
     // 側欄來源為 per-session：第二個 session 指到 repo-many，切 session 側欄來源跟著走
     await createSession(app.client)

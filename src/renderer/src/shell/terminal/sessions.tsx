@@ -131,6 +131,26 @@ export interface SessionsApi {
   /** 重排同一個 folder 之內的 session 順序。索引是該 folder 之內的序位。 */
   reorder(folderId: string, fromIndex: number, toIndex: number): void
   /**
+   * 把一段文字送進某個 session 的 pty，**並把焦點交還該 session 的終端**。
+   * 換行不自動附加 —— 要不要送出由呼叫端決定（本 change 的續寫入口是要的）。
+   *
+   * 這是 renderer 對 pty 寫入的**第二個**入口（第一個是 `TerminalView` 轉發 xterm 的按鍵）。
+   * 它存在的理由是讓側欄不必自己去碰 `window.workspace.terminal.write` —— 對 pty 寫入的能力
+   * 集中在這裡，日後要加約束（例如「只允許送給 claude 目標」）才有一個施加的地方（design D5）。
+   *
+   * **聚焦是這個動作的一部分，不是呼叫端的義務**：文字送進去之後，使用者的下一個動作必然是
+   * 繼續跟 agent 對話。少了它，使用者得再點一次終端才能打字 —— 那正是 `terminal-clipboard`
+   * 實測抓到過的毛病（自選單貼上後按 Enter 不會執行，因為焦點還在選單上）。
+   */
+  sendInput(sessionId: string, text: string): void
+  /**
+   * 由 `TerminalView` 註冊「聚焦我這個終端」的方法。回傳解除註冊的函式。
+   *
+   * xterm 的把手是 `TerminalView` 的 ref，跨元件拿不到；而 `sendInput` 必須聚焦。沿用 `attach`
+   * 已經在用的註冊模式（ref 保存，不引起 re-render）。
+   */
+  registerFocus(sessionId: string, focusTerminal: () => void): () => void
+  /**
    * 把一個終端接上它的 session：先補回 attach 之前累積的輸出，再接續 live 串流。
    * 回傳解除接續的函式。
    */
@@ -516,6 +536,23 @@ export function SessionsProvider({ children }: { children: React.ReactNode }): R
     [],
   )
 
+  /** sessionId → 聚焦該終端的方法。由 `TerminalView` 掛載時註冊（見 `registerFocus`）。 */
+  const focusers = useRef<Map<string, () => void>>(new Map())
+
+  const registerFocus = useCallback((sessionId: string, focusTerminal: () => void) => {
+    focusers.current.set(sessionId, focusTerminal)
+    return () => {
+      // 只在仍是自己時移除 —— StrictMode 會把掛載 effect 跑兩次，第二個註冊才是存活下來的那個，
+      // 第一個的 cleanup 若無條件刪除，就會把它一起刪掉。
+      if (focusers.current.get(sessionId) === focusTerminal) focusers.current.delete(sessionId)
+    }
+  }, [])
+
+  const sendInput = useCallback((sessionId: string, text: string) => {
+    window.workspace.terminal.write(sessionId, text)
+    focusers.current.get(sessionId)?.()
+  }, [])
+
   const attach = useCallback((sessionId: string, write: (chunk: string) => void) => {
     const pending = backlog.current.get(sessionId)
     if (pending) {
@@ -559,6 +596,8 @@ export function SessionsProvider({ children }: { children: React.ReactNode }): R
       anchorChange,
       reorder,
       attach,
+      sendInput,
+      registerFocus,
       restoredScrollbackOf,
     }),
     [
@@ -574,6 +613,8 @@ export function SessionsProvider({ children }: { children: React.ReactNode }): R
       setPanelSource,
       reorder,
       attach,
+      sendInput,
+      registerFocus,
       restoredScrollbackOf,
     ],
   )

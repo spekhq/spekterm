@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { MarkdownView } from '../files/MarkdownView'
 import type { ChangeArtifactView, DeltaSpecView, ParsedTasks } from '../types'
+import type { ContinuationBlock } from './continuation'
 import { useChange } from './data'
 import { parseDelta } from './delta'
 import {
@@ -19,6 +20,10 @@ interface ChangeViewProps {
   folderId: string
   /** 當前 focused session 錨定的 change。null＝無錨定。 */
   slug: string | null
+  /** 續寫入口不可用的原因；`null` ＝ 可用。 */
+  continuationBlock: ContinuationBlock | null
+  /** 請 agent 續寫下一個 artifact。 */
+  onContinue: () => void
   onOpenFile: (relPath: string) => void
   onGoToChanges: () => void
 }
@@ -39,6 +44,8 @@ interface ChangeViewProps {
 export function ChangeView({
   folderId,
   slug,
+  continuationBlock,
+  onContinue,
   onOpenFile,
   onGoToChanges,
 }: ChangeViewProps): React.JSX.Element {
@@ -131,6 +138,61 @@ export function ChangeView({
       <div className="min-h-0 flex-1 overflow-auto px-4 py-3">
         {active && <ArtifactContent artifact={active} onOpenFile={onOpenFile} />}
       </div>
+
+      <ContinuationBar
+        missing={data.missingArtifacts}
+        blocked={continuationBlock}
+        onContinue={onContinue}
+      />
+    </div>
+  )
+}
+
+/**
+ * 「請 agent 續寫下一個 artifact」的入口 —— 側欄第一次對 session **發話**（此前只有跟隨）。
+ *
+ * **一顆按鈕，不是每個缺漏的 artifact 各一顆。** 使用者原本要的是後者，但續寫流程一次只產生
+ * 一個、且**由它自己挑**：排四顆按鈕會承諾一個它給不出的選擇（按「specs」那顆，寫出來的可能
+ * 是 design）。而「下一個會是哪一個」我們刻意不算 —— readiness 取決於 schema 的依賴規則，
+ * 側欄複製那套規則就是複製一份**會過期**的權威。因此只誠實列出「還缺哪些」（design D4）。
+ *
+ * 不可用時**停用而非消失**：消失會讓人以為這個功能不存在或壞了。
+ */
+function ContinuationBar({
+  missing,
+  blocked,
+  onContinue,
+}: {
+  missing: string[]
+  blocked: ContinuationBlock | null
+  onContinue: () => void
+}): React.JSX.Element | null {
+  const { t } = useTranslation()
+
+  // artifact 齊備 —— 沒有東西要續寫，不佔位置。
+  if (missing.length === 0) return null
+
+  return (
+    <div className="flex shrink-0 items-center gap-2 border-t border-hairline px-4 py-2">
+      <button
+        type="button"
+        disabled={blocked !== null}
+        onClick={onContinue}
+        aria-label={t('openspec.continueArtifact')}
+        title={blocked ? t(`openspec.continueBlocked.${blocked}`) : undefined}
+        className={`shrink-0 rounded border px-3 py-1 text-xs ${
+          blocked
+            ? 'cursor-not-allowed border-hairline text-ink-faint opacity-50'
+            : 'border-accent text-accent hover:bg-hover'
+        }`}
+      >
+        {t('openspec.continueArtifact')}
+      </button>
+      <span className="min-w-0 truncate text-xs text-ink-faint">
+        {blocked
+          ? t(`openspec.continueBlocked.${blocked}`)
+          : t('openspec.continueMissing', { artifacts: missing.join(', ') })}
+      </span>
     </div>
   )
 }
@@ -178,6 +240,44 @@ function ArtifactContent({
   )
 }
 
+/**
+ * task 的完成標記。
+ *
+ * **不用 `☑` / `☐` 這兩個字元** —— 它們是字型的 glyph，長相隨字型而變（與 box-drawing 在終端裡
+ * 的問題同源：同一個語意，換一個字型就是另一個樣子，而我們控制不了使用者裝了什麼）。改為內嵌
+ * SVG，形狀由我們自己畫。取自 spek web `ChangeDetail` 既有的樣式，兩邊看起來是同一個東西。
+ *
+ * 不引入 icon 套件 —— 為兩個 16×16 的圖形背一整包相依，不划算。
+ */
+function TaskMark({ completed }: { completed: boolean }): React.JSX.Element {
+  return completed ? (
+    <svg
+      viewBox="0 0 16 16"
+      fill="none"
+      aria-hidden="true"
+      className="mt-1 h-4 w-4 shrink-0 text-green"
+    >
+      <circle cx="8" cy="8" r="7" fill="currentColor" opacity="0.2" />
+      <path
+        d="M5 8l2 2 4-4"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  ) : (
+    <svg
+      viewBox="0 0 16 16"
+      fill="none"
+      aria-hidden="true"
+      className="mt-1 h-4 w-4 shrink-0 text-ink-faint"
+    >
+      <circle cx="8" cy="8" r="7" stroke="currentColor" strokeWidth="1.5" />
+    </svg>
+  )
+}
+
 function TaskList({ tasks }: { tasks: ParsedTasks }): React.JSX.Element {
   const { t } = useTranslation()
 
@@ -204,9 +304,7 @@ function TaskList({ tasks }: { tasks: ParsedTasks }): React.JSX.Element {
                   task.completed ? 'text-ink-faint line-through' : 'text-ink'
                 }`}
               >
-                <span className={task.completed ? 'text-green' : 'text-ink-faint'}>
-                  {task.completed ? '☑' : '☐'}
-                </span>
+                <TaskMark completed={task.completed} />
                 <span className="min-w-0">{task.text}</span>
               </li>
             ))}

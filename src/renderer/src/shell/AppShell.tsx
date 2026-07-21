@@ -3,6 +3,7 @@ import { ActivityBar } from './ActivityBar'
 import { KeyboardNavigation } from './KeyboardNavigation'
 import { MainStage } from './MainStage'
 import { PreferencesProvider } from './PreferencesProvider'
+import { StatusBar } from './StatusBar'
 import { WorkspaceRail } from './WorkspaceRail'
 import { DirtyBuffersProvider } from './files/dirty-buffers'
 import { OpenSpecProvider } from './openspec/data'
@@ -38,7 +39,13 @@ export function AppShell(): React.JSX.Element {
               onReorderFolder={(id, toIndex) => void reorderFolders(id, toIndex)}
             />
 
-            <Group orientation="horizontal" className="h-full w-full">
+            {/*
+              三欄 + 底部狀態列。狀態列**不隸屬於任何一欄** —— 它橫跨整個視窗，且不受 side panel
+              收合或任一分界拖動影響（`workspace-layout` 的新 requirement）。因此三欄的 Group 要
+              包進一個直向容器，並以 `min-h-0` 讓它把剩下的高度讓給狀態列。
+            */}
+            <div className="flex h-full w-full flex-col">
+            <Group orientation="horizontal" className="min-h-0 w-full flex-1">
               <Panel defaultSize="56px" minSize="48px" maxSize="120px">
                 <ActivityBar />
               </Panel>
@@ -69,6 +76,9 @@ export function AppShell(): React.JSX.Element {
                 <MainStage folder={selected} folders={folders} />
               </Panel>
             </Group>
+
+            <StatusBar folders={folders} selectedId={selectedId} />
+            </div>
           </OpenSpecProvider>
         </SessionsProvider>
       </DirtyBuffersProvider>

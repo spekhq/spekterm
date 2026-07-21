@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Group, Panel, Separator, usePanelRef } from 'react-resizable-panels'
+import { type ContinuationBlock, continuationCommand } from './openspec/continuation'
 import { useChanges } from './openspec/data'
 import { VizOverlay, type VizKind } from './openspec/VizOverlay'
 import type { FileRequest, OpenSpecRequest, OpenSpecTarget } from './openspec/nav'
@@ -177,6 +178,34 @@ export function MainStage({ folder, folders }: MainStageProps): React.JSX.Elemen
   )
 
   /**
+   * 續寫入口能不能用 —— 三個條件全部成立才行（`artifact-continuation` 的 spec）。
+   *
+   * 條件的順序就是回報原因的優先序：先看有沒有對象，再看它是不是對的對象。
+   */
+  const continuationBlock: ContinuationBlock | null =
+    !displayed || !focusedFolder
+      ? 'noSession'
+      : panelFolder?.id !== displayed.folderId
+        ? 'foreignSource'
+        : displayed.spawnTarget !== 'claude'
+          ? 'notClaude'
+          : displayed.status !== 'running'
+            ? 'notRunning'
+            : null
+
+  /**
+   * 把續寫指示送進 focused session 的 pty 並執行（`sendInput` 一併把焦點交還終端）。
+   *
+   * **目標恆為 focused session** —— 也就是畫面上那個終端。同一個 repo 有多個 claude 在跑也不
+   * 構成歧義：側欄呈現的 change 就是 focused session 錨定的那一個（錨定是 per-session 的），
+   * 而那行字會出現在使用者正看著的終端裡，送給了誰**在視覺上是自明的**（design D3）。
+   */
+  const continueArtifacts = useCallback(() => {
+    if (!focusedId || !anchoredChange || continuationBlock) return
+    sessions.sendInput(focusedId, continuationCommand(anchoredChange))
+  }, [focusedId, anchoredChange, continuationBlock, sessions])
+
+  /**
    * 來源指示器選了一個 folder：設定 focused session 的側欄來源。
    *
    * 只在有 focused session 時有效 —— 側欄來源是 per-session 的狀態，沒有 session 就沒地方存
@@ -320,6 +349,8 @@ export function MainStage({ folder, folders }: MainStageProps): React.JSX.Elemen
               onSelectSource={changePanelSource}
               anchoredChange={anchoredChange}
               onAnchor={anchorChange}
+              continuationBlock={continuationBlock}
+              onContinue={continueArtifacts}
               onOpenFile={openFileFromOpenSpec}
               onViewInOpenSpec={viewInOpenSpec}
               fileRequest={fileRequest}

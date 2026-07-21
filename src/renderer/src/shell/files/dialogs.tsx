@@ -239,7 +239,15 @@ export function ContextMenu({ x, y, items, onClose }: ContextMenuProps): React.J
           type="button"
           role="menuitem"
           disabled={item.disabled}
-          onClick={item.onSelect}
+          // **關閉由選單自己完成，不倚賴「這次點擊冒泡到 window 由下面那個 dismiss 順帶關掉」。**
+          // 那條路徑在「項目的動作使上層元件於**同一次事件中**重新 render」時會失效：React 對
+          // 受信任的離散事件同步 flush effect，於是 `[onClose]` 一變，dismiss 的 effect 就在該次
+          // 事件傳遞途中重掛 —— 舊 listener 已移除、新的排到下一個 tick —— 點擊冒到 window 時
+          // 已經沒有人在聽（實測：側欄的來源下拉選了 folder 之後不會關）。
+          onClick={() => {
+            item.onSelect()
+            onClose()
+          }}
           // `focus:` 與 `hover:` 同樣的底色 —— 少了它，以鍵盤操作時**看不出焦點在哪一項**，
           // 那這個選單就只是「能按 Enter 但你不知道會按到什麼」。`outline-none` 是因為底色
           // 已經足以表達焦點，原生外框在深色主題上很突兀。

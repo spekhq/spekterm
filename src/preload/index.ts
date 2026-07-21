@@ -5,6 +5,7 @@ import type { FsResult, WriteResponse } from '../main/ipc/fs'
 import type { RestoredSession } from '../main/ipc/terminal'
 import type { DirEntry, FileContent } from '../main/fs-service'
 import type { TerminalPreferences } from '../main/preferences-store'
+import type { SessionStatusSnapshot } from '../main/session-status'
 import type { RendererSession } from '../main/session-store'
 import type {
   ChangeDetailView,
@@ -204,6 +205,9 @@ const workspaceApi = {
      */
     setGpuAcceleration: (enabled: boolean | null): Promise<TerminalPreferences> =>
       ipcRenderer.invoke('workspace:settings:setGpuAcceleration', enabled),
+    /** 與 agent 的狀態橋接。只影響其後建立或重建的 session（注入發生在 spawn 當下）。 */
+    setAgentStatus: (enabled: boolean | null): Promise<TerminalPreferences> =>
+      ipcRenderer.invoke('workspace:settings:setAgentStatus', enabled),
     /** 系統的等寬字型清單，給設定對話框的下拉選單（Linux 走 fontconfig；其他平台回空陣列）。 */
     listMonospaceFonts: (): Promise<string[]> =>
       ipcRenderer.invoke('workspace:settings:listMonospaceFonts'),
@@ -237,6 +241,25 @@ const workspaceApi = {
     /** 推送終端畫面快照（僅 shell 目標 —— claude 續接時會自行重現對話）。 */
     snapshot: (sessionId: string, data: string): void => {
       ipcRenderer.send('workspace:terminal:snapshot', sessionId, data)
+    },
+    /**
+     * 告訴主行程「狀態列現在盯著哪個 session」（`null` ＝ 不盯）。
+     *
+     * 狀態列需要的幾件事只有主行程取得到（pty 的 cwd、git 工作區狀態、agent 回報的用量），
+     * 而它們都要輪詢 —— **只對 focused 的那一個求值**，成本才綁得住。
+     */
+    watchStatus: (sessionId: string | null): void => {
+      ipcRenderer.send('workspace:terminal:watchStatus', sessionId)
+    },
+    /** 上述輪詢的推送。回傳取消訂閱的函式。 */
+    onStatus: (listener: (status: SessionStatusSnapshot) => void): (() => void) => {
+      const handler = (_event: IpcRendererEvent, status: SessionStatusSnapshot): void => {
+        listener(status)
+      }
+      ipcRenderer.on('workspace:terminal:status', handler)
+      return () => {
+        ipcRenderer.off('workspace:terminal:status', handler)
+      }
     },
     /** renderer → pty，單向 fire-and-forget：逐鍵輸入不必等一次 round-trip 的回應。 */
     write: (sessionId: string, data: string): void => {

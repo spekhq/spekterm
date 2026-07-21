@@ -1,0 +1,92 @@
+# claude-status-bridge Specification
+
+## Purpose
+TBD - created by archiving change panel-drive-and-shell-affordances. Update Purpose after archive.
+## Requirements
+### Requirement: 啟用時，agent session 以 CLI 旗標注入狀態回報命令
+
+狀態橋接啟用時，spekterm SHALL 在 spawn agent session 時，以該 agent **公開的 CLI 旗標**注入一個
+狀態列命令，使 agent 把它自己已經算好的狀態 payload 寫到 spekterm 指定的位置。
+
+payload 的落點 SHALL 以**環境變數**傳給該命令，per session 各自一個位置；命令本身 SHALL NOT
+需要知道自己屬於哪個 session。
+
+spekterm SHALL NOT 為了取得這些資訊而解析 agent 的 transcript 或終端畫面 —— 前者是內部檔案格式
+（且實測不含花費、用量上限與 context window 大小），後者正是被終端寬度截斷的那一行。
+
+#### Scenario: 啟用後 agent 的狀態落盤
+
+- **WHEN** 狀態橋接已啟用，且使用者建立一個 agent session
+- **THEN** 該 session 的狀態 payload 出現在 spekterm 指定的位置
+- **AND** 其內容為 agent 自己回報的狀態（含 context window 大小）
+
+#### Scenario: 未啟用時完全不注入
+
+- **WHEN** 狀態橋接未啟用，且使用者建立一個 agent session
+- **THEN** spawn 該 session 時不注入任何狀態列命令
+- **AND** 不產生任何 payload 檔案
+
+### Requirement: 注入不得取代使用者原有的狀態列，串不上就不注入
+
+若使用者已自行設定了 agent 的狀態列命令，spekterm 注入的命令 SHALL **串接**該命令並保留其輸出
+—— SHALL NOT 使其失效。
+
+**使用者已有自訂狀態列、但 spekterm 無法取得其命令時，SHALL NOT 注入。** 此時注入會讓他失去
+自己那條，而不注入只是少一個他尚不知道存在的功能 —— 兩種失敗的代價不對等，取代價小者。
+
+使用者**未**設定狀態列時，SHALL 照常注入：該位置原本就是空的（agent 內建的模式提示行**不是**
+狀態列，兩種設定下皆存在），接管它的損失為零。
+
+#### Scenario: 使用者已有自訂狀態列且可串接
+
+- **WHEN** 使用者已為 agent 設定了自己的狀態列命令，且該命令可被取得
+- **THEN** 該命令的輸出仍然呈現於 agent 的終端內
+- **AND** payload 同時被寫出
+
+#### Scenario: 使用者有自訂狀態列但無法取得其命令
+
+- **WHEN** 使用者已設定狀態列，但 spekterm 無法讀出其命令
+- **THEN** spekterm 不注入任何狀態列命令
+- **AND** 使用者原有的狀態列照常呈現
+
+### Requirement: 狀態橋接預設啟用且可關閉
+
+狀態橋接 SHALL 預設為**啟用**，並 SHALL 可由使用者於設定中關閉。
+
+預設啟用的前提是上一條的零損失保證。保留關閉的選項，是為了讓不希望 spekterm 改變 agent 呼叫
+方式的使用者有退路 —— **這是本能力唯一會改變 spekterm 之外行為的部分。**
+
+切換此偏好 SHALL 只影響其後建立或重建的 session（注入發生在 spawn 當下）；設定介面 SHALL 說明
+這個限制，以免使用者誤以為開關無效。
+
+#### Scenario: 關閉後不再注入
+
+- **WHEN** 使用者關閉此偏好並建立一個 agent session
+- **THEN** 不注入任何狀態列命令
+
+#### Scenario: 切換後既有 session 不受影響
+
+- **WHEN** 使用者啟用狀態橋接，而某個 agent session 在此之前已經在執行
+- **THEN** 該 session 不會開始回報狀態
+- **AND** 設定介面已說明此限制
+
+### Requirement: payload 的寫入與讀取不得讓不完整的內容被呈現
+
+payload 的寫入 SHALL 為原子操作（先寫入暫存檔再更名），使監看者 SHALL NOT 讀到只寫了一半的內容。
+
+spekterm 讀取 payload 失敗（不存在、非合法 JSON、欄位缺漏）時 SHALL 靜默退回「無 agent 狀態」，
+SHALL NOT 中斷狀態列的其餘欄位，亦 SHALL NOT 向使用者呈現解析錯誤。
+
+session 結束時，其 payload SHALL 被清除。
+
+#### Scenario: 損毀的 payload 不影響其餘欄位
+
+- **WHEN** 某個 session 的 payload 檔內容不是合法的 JSON
+- **THEN** 狀態列照常呈現第一手欄位
+- **AND** 不呈現任何錯誤訊息
+
+#### Scenario: session 結束後不留下 payload
+
+- **WHEN** 一個曾回報過狀態的 session 被關閉
+- **THEN** 其 payload 不再存在
+

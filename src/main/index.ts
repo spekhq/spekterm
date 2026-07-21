@@ -14,6 +14,7 @@ import { registerTerminalHandlers } from './ipc/terminal'
 import { applyNavigationGuards } from './navigation'
 import { formatScanSummary, scanRepo } from './openspec'
 import { guardUnsavedChanges } from './unsaved-changes'
+import { configureAgentStatus } from './agent-status'
 import { PreferencesStore } from './preferences-store'
 import { SessionStore } from './session-store'
 import { WorkspaceStore } from './workspace-store'
@@ -113,6 +114,9 @@ void app.whenReady().then(() => {
   const preferencesStore = new PreferencesStore(join(app.getPath('userData'), 'preferences.json'))
   preferencesStore.load()
 
+  // agent 狀態橋接的落點（payload 與注入用的 settings 檔）。與偏好同在 userData 之下。
+  configureAgentStatus(app.getPath('userData'))
+
   const dirty = new DirtyStateStore()
 
   // 在建立視窗、載入任何 renderer 內容之前施加 CSP —— renderer 從第一幀起就會渲染使用者
@@ -127,7 +131,7 @@ void app.whenReady().then(() => {
   registerOpenSpecHandlers(store)
   registerShellHandlers()
   registerAppHandlers(dirty)
-  registerTerminalHandlers(store, sessionStore)
+  registerTerminalHandlers(store, sessionStore, preferencesStore)
   registerClipboardHandlers()
   registerSettingsHandlers(preferencesStore)
 

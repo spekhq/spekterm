@@ -153,6 +153,25 @@ renderer 上驗到全綠，再上 webgl —— 於是「改寫弄壞了什麼」
 「GPU renderer」與「觀測管道」兩節。`npm test` 268/268、`probe:terminal` 186/186、`probe:keyboard`
 118/118、`probe:workspace` 67/67、`probe:shell` 17/17。
 
+`panel-drive-and-shell-affordances`（**不屬於任何 Phase**）是**第七次 dogfooding 的回饋**，四條一起收。
+最重的一條打開了一個**從未通過的方向**：側欄一直只能**讀** OpenSpec，不能驅動產生它的那個 agent ——
+proposal 寫完停下來給人看，人讀完得**切回終端手打「繼續寫 design」**，specs、tasks 各再來一次。
+它交付：**續寫入口**（新能力 `artifact-continuation`）—— 送出的是 **slash command 而非自然語言**
+（`/opsx:continue <slug>`：行為本就是「產生恰好一個然後停」、帶 slug 可省掉「要哪個 change」的反問、
+而且它是 ASCII，**於是「該用中文還是英文」這個沒有好答案的問題根本不存在**）；**statusbar**
+（新能力 `status-bar` —— 雛型早已定義卻從未實作）；**選單選取後自行關閉**；以及 tasks 打勾改為內嵌 SVG。
+
+**statusbar 連著一條與 agent 的整合**（新能力 `claude-status-bridge`）：context 用量的**百分比**、
+花費、rate limit、模型顯示名**只有 agent 算得出來**，而取得它們的正確管道是 claude 的 **`--settings`
+CLI 旗標**（公開介面）—— spawn 時注入一個 `statusLine` 命令，把它算好的 payload 落盤。
+**不解析 transcript**（實測：那裡面沒有花費、沒有 rate limit、也沒有 context window 大小，而
+`message.model` 的 `[1m]` 後綴被拿掉了 —— 百分比的分母算不出來）。詳見下文「與 agent 的狀態橋接」。
+
+`npm test` 268/268、`probe:workspace` 75/75、`probe:openspec` 196/196、`probe:files` 102/102、
+`probe:keyboard` 118/118。**`probe:terminal` 的新段落全綠（`runAgentStatus` 4/4、`runContinuation`
+3/3），但 `runMode` 有兩條紅燈 —— baseline 對照組重現了一模一樣的兩條**（GPU 的 canvas 未釋放、
+`readTerminalText` 選不到內容），**既有問題，待另行處理**。
+
 尚未開始：打包（Phase 6）、handoff（Phase 7+）。**session 常駐**（讓 pty 活過 app 的生命）已排入
 路線圖但**刻意不做** —— 見 `docs/PRD.md` §11 的「session 常駐」，那裡記著 tmux 與自寫 daemon 的取捨。
 
@@ -168,7 +187,7 @@ npm run probe:workspace # 驗收 workspace-folders / filesystem-access / workspa
 npm run probe:files     # 驗收 file-explorer / file-viewer / 編輯 / 存檔 / 衝突 / CRUD / 導航防護 / 編輯器 worker / CSP（遠端圖片可載入、script-src 僅 self、注入點對 file:// 生效，dev + build 兩模式）
 npm run probe:terminal  # 驗收 terminal-sessions + session-persistence + GPU renderer（pty 雙向／cwd／resize／多開／關分頁・reload・關窗皆不留孤兒；**GPU renderer 只給顯示中的終端**（代理判準：active 有 canvas 且無 .xterm-rows；隱藏的不得持有 canvas）、關掉 GPU 加速退回 DOM 且不遺失內容、開回來又是 GPU；**觀測管道已 renderer-agnostic** —— 不再從 DOM 讀終端內容：pty 行為走**讀檔**、畫面走**產品的複製路徑**、字級走 **pty 的 cols**；`PROBE_ONLY=<段落>[:<模式>]` 可只跑一部分（迭代用，不設就跑全部）；剪貼簿畸形輸入防禦；**右鍵 gate 在 mouse reporting**（stub 送 DECSET 1000 時右鍵讓位給程式、關閉後恢復選單 —— 含對照組）；OSC 標題與命名權；**關掉 app 再開後 session 原樣重建**、只喚醒被顯示的那一個、claude 以 --resume 續接同一個對話、續接失敗自癒為全新對話、shell 於最後 cwd 重生並重播畫面、kill -9 後快照仍在、損毀韌性、被竄改的識別碼不進命令 —— 皆以 PATH 上的 stub claude 承載，dev + build 兩模式）
 npm run probe:keyboard  # 驗收 keyboard-navigation（Ctrl+Tab 切 session／Ctrl+↑↓ 切 repo／位置序非 MRU／按鍵不流進 pty／編輯器與對話框的行為 —— 對話框的抑制以 session 命名／files／**終端字型設定**三種各驗一次；**Shift+↑↓ 排 repo、Shift+←→ 排 session** —— 端點不循環、移動後仍選中／focused、終端持有焦點時仍生效且按鍵不進 pty、**編輯器持有焦點時 Shift+→ 仍是文字選取**，dev + build 兩模式）
-npm run probe:openspec  # 驗收 openspec-data-access / openspec-panel（兩個視圖／兩棵樹／artifact 分頁／agent 改檔即更新／錨定／交叉導覽／Graph・Timeline 的 overlay，dev + build 兩模式）
+npm run probe:openspec  # 驗收 openspec-data-access / openspec-panel（兩個視圖／兩棵樹／artifact 分頁／agent 改檔即更新／錨定／交叉導覽／Graph・Timeline 的 overlay；**續寫入口**的呈現條件與三種停用情形、**選單選取後關閉**，dev + build 兩模式）
 npm run probe:native    # 驗收 native-module-toolchain（Electron 主行程載入 node-pty + spawn pty）
 npm run probe:core      # 驗收 spek-core-integration（主行程掃描 OpenSpec，且不開 TCP 埠）
 npm run probe:identity  # 驗收 app-identity（productName／appId／userData 路徑／視窗標題）
@@ -528,6 +547,16 @@ org 名**不是**凍結身分的一部分 —— repo 改名與 transfer 皆自�
   （Settings 入口不再是停用的 placeholder）。**行高 1.3 → 1.0** 修掉框線的靜態縫。
   **GPU renderer 刻意延後到下一個 change**（表格因此只是改善、不算修好）—— 它會廢掉 `probe:terminal`
   的 14 個觀測點，完整調查見上文「GPU renderer 為什麼延後」。
+- **側欄駕駛 agent、狀態列與殼層打磨** — `panel-drive-and-shell-affordances`（**不屬於任何 Phase**）：
+  第七次 dogfooding 的四條回饋。新能力 **`artifact-continuation`**（側欄在 change 尚缺 artifact 時
+  提供入口，觸發即把 `/opsx:continue <slug>` **送出並執行**於 focused session 的 pty；**一顆按鈕
+  而非每個缺漏各一顆** —— 續寫流程一次只產生一個且由它自己挑，四顆按鈕會承諾一個它給不出的選擇）、
+  **`status-bar`**（雛型早已定義卻從未實作的底部狀態列）、**`claude-status-bridge`**（見上節）；
+  修改 `workspace-layout`（新增狀態列區域、**選單以滑鼠選取後 SHALL 關閉**）與 `terminal-preferences`
+  （橋接開關）。連帶：tasks 打勾改內嵌 SVG（`☑`／`☐` 的長相隨字型而變）。
+  **本輪有兩條經調查後不做**：終端裡 claude 的連結要 `Ctrl+click` **不是 bug**（claude 開了 mouse
+  reporting，那次點擊由它自己處理 —— 見下文「終端連結」），因此「點檔案開在側欄」在 claude session
+  裡**我們攔不到**。
 - Phase 6 打包與發佈，Phase 7+ 建立護城河（handoff）。**session 常駐**已排入路線圖但刻意不做
   （PRD §11）。
 
@@ -1755,6 +1784,100 @@ require**（已驗證：`out/main/index.js` 裡是 `import i18next from "i18next
 隨 `session-title-authority` 移除（現在是**永久接管、靜默忽略**）。文案與行為不符，而且它承諾的是
 一個不存在的功能。英文版改為誠實的敘述：「While a name is set, titles announced by the pty are
 ignored. Clear the name to follow them again.」**全面改寫文案時會撞見這種東西 —— 它們是資產。**
+
+## 終端裡的連結歸誰管（`panel-drive-and-shell-affordances` 的調查結論）
+
+**「claude session 裡的連結要 `Ctrl+click` 才開得了」不是我們的 bug。** 實測：login shell 中純文字
+URL 與 OSC 8 超連結**兩套都正常**（hover 有底線、左鍵直接開、三種修飾鍵都開得起來）——
+`linkHandler` 與 `WebLinksAddon` 都是好的。
+
+差別只在 **claude 開了 mouse reporting**。xterm 此時：加上 `.enable-mouse-events`（該條 CSS 就是
+`cursor: default`，所以游標不變）、把左鍵**轉發給程式**並 `cancel()` 掉自己的處理。而**修飾鍵是一起
+編碼進去的** —— 於是 `Ctrl+click` 是**claude 自己**去開那個連結的。
+
+**`Shift+左鍵反而沒反應**，因為它被 xterm 攔去做「強制選取」（`shouldForceSelection` 在非 Mac
+＝ `shiftKey`）而根本沒送進 claude。**Shift 從來就不是「連結的繞道」** —— 它只在程式接管滑鼠時
+才有意義（shell 裡 Shift+左鍵照樣開得了連結，那反證了這件事）。
+
+**推論：「點檔案路徑開在側欄」在 claude session 裡做不到。** 那次左鍵以跳脫序列進了 pty，我們收不到；
+「另開 app」也是 claude 自己去 `xdg-open` 的。唯一的攔法是在 capture 階段搶下**左鍵**，但左鍵是
+claude 整個 UI 的主要互動面（選單、選項、輸入框），代價與當初搶右鍵不是同一個量級。
+**真正的解是讓 spekterm 被 claude 認成 IDE**（它在 VS Code／JetBrains 裡就是這樣把檔案開進編輯器）
+—— 那要獨立論證，尚未進行。
+
+## 與 agent 的狀態橋接（`claude-status-bridge`，`panel-drive-and-shell-affordances` 起）
+
+狀態列上「只有 agent 算得出來」的那幾段（模型顯示名、**context 用量百分比**、花費、rate limit）
+不是我們算的，是 **claude 自己交出來的**：spawn claude session 時以 **`--settings`（公開的 CLI
+旗標）**注入一個 `statusLine` 命令，把它已經算好的 payload 落盤，主行程監看後推給 renderer。
+
+### 三條管道，實測之後只有一條成立
+
+| 管道 | 結論 |
+|---|---|
+| 解析終端畫面 | 否決 —— 脆弱，而且那一行本來就被寬度截斷，**我們要的正是被切掉的部分** |
+| 解析 transcript（`~/.claude/projects/*.jsonl`） | **實測否決**，見下 |
+| **`--settings` 注入 `statusLine`** | **採用** |
+
+**transcript 裡有**：model id、`effort`、token usage、`cwd`、`gitBranch`。
+**transcript 裡沒有**：花費、rate limit、**context window 大小**。而 `message.model` 是
+`claude-opus-4-8` —— **`[1m]` 後綴被拿掉了**，1M 與 200k 兩種變體長得一模一樣，**百分比的分母
+算不出來**。（過程中還踩了一個假陽性：`grep rate_limits` 命中 8 次，但那全是「把 statusline 腳本
+`cat` 出來」的 tool result —— 命中的是**腳本原始碼裡的字串**，不是資料。）
+
+### 實測結論（全部驗過）
+
+- `--settings` **吃 inline JSON 也吃檔案路徑**，且是**疊加**：只有 `statusLine` 被我們指定，
+  其餘設定不受影響。
+- 注入的命令**看得到我們設給 pty 的環境變數** —— 落點因此可以是 per-session 的路徑，
+  同一份設定檔給所有 session 共用，命令本身不必知道自己屬於哪個 session。
+- payload 內含 **`context_window.context_window_size`**（實測 `1000000`）—— **於是不需要維護一張
+  「模型 → context window」的對照表**。這一點是承重的：那種表會隨新模型過期，而**它失效的樣子是
+  一個看起來很正常的錯誤百分比**。
+- `rate_limits` 在全新 session（還沒打過 API）的 payload 中**缺席** —— 因此**每個欄位都必須能
+  單獨缺席**，不可假設 payload 的形狀固定。
+
+### 預設啟用，而「預設關閉」的第一版理由是錯的
+
+第一版設計為「預設關閉」，理由是「沒有自訂 statusline 的使用者，我們一接管就拿掉了 claude 內建
+的那條」。**實測推翻了它** —— 那條內建的東西不是 statusLine：
+
+| | 終端底部 |
+|---|---|
+| 未設定 `statusLine` | 只有 `⏵⏵ auto mode on (shift+tab to cycle) · ← for agents` |
+| 已設定 `statusLine` | **自訂那行**，其下**仍有**同一條 `⏵⏵ auto mode …` |
+
+`⏵⏵ auto mode` 兩種情況都在，**它不是 statusLine 的位置**。自訂的 statusline 是額外多出來的一行，
+沒設定就單純不存在 —— **接管一個空位，損失為零**。因此預設啟用；保留開關是給不希望 spekterm 改變
+agent 呼叫方式的使用者一條退路。
+
+**但有一條保險**：使用者已有自訂 statusline、而我們**讀不出**它的命令時，**整個不注入**。
+注入會讓他失去自己那條，不注入只是少一個他還不知道存在的功能 —— **兩種失敗的代價不對等，
+就往代價小的那邊倒。**
+
+> **這推翻了 `session-restore` 的「別綁 claude 的內部佈局」嗎？沒有，而區別是承重的**：那條教訓的
+> 情境是「猜錯 → 撞號 → session 死掉」，**降級方向是災難性的**；這裡猜錯的下場是**狀態列少幾個
+> 欄位**。而且我們綁的是一個 CLI 旗標與它自己的輸出，不是猜它把檔案放在哪、用什麼格式寫。
+> **同一條紀律不該無差別套用 —— 要問的是「失效時會怎樣」。**
+
+### 順帶：使用者回報的那個 bug 第一次被實際拍到
+
+實測畫面裡，他的 statusline 在該寬度下只剩
+`…/-home-me-git-spekterm/8934b279-…/scratchpad …` —— **模型、context、花費、rate limit
+全部被截斷掉了**。狀態列要取回的就是那些；而它幫上忙的方式**不是「顯示那些資訊」，是「讓那幾段
+可以從 claude 的 statusline 裡刪掉，把寬度讓給尾巴」**。
+
+## 混排字型的列要釘住行框（`leading-none`）
+
+狀態列的第一版沒有釘住行框高度，dogfood 回報「字型不一樣大、排列不整齊」。**根因不是字級** ——
+整條列都是同一個 token；是**某些字元落到 fallback 字型**，而**行框高度會跟著各自的字型度量走**，
+於是 `items-center` 對齊的是「各自不同高的盒子」。
+
+實測系統等寬字（DejaVu Sans Mono）的覆蓋範圍：`·` `…` `↻` **有**，**`⑂`（U+2442）沒有** ——
+它必定落到 fallback，已改為 `wt`。另一個潛在來源：claude 自己設的分頁標題常帶 `✳`（U+2733），
+**它同時存在於等寬字與 emoji 字型**，Chromium 若挑了後者，那個字會明顯變大又偏移基線。
+
+**這與終端 box-drawing 的教訓同源：字型覆蓋範圍不足時，症狀出現在版面上，而不是出現在缺字的地方。**
 
 ## 字級尺度（`rail-legibility-and-repo-row` 起）
 

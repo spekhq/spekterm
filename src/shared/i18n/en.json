@@ -148,7 +148,15 @@
     "specDeltas": "Spec deltas",
     "openInFiles": "Open {{path}} in Files",
     "relatedChanges": "Changes that touch this spec: {{changes}}",
-    "taskProgress": "Task progress"
+    "taskProgress": "Task progress",
+    "continueArtifact": "Continue",
+    "continueMissing": "Not written yet: {{artifacts}}",
+    "continueBlocked": {
+      "noSession": "Start a session in this repo to continue this change.",
+      "foreignSource": "The panel is showing another repo. Switch it back to the session repo to continue.",
+      "notClaude": "The focused session is a shell. Focus a claude session to continue.",
+      "notRunning": "The focused session is not running. Open it to continue."
+    }
   },
   "viz": {
     "label": "Visualizations",
@@ -235,6 +243,23 @@
     "preview": "Preview",
     "previewSample": "The quick brown fox 0123456789\nil1 | oO0 {}[]() => != === <= >=\nconst λ = (x) => x ?? 0; // 1lI0O",
     "reset": "Reset to default",
-    "save": "Save"
+    "save": "Save",
+    "agentStatus": "Show agent status in the status bar",
+    "agentStatusHint": "Asks claude to report its model, context usage and cost to spekterm. Your own status line keeps working. Applies to sessions started after this change."
+  },
+  "statusBar": {
+    "label": "Status bar",
+    "noRepo": "No repo selected",
+    "noSession": "No session in this repo",
+    "changeWithTasks": "{{slug}} {{completed}}/{{total}}",
+    "panelSource": "panel: {{name}}",
+    "worktree": "wt {{name}}",
+    "sessions": "{{here}}/{{total}} sessions",
+    "openspecCounts": "{{specs}} specs · {{active}} active",
+    "unsaved": "{{count}} unsaved",
+    "context": "ctx {{percent}}%",
+    "cost": "${{usd}}",
+    "fiveHour": "5h {{percent}}%",
+    "sevenDay": "7d {{percent}}%"
   }
 }
