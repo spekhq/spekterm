@@ -1452,6 +1452,12 @@ async function runMode(label, { port, rendererUrl }) {
         隱藏中仍持有canvas: hidden.filter((d) => d.querySelectorAll('canvas').length > 0).length,
         顯示中有canvas: hosts.filter((d) => !d.classList.contains('hidden'))
           .every((d) => d.querySelectorAll('canvas').length > 0),
+        逐一: hosts.map((d) => ({
+          隱藏: d.classList.contains('hidden'),
+          canvas數: d.querySelectorAll('canvas').length,
+          class: [...d.querySelectorAll('canvas')].map((c) => c.className || '(無 class)'),
+          有xtermRows: d.querySelectorAll('.xterm-rows').length > 0,
+        })),
       }
     })()`
     // **輪詢，不要量一次就斷言** —— 釋放發生在 React 的 effect 裡，而上一步（等 pty 出現）
@@ -1470,7 +1476,8 @@ async function runMode(label, { port, rendererUrl }) {
         gpuPerTerminal.顯示中有canvas === true,
       `終端 ${gpuPerTerminal.總數} 個、隱藏 ${gpuPerTerminal.隱藏數} 個，其中 ` +
         `${gpuPerTerminal.隱藏中仍持有canvas} 個仍持有 canvas；顯示中的有 canvas=` +
-        `${gpuPerTerminal.顯示中有canvas}（隱藏數為 0 表示這條沒有鑑別力）`,
+        `${gpuPerTerminal.顯示中有canvas}（隱藏數為 0 表示這條沒有鑑別力）` +
+        ` 逐一=${JSON.stringify(gpuPerTerminal.逐一)}`,
     )
 
     // 兩個 login shell 的 session 都停在本地標籤，且**序號各自不同** —— 序號是 folder 內遞增的。
