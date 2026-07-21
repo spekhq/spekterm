@@ -265,8 +265,24 @@ ready 事件要等主 script 評估完成才觸發，會死鎖。
 
 ### core 套件的名稱與分發（已定案）
 
-core 對外發佈為 **`@spekjs/core`**（已於 npm public registry 發佈，本 repo 以 `^1.1.3`
+core 對外發佈為 **`@spekjs/core`**（已於 npm public registry 發佈，本 repo 以 `^1.2.0`
 宣告依賴）。Phase 5 抽出的 UI 套件為 **`@spekjs/ui`**（`^1.0.1`）。
+
+> **1.2.0 是 jj（Jujutsu）workspace 聚合（upstream #23，隨 spek v1.9.0 發佈），對 spekterm 是
+> 純衛生性升級 —— 零功能變化。** 理由與 #17 完全同型：**變動全在聚合 API 裡**。排除那次 LF 正規化
+> 之後，`scanner.ts` 的每一段 hunk 都落在 `scanOpenSpecAggregated` / `buildGraphDataAggregated`
+> 與新的 `changeContentFingerprint`，**`scanOpenSpec` 一行都沒動**。實測（本 repo 與有 3 個
+> worktree 的 core-lib，各走一次側欄真正的路徑 `scanOpenSpec` → `readChange` → `readSpec`
+> → `buildGraphData`）：1.1.3 與 1.2.0 的輸出**逐字相同**（specs／active／archived／graph 的
+> nodes・edges／`schemaOrder`／`ChangeInfo` 的欄位集合）。
+>
+> **型別上它同時是 1.1.0 那個坑的重演與反例，值得對照著看**：`ChangeInfo` 新增的 `isCurrent?` 與
+> `conflictsWith?` 都是 **optional**（讀取端與建構端都不受影響，且**非聚合掃描根本不會填它們** ——
+> 實測 `Object.keys()` 裡沒有這兩個）；但 `WorktreeInfo` / `WorktreeSource` 新增了 **required** 的
+> `vcs: 'git' | 'jj'` —— **那條的破壞條件與 1.1.0 的 `defaultSchema` 一模一樣**（自己建構這兩個型別
+> 才會 `TS2741`）。我們毫髮無傷是因為根本沒碰它們（grep 確認 `src/` 與 `scripts/` 從未出現
+> `WorktreeInfo`、`WorktreeSource`、`listWorktrees`、`listWorkspaces`、`listJjWorkspaces`）。
+> **升 core 時該 grep 的不只是「有沒有呼叫聚合 API」，還有「有沒有自己建構 core 的型別」。**
 
 > **1.1.3 的 schema-order 快取改為 key 在 schema 而非 change（upstream #19），對側欄是可觀測的
 > 提速。** `readChange` 取 `schemaOrder` 要 spawn 一次 `openspec status --change <slug> --json`
