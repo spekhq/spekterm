@@ -81,7 +81,7 @@ export function PreferencesProvider({ children }: { children: React.ReactNode })
       // 未設定＝啟用（與 GPU 加速同一條規則）。
       agentStatusEnabled: terminal.agentStatus !== false,
     }),
-    [terminal, updateTerminalFont, updateGpuAcceleration],
+    [terminal, updateTerminalFont, updateGpuAcceleration, updateAgentStatus],
   )
 
   return <PreferencesContext.Provider value={api}>{children}</PreferencesContext.Provider>

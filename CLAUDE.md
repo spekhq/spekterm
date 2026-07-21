@@ -181,7 +181,33 @@ CLI 旗標**（公開介面）—— spawn 時注入一個 `statusLine` 命令�
 npm run dev             # electron-vite dev（開發模式）
 npm run build           # 建置至 out/
 npm run typecheck       # tsc：main / preload（node）+ renderer（web）
-npm test                # node:test 單元測試（fs 邊界、workspace store、listDir/readFile、watcher、外部 URL、pty 管理器、git 分支解析、終端偏好 store（字型 family 清理/size 與行高夾制/損毀隔離）、字級不得寫死、舊產品名不得殘留、UI 文案不得含 CJK、aria-label 不得硬編、字典 key 的型別安全）
+npm run measure:bundle  # renderer bundle 體積報告（依編輯器核心／worker／語言分類歸因）
+```
+
+#### 測試分兩層 —— 分界是**成本**，不是技術手法
+
+| | 是什麼 | 什麼時候跑 |
+|---|---|---|
+| `npm test`（＝ `npm run test:unit`） | node:test —— headless、秒級、可平行、無副作用 | **隨時**。改完就跑 |
+| `npm run test:e2e` | 全部 9 支探針，走 CDP 或真 Electron 主行程，驗**被出貨的那份程式碼** | **驗收時**。約十幾分鐘，且**期間使用者無法操作電腦**（真視窗、真滑鼠事件） |
+| `npm run test:all` | 兩層都跑 | 封存前 |
+
+**探針不併進 `npm test`，是刻意的**：它們會霸佔螢幕、不可平行（各自佔 debugging port、各自起 Electron
+還要收屍）。併進去的代價是「從此沒有人敢隨手打 `npm test`」，那會直接殺掉第一層最大的價值。
+**迭代時用單支的 `probe:*` 入口**（下方），不要為了改一行而跑 `test:e2e`。
+
+`test:e2e` 由 `scripts/run-probes.mjs` 依序跑完（成本遞增排序）。它做兩件單支入口不做的事：
+**只 build 一次**（每個 `probe:*` 都自帶 `npm run build`，全跑一輪等於 build 九次），以及
+**清掉 `electron-vite dev` 洩漏到 shell 的環境變數**（`ELECTRON_RENDERER_URL` 等 —— 見下文
+「CSP 『build 模式拿到 dev 政策』的紅是環境串擾」）。它**不 fail fast**：付了十幾分鐘的代價就該拿到
+完整的一張圖，最後印總結表，exit code 反映整體結果。
+
+```bash
+npm run test:unit       # node:test 單元測試（fs 邊界、workspace store、listDir/readFile、watcher、外部 URL、pty 管理器、git 分支解析、終端偏好 store（字型 family 清理/size 與行高夾制/損毀隔離）、字級不得寫死、舊產品名不得殘留、UI 文案不得含 CJK、aria-label 不得硬編、字典 key 的型別安全）
+npm run test:e2e        # 全部探針（build 一次 + 依序跑完 + 總結表）
+npm run test:all        # test:unit && test:e2e
+
+# ── 單支探針入口（迭代用；`test:e2e` 就是把這些依序跑完）────────────────────
 npm run probe:shell     # 驗收 workspace-app-shell（開視窗 + 信任模型 + preload 白名單，走 CDP）
 npm run probe:workspace # 驗收 workspace-folders / filesystem-access / workspace-layout / repo-branch / terminal-preferences（rail 呈現分支、於 app 之外切 branch 後自己更新、detached HEAD、執行期間變成 git repo、rail 不呈現不可操作的控制項；**repo 的拖曳排序** —— 落點與指示線一致、末端拖得到、拖 session 子列不會連 repo 一起搬、未位移的按下＝點擊、順序跨重啟還原、可拖曳項目的靜止游標為 pointer；**Settings 入口啟用**且觸發後開啟終端偏好設定對話框（family 下拉／size／行高／**GPU 加速開關**／預覽、首項為系統預設、Esc 關閉、**預覽不得含框線字元** —— 那些字元在終端由 GPU 程式化繪製、不經字型）；**終端偏好**寫入時夾制 size・清理 family、跨重啟還原、偏好檔損毀仍以預設啟動且原檔改名保留）
 npm run probe:files     # 驗收 file-explorer / file-viewer / 編輯 / 存檔 / 衝突 / CRUD / 導航防護 / 編輯器 worker / CSP（遠端圖片可載入、script-src 僅 self、注入點對 file:// 生效，dev + build 兩模式）
@@ -191,7 +217,6 @@ npm run probe:openspec  # 驗收 openspec-data-access / openspec-panel（兩個�
 npm run probe:native    # 驗收 native-module-toolchain（Electron 主行程載入 node-pty + spawn pty）
 npm run probe:core      # 驗收 spek-core-integration（主行程掃描 OpenSpec，且不開 TCP 埠）
 npm run probe:identity  # 驗收 app-identity（productName／appId／userData 路徑／視窗標題）
-npm run measure:bundle  # renderer bundle 體積報告（依編輯器核心／worker／語言分類歸因）
 ```
 
 `probe:identity` **不傳 `--user-data-dir`** —— 它要驗的正是 `app.getPath('userData')` 實際解析出來
@@ -1034,6 +1059,26 @@ Phase 5 把清單補齊，並補上兩條它本來就該守的：**`fs.symlink` 
 論證完全建立在這個前提上），以及 `openspec.*` 也受同一條白名單原則約束。
 
 **探針的斷言會隨規格過期。** 加能力到 preload 白名單時，記得那裡有一道守衛在等著。
+
+> **同一件事在 `panel-drive-and-shell-affordances` 又發生了一次，而且是 `test:e2e` 的第一次跑抓到的。**
+> 那個 change 往 preload 加了 `watchStatus`／`onStatus`／`setAgentStatus`，**沒動 `probe-shell.mjs`，
+> 而它從頭到尾沒跑過 `probe:shell`** —— 於是白名單守衛帶著兩條紅燈被封存了。**「這次沒改到那塊」
+> 不是不跑的理由**：白名單守衛守的正是「你加了東西卻沒告訴它」。這是 `test:e2e` 存在的理由 ——
+> 單支入口讓人只跑自己改到的那幾支，而漏掉的那幾支正是會抓到你的那幾支。
+
+### stub 的旗標比對不可用位置 —— `--settings` 一注入，整支 stub 靜默退化
+
+`claude-status-bridge` 起，spawn 出來的命令前面多了一段 `--settings <路徑>`。`probe:terminal` 的
+stub claude 用 `[ "$1" = "--resume" ]` 判斷要不要模擬續接失敗 —— **`$1` 從此恆為 `--settings`**，
+於是那支 stub **完全不再模擬失敗**，只是退化成一個普通的互動 shell。
+
+**失效方向是最壞的那種**：stub 本身看起來一切正常（session 起得來、能打字），紅的卻是產品那側的
+斷言 —— 自癒沒被觸發（第三次呼叫不存在）、其後「被竄改的識別碼」那條連 argv 都是空的。**一路追下去
+會先懷疑產品的自癒壞了。** JS 那側的 `stub.calls()[0].split(' ')[1]` 與 `/^--session-id …$/` 是同一個
+病：都假設了 argv 的**位置**。
+
+**判準一律在整串裡找旗標**（`for a in "$@"` / `conversationOf()` 的 regex），於是日後再注入什麼旗標，
+這些斷言都不必跟著改。
 
 ### 驗 reload 要用 `Page.reload`，不能用頁面裡的 `location.reload()`
 

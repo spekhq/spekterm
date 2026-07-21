@@ -110,6 +110,11 @@ const PROBE_EXPRESSION = `(async () => {
     // wake／restore／persist／snapshot 於 session-restore 引入（session-persistence 規格）：
     // 它們的邊界要求是「持久化不得把路徑詞彙交給 renderer」—— 介面上因此沒有任何路徑參數，
     // 也沒有對話識別碼（那是主行程的知識）。wake 只收一個 sessionId。
+    //
+    // watchStatus／onStatus 於 panel-drive-and-shell-affordances 引入（claude-status-bridge
+    // 規格）：狀態列所需、且只有主行程取得到的事實（pty 的 cwd、git 工作區、agent 回報的用量）。
+    // watchStatus 只收一個 sessionId（null ＝停止輪詢），沒有路徑詞彙。
+    // （這段註解在**模板字串之內** —— 不要在這裡用反引號，它會把整個模板提前結束。）
     surplusTerminalKeys: Object.keys(api?.terminal ?? {}).filter(
       (key) =>
         ![
@@ -123,13 +128,20 @@ const PROBE_EXPRESSION = `(async () => {
           'snapshot',
           'onData',
           'onExit',
+          'watchStatus',
+          'onStatus',
         ].includes(key),
     ),
     // settings 的能力（terminal-rendering-and-preferences，terminal-preferences 規格）。同一條
     // 白名單原則 —— 從第一天就補上守衛，避免重蹈 folders.*／terminal.* 當年「整個 namespace 沒有
     // 守衛」的覆轍。get／setTerminalFont：值由主行程的 store 清理／夾制，介面上沒有任何路徑詞彙。
+    // setAgentStatus 於 panel-drive-and-shell-affordances 引入（terminal-preferences 規格）：
+    // 與 GPU 加速同型的布林偏好，值同樣由主行程的 store 承接，介面上沒有路徑詞彙。
     surplusSettingsKeys: Object.keys(api?.settings ?? {}).filter(
-      (key) => !['get', 'setTerminalFont', 'setGpuAcceleration', 'listMonospaceFonts'].includes(key),
+      (key) =>
+        !['get', 'setTerminalFont', 'setGpuAcceleration', 'setAgentStatus', 'listMonospaceFonts'].includes(
+          key,
+        ),
     ),
     // symlink 絕不可出現在白名單上。
     //

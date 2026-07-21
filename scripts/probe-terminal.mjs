@@ -117,6 +117,19 @@ const STUB_MODEL_NAME = 'Stub Model (1M context)'
  * stub 同時把每次被呼叫的 argv 記進 `calls()` —— 續接（`--resume <id>`）與新建（`--session-id <id>`）
  * 用的是哪個旗標、哪個 id，只有這樣才驗得出來。
  */
+/**
+ * 自 stub 記下的一行 argv，取出「這次是新建還是續接、對話識別碼是什麼」。
+ *
+ * **不要用位置去切。** `claude-status-bridge` 起，spawn 出來的命令前面多了一段
+ * `--settings <路徑>`（狀態橋接的注入）—— 寫死 `split(' ')[1]` 取到的會是那個路徑，
+ * 而錨定開頭的 `/^--session-id …$/` 則整條對不上。這裡改為在整串裡找旗標，
+ * 於是日後再多注入什麼旗標，這些斷言都不必跟著改。
+ */
+function conversationOf(argv) {
+  const match = /--(session-id|resume) ([0-9a-f-]{36})(?:\s|$)/.exec(argv ?? '')
+  return match ? { mode: match[1], id: match[2] } : null
+}
+
 function makeStubClaude({ resumeFails = false, honorSettings = false, logInput = false } = {}) {
   const home = mkTemp('spekterm-terminal-stubhome-')
   const bin = join(home, '.local', 'bin')
@@ -161,8 +174,17 @@ function makeStubClaude({ resumeFails = false, honorSettings = false, logInput =
     `: > "${receipt}"`,
     `echo "$@" >> "${callLog}"`,
     honorSettings ? honor : '',
+    // **旗標要掃過整個 `"$@"`，不能看 `$1`。** 這裡一度寫成 `[ "$1" = "--resume" ]`，而
+    // `claude-status-bridge` 起，命令前面多了一段 `--settings <路徑>` —— `$1` 從此恆為
+    // `--settings`，**這支 stub 於是完全不再模擬續接失敗**：自癒沒有被觸發，第三次呼叫不存在，
+    // 「自癒」與其後「被竄改的識別碼」兩組斷言一起倒。失效方向是最壞的那種 —— stub 看起來
+    // 一切正常（它就退化成一個普通的互動 shell），紅的卻是產品那邊的斷言。
     resumeFails
-      ? 'if [ "$1" = "--resume" ]; then echo "No conversation found with session ID: $2"; exit 1; fi'
+      ? [
+          'resume=""; prev=""',
+          'for a in "$@"; do if [ "$prev" = "--resume" ]; then resume="$a"; fi; prev="$a"; done',
+          'if [ -n "$resume" ]; then echo "No conversation found with session ID: $resume"; exit 1; fi',
+        ].join('\n')
       : '',
     logInput ? `exec sh -c 'tee -a "${inputLog}" | "$SHELL" -i'` : 'exec "$SHELL" -i',
   ].filter(Boolean)
@@ -2200,11 +2222,12 @@ async function runRestore(label, { port, rendererUrl }) {
     // claude 目標：以我們指定的對話識別碼啟動（--session-id）—— 於是它可以被持久化並在下次續接。
     await waitForPtyCount(marker, 1)
     const firstCalls = stub.calls()
-    const conversation = firstCalls[0]?.split(' ')[1] ?? ''
+    const first = conversationOf(firstCalls[0])
+    const conversation = first?.id ?? ''
     check(
       results,
       `${label}：新建的 claude session 以我們指定的對話識別碼啟動`,
-      firstCalls.length === 1 && /^--session-id [0-9a-f-]{36}$/.test(firstCalls[0]),
+      firstCalls.length === 1 && first?.mode === 'session-id',
       `argv=${JSON.stringify(firstCalls)}`,
     )
 
@@ -2283,7 +2306,9 @@ async function runRestore(label, { port, rendererUrl }) {
     check(
       results,
       `${label}：重建的 claude session 續接同一個對話（--resume 同一個 id）`,
-      resumeCalls.length === 2 && resumeCalls[1] === `--resume ${conversation}`,
+      resumeCalls.length === 2 &&
+        conversationOf(resumeCalls[1])?.mode === 'resume' &&
+        conversationOf(resumeCalls[1])?.id === conversation,
       `argv=${JSON.stringify(resumeCalls)}`,
     )
 
@@ -2484,7 +2509,7 @@ async function runHealAndCrash(label, { port, rendererUrl }) {
     await openSessionViaMenu(app.client, copy('sessions.spawnClaude'))
     await pollUntil(app.client, TABS, (value) => value.length === 1, 8000)
     await waitForPtyCount(marker, 1)
-    const created = stub.calls()[0]?.split(' ')[1] ?? ''
+    const created = conversationOf(stub.calls()[0])?.id ?? ''
 
     await openTabMenu(app.client, 0)
     await realClick(app.client, await app.client.evaluate(MENU_ITEM_RECT(copy('sessions.rename'))))
@@ -2515,9 +2540,10 @@ async function runHealAndCrash(label, { port, rendererUrl }) {
       results,
       `${label}：續接失敗時以全新的對話識別碼自癒（不沿用舊 id —— 那會撞號）`,
       healed.length === 3 &&
-        healed[1] === `--resume ${created}` &&
-        /^--session-id [0-9a-f-]{36}$/.test(healed[2]) &&
-        healed[2].split(' ')[1] !== created,
+        conversationOf(healed[1])?.mode === 'resume' &&
+        conversationOf(healed[1])?.id === created &&
+        conversationOf(healed[2])?.mode === 'session-id' &&
+        conversationOf(healed[2])?.id !== created,
       `argv=${JSON.stringify(healed)}`,
     )
 
@@ -2586,7 +2612,7 @@ async function runHealAndCrash(label, { port, rendererUrl }) {
       `${label}：被竄改的對話識別碼不進入命令，該 session 以全新對話重建`,
       !existsSync(pwned) &&
         afterTamper.length === 1 &&
-        /^--session-id [0-9a-f-]{36}$/.test(afterTamper[0]),
+        conversationOf(afterTamper[0])?.mode === 'session-id',
       `注入的檔案存在=${existsSync(pwned)} argv=${JSON.stringify(afterTamper)}`,
     )
 

@@ -352,14 +352,16 @@ export function WorkspaceRail({
   }, [])
 
   // 拖曳給的是位置，但送出去的必須是**識別碼** —— 清單的權威在主行程（design D5）。
-  const foldersRef = useRef(folders)
-  foldersRef.current = folders
+  //
+  // 這裡曾經把 `folders` 存進 ref（於渲染期間指派）以求 callback 穩定。那是不必要的：
+  // `useDragReorder` 明載 `onCommit` **不必穩定**（它變動時 window listener 於同一次 effect
+  // flush 內拆掉重掛，中間送不進任何滑鼠事件），而渲染期間寫 ref 是 React 的違規動作。
   const commitFolderOrder = useCallback(
     (fromIndex: number, toIndex: number) => {
-      const moved = foldersRef.current[fromIndex]
+      const moved = folders[fromIndex]
       if (moved) onReorder(moved.id, toIndex)
     },
-    [onReorder],
+    [folders, onReorder],
   )
 
   const folderReorder = useDragReorder(

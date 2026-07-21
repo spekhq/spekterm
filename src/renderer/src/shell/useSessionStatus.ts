@@ -13,8 +13,15 @@ import type { SessionStatus } from './types'
 export function useSessionStatus(sessionId: string | null): SessionStatus | null {
   const [status, setStatus] = useState<SessionStatus | null>(null)
 
-  useEffect(() => {
+  // **清空發生在渲染期間，不在 effect 裡**（React 官方的「渲染期間調整 state」）。寫在 effect
+  // 裡的話，舊 session 的快照會多活一次繪製 —— 而那正是這個 hook 要避免的東西。
+  const [seenSessionId, setSeenSessionId] = useState(sessionId)
+  if (seenSessionId !== sessionId) {
+    setSeenSessionId(sessionId)
     setStatus(null)
+  }
+
+  useEffect(() => {
     window.workspace.terminal.watchStatus(sessionId)
     if (sessionId === null) return
 

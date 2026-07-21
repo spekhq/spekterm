@@ -9,6 +9,14 @@ export default tseslint.config(
   js.configs.recommended,
   ...tseslint.configs.recommended,
 
+  // 「解構出來丟掉」是省略欄位的慣用寫法（`const { secret: _s, ...rest } = x`）——
+  // 被丟掉的那幾個名字本來就不該被使用，把它們算成「未使用的變數」是誤報。
+  {
+    rules: {
+      '@typescript-eslint/no-unused-vars': ['error', { ignoreRestSiblings: true }],
+    },
+  },
+
   // 主行程與 preload：Node 環境
   {
     files: ['src/main/**/*.ts', 'src/preload/**/*.ts', 'electron.vite.config.ts'],
