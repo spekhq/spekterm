@@ -63,6 +63,7 @@
 - [x] 8.8 既有斷言的回歸確認：無 worktree 的 fixture 行為與改動前相同
 - [x] 8.9 `npm run typecheck` 與 `npm test` 全綠
 - [x] 8.10 `npm run probe:openspec` —— 迭代時以單一模式進行，完成後完整跑一次（dev + build）
+- [x] 8.12 斷言（`/opsx:verify` 的獨立稽核指出的缺口）：**folder 本身就是一個 linked worktree** 時，該 worktree 自己的 change 其續寫入口**可用** —— 此時 `isMain` 為 false 而 `isFolderRoot` 為 true，兩者相反。**對照組已驗**：把判準換回 `isMain`，這條兩個模式都變紅。順帶守住 D2b 在 UI 層的行為（該 folder 自己沒有 `openspec/specs/`，spec 仍列得出來且打得開）
 - [x] 8.11 `npm run probe:core` —— 驗 1.5 的「掃描摘要不變」確實成立（白名單／格式守衛正是「你改了卻沒告訴它」時會抓到你的那種）
 
 ## 9. 文件

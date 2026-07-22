@@ -705,6 +705,14 @@ const TIMELINE_SECTIONS = `(() => {
   return [...dialog.querySelectorAll('.spekui-timeline-section')].map((el) => el.getAttribute('title'))
 })()`
 
+/** overlay 的關閉按鈕。 */
+const CLICK_VIZ_CLOSE = `(() => {
+  const btn = document.querySelector('[role="dialog"] [aria-label="${copy('viz.close')}"]')
+  if (!btn) return false
+  btn.click()
+  return true
+})()`
+
 /** 點 overlay 裡的一顆 chip（group by topic 之類）—— 以可見文字定位。 */
 const CLICK_VIZ_CHIP = (label) => `(() => {
   const dialog = document.querySelector('[role="dialog"]')
@@ -889,6 +897,7 @@ async function runMode(label, { port, rendererUrl }) {
     ['f-archived', archivedOnly],
     ['f-plain', plain],
     ['f-worktree', worktree.repo],
+    ['f-worktree-inside', worktree.inside],
   ])
 
   const stub = makeStubClaude()
@@ -1755,6 +1764,100 @@ async function runMode(label, { port, rendererUrl }) {
       '聚合後 Timeline 仍依 topic 分組（不是全部落在無 topic）',
       Array.isArray(laneTitles) && laneTitles.includes('auth'),
       JSON.stringify(laneTitles),
+    )
+
+    // ── folder 本身就是一個 linked worktree ──────────────────────────────────
+    //
+    // **這一段守的是 D7 的判準本身。** 此時該 folder 的 change 其 `isMain` 為 false（主工作
+    // 目錄在別處）而 `isFolderRoot` 為 true（session 就跑在這裡）—— 兩者相反。把判準換回
+    // `isMain`，續寫入口會被錯誤地停用，而那個錯誤**只有人的眼睛看得到**：DTO 層的單元測試
+    // 驗的是欄位值，不是入口亮不亮。
+    // **關掉 overlay 之後要確認它真的關了。** 下面的 `createSession` 送的是**真滑鼠事件**，
+    // overlay 只要還蓋著就點不到「+ session」，而 `createSession` 是 throw 而不是回報紅燈 ——
+    // 整支探針會就此中斷（實測踩過）。`SELECT_FOLDER` 之類的 `evaluate` 直接點 DOM，不受遮擋，
+    // 所以「前一條是綠的」完全不代表 overlay 已經退場。
+    //
+    // **用關閉按鈕而不是 Esc —— 那是探針的限制，不是產品的問題。** 實測：在這個位置送 Esc
+    // 關不掉 overlay，而同一支探針早先那條 Esc 斷言是綠的，差別只在這裡點過 overlay 內的
+    // chip（`evaluate` 的 `btn.click()`）。**已由 dogfood 確認真鍵盤關得掉**，所以是 CDP 注入
+    // 的邊角，比照「探針證明不了真實鍵盤」那條既有紀錄。此處要的只是「把 overlay 收掉」，
+    // 而按鈕是使用者本來就有的路徑，且不依賴焦點落在哪。
+    await app.client.evaluate(CLICK_VIZ_CLOSE)
+    const overlayGone = await pollUntil(app.client, OVERLAY, (v) => v === null, 8000)
+    check(results, '關閉 Timeline overlay', overlayGone === null, JSON.stringify(overlayGone))
+
+    console.log('\nfolder 本身是 linked worktree')
+
+    check(
+      results,
+      '選中一個本身就是 linked worktree 的 folder',
+      (await pollUntil(app.client, SELECT_FOLDER('wt-inside'), (ok) => ok === true, 8000)) === true,
+    )
+    await createSession(app.client, 'claude')
+
+    const selfAnchored = await anchorChange(app.client, 'inside-change')
+    check(
+      results,
+      '錨定該 worktree 自己的 change',
+      selfAnchored === 'inside-change',
+      String(selfAnchored),
+    )
+
+    // 前置：它確實**不是**主工作目錄的 change —— 否則這條退化成「main 的 change 可續寫」，
+    // 對 `isMain` / `isFolderRoot` 之分毫無鑑別力。
+    await app.client.evaluate(CLICK_VIEW(copy('openspec.tabBrowse')))
+    const selfRows = await pollUntil(
+      app.client,
+      CHANGE_TREE_ROWS('Active'),
+      (list) => list.some((r) => r.slug === 'inside-change'),
+      10_000,
+    )
+    check(
+      results,
+      '該 change 帶著非 main 的來源標示（前置：它不是主工作目錄的 change）',
+      selfRows?.find((r) => r.slug === 'inside-change')?.text.includes('feat-inside') === true,
+      selfRows?.find((r) => r.slug === 'inside-change')?.text,
+    )
+
+    await app.client.evaluate(CLICK_VIEW(copy('openspec.tabChange')))
+    const selfEntry = await pollUntil(
+      app.client,
+      CONTINUE_ENTRY,
+      (v) => v !== null && v.disabled === false,
+      12_000,
+    )
+    check(
+      results,
+      'folder 本身是 linked worktree 時，續寫入口可用',
+      selfEntry?.disabled === false,
+      JSON.stringify(selfEntry),
+    )
+
+    // 順帶：spec 的讀取根是**主工作目錄**（D2b）—— 這個 folder 自己沒有 openspec/specs/。
+    await app.client.evaluate(CLICK_VIEW(copy('openspec.tabBrowse')))
+    const specRows = await pollUntil(app.client, SPEC_TREE_TOPICS, (list) => list.length > 0, 10_000)
+    check(
+      results,
+      'folder 是 linked worktree 時仍列得出主工作目錄的 spec',
+      specRows?.some((r) => r.topic === 'auth') === true,
+      JSON.stringify(specRows?.map((r) => r.topic)),
+    )
+    check(
+      results,
+      '而且那個 spec 打得開（讀取根不是 folder 自己）',
+      (await app.client.evaluate(ACTIVATE_TREE_ROW('auth'))) === true,
+    )
+    const mainSpecText = await pollUntil(
+      app.client,
+      SPEC_CONTENT,
+      (text) => text.includes('auth Specification'),
+      12_000,
+    )
+    check(
+      results,
+      'spec 的內容真的讀得到（讀取根不是 folder 自己）',
+      String(mainSpecText).includes('auth Specification'),
+      String(mainSpecText).slice(0, 120),
     )
   } finally {
     await app.close()
