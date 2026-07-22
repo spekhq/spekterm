@@ -17,6 +17,7 @@ import { join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { check, connect, dragMouse, pollUntil, pressKey, waitForPageTarget } from './lib/cdp.mjs'
 import { copy, patternOf, suffixOf } from './lib/copy.mjs'
+import { electronExtraArgs } from './lib/display.mjs'
 
 const DEBUG_PORT = 9223
 const results = []
@@ -111,7 +112,7 @@ const MOUNTED = `(() => {
 async function launch(profileDir) {
   const electron = spawn(
     process.platform === 'win32' ? 'electron.cmd' : 'electron',
-    [`--remote-debugging-port=${DEBUG_PORT}`, `--user-data-dir=${profileDir}`, '.'],
+    [`--remote-debugging-port=${DEBUG_PORT}`, `--user-data-dir=${profileDir}`, ...electronExtraArgs(), '.'],
     { stdio: ['ignore', 'pipe', 'pipe'], env: process.env, shell: process.platform === 'win32' },
   )
   let stderr = ''
@@ -821,10 +822,19 @@ try {
   // 上面那次拖曳把 repo-plain 換到了第一個。
   console.log('\n重啟後還原')
   app = await launch(profile)
-  const afterRestart = await app.client.evaluate(RAIL_ROWS)
+  // **輪詢，不要量一次就斷言。** `app.mounted` 只保證 rail 的 `<aside>` 掛上了，而**列本身來自
+  // 一次非同步的 `folders.list()`，晚一步才渲染** —— 一啟動就量會讀到空陣列，於是順序比對失敗，
+  // 而 detail 也是空的（**看起來像「順序錯了」，其實是還沒畫出來**）。實測：連跑兩輪
+  // `test:e2e`，第二輪在這裡紅。上面第一次啟動時（`RAIL_ROWS` 的 `length === 3`）本來就是輪詢的，
+  // 這條重啟路徑漏了 —— 同一個教訓 CLAUDE.md 已為 `probe:openspec` 記過一次。
+  //
+  // 輪詢的是「列渲染出來了沒」，**不是**「順序對不對」：順序錯的話 length 仍是 3，下面照樣紅。
+  const afterRestart = await pollUntil(app.client, RAIL_ROWS, (rows) => rows.length === 3, 10_000)
   check(results, '清單與使用者排定的順序於重啟後一致',
     afterRestart.map((r) => r.name).join(',') === 'repo-plain,repo-openspec,repo-missing',
-    afterRestart.map((r) => r.name).join(', '))
+    afterRestart.length === 0
+      ? 'rail 一列都沒有 —— 列未及渲染，不是順序錯了'
+      : afterRestart.map((r) => r.name).join(', '))
 
   // ── terminal-preferences：字型偏好跨重啟還原 ──────────────────────────────
   const prefsAfterRestart = await app.client.evaluate('window.workspace.settings.get()')

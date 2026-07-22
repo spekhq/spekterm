@@ -18,20 +18,14 @@ import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
-const electron = join(root, 'node_modules', '.bin', 'electron')
 
-/** 依成本遞增排列 —— 便宜的先跑完，才輪到會霸佔螢幕好幾分鐘的那幾支。 */
-const PROBES = [
-  { name: 'native', cmd: electron, args: ['scripts/probe-native.mjs'] },
-  { name: 'core', args: ['scripts/probe-core.mjs'] },
-  { name: 'identity', args: ['scripts/probe-identity.mjs'] },
-  { name: 'shell', args: ['scripts/probe-shell.mjs'] },
-  { name: 'workspace', args: ['scripts/probe-workspace.mjs'] },
-  { name: 'files', args: ['scripts/probe-files.mjs'] },
-  { name: 'keyboard', args: ['scripts/probe-keyboard.mjs'] },
-  { name: 'openspec', args: ['scripts/probe-openspec.mjs'] },
-  { name: 'terminal', args: ['scripts/probe-terminal.mjs'] },
-]
+/**
+ * 依成本遞增排列 —— 便宜的先跑完，才輪到跑好幾分鐘的那幾支。
+ *
+ * 一律經 `run-probe.mjs`，不直接 spawn 探針 —— 螢幕的選擇（虛擬／實體）與軟體 GL 的旗標收在
+ * 那一層，這裡若自己 spawn，兩條路徑遲早會不一樣。
+ */
+const PROBES = ['native', 'core', 'identity', 'shell', 'workspace', 'files', 'keyboard', 'openspec', 'terminal']
 
 const LEAKED_DEV_ENV = [
   'ELECTRON_RENDERER_URL',
@@ -49,9 +43,13 @@ cleaned.forEach((k) => delete env[k])
 // 可能不是經 npm 起的 —— 自己補上，否則會是一句沒頭沒腦的 `spawn electron ENOENT`。
 env.PATH = `${join(root, 'node_modules', '.bin')}:${env.PATH ?? ''}`
 
-function run({ cmd, args }) {
+function run(name) {
   return new Promise((resolve) => {
-    const child = spawn(cmd ?? process.execPath, args, { cwd: root, stdio: 'inherit', env })
+    const child = spawn(process.execPath, ['scripts/run-probe.mjs', name], {
+      cwd: root,
+      stdio: 'inherit',
+      env,
+    })
     child.on('close', (code) => resolve(code === 0))
     child.on('error', (err) => {
       console.error(`\n無法啟動探針：${err.message}`)
@@ -65,11 +63,11 @@ if (cleaned.length > 0) {
 }
 
 const results = []
-for (const probe of PROBES) {
-  console.log(`\n${'='.repeat(72)}\n[test:e2e] probe:${probe.name}\n${'='.repeat(72)}`)
+for (const name of PROBES) {
+  console.log(`\n${'='.repeat(72)}\n[test:e2e] probe:${name}\n${'='.repeat(72)}`)
   const started = Date.now()
-  const passed = await run(probe)
-  results.push({ name: probe.name, passed, seconds: Math.round((Date.now() - started) / 1000) })
+  const passed = await run(name)
+  results.push({ name, passed, seconds: Math.round((Date.now() - started) / 1000) })
 }
 
 console.log(`\n${'='.repeat(72)}\n[test:e2e] 總結\n${'='.repeat(72)}`)

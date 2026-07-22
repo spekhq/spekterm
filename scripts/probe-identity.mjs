@@ -31,6 +31,7 @@ import { basename, dirname, join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { fileURLToPath } from 'node:url'
 import { check, connect, pollUntil, waitForPageTarget } from './lib/cdp.mjs'
+import { electronExtraArgs } from './lib/display.mjs'
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..')
 
@@ -82,7 +83,7 @@ check(results, 'appId 為合法的反向域名形狀（至少三段）', appIdSe
 
 const electron = spawn(
   process.platform === 'win32' ? 'electron.cmd' : 'electron',
-  [`--remote-debugging-port=${DEBUG_PORT}`, '.'],
+  [`--remote-debugging-port=${DEBUG_PORT}`, ...electronExtraArgs(), '.'],
   {
     cwd: repoRoot,
     stdio: ['ignore', 'pipe', 'pipe'],

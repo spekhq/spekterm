@@ -27,6 +27,7 @@ import {
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
+import { electronExtraArgs } from './lib/display.mjs'
 
 const PROJECT_ROOT = realpathSync(new URL('..', import.meta.url).pathname)
 const SUMMARY_TIMEOUT_MS = 60_000
@@ -213,7 +214,7 @@ async function runApp(scanPath) {
   // 基準線：app 尚未啟動時，本 netns 已存在的 LISTEN socket（機器上其他行程的）
   const baseline = onLinux ? hostListenTable() : new Map()
 
-  const child = spawn('electron', ['.'], {
+  const child = spawn('electron', [...electronExtraArgs(), '.'], {
     cwd: PROJECT_ROOT,
     stdio: ['ignore', 'pipe', 'pipe'],
     env: { ...process.env, SPEKTERM_SCAN_PATH: scanPath },

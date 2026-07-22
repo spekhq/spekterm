@@ -21,6 +21,7 @@ import { join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { check, connect, pollUntil, waitForPageTarget } from './lib/cdp.mjs'
 import { copy, prefixOf } from './lib/copy.mjs'
+import { electronExtraArgs } from './lib/display.mjs'
 
 const BUILD_PORT = 9234
 const DEV_PORT = 9235
@@ -143,7 +144,7 @@ async function startRendererDevServer() {
 async function launch({ port, profileDir, rendererUrl }) {
   const child = spawn(
     'electron',
-    [`--remote-debugging-port=${port}`, `--user-data-dir=${profileDir}`, '.'],
+    [`--remote-debugging-port=${port}`, `--user-data-dir=${profileDir}`, ...electronExtraArgs(), '.'],
     {
       stdio: ['ignore', 'pipe', 'pipe'],
       env: {

@@ -169,8 +169,27 @@ CLI 旗標**（公開介面）—— spawn 時注入一個 `statusLine` 命令�
 
 `npm test` 268/268、`probe:workspace` 75/75、`probe:openspec` 196/196、`probe:files` 102/102、
 `probe:keyboard` 118/118。**`probe:terminal` 的新段落全綠（`runAgentStatus` 4/4、`runContinuation`
-3/3），但 `runMode` 有兩條紅燈 —— baseline 對照組重現了一模一樣的兩條**（GPU 的 canvas 未釋放、
-`readTerminalText` 選不到內容），**既有問題，待另行處理**。
+3/3），但 `runMode` 有兩條紅燈 —— baseline 對照組重現了一模一樣的兩條**（當時記為「GPU 的 canvas
+未釋放」與「`readTerminalText` 選不到內容」）。
+
+> **上面那個「`runContinuation` 3/3」是一筆會誤導人的數字。** 那一段每個模式有 3 條檢查、
+> **build 與 dev 兩個模式共 6 條** —— 3/3 表示當時**只跑了一個模式**，而不是「兩個模式都綠」。
+> `probe-virtual-display-and-canvas-leak` 實測該段的基準是 **2/4**，且**兩個模式都會失敗**
+> （根因是 stub 的形狀，見下文「一個 flaky 的斷言，往往是問錯了問題」），已修。
+> **教訓：驗收數字要連分母一起看** —— `N/N` 只說「跑到的都過了」，沒說跑到了多少。
+
+> **那筆「GPU 的 canvas 未釋放」是錯誤的紀錄，已由 `probe-virtual-display-and-canvas-leak` 更正
+> —— 產品一直是對的，錯的是判準。** 詳見下文「別拿 DOM 元素數量當『持有某資源』的代理判準」。
+
+`probe-virtual-display-and-canvas-leak`（**不屬於任何 Phase**）交付兩件事。其一：**探針預設改在
+虛擬螢幕（Xvfb）上執行** —— 此前一輪 `test:e2e` 十幾分鐘期間使用者無法操作自己的機器，而那是一道
+**會讓人繞過它的成本**（實例：`panel-drive-and-shell-affordances` 因為「沒改到那塊」而沒跑
+`probe:shell`，於是白名單守衛帶著兩條紅燈被封存）。其二：**把上面那條紅燈的判準改對** ——
+它數的是 `<canvas>` 元素，而其中一顆是**跨終端共用、會遷移**的 glyph 光柵化暫存畫布。
+
+代價寫進了 spec 而不只是這裡：虛擬螢幕上取得的是**軟體 GL**，它**驗得到渲染資源的生命週期，
+驗不到畫素** —— `terminal-sessions` 因此明文要求「自動化驗收通過 SHALL NOT 被詮釋為程式化繪製的
+呈現是正確的」。逃生口是 `PROBE_DISPLAY=physical`。
 
 尚未開始：打包（Phase 6）、handoff（Phase 7+）。**session 常駐**（讓 pty 活過 app 的生命）已排入
 路線圖但**刻意不做** —— 見 `docs/PRD.md` §11 的「session 常駐」，那裡記著 tmux 與自寫 daemon 的取捨。
@@ -189,12 +208,33 @@ npm run measure:bundle  # renderer bundle 體積報告（依編輯器核心／wo
 | | 是什麼 | 什麼時候跑 |
 |---|---|---|
 | `npm test`（＝ `npm run test:unit`） | node:test —— headless、秒級、可平行、無副作用 | **隨時**。改完就跑 |
-| `npm run test:e2e` | 全部 9 支探針，走 CDP 或真 Electron 主行程，驗**被出貨的那份程式碼** | **驗收時**。約十幾分鐘，且**期間使用者無法操作電腦**（真視窗、真滑鼠事件） |
+| `npm run test:e2e` | 全部 9 支探針，走 CDP 或真 Electron 主行程，驗**被出貨的那份程式碼** | **驗收時**。約十幾分鐘（跑在虛擬螢幕上，不佔用你的螢幕） |
 | `npm run test:all` | 兩層都跑 | 封存前 |
 
-**探針不併進 `npm test`，是刻意的**：它們會霸佔螢幕、不可平行（各自佔 debugging port、各自起 Electron
-還要收屍）。併進去的代價是「從此沒有人敢隨手打 `npm test`」，那會直接殺掉第一層最大的價值。
+**探針不併進 `npm test`，是刻意的**：它們不可平行（各自佔 debugging port、各自起 Electron 還要收屍），
+一輪十幾分鐘。併進去的代價是「從此沒有人敢隨手打 `npm test`」，那會直接殺掉第一層最大的價值。
 **迭代時用單支的 `probe:*` 入口**（下方），不要為了改一行而跑 `test:e2e`。
+
+#### 探針預設跑在虛擬螢幕上（`probe-virtual-display-and-canvas-leak` 起）
+
+探針要開真視窗、送真滑鼠事件，但**不必畫在你的螢幕上**：`scripts/run-probe.mjs` 把它們包進
+`xvfb-run`（需 `sudo apt install xvfb`；缺了它會**明確失敗並說明怎麼裝**，不會靜默改用你的螢幕）。
+`DISPLAY` 是行程層的變數，而 CDP 的 `Input.dispatchMouseEvent` 注入的是 Chromium 的輸入管線、
+**與 X server 無關** —— 換螢幕對探針而言是透明的。
+
+```bash
+PROBE_DISPLAY=physical npm run probe:terminal   # 逃生口：畫在你的實體螢幕上
+```
+
+**逃生口不是可有可無的。** 虛擬螢幕沒有 GPU，探針因此以**軟體 GL** 執行（`--enable-unsafe-swiftshader`
+`--use-angle=swiftshader`，由 `scripts/lib/display.mjs` 統一供應）。**它證明得了渲染資源的生命週期
+（取得、釋放、退回），證明不了畫素** —— 框線相不相接、粗細一不一致，只有真實的圖形驅動看得出來。
+`terminal-sessions` 已把這條寫成規格：**自動化驗收通過 SHALL NOT 被詮釋為「程式化繪製的呈現是正確的」**。
+那一類問題此前就只由 dogfood 認定，此後仍然如此。
+
+> **少了那兩個旗標，整條 GPU 路徑會靜默地不被驗到**：webgl context 取不到 → app **正確地**降級為
+> DOM renderer → GPU 相關斷言全紅。那個紅是環境造成的，而「為此把斷言放寬」等於把
+> `terminal-gpu-renderer` 的交付從驗收中移除。
 
 `test:e2e` 由 `scripts/run-probes.mjs` 依序跑完（成本遞增排序）。它做兩件單支入口不做的事：
 **只 build 一次**（每個 `probe:*` 都自帶 `npm run build`，全跑一輪等於 build 九次），以及
@@ -1544,6 +1584,84 @@ webgl: cellW = 9（整數）              → 垂直線佔的 x 數：[1, 1, 1, 
 因此 design 明文**不宣稱**修好它，tasks 也寫著「若 dogfood 仍破，不得因為『已經上了 webgl』就宣稱
 結案」。**最終由 dogfood 認定：使用者實測通過。** 但這條紀律要留著 —— 下次遇到「只有真實環境才觸發
 的呈現問題」，能驗的就驗，驗不到的就標示清楚交給 dogfood，不要用一個合成的綠燈假裝它被證明了。
+
+### 一個 flaky 的斷言，往往是**問錯了問題**，不是機器太慢
+
+`probe:terminal` 兩條長年間歇性紅燈，實測根因都**不是時間不夠**（因此加重試或延長逾時都是錯的處置，
+那只會把「斷言問錯了問題」偽裝成「機器比較慢」）：
+
+- **續寫入口的指示沒抵達 pty** —— stub claude 的 `logInput` 分支以
+  `exec sh -c 'tee -a log | "$SHELL" -i'` 收尾，而那個 `sh` 的 **stdin 是管線而不是 tty**，
+  它撐不住：session 數秒內就變成「已結束」。於是這一段一直是一場**競態**（點擊趕在 stub 死掉之前
+  就綠），實測基準 2/4，**build 與 dev 兩模式皆然 —— 一度誤判為 dev 特有**。
+  改成 `exec cat >> <log>`：這一段只需要一個**讀 pty、寫檔、不會自己結束**的行程。
+- **「關掉 GPU 加速不遺失終端既有的內容」** —— 它緊接在「重新載入後仍可建立新 session」之後，
+  顯示中的是一個**剛建立、幾乎空白**的 session。判準「複製回來的文字非空」因此**幾乎沒有鑑別力**：
+  它其實只是在確認**非同步抵達**的 shell prompt 畫出來了沒。改成切 renderer 前自己寫入一段標記
+  （`echo GPUMARK_$((6*7))` —— **回顯裡不含答案**），判準變成「**那一段特定內容還在不在**」。
+
+**兩者都讓斷言變強，而不只是變穩** —— 後者才是 spec 說的「不遺失既有內容」。
+
+> **追 flaky 的方法**：先問「它是不是每次都在同一個地方失敗」，再**把懷疑的中間狀態變成獨立的斷言**
+> （「按下前 pty 已存在」「切換前終端裡確實有已知內容」）。那兩條新斷言不是用完就丟的鷹架 ——
+> 留著它們，下次同一個前提被破壞時會**直接指出是前提壞了**，而不是讓終點的斷言含糊地紅一條。
+> 上面第一條正是這樣現形的：加上「pty 已存在」之後，才看見 session 其實**自己結束了**。
+
+> **第三條 flaky 是「連跑兩輪」才抓到的，而它是同一個教訓的第三次重演。**
+> `probe:workspace` 的「順序於重啟後一致」在重啟後**只量一次** `RAIL_ROWS` —— 而 `app.mounted`
+> 只保證 rail 的 `<aside>` 掛上了，**列本身來自一次非同步的 `folders.list()`，晚一步才渲染**。
+> 讀到空陣列 → 順序比對失敗 → 而 detail 也是空的，**看起來像「順序錯了」，其實是還沒畫出來**。
+> 同一支探針第一次啟動時本來就是輪詢的（`length === 3`），**只有重啟那條路徑漏了**；
+> `probe:openspec` 也為同一個根因修過一次。**加一條「啟動後立刻量」的斷言時，先問列渲染完了沒。**
+>
+> 附帶的紀律：**flaky 的驗證要連跑，不能只跑一輪。** 第一輪 9/9 全綠時我已經準備收工了。
+
+> **`pollUntil` 只吃 `evaluate` 的字串表達式。** 讀終端內容是一連串真滑鼠動作（拖曳選取 → 右鍵 →
+> 複製 → 讀剪貼簿），要輪詢它得用 `pollUntilText()`（吃一個取值函式）—— 量一次就斷言，等於賭
+> 「內容此刻已經在畫面上」。
+
+### 別拿 DOM 元素數量當「持有某資源」的代理判準（`probe-virtual-display-and-canvas-leak`）
+
+`probe:terminal` 有一條長期紅燈（「GPU 的渲染資源只給顯示中的終端」），CLAUDE.md 一度記載為**既有的
+產品缺陷**。**那是錯的紀錄：產品一直符合規格，錯的是判準。**
+
+判準原本是「隱藏的終端底下有沒有 `<canvas>`」。而實測：
+
+- webgl 只會往 DOM 塞 **2 顆** canvas（`LinkRenderLayer`，class `xterm-link-layer`；以及
+  `WebglRenderer._canvas`，無 class），兩顆都在 addon dispose 時被移除。
+- 但**單一終端就量到 3 顆**。第三顆是 `<canvas width="40" height="27" style="display:none">`，
+  parent 是 **`.xterm` 本身**（不是 `.xterm-screen`），且反覆被移除又加回。
+- 攔截 DOM 插入 API 取得的堆疊指出它是 **`TextureAtlas._tmpCanvas`** —— glyph 光柵化用的暫存畫布，
+  **不帶任何 GPU context**，為了繼承 `font-feature-settings` 才必須掛進 DOM（xterm 原始碼的註解
+  自己說明了這一點）。
+- 而 **atlas 由 `charAtlasCache` 跨終端共享**（同字型設定的終端共用一份，`ownedBy` 陣列）——
+  那**唯一的一顆**會被 `append()` 搬到「最近一次光柵化 glyph 的那個終端」底下。DOM 節點只有一個
+  parent，所以總數恆為 3：**它從來沒有多出來過，只是換了個 parent。**
+
+於是紅或綠只取決於一件與規格無關的事：切換之後，顯示中的終端**有沒有再光柵化過新字元**。沒有的話
+它就停在隱藏的那個底下不動 —— 一個**穩定**的狀態，輪詢等不掉。
+
+**這個判準的失效方式是兩個方向都錯**：資源真的洩漏時它可能沉默（殘留落在顯示中的終端上就看不見），
+一切正常時它卻間歇地報錯 —— **而後者誘使人把它當成 flaky 而忽略它**（實測：真實螢幕 1/4 紅、虛擬
+螢幕 4/5 紅，我因此先判成「時序 flaky」、再判成「穩定的資源殘留」，兩次都錯）。
+
+**正解是問「這個終端當下走哪一條渲染路徑」**，兩條路徑各有**專屬於該終端、隨切換建立與移除**的產物：
+程式化繪製 ＝ 有 `canvas.xterm-link-layer` 且無 `.xterm-rows`；倚賴 glyph ＝ 反之。
+
+- **不要改成「數 canvas 但排除 `_tmpCanvas`」**（以尺寸或 `display:none` 過濾）—— 那是把判準綁在
+  xterm 的內部實作細節上，且會**靜默地**隨版本失效。
+- **判準寫進了 spec 而不只是 probe**：規格說「持有渲染資源」，就得說清楚那在外部如何觀察 ——
+  否則下一個人會再選一次同樣方便而錯誤的代理判準。
+- 驗收要**兩個方向都有**：不只「隱藏的沒有」，也要「顯示中的有」。先前那條之所以能長期紅著而沒人
+  發現是判準的問題，正是因為它只看隱藏的那一半。
+- 「共用暫存物不構成證據」那條 scenario **以注入構造，不等它自然發生** —— 等待版沒有鑑別力（等不到
+  就靜默通過）。注入一顆不帶 `xterm-link-layer` class 的 canvas 是確定的，且對舊判準必定為紅。
+
+> **教訓的一般形式：一個「沒有 class 的 canvas」不等於「我以為的那顆沒有 class 的 canvas」。**
+> 我看到殘留的是無 class 的 canvas，就推論它是 `WebglRenderer` 的主 canvas —— 那一步沒有證據。
+> 追到底的方法是**攔截 DOM 的插入 API 取建立堆疊**（`MutationObserver` 給不了：它的 callback 是
+> 非同步的，堆疊只會指向 observer 自己）。而 `appendChild` 只是插入路徑之一 —— `_tmpCanvas` 走的是
+> `append()`，只包 `appendChild` 會什麼都抓不到。
 
 ### 觀測管道：**probe 不再從 DOM 讀終端內容**（`terminal-gpu-renderer` 起）
 

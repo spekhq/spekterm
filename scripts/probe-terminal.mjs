@@ -26,6 +26,7 @@ import { join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { check, connect, dragMouse, pollUntil, pressKey, waitForPageTarget } from './lib/cdp.mjs'
 import { copy, prefixOf } from './lib/copy.mjs'
+import { electronExtraArgs } from './lib/display.mjs'
 
 const BUILD_PORT = 9226
 const DEV_PORT = 9227
@@ -186,7 +187,17 @@ function makeStubClaude({ resumeFails = false, honorSettings = false, logInput =
           'if [ -n "$resume" ]; then echo "No conversation found with session ID: $resume"; exit 1; fi',
         ].join('\n')
       : '',
-    logInput ? `exec sh -c 'tee -a "${inputLog}" | "$SHELL" -i'` : 'exec "$SHELL" -i',
+    // **`logInput` 不接互動 shell，只留一個 `cat`。**
+    //
+    // 這裡原本是 `exec sh -c 'tee -a log | "$SHELL" -i'` —— 而那個 `sh -i` 的 stdin 是**管線
+    // 而不是 tty**，它撐不住：實測 stub 在數秒內就結束，session 隨即變成「已結束」。於是這一段
+    // 一直是一場**競態** —— 點擊趕在 stub 死掉之前就綠、趕不上就紅（實測基準 2/4，dev 與 build
+    // 兩模式皆然，並非 dev 特有）。而症狀是「指示沒抵達 pty」，看起來像產品的續寫壞了。
+    //
+    // 這一段要驗的只有「指示抵達 pty，且帶著 Enter」—— 那不需要一個能執行命令的 shell，只需要
+    // 一個**讀 pty、寫檔、而且不會自己結束**的行程。`cat` 正是它，且它由 pty 直接持有 tty。
+    // （pty 預設是 canonical 模式且 ICRNL，於是送出的 `\r` 落到檔案裡是 `\n` —— 兩者本就都收。）
+    logInput ? `exec cat >> "${inputLog}"` : 'exec "$SHELL" -i',
   ].filter(Boolean)
 
   writeFileSync(claude, `${lines.join('\n')}\n`)
@@ -325,7 +336,7 @@ async function startRendererDevServer() {
 async function launch({ port, profileDir, rendererUrl, marker, stub }) {
   const child = spawn(
     'electron',
-    [`--remote-debugging-port=${port}`, `--user-data-dir=${profileDir}`, '.'],
+    [`--remote-debugging-port=${port}`, `--user-data-dir=${profileDir}`, ...electronExtraArgs(), '.'],
     {
       stdio: ['ignore', 'pipe', 'pipe'],
       env: {
@@ -392,6 +403,53 @@ const TABS = `[...document.querySelectorAll('[aria-label="${copy('sessions.tabs'
   selected: tab.getAttribute('aria-selected') === 'true',
   exited: tab.innerText.includes('${copy('sessions.exitedBadge')}'),
 }))`
+
+/**
+ * 一段可嵌進 `evaluate` 的前綴：定義 `hostsOf()` 與 `renderPathOf()`。
+ *
+ * ## 判準是「這個終端當下走哪一條渲染路徑」，**不是**「它底下有幾個 `<canvas>`」
+ *
+ * 兩條路徑各有**專屬於該終端、且隨路徑切換而建立與移除**的產物：
+ *
+ * | 渲染路徑 | 憑據 |
+ * |---|---|
+ * | 程式化繪製（webgl） | 有 `canvas.xterm-link-layer`、無 `.xterm-rows` |
+ * | 倚賴 glyph（DOM） | 有 `.xterm-rows`、無 `canvas.xterm-link-layer` |
+ *
+ * `xterm-link-layer` 是 webgl renderer 自己建立、自己在 dispose 時移除的 render layer，
+ * 帶著穩定的 class。
+ *
+ * ## 為什麼**不能**數 `<canvas>`（這條判準錯了很久）
+ *
+ * webgl 只會往 DOM 塞 2 個 canvas（link 層 + renderer 主 canvas），但實測**單一終端就量到 3 個**。
+ * 第三顆是 **`TextureAtlas._tmpCanvas`** —— glyph 光柵化用的暫存畫布，**不帶任何 GPU context**，
+ * 它為了繼承 `font-feature-settings` 才必須掛進 DOM（xterm 原始碼的註解自己說明了）。
+ *
+ * 而 **atlas 由 `charAtlasCache` 跨終端共享**（同字型設定的終端共用一份，`ownedBy` 陣列）——
+ * 於是那**唯一的一顆**會被 `append()` 搬到「最近一次光柵化 glyph 的那個終端」底下並停在那裡。
+ * DOM 節點只有一個 parent，所以總數恆為 3：**它從來沒有多出來過，只是換了個 parent。**
+ *
+ * 數 canvas ＝ **把一個跨終端共用、會遷移的東西當成 per-terminal 的狀態**。它的失效方式是兩個
+ * 方向都錯：資源真的洩漏時它可能沉默（殘留落在顯示中的終端上就看不見），一切正常時它卻會間歇地
+ * 報錯（切換後顯示中的終端若未再光柵化新字元，`_tmpCanvas` 就停在隱藏的那個底下不動）——
+ * 而後者誘使人把它當成 flaky 而忽略它。實測正是如此：真實螢幕 1/4 紅、虛擬螢幕 4/5 紅。
+ *
+ * **也不要改成「數 canvas 但排除 `_tmpCanvas`」**（例如以尺寸或 `display:none` 過濾）——
+ * 那是把判準綁在 xterm 的內部實作細節上，且它會**靜默地**隨 xterm 版本失效。
+ */
+const RENDER_PATH_PRELUDE = `
+  const hostsOf = () => [...document.querySelectorAll('section[aria-label="${copy('stage.terminal')}"] > div')]
+  const renderPathOf = (host) => {
+    const link = !!host.querySelector('canvas.xterm-link-layer')
+    const rows = !!host.querySelector('.xterm-rows')
+    if (link && !rows) return 'programmatic'
+    if (rows && !link) return 'glyph'
+    return 'unknown(link=' + link + ',rows=' + rows + ')'
+  }
+  /** 共用暫存畫布的所在 —— 只用於 detail，**不得**進入任何判準。 */
+  const strayCanvasesIn = (host) =>
+    [...host.querySelectorAll('canvas')].filter((c) => !c.classList.contains('xterm-link-layer')).length
+`
 
 /** rail 的 session 子列（第 n 個，自 0 起）。 */
 const RAIL_SESSION_RECT = (index) => `(() => {
@@ -912,6 +970,21 @@ async function readTerminalText(client) {
   return text
 }
 
+/**
+ * 輪詢一個**自訂的取值函式**直到滿足條件（`pollUntil` 只吃 `evaluate` 的字串表達式）。
+ *
+ * 讀終端內容是一連串真滑鼠動作（拖曳選取 → 右鍵 → 複製 → 讀剪貼簿），量一次就斷言等於賭
+ * 「內容此刻已經在畫面上」—— 而 shell 的 prompt 與命令輸出都是非同步抵達的。
+ */
+async function pollUntilText(read, settled, timeoutMs = 10_000) {
+  const deadline = Date.now() + timeoutMs
+  for (;;) {
+    const text = await read()
+    if (settled(text) || Date.now() >= deadline) return text
+    await sleep(200)
+  }
+}
+
 /** 自 rail 的 folder 列建立 session（該入口 hover 才顯示，但 rect 與點擊不受 opacity 影響）。 */
 async function openSessionViaRail(client, itemLabel) {
   const btn = await pollUntil(client, RAIL_NEW_SESSION_RECT, (value) => value !== null, 8000)
@@ -1239,32 +1312,21 @@ async function runMode(label, { port, rendererUrl }) {
 
     // ── terminal-sessions：GPU renderer 只給當下顯示的終端 ────────────────────
     //
-    // **代理判準**：webgl renderer 把畫面畫進 `<canvas>`，並移除 `.xterm-rows`（DOM renderer
-    // 的產物）。斷言「active 終端有 canvas 且沒有 .xterm-rows」＝ GPU renderer 確實生效。
+    // **判準是渲染路徑**（見 `RENDER_PATH_PRELUDE` —— 那裡記著為什麼不能數 canvas）。
     //
     // **像素級的框線對齊驗不到** —— 由 code review + design + dogfood 承擔（比照 OSC 8
     // linkHandler 的先例）。這條擋的是「GPU renderer 靜默沒有啟用」的回歸：少了它，本檔其餘
     // 斷言全綠也證明不了 GPU renderer 還活著（它們刻意設計成 renderer-agnostic）。
-    const gpu = await app.client.evaluate(`(() => {
-      const hosts = [...document.querySelectorAll('section[aria-label="${copy('stage.terminal')}"] > div')]
-      const active = hosts.find((d) => !d.classList.contains('hidden'))
+    const gpu = await app.client.evaluate(`(() => {${RENDER_PATH_PRELUDE}
+      const active = hostsOf().find((d) => !d.classList.contains('hidden'))
       if (!active) throw new Error('找不到顯示中的終端')
-      return {
-        activeCanvas: active.querySelectorAll('canvas').length,
-        activeHasRows: !!active.querySelector('.xterm-rows'),
-        // 未顯示的終端**不得**持有 canvas —— 並存的 webgl context 有上限（實測 16），
-        // 超出時最舊的會被靜默丟棄，而那不會觸發任何事件。
-        hiddenWithCanvas: hosts
-          .filter((d) => d.classList.contains('hidden'))
-          .filter((d) => d.querySelectorAll('canvas').length > 0).length,
-        hiddenCount: hosts.filter((d) => d.classList.contains('hidden')).length,
-      }
+      return { activePath: renderPathOf(active), stray: strayCanvasesIn(active) }
     })()`)
     check(
       results,
       `${label}：顯示中的終端以 GPU renderer 呈現`,
-      gpu.activeCanvas > 0 && gpu.activeHasRows === false,
-      `canvas=${gpu.activeCanvas} 個、.xterm-rows ${gpu.activeHasRows ? '存在（表示退回了 DOM renderer）' : '不存在'}`,
+      gpu.activePath === 'programmatic',
+      `渲染路徑=${gpu.activePath}（共用暫存畫布 ${gpu.stray} 個 —— 僅供參考，不進判準）`,
     )
 
     // 清掉選取，免得干擾後續的輸入
@@ -1443,20 +1505,21 @@ async function runMode(label, { port, rendererUrl }) {
     // 為什麼是正確性要求而非優化：並存的 webgl context 有上限（實測恰為 16），**超出時最舊的
     // 會被靜默丟棄、不觸發任何事件** —— 於是較舊的終端會無聲地變成空白，而 wrapper 裡的
     // `onContextLoss` 自癒救不了它（它倚賴一個通知，而那裡根本沒有通知）。
-    const GPU_PER_TERMINAL = `(() => {
-      const hosts = [...document.querySelectorAll('section[aria-label="${copy('stage.terminal')}"] > div')]
+    const GPU_PER_TERMINAL = `(() => {${RENDER_PATH_PRELUDE}
+      const hosts = hostsOf()
       const hidden = hosts.filter((d) => d.classList.contains('hidden'))
+      const shown = hosts.filter((d) => !d.classList.contains('hidden'))
       return {
         總數: hosts.length,
         隱藏數: hidden.length,
-        隱藏中仍持有canvas: hidden.filter((d) => d.querySelectorAll('canvas').length > 0).length,
-        顯示中有canvas: hosts.filter((d) => !d.classList.contains('hidden'))
-          .every((d) => d.querySelectorAll('canvas').length > 0),
+        隱藏中仍走程式化繪製: hidden.filter((d) => renderPathOf(d) === 'programmatic').length,
+        顯示中皆走程式化繪製: shown.length > 0 && shown.every((d) => renderPathOf(d) === 'programmatic'),
         逐一: hosts.map((d) => ({
           隱藏: d.classList.contains('hidden'),
-          canvas數: d.querySelectorAll('canvas').length,
-          class: [...d.querySelectorAll('canvas')].map((c) => c.className || '(無 class)'),
-          有xtermRows: d.querySelectorAll('.xterm-rows').length > 0,
+          路徑: renderPathOf(d),
+          // **僅供 detail，不進判準** —— 這正是先前那條錯誤判準所數的東西。留著它是為了讓
+          // 「共用暫存畫布停在隱藏終端底下」這個情境在輸出中看得見（而斷言仍是綠的）。
+          共用暫存畫布: strayCanvasesIn(d),
         })),
       }
     })()`
@@ -1465,19 +1528,56 @@ async function runMode(label, { port, rendererUrl }) {
     const gpuPerTerminal = await pollUntil(
       app.client,
       GPU_PER_TERMINAL,
-      (v) => v.隱藏數 > 0 && v.隱藏中仍持有canvas === 0,
+      (v) => v.隱藏數 > 0 && v.隱藏中仍走程式化繪製 === 0 && v.顯示中皆走程式化繪製,
       5000,
     )
     check(
       results,
       `${label}：GPU 的渲染資源只給顯示中的終端（未顯示的不持有）`,
       gpuPerTerminal.隱藏數 > 0 &&
-        gpuPerTerminal.隱藏中仍持有canvas === 0 &&
-        gpuPerTerminal.顯示中有canvas === true,
+        gpuPerTerminal.隱藏中仍走程式化繪製 === 0 &&
+        gpuPerTerminal.顯示中皆走程式化繪製 === true,
       `終端 ${gpuPerTerminal.總數} 個、隱藏 ${gpuPerTerminal.隱藏數} 個，其中 ` +
-        `${gpuPerTerminal.隱藏中仍持有canvas} 個仍持有 canvas；顯示中的有 canvas=` +
-        `${gpuPerTerminal.顯示中有canvas}（隱藏數為 0 表示這條沒有鑑別力）` +
+        `${gpuPerTerminal.隱藏中仍走程式化繪製} 個仍走程式化繪製；顯示中的皆走程式化繪製=` +
+        `${gpuPerTerminal.顯示中皆走程式化繪製}（隱藏數為 0 表示這條沒有鑑別力）` +
         ` 逐一=${JSON.stringify(gpuPerTerminal.逐一)}`,
+    )
+
+    // **共用的暫存畫布不構成「持有渲染資源」的證據**（`terminal-sessions` 的 scenario）。
+    //
+    // 這條守的是先前那個誤判：舊判準數 `<canvas>`，而 `TextureAtlas._tmpCanvas` 是跨終端共用、
+    // 會遷移的暫存畫布 —— 它停在最近一次光柵化的那個終端底下。若那是隱藏的終端，舊判準就報錯，
+    // 而產品完全正常（實測：真實螢幕 1/4 紅、虛擬螢幕 4/5 紅）。
+    //
+    // **以注入構造，不等它自然發生。** 等待版沒有鑑別力 —— `_tmpCanvas` 落在哪個終端取決於
+    // 「切換後顯示中的終端有沒有再光柵化新字元」，等不到就靜默通過，那是一盞測不到自己宣稱在測
+    // 的東西的燈。注入一個**不帶 `xterm-link-layer` class 的 canvas**（那正是共用暫存物在判準
+    // 眼中的樣子）則是確定的，而且它對舊判準必定為紅 —— 鑑別力由此保證。
+    const strayInjected = await app.client.evaluate(`(() => {${RENDER_PATH_PRELUDE}
+      const hidden = hostsOf().find((d) => d.classList.contains('hidden'))
+      if (!hidden) throw new Error('沒有隱藏的終端可用於構造')
+      const before = renderPathOf(hidden)
+      const stray = document.createElement('canvas')
+      stray.width = 40
+      stray.height = 27
+      stray.style.display = 'none'
+      stray.dataset.probeStray = 'true'
+      hidden.querySelector('.xterm')?.append(stray)
+      return { before, after: renderPathOf(hidden), strayCount: strayCanvasesIn(hidden) }
+    })()`)
+    check(
+      results,
+      `${label}：共用的暫存畫布不構成「持有渲染資源」的證據`,
+      strayInjected.before === 'glyph' &&
+        strayInjected.after === 'glyph' &&
+        strayInjected.strayCount > 0,
+      `注入前=${strayInjected.before} 注入後=${strayInjected.after} ` +
+        `不帶 link-layer class 的 canvas=${strayInjected.strayCount} 個` +
+        `（strayCount 為 0 表示注入沒生效，這條就沒有鑑別力）`,
+    )
+    // 清掉，免得它影響後續斷言。
+    await app.client.evaluate(
+      `[...document.querySelectorAll('canvas[data-probe-stray]')].forEach((c) => c.remove()), true`,
     )
 
     // 兩個 login shell 的 session 都停在本地標籤，且**序號各自不同** —— 序號是 folder 內遞增的。
@@ -2130,39 +2230,66 @@ async function runMode(label, { port, rendererUrl }) {
     // session 與版面都有明確的假設（`shell-affordance-tweaks` 的教訓：插入段的位置是承重的）。
     //
     // **走使用者的路徑**（開 Settings → 點勾選 → 存），不打 IPC —— 見 `setGpuViaSettings`。
-    const GPU_STATE = `(() => {
-      const host = [...document.querySelectorAll('section[aria-label="${copy('stage.terminal')}"] > div')]
-        .find((d) => !d.classList.contains('hidden'))
+    const GPU_STATE = `(() => {${RENDER_PATH_PRELUDE}
+      const host = hostsOf().find((d) => !d.classList.contains('hidden'))
       if (!host) throw new Error('找不到顯示中的終端')
-      return { canvas: host.querySelectorAll('canvas').length, rows: !!host.querySelector('.xterm-rows') }
+      return { path: renderPathOf(host), stray: strayCanvasesIn(host) }
     })()`
 
+    // **先在終端裡放一段已知的內容，再切 renderer** —— 否則這條斷言沒有鑑別力。
+    //
+    // 這一段緊接在「重新載入後仍可建立新 session」之後，於是顯示中的是一個**剛建立、幾乎空白**的
+    // session：畫面上只有 shell 的第一個 prompt，而那個 prompt 是**非同步抵達**的。原本的判準是
+    // 「複製回來的文字非空」—— 它其實只是在確認 prompt 畫出來了沒，實測因此間歇性失敗（讀到 35 個
+    // 全是空白的字元）。**症狀看起來像「關掉 GPU 就把內容弄丟了」，其實是斷言在問一個沒有內容的終端。**
+    //
+    // 換成一個自己寫進去的標記，兩件事同時解決：內容確定存在（等到它出現才往下走），而且判準從
+    // 「有沒有東西」變成「**那一段特定的內容還在不在**」—— 那才是 spec 說的「不遺失既有內容」。
+    // 標記用 `echo GPUMARK_$((6*7))`：**回顯裡不含答案**，`GPUMARK_42` 只有真的執行了才會出現。
+    await realClick(app.client, await app.client.evaluate(TERMINAL_RECT))
+    await typeLine(app.client, 'echo GPUMARK_$((6*7))')
+    const beforeGpuOff = await pollUntilText(
+      () => readTerminalText(app.client),
+      (text) => text.includes('GPUMARK_42'),
+      10_000,
+    )
+    check(
+      results,
+      `${label}：切換 renderer 前，終端裡確實有一段已知內容`,
+      beforeGpuOff.includes('GPUMARK_42'),
+      `讀回=${JSON.stringify(beforeGpuOff.slice(-60))}`,
+    )
+
     await setGpuViaSettings(app.client, false)
-    const gpuOff = await pollUntil(app.client, GPU_STATE, (v) => v.canvas === 0, 5000)
+    const gpuOff = await pollUntil(app.client, GPU_STATE, (v) => v.path === 'glyph', 5000)
     check(
       results,
       `${label}：關閉 GPU 加速後，終端退回不倚賴 GPU 的渲染路徑`,
-      gpuOff.canvas === 0 && gpuOff.rows === true,
-      `canvas=${gpuOff.canvas} 個、.xterm-rows ${gpuOff.rows ? '回來了' : '仍不存在（表示沒有真的退回）'}`,
+      gpuOff.path === 'glyph',
+      `渲染路徑=${gpuOff.path}（共用暫存畫布 ${gpuOff.stray} 個 —— 不進判準）`,
     )
 
     // 關掉 GPU **不得遺失終端既有的內容**（spec 明文要求）。判準走複製路徑 —— 它跨 renderer 不變。
-    const afterGpuOff = await readTerminalText(app.client)
+    const afterGpuOff = await pollUntilText(
+      () => readTerminalText(app.client),
+      (text) => text.includes('GPUMARK_42'),
+      8000,
+    )
     check(
       results,
       `${label}：關閉 GPU 加速不遺失終端既有的內容`,
-      afterGpuOff.trim() !== '',
-      `退回 DOM renderer 後仍讀得到 ${afterGpuOff.length} 字元`,
+      afterGpuOff.includes('GPUMARK_42'),
+      `退回 DOM renderer 後讀回=${JSON.stringify(afterGpuOff.slice(-60))}`,
     )
 
     // 開回來 —— 並確認它真的又是 GPU 了（不是「關了就回不去」）。
     await setGpuViaSettings(app.client, true)
-    const gpuOn = await pollUntil(app.client, GPU_STATE, (v) => v.canvas > 0, 5000)
+    const gpuOn = await pollUntil(app.client, GPU_STATE, (v) => v.path === 'programmatic', 5000)
     check(
       results,
       `${label}：重新開啟 GPU 加速後，終端回到 GPU renderer`,
-      gpuOn.canvas > 0 && gpuOn.rows === false,
-      `canvas=${gpuOn.canvas} 個、.xterm-rows ${gpuOn.rows ? '仍存在（沒有回到 GPU）' : '不存在'}`,
+      gpuOn.path === 'programmatic',
+      `渲染路徑=${gpuOn.path}（共用暫存畫布 ${gpuOn.stray} 個 —— 不進判準）`,
     )
 
     await app.quitGracefully()
@@ -2932,12 +3059,23 @@ async function runContinuation(label, { port, rendererUrl }) {
 
   const profile = seedProfile([['f1', repo]])
   const stub = makeStubClaude({ logInput: true })
+  const marker = `spek-term-cont-${process.pid}-${Date.now()}`
 
   let app = null
   try {
-    app = await launch({ port, profileDir: profile, rendererUrl, stub })
+    app = await launch({ port, profileDir: profile, rendererUrl, marker, stub })
     await pollUntil(app.client, SELECT_FOLDER('repo-a'), (value) => value === true, 10_000)
     await openSessionViaMenu(app.client, copy('sessions.spawnClaude'))
+    // **等 pty 真的存在，再點續寫入口。**
+    //
+    // 續寫是把指示寫進 focused session 的 pty，而 pty 的誕生是非同步的 —— 分頁一出現就點下去，
+    // 那則指示會抵達一個還不存在的 pty，被主行程直接丟棄：輸入串流裡什麼都沒有，10 秒後
+    // `waitForFile` 逾時回空字串。**症狀是「指示沒送出」，看起來像產品的續寫壞了。**
+    // 這一段此前根本沒有傳 marker（於是也無從等待），實測失敗率 2/4。
+    // 與「先訂閱、再列目錄」同源：**要作用於一個東西，先確認它已經存在。**
+    const ptys = await waitForPtyCount(marker, 1, 15_000)
+    check(results, `${label}：續寫入口按下前，session 的 pty 已存在`, ptys.length === 1,
+      `pty 行程 ${ptys.length} 個`)
 
     const CONTINUE_RECT = RECT_OF(`[aria-label="${copy('openspec.continueArtifact')}"]`)
     const btn = await pollUntil(app.client, CONTINUE_RECT, (v) => v !== null, 15_000)

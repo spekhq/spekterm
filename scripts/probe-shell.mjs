@@ -15,6 +15,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { check, connect, pollUntil, waitForPageTarget } from './lib/cdp.mjs'
 import { copy } from './lib/copy.mjs'
+import { electronExtraArgs } from './lib/display.mjs'
 
 const DEBUG_PORT = 9222
 const STARTUP_TIMEOUT_MS = 30_000
@@ -159,7 +160,7 @@ const profileDir = mkdtempSync(join(tmpdir(), 'spekterm-probe-shell-'))
 
 const electron = spawn(
   process.platform === 'win32' ? 'electron.cmd' : 'electron',
-  [`--remote-debugging-port=${DEBUG_PORT}`, `--user-data-dir=${profileDir}`, '.'],
+  [`--remote-debugging-port=${DEBUG_PORT}`, `--user-data-dir=${profileDir}`, ...electronExtraArgs(), '.'],
   { stdio: ['ignore', 'pipe', 'pipe'], env: process.env, shell: process.platform === 'win32' },
 )
 
