@@ -308,7 +308,11 @@ leader，再 `process.kill(-pid)` 殺整組。**另外，面板留有未存變�
 > 其實一個殭屍都沒殺到）。把 `-` 包成字元類別即可自我豁免：`pkill -9 -f 'spekterm[-]files-profile'`
 > —— regex 仍匹配真正的 profile 名，但你自己那條命令的字面不匹配。
 
-> **腳本裡比對 git 的輸出，一律加 `--no-color`（或 `-c color.ui=false`）—— 它已經咬過兩次。**
+> **腳本裡比對 git 的輸出，一律加 `--no-color` —— 它已經咬過三次。**
+>
+> **`-c color.ui=false` 不夠**（第三次就是這樣咬的）：這台機器的 git config 設了 `color.diff = always`，
+> 而 `color.diff` 比 `color.ui` **更具體**，於是 `-c color.ui=false` 贏不了它。用**子命令自己的**
+> `--no-color`（`git diff --no-color`、`git log --no-color`…），或 `-c color.diff=false`。
 > git 在這個環境會強制上色，於是 `git diff | grep '^-'` **匹配不到任何東西**：刪除行的開頭是
 > 一個 ANSI escape，不是字面的 `-`。而失效方式是最壞的那種 —— grep 回 0 個、exit 1，**靜默跳過
 > `&&` 後面的每一步**，看起來就像「0 deletions，乾淨」。第一次是 `naming.test.mjs` 的路徑比對
@@ -317,6 +321,10 @@ leader，再 `process.kill(-pid)` 殺整組。**另外，面板留有未存變�
 >
 > 同源的還有 **`git log --oneline | grep`**、**`git status | grep`**、**`git grep`** —— 凡是把 git
 > 的輸出餵給另一個程式判讀的地方都適用。（`git grep` 另可用 `-I --no-color`。）
+>
+> **而「兩個判準對不上時，不要挑好聽的那個」**：第三次是 `--numstat` 說 5 個刪除、`grep '^-'`
+> 說 0 個。那個矛盾就是顏色碼還在的證據 —— 若當時採信 grep，就會宣稱「spec 同步沒有刪掉任何
+> 東西」而放行。
 
 **驗互動時用真事件，不要用 `dispatchEvent(new MouseEvent(...))`。** 合成事件不等於真實
 輸入：它不走完整的 pointer/mouse/contextmenu 序列，也不觸發 React 19 對 trusted discrete
