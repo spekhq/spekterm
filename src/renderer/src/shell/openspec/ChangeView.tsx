@@ -14,6 +14,7 @@ import {
   SectionTitle,
   StatusBadge,
   TaskCount,
+  WorktreeBadge,
 } from './ui'
 
 interface ChangeViewProps {
@@ -95,6 +96,7 @@ export function ChangeView({
             {data.slug}
           </h2>
           <StatusBadge status={data.status} />
+          <WorktreeBadge worktree={data.worktree} />
         </div>
 
         {/*
@@ -139,9 +141,17 @@ export function ChangeView({
         {active && <ArtifactContent artifact={active} onOpenFile={onOpenFile} />}
       </div>
 
+      {/*
+        條件 4（change 住在另一個工作目錄）在**這裡**判定，不在 MainStage —— 那裡只有 session
+        資料，拿不到 change 的來源。分工是：MainStage 管「有沒有對的對象」，這裡管「這個 change
+        是不是它搆得著的」。session 的條件優先回報（先看有沒有對象，再看對象搆不搆得著）。
+      */}
       <ContinuationBar
         missing={data.missingArtifacts}
-        blocked={continuationBlock}
+        blocked={
+          continuationBlock ??
+          (data.worktree && !data.worktree.isFolderRoot ? 'foreignWorktree' : null)
+        }
         onContinue={onContinue}
       />
     </div>

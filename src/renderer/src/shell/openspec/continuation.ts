@@ -36,3 +36,14 @@ export type ContinuationBlock =
   | 'notClaude'
   /** focused session 休眠或已結束，沒有 pty 可寫。 */
   | 'notRunning'
+  /**
+   * 這個 change 住在**另一個工作目錄**（git worktree）裡，而 session 跑在 folder 的根目錄。
+   *
+   * 這是 `foreignSource` 在同一個 repo 之內的更細粒度版本，成立的理由完全相同：送進去的識別碼
+   * 查無此 change，更糟的是 agent 會在 session 所在之處**建出一個同名的空 change**。
+   *
+   * **判準不是「來源是不是主工作目錄」** —— folder 本身就是一個 linked worktree 時（那正是
+   * 「一個 change 一個 worktree」工作流的產物），session 的 cwd 就在該 worktree 裡，指示會成功。
+   * 要問的是「來源與 session 所屬的 folder 是不是同一個工作目錄」，即 `worktree.isFolderRoot`。
+   */
+  | 'foreignWorktree'

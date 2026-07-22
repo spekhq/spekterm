@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, it } from 'node:test'
+import type { AggregatedScanResult } from '@spekjs/core'
 import { OpenSpecService, OpenSpecServiceError } from './openspec-service'
 import type { FolderLookup, WorkspaceFolder } from './workspace-store'
 
@@ -77,7 +78,10 @@ afterEach(async () => {
 
 function create(
   store: FolderLookup = okFolder(),
-  { debounceMs = 20, scan }: { debounceMs?: number; scan?: (root: string) => Promise<never> } = {},
+  {
+    debounceMs = 20,
+    scan,
+  }: { debounceMs?: number; scan?: (root: string) => Promise<AggregatedScanResult> } = {},
 ): OpenSpecService {
   service = scan
     ? new OpenSpecService(store, (id) => changed.push(id), debounceMs, scan)
@@ -198,10 +202,17 @@ describe('OpenSpecService 的快取與失效', () => {
     await real.dispose()
 
     const svc = create(okFolder(), {
-      scan: (async () => {
+      scan: async () => {
         scans += 1
-        return { specs: [], activeChanges: [], archivedChanges: [], defaultSchema: null }
-      }) as unknown as (root: string) => Promise<never>,
+        return {
+          specs: [],
+          activeChanges: [],
+          archivedChanges: [],
+          defaultSchema: null,
+          worktrees: [],
+          aggregated: false,
+        }
+      },
     })
 
     await svc.getSpecs('f1')
@@ -216,11 +227,18 @@ describe('OpenSpecService 的快取與失效', () => {
   it('同一個 folder 的併發請求共用一次掃描', async () => {
     let scans = 0
     const svc = create(okFolder(), {
-      scan: (async () => {
+      scan: async () => {
         scans += 1
         await delay(30)
-        return { specs: [], activeChanges: [], archivedChanges: [], defaultSchema: null }
-      }) as unknown as (root: string) => Promise<never>,
+        return {
+          specs: [],
+          activeChanges: [],
+          archivedChanges: [],
+          defaultSchema: null,
+          worktrees: [],
+          aggregated: false,
+        }
+      },
     })
 
     await Promise.all([
@@ -298,5 +316,255 @@ describe('OpenSpecService 的空 repo', () => {
     const changes = await svc.getChanges('f2')
     assert.deepEqual(changes.active, [])
     assert.deepEqual(changes.archived, [])
+  })
+})
+
+/**
+ * 聚合（git worktree）—— 以注入的掃描結果驅動。
+ *
+ * **刻意不 spawn 真的 `git`**：要驗的是本 app 對聚合結果的處理（來源翻譯、讀取根、監看範圍），
+ * 而「core 怎麼列舉與去重」是 core 的責任，不該在這裡重測一次（本 change 的 spec 明文把那件事
+ * 委由 core）。真 git worktree 的端到端行為由 `probe:openspec` 承擔。
+ */
+describe('OpenSpecService 的 worktree 聚合', () => {
+  /** 一筆 core 形狀的 worktree 資訊。 */
+  function worktree(wtPath: string, opts: { isMain?: boolean; branch?: string | null } = {}) {
+    return {
+      path: wtPath,
+      branch: opts.branch === undefined ? 'feat-x' : opts.branch,
+      head: 'a'.repeat(40),
+      isMain: opts.isMain ?? false,
+      isBare: false,
+      key: path.basename(wtPath).slice(0, 8),
+      vcs: 'git' as const,
+    }
+  }
+
+  /** 一筆 core 形狀的 change，帶著來源。 */
+  function change(slug: string, source: ReturnType<typeof worktree>) {
+    return {
+      slug,
+      date: null,
+      timestamp: null,
+      createdDate: null,
+      archivedDate: null,
+      hasTasks: false,
+      hasSpecs: false,
+      hasProposal: true,
+      hasDesign: false,
+      artifactCount: 1,
+      schema: null,
+      defaultSchema: null,
+      taskStats: null,
+      source: { key: source.key, path: source.path, branch: source.branch, isMain: source.isMain, vcs: source.vcs },
+    }
+  }
+
+  function aggregated(active: unknown[], worktrees: unknown[]): AggregatedScanResult {
+    return {
+      specs: [],
+      activeChanges: active,
+      archivedChanges: [],
+      defaultSchema: null,
+      worktrees,
+      aggregated: true,
+    } as unknown as AggregatedScanResult
+  }
+
+  it('來源翻譯後不含絕對路徑，且其餘欄位原封流穿', async () => {
+    const wt = worktree(path.join(base, 'wt-a'))
+    const raw = change('in-worktree', wt)
+    const svc = create(okFolder(), { scan: async () => aggregated([raw], [worktree(repo, { isMain: true }), wt]) })
+
+    const changes = await svc.getChanges('f1')
+    const [entry] = changes.active
+
+    // 對照組：core 原始結果**確實**帶著絕對路徑 —— 少了這條，「DTO 不含路徑」在
+    // 「core 根本沒給 source」時也會通過。
+    assert.equal(raw.source.path, path.join(base, 'wt-a'))
+
+    assert.equal(JSON.stringify(entry).includes(base), false, 'DTO 不得含絕對路徑')
+    assert.equal(entry.worktree?.branch, 'feat-x')
+    assert.equal(entry.worktree?.key, wt.key)
+    // 原封流穿：core 的其餘欄位沒有因為重建而遺失
+    assert.equal(entry.slug, 'in-worktree')
+    assert.equal(entry.artifactCount, 1)
+  })
+
+  /**
+   * `isMain` 與 `isFolderRoot` 在「folder 本身就是 linked worktree」時**相反** ——
+   * 這正是續寫入口的條件不能用 `isMain` 判定的理由（design D7）。
+   */
+  it('isFolderRoot 與 isMain 是兩件事', async () => {
+    const mainWt = worktree(path.join(base, 'elsewhere'), { isMain: true, branch: 'master' })
+    const selfWt = worktree(repo) // folder 自己，但不是主工作目錄
+    const svc = create(okFolder(), {
+      scan: async () => aggregated([change('here', selfWt), change('there', mainWt)], [mainWt, selfWt]),
+    })
+
+    const { active } = await svc.getChanges('f1')
+    const here = active.find((c) => c.slug === 'here')
+    const there = active.find((c) => c.slug === 'there')
+
+    assert.equal(here?.worktree?.isMain, false)
+    assert.equal(here?.worktree?.isFolderRoot, true, 'folder 自己的 change：agent 搆得著')
+    assert.equal(there?.worktree?.isMain, true)
+    assert.equal(there?.worktree?.isFolderRoot, false, '主工作目錄在別處：agent 搆不著')
+  })
+
+  it('來源在 folder 邊界外時不提供檔案導覽路徑，但內容照樣讀得到', async () => {
+    // 邊界外的 worktree，內含一個真的 change
+    const outsideWt = path.join(outside, 'wt')
+    fs.mkdirSync(path.join(outsideWt, 'openspec', 'changes', 'far-away'), { recursive: true })
+    fs.writeFileSync(
+      path.join(outsideWt, 'openspec', 'changes', 'far-away', 'proposal.md'),
+      '# 遠方\n\n## Why\n\n測試。\n',
+    )
+
+    const wt = worktree(outsideWt)
+    const svc = create(okFolder(), {
+      scan: async () => aggregated([change('far-away', wt)], [worktree(repo, { isMain: true }), wt]),
+    })
+
+    const detail = await svc.getChange('f1', 'far-away')
+    assert.equal(detail.relPath, null, '邊界外 → 翻不出 relPath')
+    assert.ok(
+      detail.artifacts.some((a) => a.content?.includes('遠方')),
+      '內容仍然完整 —— 降級的只有檔案導覽',
+    )
+    assert.equal(detail.worktree?.isFolderRoot, false)
+  })
+
+  it('worktree 的 openspec 變更會使快取失效並通知 renderer', async () => {
+    const wtPath = path.join(base, 'wt-watch')
+    fs.mkdirSync(path.join(wtPath, 'openspec'), { recursive: true })
+    const wt = worktree(wtPath)
+
+    const svc = create(okFolder(), {
+      scan: async () => aggregated([], [worktree(repo, { isMain: true }), wt]),
+    })
+    await svc.getChanges('f1') // 觸發掃描 → 第二層 watcher 建立
+    await delay(READY_MS)
+
+    fs.writeFileSync(path.join(wtPath, 'openspec', 'poke.md'), '# 動了\n')
+    await delay(READY_MS)
+
+    assert.deepEqual(changed, ['f1'], 'worktree 裡的變更也要推送通知')
+  })
+
+  it('folder 自己的工作目錄不重複監看', async () => {
+    const svc = create(okFolder(), {
+      scan: async () => aggregated([], [worktree(repo, { isMain: true })]),
+    })
+    await svc.getChanges('f1')
+    await delay(READY_MS)
+
+    fs.writeFileSync(path.join(repo, 'openspec', 'poke.md'), '# 動了\n')
+    await delay(READY_MS)
+
+    // 基礎層已經在看 repo/openspec —— 第二層若也建一個，同一次變更會送出兩個事件。
+    // debounce 會把它們合批，所以這裡驗的是「通知恰好一次」。
+    assert.deepEqual(changed, ['f1'])
+  })
+})
+
+/**
+ * 兩層 watcher 的生死 —— 這一組驗的是「訂閱什麼取決於掃描結果」那個張力被正確處理了。
+ */
+describe('OpenSpecService 的 worktree 監看層', () => {
+  /** 讓 repo 看起來像個 git 主工作目錄（不 spawn git，比照 git-branch.test.ts）。 */
+  function makeGitDir(): string {
+    const gitDir = path.join(repo, '.git')
+    fs.mkdirSync(path.join(gitDir, 'worktrees'), { recursive: true })
+    fs.writeFileSync(path.join(gitDir, 'HEAD'), 'ref: refs/heads/master\n')
+    return gitDir
+  }
+
+  function wt(wtPath: string, isMain = false) {
+    return {
+      path: wtPath,
+      branch: isMain ? 'master' : 'feat',
+      head: null,
+      isMain,
+      isBare: false,
+      key: path.basename(wtPath).slice(0, 8),
+      vcs: 'git' as const,
+    }
+  }
+
+  function result(worktrees: unknown[]): AggregatedScanResult {
+    return {
+      specs: [],
+      activeChanges: [],
+      archivedChanges: [],
+      defaultSchema: null,
+      worktrees,
+      aggregated: true,
+    } as unknown as AggregatedScanResult
+  }
+
+  /**
+   * 雞生蛋：worktree 是「先建立目錄、後寫入 change」。
+   *
+   * **三段式是必要的** —— 單純斷言「新建 worktree 之後收到通知」是**假綠**：建立目錄這件事
+   * 本身就會觸發基礎層（`<commonDir>/worktrees/`），那條斷言在完全沒有第二層 watcher 的實作下
+   * 照樣會過。要驗的是「**其後**寫進那個 worktree 的 change 也會被看見」。
+   */
+  it('執行期新建的 worktree，其後的寫入也被監看', async () => {
+    const gitDir = makeGitDir()
+    const newWt = path.join(base, 'wt-new')
+
+    let discovered = false
+    const svc = create(okFolder(), {
+      scan: async () =>
+        discovered ? result([wt(repo, true), wt(newWt)]) : result([wt(repo, true)]),
+    })
+
+    await svc.getChanges('f1') // 第一次掃描：只有主工作目錄
+    await delay(READY_MS)
+
+    // (a) 新 worktree 出現 —— 基礎層（worktrees 清單）應該察覺
+    fs.mkdirSync(path.join(gitDir, 'worktrees', 'wt-new'), { recursive: true })
+    fs.mkdirSync(path.join(newWt, 'openspec'), { recursive: true })
+    await delay(READY_MS)
+    assert.deepEqual(changed, ['f1'], '新增工作目錄本身要觸發一次通知')
+
+    // (b) 重新取數 —— 這一次掃描才會讓第二層把新 worktree 納入監看
+    discovered = true
+    changed.length = 0
+    await svc.getChanges('f1')
+    await delay(READY_MS)
+
+    // (c) 真正的考驗：寫進新 worktree 的 change
+    fs.writeFileSync(path.join(newWt, 'openspec', 'poke.md'), '# 新的\n')
+    await delay(READY_MS)
+    assert.deepEqual(changed, ['f1'], '新 worktree 裡的寫入必須被看見')
+  })
+
+  it('工作目錄自清單消失後，其 watcher 被釋放', async () => {
+    makeGitDir()
+    const gone = path.join(base, 'wt-gone')
+    fs.mkdirSync(path.join(gone, 'openspec'), { recursive: true })
+
+    let present = true
+    const svc = create(okFolder(), {
+      scan: async () => (present ? result([wt(repo, true), wt(gone)]) : result([wt(repo, true)])),
+    })
+
+    await svc.getChanges('f1')
+    await delay(READY_MS)
+    fs.writeFileSync(path.join(gone, 'openspec', 'a.md'), '# 在\n')
+    await delay(READY_MS)
+    assert.deepEqual(changed, ['f1'], '還在清單上時看得到它的變更')
+
+    // 自清單消失（worktree 被移除）
+    present = false
+    changed.length = 0
+    await svc.getChanges('f1')
+    await delay(READY_MS)
+
+    fs.writeFileSync(path.join(gone, 'openspec', 'b.md'), '# 不該再被看見\n')
+    await delay(READY_MS)
+    assert.deepEqual(changed, [], '已離開清單的工作目錄不該再推送通知')
   })
 })

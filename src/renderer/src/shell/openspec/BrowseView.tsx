@@ -2,7 +2,7 @@ import { type Heading, extractHeadings } from '@spekjs/core/headings'
 import { useMemo, useState } from 'react'
 import type { ChangeInfo } from '../types'
 import { useChanges, useSpec, useSpecs } from './data'
-import { ErrorNote, Loading, ProgressBar, TaskCount } from './ui'
+import { ErrorNote, Loading, ProgressBar, TaskCount, WorktreeBadge } from './ui'
 import { useTranslation } from 'react-i18next'
 
 interface BrowseViewProps {
@@ -342,6 +342,7 @@ function ChangeGroup({
                 >
                   {change.slug}
                 </span>
+                <WorktreeBadge worktree={change.worktree} />
                 {change.taskStats && (
                   <TaskCount
                     completed={change.taskStats.completed}

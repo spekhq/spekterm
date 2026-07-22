@@ -1,23 +1,25 @@
 import { stat } from 'node:fs/promises'
 import path from 'node:path'
 import {
+  type AggregatedScanResult,
   type ChangeInfo,
   type GraphData,
   type HistoryEntry,
   type ParsedTasks,
-  type ScanResult,
   type TaskStats,
-  buildGraphData,
+  type WorktreeInfo,
+  buildGraphDataAggregated,
   pollingInterval,
   readChange,
   readSpec,
   readSpecAtChange,
-  scanOpenSpec,
+  scanOpenSpecAggregated,
   shouldUsePolling,
   withAuthoritativeChokidarEnv,
 } from '@spekjs/core'
 import { type FSWatcher, watch as chokidarWatch } from 'chokidar'
 import { isWithin } from './fs-boundary'
+import { resolveCommonDir } from './git-branch'
 import type { FolderLookup } from './workspace-store'
 
 export type OpenSpecErrorCode = 'UNKNOWN_FOLDER' | 'NOT_FOUND' | 'READ_FAILED'
@@ -71,9 +73,46 @@ export interface OverviewData {
   taskStats: TaskStats
 }
 
+/**
+ * 一個 change 的來源工作目錄（git worktree），送往 renderer 的形狀。
+ *
+ * core 的 `WorktreeSource` 帶著**絕對路徑**，這裡一律丟棄它 —— renderer 沒有詞彙可以表達
+ * workspace 之外的位置。`key` 是 core 算的路徑 sha1 前 8 碼，不可逆、不含路徑資訊。
+ *
+ * **兩個布林各司其職，不可互相代用**：
+ *
+ * | | 是什麼 | 用途 |
+ * |---|---|---|
+ * | `isMain` | 來源的**性質** —— 它是不是該 repo 的主工作目錄 | **呈現**：徽章不標示 main（對齊 spek） |
+ * | `isFolderRoot` | 來源與**這個 folder** 的關係 —— 它是不是 folder 自己 | **能力判定**：續寫入口（design D7） |
+ *
+ * folder 本身就是一個 linked worktree 時，兩者是**相反**的：該 folder 的 change 其
+ * `isMain === false`（主工作目錄在別處）但 `isFolderRoot === true`（agent 就站在這裡）。
+ * 拿 `isMain` 去判斷「agent 能不能對這個 change 動手」會錯誤地停用一個明明會成功的入口。
+ */
+export interface ChangeOrigin {
+  key: string
+  branch: string | null
+  vcs: 'git' | 'jj'
+  isMain: boolean
+  isFolderRoot: boolean
+}
+
+/**
+ * 送往 renderer 的 change 摘要。
+ *
+ * `Omit<ChangeInfo, 'source'>` 而非逐欄列舉是刻意的：core 日後新增欄位仍會**自己流穿**到
+ * renderer（CLAUDE.md 記為承重的性質），本 change 接下的同步義務因此縮到 `source` 這一個欄位。
+ *
+ * 而欄位**不叫 `source`**：`Omit` 之後該屬性不存在，加上它在 `ChangeInfo` 裡是 optional，
+ * 於是這個型別仍可直接餵給 `@spekjs/ui` 的 `buildLanes`（它要的是 core 的 `ChangeInfo[]`）。
+ * 若沿用 `source` 這個名字換成我們的型別，就會因缺 `path` 而不 assignable。
+ */
+export type ChangeSummary = Omit<ChangeInfo, 'source'> & { worktree?: ChangeOrigin }
+
 export interface ChangesData {
-  active: ChangeInfo[]
-  archived: ChangeInfo[]
+  active: ChangeSummary[]
+  archived: ChangeSummary[]
   defaultSchema: string | null
 }
 
@@ -112,13 +151,22 @@ export interface ChangeDetailView {
   missingArtifacts: string[]
   /** change 的目錄。供交叉導覽。 */
   relPath: string | null
+  /**
+   * 來源工作目錄。**不取自 core 的 `ChangeDetail.source`** —— 那個欄位雖然宣告著「僅聚合讀取會
+   * 填入」，但 `readChange` 從來不填它（core 沒有聚合版的 readChange，已 grep 確認）。這裡取自
+   * 掃描結果中查表得到的那筆 `ChangeInfo`，與讀取根的解析同源。
+   */
+  worktree?: ChangeOrigin
 }
 
 /** agent 的一次操作會寫入數個檔案（proposal + design + specs/*.md + tasks），不合批就會讓側欄連續重載。 */
 const DEFAULT_DEBOUNCE_MS = 150
 
 interface FolderWatch {
-  watcher: FSWatcher
+  /** 基礎層：folder 自己的 `openspec/`，以及工作目錄清單（`<commonDir>/worktrees/`）。 */
+  watchers: FSWatcher[]
+  /** 第二層：每個**其他**工作目錄的 `openspec/`，以其絕對路徑為 key。 */
+  worktreeWatchers: Map<string, FSWatcher>
   timer: NodeJS.Timeout | null
 }
 
@@ -145,39 +193,36 @@ async function exists(target: string): Promise<boolean> {
  * repo 根目錄的 markdown（`CLAUDE.md` / `README.md`），**不是** change 的 artifact ——
  * 已實測，不要拿它來推路徑。
  *
- * 因此這裡依慣例推導候選路徑，並以 `stat` 確認它真的存在。推不出來就回 `null`：
- * 側欄少一個「跳到檔案」的入口，好過送一個不存在或越界的路徑給 renderer（design D5）。
+ * 因此這裡依慣例推導候選路徑（純字串，不碰檔案系統）；是否真的存在、以及能不能翻譯成
+ * folder-relative，由 `toFolderRel()` 回答。
+ *
+ * 回傳值**相對於該 change 的來源工作目錄**，不是相對於 folder —— 聚合之後兩者可能不同。
  */
-async function changeDirRelPath(
-  root: string,
-  slug: string,
-  status: 'active' | 'archived',
-): Promise<string | null> {
-  const rel =
-    status === 'archived' ? `openspec/changes/archive/${slug}` : `openspec/changes/${slug}`
-  const abs = path.join(root, rel)
-  if (!isWithin(root, abs)) return null
-  return (await exists(abs)) ? rel : null
+function changeDirIn(slug: string, status: 'active' | 'archived'): string {
+  return status === 'archived' ? `openspec/changes/archive/${slug}` : `openspec/changes/${slug}`
 }
 
-async function artifactRelPath(root: string, changeDir: string | null, id: string): Promise<string | null> {
-  if (!changeDir) return null
-  const rel = `${changeDir}/${id}.md`
-  const abs = path.join(root, rel)
-  if (!isWithin(root, abs)) return null
-  return (await exists(abs)) ? rel : null
-}
-
-async function deltaSpecRelPath(
-  root: string,
-  changeDir: string | null,
-  topic: string,
+/**
+ * 把「相對於**來源工作目錄**的路徑」翻譯成「相對於 **folder**」，並確認它真的存在。
+ *
+ * 聚合之後這兩個 root 不再必然相同：change 可能住在一個 linked worktree 裡，而那個 worktree
+ * 可以在 folder 邊界之內（`<repo>/.claude/worktrees/<slug>`）或之外（`/tmp/...`）。邊界外時
+ * `toRelPath` 回 `null` —— 側欄少一個「跳到檔案」的入口，好過送一個 renderer 無從表達的路徑
+ * （design D5／D6）。
+ *
+ * **一個承重的前提**：`isWithin` 是純字面比較。這裡第一次拿**兩個獨立來源**的絕對路徑相比 ——
+ * 一端來自 `workspace.json`，另一端來自 `git worktree list`。兩者目前都是 realpath
+ * （`workspace-store.ts` 的 `add()` 以 `realpathSync` 正規化；git 回的一律已解析 symlink），
+ * 所以比得起來。**若 workspace 的路徑正規化改變，每一個 change 的「跳到檔案」會同時靜默消失。**
+ */
+async function toFolderRel(
+  folderRoot: string,
+  sourceRoot: string,
+  rel: string,
 ): Promise<string | null> {
-  if (!changeDir) return null
-  const rel = `${changeDir}/specs/${topic}/spec.md`
-  const abs = path.join(root, rel)
-  if (!isWithin(root, abs)) return null
-  return (await exists(abs)) ? rel : null
+  const abs = path.join(sourceRoot, rel)
+  if (!(await exists(abs))) return null
+  return toRelPath(folderRoot, abs)
 }
 
 function sumTaskStats(changes: ChangeInfo[]): TaskStats {
@@ -226,9 +271,9 @@ function missingArtifacts(info: ChangeInfo): string[] {
  * 不依賴 Electron，因此可由單元測試直接驅動：推送的出口是建構時傳入的 `send`。
  */
 export class OpenSpecService {
-  readonly #cache = new Map<string, ScanResult>()
+  readonly #cache = new Map<string, AggregatedScanResult>()
   /** 同一個 folder 的併發請求共用一次掃描 —— 四個 tab 同時開，不該掃四次。 */
-  readonly #inflight = new Map<string, Promise<ScanResult>>()
+  readonly #inflight = new Map<string, Promise<AggregatedScanResult>>()
   readonly #watches = new Map<string, FolderWatch>()
 
   constructor(
@@ -236,13 +281,65 @@ export class OpenSpecService {
     private readonly send: (folderId: string) => void,
     private readonly debounceMs: number = DEFAULT_DEBOUNCE_MS,
     /**
-     * 掃描的實作。預設即 core 的 `scanOpenSpec`。
+     * 掃描的實作。預設即 core 的**聚合**掃描。
      *
      * 之所以是個可注入的依賴：「快取命中時不重複掃描」是**效能特性**，從外部的回傳值看不
      * 出來 —— 不把掃描這件事顯式化，就只能靠計時之類的脆弱手段去猜它有沒有真的跑。
+     *
+     * `includeJj: false`：本階段只涵蓋 git worktree，jj 那條路徑（內容指紋去重、`isCurrent`、
+     * `conflictsWith`）整條不會被走到，與 spek 的 web 與 extension 的預設一致。
+     *
+     * `aggregate` 採 core 的預設（true）。core 在 worktree ≤ 1 時會自行退回等同 `scanOpenSpec`
+     * 的結果 —— 於是單一工作目錄的 repo 行為與聚合前完全相同。**這也是一個假綠的來源**：
+     * 驗收若 fixture 的 worktree 沒建成功，斷言會照樣通過。
      */
-    private readonly scan: (root: string) => Promise<ScanResult> = scanOpenSpec,
+    private readonly scan: (root: string) => Promise<AggregatedScanResult> = (root) =>
+      scanOpenSpecAggregated(root, { includeJj: false }),
   ) {}
+
+  /**
+   * 該 repo 的主工作目錄 —— **spec 的讀取根**。
+   *
+   * core 的聚合掃描其 `specs` 一律取自主工作目錄（`scanner.ts` 的 `specs: main.scan.specs`），
+   * 因此讀取單一 spec 時不能沿用 folder 自己的路徑：folder 可能是該 repo 的一個 linked
+   * worktree、或其中一個子目錄，兩種情形下 spec 都會**列得出來卻打不開**（已實測 `readSpec`
+   * 回 `null` → NOT_FOUND）。
+   *
+   * 找不到（非 git repo、或 core 未回報工作目錄）時退回 folder 自身 —— 那正是非聚合的情形。
+   */
+  #specRoot(root: string, result: AggregatedScanResult): string {
+    return result.worktrees.find((wt) => wt.isMain)?.path ?? root
+  }
+
+  /** change 的讀取根：它自己的來源工作目錄；非聚合時 `source` 為 `undefined`，退回 folder。 */
+  #changeRoot(root: string, change: ChangeInfo): string {
+    return change.source?.path ?? root
+  }
+
+  /**
+   * core 的來源資訊 → 送往 renderer 的形狀（丟棄絕對路徑，補上 `isFolderRoot`）。
+   *
+   * `isFolderRoot` 的比較在此完成 —— renderer 沒有路徑詞彙，能力判定（design D7）卻需要
+   * 「來源是不是 folder 自己」這個答案。
+   */
+  #origin(root: string, change: ChangeInfo): ChangeOrigin | undefined {
+    const source = change.source
+    if (!source) return undefined
+    return {
+      key: source.key,
+      branch: source.branch,
+      vcs: source.vcs,
+      isMain: source.isMain,
+      isFolderRoot: source.path === root,
+    }
+  }
+
+  /** `ChangeInfo` → `ChangeSummary`：只換掉 `source`，其餘欄位原封流穿（design D3）。 */
+  #summary(root: string, change: ChangeInfo): ChangeSummary {
+    const { source: _source, ...rest } = change
+    const worktree = this.#origin(root, change)
+    return worktree ? { ...rest, worktree } : rest
+  }
 
   /** 驗收「快取命中不重掃」與「重新載入不累積 watcher」用得上。 */
   get watchedFolderCount(): number {
@@ -274,7 +371,11 @@ export class OpenSpecService {
     const info = result.specs.find((spec) => spec.topic === topic)
     if (!info) throw new OpenSpecServiceError('NOT_FOUND', `unknown spec topic: ${topic}`)
 
-    const detail = await this.#read(() => readSpec(root, info.topic), `spec not readable: ${topic}`)
+    const specRoot = this.#specRoot(root, result)
+    const detail = await this.#read(
+      () => readSpec(specRoot, info.topic),
+      `spec not readable: ${topic}`,
+    )
     return {
       topic: detail.topic,
       content: detail.content,
@@ -290,18 +391,21 @@ export class OpenSpecService {
     if (!spec) throw new OpenSpecServiceError('NOT_FOUND', `unknown spec topic: ${topic}`)
     const change = this.#findChange(result, slug)
 
+    // spec 的某個版本住在**該 change 自己的**工作目錄裡（它是 change 的 delta），
+    // 因此讀取根是 change 的來源，不是 spec 的來源。
+    const changeRoot = this.#changeRoot(root, change)
     const version = await this.#read(
-      () => readSpecAtChange(root, spec.topic, change.slug),
+      () => readSpecAtChange(changeRoot, spec.topic, change.slug),
       `spec ${topic} not present at change ${slug}`,
     )
     return { topic: spec.topic, slug: change.slug, content: version.content }
   }
 
   async getChanges(folderId: string): Promise<ChangesData> {
-    const { result } = await this.#scan(folderId)
+    const { root, result } = await this.#scan(folderId)
     return {
-      active: result.activeChanges,
-      archived: result.archivedChanges,
+      active: result.activeChanges.map((change) => this.#summary(root, change)),
+      archived: result.archivedChanges.map((change) => this.#summary(root, change)),
       defaultSchema: result.defaultSchema,
     }
   }
@@ -310,11 +414,15 @@ export class OpenSpecService {
     const { root, result } = await this.#scan(folderId)
     const info = this.#findChange(result, slug)
 
+    const changeRoot = this.#changeRoot(root, info)
     const detail = await this.#read(
-      () => readChange(root, info.slug),
+      () => readChange(changeRoot, info.slug),
       `change not readable: ${slug}`,
     )
-    const changeDir = await changeDirRelPath(root, info.slug, detail.status)
+
+    // 目錄名相對於**來源工作目錄**；`changeDir` 則是翻譯後、相對於 folder 的（可能為 null）。
+    const dirIn = changeDirIn(info.slug, detail.status)
+    const changeDir = await toFolderRel(root, changeRoot, dirIn)
 
     const artifacts: ChangeArtifactView[] = await Promise.all(
       detail.artifacts.map(async (artifact) => ({
@@ -328,13 +436,17 @@ export class OpenSpecService {
               artifact.specs.map(async (delta) => ({
                 topic: delta.topic,
                 content: delta.content,
-                relPath: await deltaSpecRelPath(root, changeDir, delta.topic),
+                relPath: changeDir
+                  ? await toFolderRel(root, changeRoot, `${dirIn}/specs/${delta.topic}/spec.md`)
+                  : null,
               })),
             )
           : undefined,
         // specs 是一整棵子目錄，沒有單一檔案可跳。
         relPath:
-          artifact.kind === 'specs' ? null : await artifactRelPath(root, changeDir, artifact.id),
+          artifact.kind === 'specs' || !changeDir
+            ? null
+            : await toFolderRel(root, changeRoot, `${dirIn}/${artifact.id}.md`),
       })),
     )
 
@@ -349,13 +461,18 @@ export class OpenSpecService {
       schemaOrder: detail.schemaOrder,
       missingArtifacts: missingArtifacts(info),
       relPath: changeDir,
+      worktree: this.#origin(root, info),
     }
   }
 
   async getGraphData(folderId: string): Promise<GraphData> {
     const { root } = await this.#scan(folderId)
-    // 節點與邊只帶 `spec:<topic>` / `change:<slug>` 這類識別碼，沒有路徑欄位可洩漏。
-    return this.#read(() => buildGraphData(root), `graph not available: ${folderId}`)
+    // 節點與邊只帶 `spec:<topic>` / `change:<key>:<slug>` 這類識別碼，沒有路徑欄位可洩漏
+    //（`key` 是路徑的 sha1 前 8 碼，不可逆）。
+    return this.#read(
+      () => buildGraphDataAggregated(root, { includeJj: false }),
+      `graph not available: ${folderId}`,
+    )
   }
 
   /** folder 自 workspace 移除，或 renderer 消失時釋放。 */
@@ -365,7 +482,9 @@ export class OpenSpecService {
     if (!watch) return
     this.#watches.delete(folderId)
     if (watch.timer) clearTimeout(watch.timer)
-    await watch.watcher.close()
+    await Promise.all(
+      [...watch.watchers, ...watch.worktreeWatchers.values()].map((watcher) => watcher.close()),
+    )
   }
 
   async dispose(): Promise<void> {
@@ -379,8 +498,14 @@ export class OpenSpecService {
    *
    * 只有掃描確實發現的 change 才可讀 —— 一個 `slug = "../../../../etc"` 在這裡就被擋下，
    * 而且**不會**有任何以它拼接而成的檔案系統存取。
+   *
+   * 聚合之後這裡還多擔一件事：**回傳的那筆帶著來源**，讀取根由它解析（design D2）。
+   * 白名單的語意完好 —— renderer 給 slug、主行程查表、表裡那筆決定去哪讀。
+   *
+   * active 先於 archived：一個 slug 可能在主工作目錄已封存、而某個 worktree 仍持有其 active
+   * 版本（「一個 change 一個 worktree」工作流的常態）。此時以進行中的那一份為準。
    */
-  #findChange(result: ScanResult, slug: string): ChangeInfo {
+  #findChange(result: AggregatedScanResult, slug: string): ChangeInfo {
     const change = [...result.activeChanges, ...result.archivedChanges].find(
       (entry) => entry.slug === slug,
     )
@@ -408,7 +533,7 @@ export class OpenSpecService {
     return value
   }
 
-  async #scan(folderId: string): Promise<{ root: string; result: ScanResult }> {
+  async #scan(folderId: string): Promise<{ root: string; result: AggregatedScanResult }> {
     const folder = this.store.list().find((entry) => entry.id === folderId)
     if (!folder) throw new OpenSpecServiceError('UNKNOWN_FOLDER', `unknown folder: ${folderId}`)
     const root = folder.path
@@ -430,6 +555,8 @@ export class OpenSpecService {
           this.#cache.set(folderId, result)
           this.#inflight.delete(folderId)
         }
+        // 工作目錄清單是掃描的**產物**，所以第二層只能在這裡同步（design D4）。
+        this.#syncWorktreeWatches(folderId, root, result.worktrees)
         return result
       })
       .catch((error) => {
@@ -441,11 +568,69 @@ export class OpenSpecService {
     return { root, result: await promise }
   }
 
+  /**
+   * 基礎層：不需要掃描結果就知道要看哪的兩處。
+   *
+   * 1. folder 自己的 `openspec/`；
+   * 2. **工作目錄清單本身**（`<commonDir>/worktrees/`）—— 這條是承重的，不是加保險：worktree 是
+   *    「先建立目錄、後寫入 change」，只監看既有工作目錄的話，一個新建 worktree 的第一次寫入
+   *    **沒有任何 watcher 在場**，側欄要等到不相干的事件才會醒（雞生蛋，只能由監看清單打破）。
+   *
+   * 第二層（每個工作目錄的 `openspec/`）建立在 `#syncWorktreeWatches`，因為清單是掃描的產物。
+   */
   #ensureWatch(folderId: string, root: string): void {
     if (this.#watches.has(folderId)) return
 
-    const target = path.join(root, 'openspec')
-    const usePolling = shouldUsePolling(root)
+    const watch: FolderWatch = { watchers: [], worktreeWatchers: new Map(), timer: null }
+    this.#watches.set(folderId, watch)
+
+    watch.watchers.push(this.#watch(folderId, path.join(root, 'openspec')))
+
+    const commonDir = resolveCommonDir(root)
+    if (commonDir !== null) {
+      // **只理會目錄的新增與移除。** 實測：在 worktree 裡跑一次 `git commit`，這個目錄下會產生
+      // 3 個檔案事件（index / logs/HEAD / COMMIT_EDITMSG）。這個 app 的前提是旁邊有 agent 一直
+      // 在跑 git —— 不收窄的話，每次 commit 都會使快取失效並重跑一次聚合掃描（約 175ms）。
+      watch.watchers.push(
+        this.#watch(folderId, path.join(commonDir, 'worktrees'), {
+          depth: 0,
+          events: ['addDir', 'unlinkDir'],
+        }),
+      )
+    }
+  }
+
+  /**
+   * 第二層：每個工作目錄的 `openspec/`。工作目錄清單一變（新增／移除 worktree）就跟著調整。
+   *
+   * folder 自己的那個由基礎層負責，這裡跳過它 —— 否則同一個目錄會被監看兩次，一次變更送出
+   * 兩個事件。
+   */
+  #syncWorktreeWatches(folderId: string, root: string, worktrees: WorktreeInfo[]): void {
+    const watch = this.#watches.get(folderId)
+    if (!watch) return
+
+    const wanted = new Set(worktrees.map((wt) => wt.path).filter((wtPath) => wtPath !== root))
+
+    for (const [wtPath, watcher] of watch.worktreeWatchers) {
+      if (wanted.has(wtPath)) continue
+      watch.worktreeWatchers.delete(wtPath)
+      void watcher.close()
+    }
+
+    for (const wtPath of wanted) {
+      if (watch.worktreeWatchers.has(wtPath)) continue
+      watch.worktreeWatchers.set(wtPath, this.#watch(folderId, path.join(wtPath, 'openspec')))
+    }
+  }
+
+  /** 建一個監看者，其事件一律收斂為「該 folder 的結構已變更」。 */
+  #watch(
+    folderId: string,
+    target: string,
+    options?: { depth?: number; events?: string[] },
+  ): FSWatcher {
+    const usePolling = shouldUsePolling(target)
     const interval = pollingInterval()
 
     // callback 必須同步（見 core 的 withAuthoritativeChokidarEnv）：env 的對齊只在
@@ -454,30 +639,40 @@ export class OpenSpecService {
       chokidarWatch(target, {
         // chokidar 的預設是 true。folder 內一個指向邊界外的 symlink 被展開時，watcher 會
         // 跟著走出去 —— listDir 守住的邊界會從這道側門漏掉（Phase 2 的實測）。
+        //
+        // **這與「監看位於邊界外的工作目錄」不衝突**：那些路徑是版控系統列舉出來的已知位置，
+        // 而這道約束防的是由 repo 內容決定的、不受信任的展開。且推給 renderer 的只有一個
+        // folderId，沒有任何路徑會流出去。
         followSymlinks: false,
         ignoreInitial: true,
         usePolling,
         interval,
+        ...(options?.depth === undefined ? {} : { depth: options.depth }),
       }),
     )
 
-    const watch: FolderWatch = { watcher, timer: null }
-    this.#watches.set(folderId, watch)
-
-    watcher.on('all', () => {
-      this.#invalidate(folderId)
-
-      if (watch.timer) return
-      watch.timer = setTimeout(() => {
-        watch.timer = null
-        this.send(folderId)
-      }, this.debounceMs)
-      // 合批的計時器不該讓 Electron 的主行程無法結束
-      watch.timer.unref?.()
+    const events = options?.events
+    watcher.on('all', (event) => {
+      if (events && !events.includes(event)) return
+      this.#onChange(folderId)
     })
 
     // watcher 的錯誤（例如 openspec/ 不存在）不該讓主行程掛掉：掃描結果本來就會是空的。
     watcher.on('error', () => {})
+    return watcher
+  }
+
+  #onChange(folderId: string): void {
+    this.#invalidate(folderId)
+
+    const watch = this.#watches.get(folderId)
+    if (!watch || watch.timer) return
+    watch.timer = setTimeout(() => {
+      watch.timer = null
+      this.send(folderId)
+    }, this.debounceMs)
+    // 合批的計時器不該讓 Electron 的主行程無法結束
+    watch.timer.unref?.()
   }
 
   #invalidate(folderId: string): void {

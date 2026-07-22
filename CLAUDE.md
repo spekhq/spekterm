@@ -191,6 +191,26 @@ CLI 旗標**（公開介面）—— spawn 時注入一個 `statusLine` 命令�
 驗不到畫素** —— `terminal-sessions` 因此明文要求「自動化驗收通過 SHALL NOT 被詮釋為程式化繪製的
 呈現是正確的」。逃生口是 `PROBE_DISPLAY=physical`。
 
+`openspec-worktree-aggregation`（**不屬於任何 Phase**）讓側欄第一次看得見 **git worktree 裡的
+change**。此前主行程用的是**非聚合**的 `scanOpenSpec`，只掃 folder 根目錄的 `openspec/` —— 而
+「每個 change 各自開一個 worktree」是使用者自己的標準工作流（`common-openspec-change` skill），
+於是**正在開發的那個 change 在側欄上恆為 `active=0`**（CLAUDE.md 早就記著這個實測，卻沒把它讀成
+病徵）。側欄懂 OpenSpec 正是這個 app 相對於「開四個終端機分頁」的增量價值，它看不見使用者當下在
+做的事，那個價值命題就是空的。
+
+**這件事在 `@spekjs/core` 裡早就做好了**（upstream #17／#23，spek 的 web 與 VSCode extension 都在用）——
+worktree 列舉、active change 的 git 分歧選舉去重、archived 去重、graph 節點命名，**本 change 一行
+都沒有自己實作**。交付的是換用它，加上四件宿主端才有的事：**來源 DTO**（丟棄 core 的絕對路徑，
+換成識別碼＋分支）、**三個讀取根**（change 走自己的來源、spec 走主工作目錄）、**兩層 watcher**、
+以及 **Timeline 分組的適配**。範圍限於「讀」——session 開在 worktree 與 rail 把 worktree 列為一級
+項目都不在內，各自有未決的前提（見下文）。
+
+**最終方向是對齊 spek 的能力集**（三態聚合控制、jj workspace），本 change 只走第一步；因此**不做
+開關，但也不做出讓開關加不進來的設計**——聚合與否是 `scanOpenSpecAggregated` 的一個參數。
+
+`npm test` 280/280、`probe:openspec` 新增 14 條。詳見下文「worktree 聚合」——那裡記著五個**會靜默
+失敗**的實測踩雷，其中三個是獨立稽核抓到的**我自己寫錯的宣稱**。
+
 尚未開始：打包（Phase 6）、handoff（Phase 7+）。**session 常駐**（讓 pty 活過 app 的生命）已排入
 路線圖但**刻意不做** —— 見 `docs/PRD.md` §11 的「session 常駐」，那裡記著 tmux 與自寫 daemon 的取捨。
 
@@ -2029,6 +2049,137 @@ agent 呼叫方式的使用者一條退路。
 `…/-home-me-git-spekterm/8934b279-…/scratchpad …` —— **模型、context、花費、rate limit
 全部被截斷掉了**。狀態列要取回的就是那些；而它幫上忙的方式**不是「顯示那些資訊」，是「讓那幾段
 可以從 claude 的 statusline 裡刪掉，把寬度讓給尾巴」**。
+
+## worktree 聚合的實測與踩雷（`openspec-worktree-aggregation`）
+
+### 「worktree ≤ 1 時 core 靜默退回非聚合」是這個 change 最大的假綠來源
+
+`scanOpenSpecAggregated` 在 `aggregate: false` **或工作目錄只有一個**時，回傳的結果等同
+`scanOpenSpec`（只是外掛 `worktrees` 與 `aggregated: false`）。這個性質讓「單一 worktree 的 repo
+行為完全不變」，回歸風險極低 —— 但它也意味著**驗收的 fixture 若 `git worktree add` 失敗，
+每一條斷言仍會通過**。
+
+因此 `probe:openspec` 那組的關鍵不是「change 出現了」，而是成對的反向斷言：**那些 change
+確實不在主工作目錄的 `openspec/changes/` 底下**。少了它，整段驗收證明不了聚合真的發生過。
+
+同型的成對還有兩處：「來自 worktree 的 change 標示分支」要配「**來自主工作目錄的不標示**」
+（否則「標示恆常呈現」也會過）；「邊界外的不提供檔案導覽入口」要配「邊界內的**有**」
+（否則「入口壞掉」也會過）。
+
+### gitdir 少解一層 `commondir`，「新 worktree 被納入」會**靜默**失效
+
+worktree 的清單住在 **common dir** 底下的 `worktrees/`，而 `.git` 檔案只指到
+`<main>/.git/worktrees/<name>` —— **那底下永遠不會有 `worktrees/`**：
+
+```
+<worktree>/.git      → "gitdir: <main>/.git/worktrees/<name>"   ← resolveGitDir 停在這
+<gitdir>/commondir   → "../.."  ⇒ <main>/.git                   ← 要的是這個
+```
+
+少了 `resolveCommonDir()` 那一層，watcher 會 attach 到一個**永不存在**的路徑，而 chokidar
+**不報錯、也不發事件**。觸發條件正是使用者的工作流：把 `common-openspec-change` 產生的 worktree
+加進 workspace。
+
+**而監看工作目錄清單本身是承重的，不是加保險**：worktree 是「先建立目錄、後寫入 change」，
+只監看既有工作目錄的 `openspec/` 時，新建 worktree 的第一次寫入**沒有任何 watcher 在場**。
+這是雞生蛋，只能由監看清單打破。
+
+- **基礎層要 `depth: 0` 且只理會 `addDir`／`unlinkDir`**：實測在 worktree 裡跑一次 `git commit`，
+  該目錄下會產生 3 個檔案事件（`index` / `logs/HEAD` / `COMMIT_EDITMSG`）。這個 app 的前提是旁邊
+  有 agent 一直在跑 git —— 不收窄的話每次 commit 都會重跑一次聚合掃描（實測約 175ms）。
+- 「訂閱什麼取決於掃描結果」與 Phase 2 的「**先訂閱、再掃描**」直接打架，解法是分兩層
+  （比照 `branch-service` 的兩層 watcher）：基礎層掃描前建立，worktree 層每次掃描完成後同步。
+
+### `isMain` 與 `isFolderRoot` 是兩個**不可互代**的判準
+
+續寫入口的條件 4 初版寫成「來源是不是該 repo 的**主工作目錄**」。**方向錯了** —— 實測
+`listWorkspaces` 從一個 linked worktree 呼叫時，`isMain` 掛在**該 repo 的主工作目錄**上，傳入的
+那個 worktree 是 `isMain: false`。於是使用者把 worktree 加進 workspace 時：session 的 cwd 就在
+那個 worktree 裡、change 也在那裡、`/opsx:continue` **明明會成功**，入口卻被錯誤地停用。
+
+要問的是「**agent 站的地方，就是 change 在的地方嗎**」＝ `source.path === folder.path`。
+DTO 因此帶**兩個**布林：`isMain`（來源的**性質**，呈現用 —— 徽章不標示 main，對齊 spek）與
+`isFolderRoot`（來源與**這個 folder** 的關係，能力判定用）。folder 本身是 linked worktree 時
+兩者相反。
+
+> **一般形式：一個方便取得、看起來相關的量，不等於規格真正在乎的那個量。** 與「別拿 DOM 元素
+> 數量當『持有某資源』的代理判準」同型。
+
+### `@spekjs/ui` 內部對聚合節點 id 的處理**不一致** —— Timeline 的分組會靜默退化
+
+聚合關係圖的 change 節點 id 是 `change:<worktreeKey>:<slug>`，而套件內部：
+
+| | 對 `change:<key>:<slug>` |
+|---|---|
+| `SpecGraph` | **剝掉** key（`SpecGraph.js:149`） |
+| `buildLanes` / `changeTopicsMap` | **不剝** —— 只剝 `change:` 前綴，再以 slug 查表 |
+
+於是查表恆不命中，**Timeline 的「依 topic 分組」全部落到「(no topic)」，而圖照樣畫得出來**。
+實測（同一個 repo）：
+
+```
+topicsMap(raw):      [['0ceceaeb:main-change', ['auth']], …]   ← 對不上
+topicsMap(adapted):  [['main-change', ['auth']], …]            ← 對得上
+```
+
+**「`@spekjs/ui` 零改動」這個宣稱只查了一半**（只看了 `SpecGraph`），是獨立稽核抓到的。
+適配在宿主端做（餵給 `buildLanes` 之前正規化，`SpecGraph` 仍拿原始的）；**`edges` 的兩端也要換**
+—— `changeTopicsMap` 是先用 edge 的端點查 node、再讀 `node.id`。這也應回報 upstream：spek web
+自己的 Timeline 在聚合模式下有同樣的問題。
+
+### `ChangeDetail.source` 是一個**宣告了但從不被填**的欄位
+
+core 的 `types.ts` 寫著它「僅聚合讀取會填入」，但 **`readChange` 從來不填**（core 沒有聚合版的
+`readChange`，已 grep 確認整個 package 無寫入點）。「本 change 視圖標示來源」與續寫入口的條件 4
+都需要它 —— 正解是**從掃描結果取**（`#findChange` 查表拿到的那筆 `ChangeInfo` 本來就帶著
+`source`），與讀取根的解析同源，零額外成本。
+
+### spec 只取主工作目錄，所以**讀取根有三個而不是一個**
+
+`scanner.ts` 的聚合是 `specs: main.scan.specs` —— spec 一律取自主工作目錄，與 change 不同。
+於是三條路徑各有各的根：
+
+| 讀什麼 | 根 |
+|---|---|
+| change 的內容 / 某個 change 當下的 spec 版本 | **該 change 自己的來源工作目錄** |
+| spec 的內容 | **主工作目錄**（不是 folder 自己！） |
+| relPath 的翻譯基準 | **folder**（翻不出來就 `null`） |
+
+只改 change 那條、沿用 `root` 讀 spec 的話，兩種情形會壞（皆已實測）：folder 是 **linked
+worktree** 時，只存在於主工作目錄的 spec **列得出來卻打不開**；folder 是 repo 的**子目錄**時，
+**每一個** spec 都打不開。
+
+> **連帶一個行為切換，已寫進 design 並接受**：folder 是 repo 的子目錄時，該 repo **只要有 ≥2 個
+> 工作目錄**，整個 repo 的 spec 與 change 就會突然出現在側欄（`listWorkspaces` 是對 repo 作答，
+> 不是對子目錄）。抑制它需要自己判斷「root 是不是某個工作目錄的根」，那等於重做 core 的判定。
+
+### `isWithin` 是純字面比較 —— 這裡第一次拿兩個獨立來源的絕對路徑相比
+
+`toFolderRel()` 之前，`changeDirRelPath` 是 `path.join(root, rel)`，兩端同源；改用來源工作目錄
+之後，一端來自 `workspace.json`、另一端來自 `git worktree list`。**兩端目前都是 realpath**
+（`workspace-store.ts` 的 `add()` 以 `realpathSync` 正規化；git 回的一律已解析 symlink，實測），
+所以比得起來。**若 workspace 的路徑正規化改變，每一個 change 的「跳到檔案」會同時靜默消失。**
+
+### `schemaOrder` 的 CLI 快取**不跨 worktree**（已查證，非推測）
+
+`schema-order.ts:120` 的 cache key 是 `` `${repoRoot}::${schema}` ``，而每個 worktree 是不同的
+`repoRoot`；TTL 30 秒。CLAUDE.md 記載的「1.1.3 起 key 在 schema 而非 change」成立於**同一個
+`repoRoot` 之內**。
+
+**影響比直覺小**：它發生在 `readChange`（開啟某個 change 的內容），**不在掃描路徑上** ——
+側欄一次只呈現一個 change，代價是「切到另一個 worktree 的 change 時該 worktree 付一次」，
+不是「每次重掃付 N 次」。**不在本 app 疊一層自己的快取** —— spek 用同一份 core，要改該在 upstream 改。
+
+### 兩個 probe 的踩雷：條件優先序，與「輪詢條件太寬鬆」
+
+- **驗一個排在後面的停用原因，得先讓前面的條件全部成立。** 條件 4（`foreignWorktree`）之前還有
+  `noSession`／`foreignSource`／`notClaude`／`notRunning`，而我切到 repo 後**沒建 session** ——
+  讀到的說明是「Start a session in this repo…」，紅得莫名其妙。
+- **`pollUntil` 的條件必須是「要的那個值出現了」，不能是「有東西了」。** Timeline 的分組所需的
+  關係圖是另一次非同步取數，它抵達之前 lane 就是 `["(no topic)"]` —— 長度 1 也滿足
+  `list.length > 0`，於是提早返回、讀到一個還沒成形的狀態。
+- 附帶：**切換視圖後要等內容渲染再點**（`build` 模式僥倖通過、`dev` 慢一步就點空），而且
+  **把中間狀態變成獨立的斷言**（「錨定切換成功了嗎」），否則紅的會是終點那條，指向錯的方向。
 
 ## 混排字型的列要釘住行框（`leading-none`）
 

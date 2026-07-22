@@ -151,11 +151,13 @@
     "taskProgress": "Task progress",
     "continueArtifact": "Continue",
     "continueMissing": "Not written yet: {{artifacts}}",
+    "worktreeDetached": "detached",
     "continueBlocked": {
       "noSession": "Start a session in this repo to continue this change.",
       "foreignSource": "The panel is showing another repo. Switch it back to the session repo to continue.",
       "notClaude": "The focused session is a shell. Focus a claude session to continue.",
-      "notRunning": "The focused session is not running. Open it to continue."
+      "notRunning": "The focused session is not running. Open it to continue.",
+      "foreignWorktree": "This change lives in another worktree. The session runs in this folder, so it cannot continue it."
     }
   },
   "viz": {

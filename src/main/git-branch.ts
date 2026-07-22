@@ -57,6 +57,42 @@ function resolveGitDir(folderPath: string): string | null {
 }
 
 /**
+ * 找出 folder 所屬 repo 的 **common dir** —— 亦即 `git rev-parse --git-common-dir`。
+ *
+ * 這比 `resolveGitDir()` 多解一層，而那一層在「folder 本身就是一個 linked worktree」時決定生死：
+ *
+ * ```
+ * <worktree>/.git      → "gitdir: <main>/.git/worktrees/<name>"   ← resolveGitDir 停在這
+ * <gitdir>/worktrees   → 不存在，且永遠不會存在
+ * <gitdir>/commondir   → "../.."  ⇒ <main>/.git                   ← 要的是這個
+ * ```
+ *
+ * worktree 的清單住在 **common dir** 底下的 `worktrees/`。少了這一層，想監看「有沒有多一個
+ * worktree」就會 attach 到一個永不存在的路徑 —— 而 chokidar 對此**不報錯、也不發事件**，
+ * 於是整條「新建的 worktree 被納入」靜默失效（實測）。
+ *
+ * 主工作目錄沒有 `commondir` 檔案，此時 common dir 就是 gitdir 自身。
+ *
+ * 與 `resolveGitDir()` 同樣**不 spawn `git`**，且同樣可能指向 folder 邊界之外 —— 那是主行程
+ * 自己的檔案存取，推給 renderer 的不會是路徑。
+ */
+export function resolveCommonDir(folderPath: string): string | null {
+  const gitDir = resolveGitDir(folderPath)
+  if (gitDir === null) return null
+
+  let content: string
+  try {
+    content = fs.readFileSync(path.join(gitDir, 'commondir'), 'utf8')
+  } catch {
+    return gitDir // 沒有 commondir ＝ 這本身就是主工作目錄的 git 目錄
+  }
+
+  const target = content.trim()
+  if (!target) return gitDir
+  return path.isAbsolute(target) ? target : path.resolve(gitDir, target)
+}
+
+/**
  * 解析 `.git/HEAD` 的內容（實測的三種形式）：
  *
  * | 狀態 | 內容 |

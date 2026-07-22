@@ -4,7 +4,7 @@ import fs from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, it, mock } from 'node:test'
-import { headPath, parseHead, readBranch } from './git-branch'
+import { headPath, parseHead, readBranch, resolveCommonDir } from './git-branch'
 
 /**
  * fixture 一律手工寫檔，不呼叫真的 `git`。
@@ -183,5 +183,61 @@ describe('headPath', () => {
     const plain = path.join(base, 'plain2')
     fs.mkdirSync(plain)
     assert.equal(headPath(plain), null)
+  })
+})
+
+describe('resolveCommonDir', () => {
+  it('主工作目錄 —— 沒有 commondir 檔案，common dir 就是 .git 自己', () => {
+    const repo = makeRepo('main-a', 'ref: refs/heads/master\n')
+    assert.equal(resolveCommonDir(repo), path.join(repo, '.git'))
+  })
+
+  /**
+   * **這一層是承重的。** worktree 的清單住在 common dir 底下的 `worktrees/`，而 `.git` 檔案
+   * 只指到 `<main>/.git/worktrees/<name>` —— 那底下**永遠不會有** `worktrees/`。
+   *
+   * 少了這層解析，「監看有沒有新的 worktree」會 attach 到一個永不存在的路徑，而 chokidar
+   * 對此不報錯也不發事件：整條「新建的 worktree 被納入」**靜默失效**。
+   */
+  it('linked worktree —— 解 commondir 那一層，回到主 repo 的 .git', () => {
+    const mainGit = path.join(base, 'main-b', '.git')
+    const wtGitDir = path.join(mainGit, 'worktrees', 'feat-x')
+    fs.mkdirSync(wtGitDir, { recursive: true })
+    // git 寫的是相對路徑（實測），要相對於 gitdir 解析
+    fs.writeFileSync(path.join(wtGitDir, 'commondir'), '../..\n')
+
+    const wt = path.join(base, 'wt-b')
+    fs.mkdirSync(wt)
+    fs.writeFileSync(path.join(wt, '.git'), `gitdir: ${wtGitDir}\n`)
+
+    assert.equal(resolveCommonDir(wt), mainGit)
+    // 對照：只解一層會停在這裡，而它底下沒有、也不會有 worktrees/
+    assert.equal(fs.existsSync(path.join(wtGitDir, 'worktrees')), false)
+  })
+
+  it('commondir 寫絕對路徑也吃', () => {
+    const mainGit = path.join(base, 'main-c', '.git')
+    const wtGitDir = path.join(mainGit, 'worktrees', 'feat-y')
+    fs.mkdirSync(wtGitDir, { recursive: true })
+    fs.writeFileSync(path.join(wtGitDir, 'commondir'), `${mainGit}\n`)
+
+    const wt = path.join(base, 'wt-c')
+    fs.mkdirSync(wt)
+    fs.writeFileSync(path.join(wt, '.git'), `gitdir: ${wtGitDir}\n`)
+
+    assert.equal(resolveCommonDir(wt), mainGit)
+  })
+
+  it('非 git repo 回 null，不拋錯', () => {
+    const plain = path.join(base, 'plain3')
+    fs.mkdirSync(plain)
+    assert.equal(resolveCommonDir(plain), null)
+  })
+
+  it('不 spawn 任何子行程', () => {
+    const calls = trapChildProcess()
+    const repo = makeRepo('main-d', 'ref: refs/heads/master\n')
+    resolveCommonDir(repo)
+    assert.deepEqual(calls, [])
   })
 })

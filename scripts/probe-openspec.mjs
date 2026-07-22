@@ -17,7 +17,7 @@
  * 結束碼 0 表示全部 scenario 通過。
  */
 import { execFileSync, spawn } from 'node:child_process'
-import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
@@ -163,6 +163,61 @@ function makeFixture() {
   mkdirSync(plain, { recursive: true })
 
   return { many, single, archivedOnly, plain }
+}
+
+/**
+ * 一個**真的** git repo 與兩個 linked worktree。
+ *
+ * **只有這一組 fixture 需要 git**：聚合掃描是靠 `git worktree list` 列舉工作目錄的，手寫
+ * `.git` 檔案騙不過它。其餘 fixture 一律不 spawn git（那會讓探針依賴機器狀態）。
+ *
+ * 三個 change 是刻意的對照組：
+ *
+ * | change | 位置 | 驗什麼 |
+ * |---|---|---|
+ * | `main-change` | 主工作目錄，artifact 齊備 | **不**標示來源；也不呈現續寫入口 |
+ * | `inside-change` | 邊界**內**的 worktree（`.claude/worktrees/`） | 標示 `feat-inside`；續寫入口停用；檔案導覽入口**有** |
+ * | `outside-change` | 邊界**外**的 worktree | 標示 `feat-outside`；檔案導覽入口**沒有** |
+ *
+ * 兩個 worktree 的 change 都**不 commit** —— 掃描讀的是檔案系統。而「只存在於一處的 slug 本來
+ * 就會勝出」，所以不必刻意造 git 分歧。
+ */
+function makeWorktreeFixture() {
+  const base = mkTemp('spekterm-openspec-worktree-')
+  const repo = join(base, 'repo-worktree')
+  const inside = join(repo, '.claude/worktrees/wt-inside')
+  const outside = join(base, 'wt-outside')
+
+  const git = (args, cwd) =>
+    execFileSync(
+      'git',
+      ['-c', 'user.email=probe@spekterm', '-c', 'user.name=probe', '-c', 'color.ui=false', ...args],
+      { cwd, stdio: 'pipe' },
+    )
+
+  writeFile(join(repo, 'openspec/config.yaml'), 'schema: spec-driven\n')
+  writeFile(join(repo, 'openspec/specs/auth/spec.md'), SPEC('auth'))
+  changeMeta(join(repo, 'openspec/changes/main-change'), '2026-05-02')
+  writeFile(join(repo, 'openspec/changes/main-change/proposal.md'), '# 主工作目錄的 change\n')
+  writeFile(join(repo, 'openspec/changes/main-change/design.md'), '# design\n')
+  writeFile(join(repo, 'openspec/changes/main-change/tasks.md'), TASKS)
+  writeFile(join(repo, 'openspec/changes/main-change/specs/auth/spec.md'), DELTA)
+
+  git(['init', '-q', '--initial-branch=master', '.'], repo)
+  git(['add', '-A'], repo)
+  git(['commit', '-qm', 'init'], repo)
+
+  git(['worktree', 'add', '-q', '-b', 'feat-inside', '.claude/worktrees/wt-inside'], repo)
+  changeMeta(join(inside, 'openspec/changes/inside-change'), '2026-05-12')
+  writeFile(join(inside, 'openspec/changes/inside-change/proposal.md'), '# 邊界內 worktree 的 change\n')
+  // 有 delta 才有 spec ↔ change 的邊 —— Timeline 的「依 topic 分組」需要它。
+  writeFile(join(inside, 'openspec/changes/inside-change/specs/auth/spec.md'), DELTA)
+
+  git(['worktree', 'add', '-q', '-b', 'feat-outside', outside], repo)
+  changeMeta(join(outside, 'openspec/changes/outside-change'), '2026-05-22')
+  writeFile(join(outside, 'openspec/changes/outside-change/proposal.md'), '# 邊界外 worktree 的 change\n')
+
+  return { repo, inside, outside }
 }
 
 /**
@@ -643,6 +698,28 @@ const CONTINUE_ENTRY = `(() => {
 
 const HAS_BACK_TO_OWN = `Boolean(document.querySelector('[aria-label="${copy('panelSource.backToOwn')}"]'))`
 
+/** Timeline 的分組標題（`.spekui-timeline-section` 的 title；套件內部的 class，不歸字典管）。 */
+const TIMELINE_SECTIONS = `(() => {
+  const dialog = document.querySelector('[role="dialog"]')
+  if (!dialog) return null
+  return [...dialog.querySelectorAll('.spekui-timeline-section')].map((el) => el.getAttribute('title'))
+})()`
+
+/** 點 overlay 裡的一顆 chip（group by topic 之類）—— 以可見文字定位。 */
+const CLICK_VIZ_CHIP = (label) => `(() => {
+  const dialog = document.querySelector('[role="dialog"]')
+  const btn = [...(dialog?.querySelectorAll('button') ?? [])]
+    .find((b) => b.textContent?.trim() === ${JSON.stringify(label)})
+  if (!btn) return false
+  btn.click()
+  return true
+})()`
+
+/** 當前呈現的 artifact 有沒有「在 Files 中開啟」的入口（邊界外的來源翻不出 relPath ⇒ 沒有）。 */
+const HAS_OPEN_IN_FILES = `Boolean(
+  document.querySelector('button[aria-label$="${suffixOf('openspec.openInFiles')}"]')
+)`
+
 const FOCUS_SESSION_TAB = (index) => `(() => {
   const tabs = [...document.querySelectorAll('[role="tablist"][aria-label="${copy('sessions.tabs')}"] button[role="tab"]')]
   const tab = tabs[${index}]
@@ -767,17 +844,51 @@ async function createSession(client, target = 'shell') {
   throw new Error(`選單中找不到 ${target}（重量再點 3 次仍未開啟）`)
 }
 
+/**
+ * 在瀏覽視圖點一列 change，並確認錨定**真的**切過去了。
+ *
+ * **點一次就斷言是在賭**：側欄會因為建立 session、掃描回來等事件重繪，`pollUntil` 看到那一列
+ * 之後、點下去之前的窗口裡它可能已經被換掉。實測是一支在 build 與 dev 之間**跳動**的 flaky
+ * （第二輪 dev 綠 build 紅、第三輪反過來）—— 與 `createSession` 對付選單的是同一種競態，
+ * 因此用同一種解法：點完確認結果，沒生效就重來。
+ *
+ * 三次都沒成功才回傳當下的實際值，讓呼叫端的斷言紅得有話可說（鑑別力不因重試而消失）。
+ */
+async function anchorChange(client, slug) {
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    // **切視圖本身也要納入重試** —— 建立 session 之後畫面仍在變動，`CLICK_VIEW` 會落空；
+    // 而落空的徵狀是「樹永遠不出現」，不是「點錯地方」（實測：兩個模式都紅在同一處，
+    // 重試三次也救不回來 —— 因為每次重試都在同一個沒切過去的視圖裡等一棵不存在的樹）。
+    await client.evaluate(CLICK_VIEW(copy('openspec.tabBrowse')))
+    const rows = await pollUntil(
+      client,
+      CHANGE_TREE_ROWS('Active'),
+      (list) => list.some((r) => r.slug === slug),
+      8000,
+    )
+    if (!rows) continue
+
+    await client.evaluate(ACTIVATE_TREE_ROW(slug))
+    // 在樹上選一個 change 會錨定它並切回「本 change」視圖，`ANCHORED_SLUG` 讀的正是那裡的標題。
+    const anchored = await pollUntil(client, ANCHORED_SLUG, (v) => v === slug, 6000)
+    if (anchored === slug) return slug
+  }
+  return await client.evaluate(ANCHORED_SLUG)
+}
+
 // ── 主流程 ──────────────────────────────────────────────────────────────────
 
 async function runMode(label, { port, rendererUrl }) {
   console.log(`\n── ${label} ──`)
 
   const { many, single, archivedOnly, plain } = makeFixture()
+  const worktree = makeWorktreeFixture()
   const profile = seedProfile([
     ['f-many', many],
     ['f-single', single],
     ['f-archived', archivedOnly],
     ['f-plain', plain],
+    ['f-worktree', worktree.repo],
   ])
 
   const stub = makeStubClaude()
@@ -1490,6 +1601,160 @@ async function runMode(label, { port, rendererUrl }) {
       '側欄來源跨重建還原（session 1 仍指向自身 repo）',
       restoredOwn === 'solo-change',
       String(restoredOwn),
+    )
+
+    // ── worktree 聚合 ───────────────────────────────────────────────────────
+    //
+    // **這一段放在最後**：它切到另一個 repo 並開 overlay，會動到前面每一段所依賴的狀態。
+    console.log('\nworktree 聚合')
+
+    check(
+      results,
+      '選中含 worktree 的 repo',
+      (await pollUntil(app.client, SELECT_FOLDER('repo-worktree'), (ok) => ok === true, 8000)) === true,
+    )
+    await app.client.evaluate(CLICK_VIEW(copy('openspec.tabBrowse')))
+
+    const wtActive = await pollUntil(
+      app.client,
+      CHANGE_TREE_ROWS('Active'),
+      (list) => list.length >= 3,
+      12_000,
+    )
+    const slugs = (wtActive ?? []).map((r) => r.slug)
+    check(
+      results,
+      'worktree 裡的 change 出現在側欄',
+      slugs.includes('inside-change') && slugs.includes('outside-change'),
+      slugs.join(', '),
+    )
+
+    // **這條是防假綠的關鍵**：worktree ≤ 1 時 core 會靜默退回非聚合，而上一條在那種情況下
+    // 仍可能因為別的原因通過。它們確實不在主工作目錄底下 —— 那才是「聚合真的發生了」的證據。
+    check(
+      results,
+      '那些 change 不存在於主工作目錄的 openspec/changes/ 底下',
+      !existsSync(join(worktree.repo, 'openspec/changes/inside-change')) &&
+        !existsSync(join(worktree.repo, 'openspec/changes/outside-change')) &&
+        existsSync(join(worktree.inside, 'openspec/changes/inside-change')),
+    )
+
+    const rowOf = (slug) => (wtActive ?? []).find((r) => r.slug === slug)
+    check(
+      results,
+      '來自 worktree 的 change 標示其分支',
+      rowOf('inside-change')?.text.includes('feat-inside') === true &&
+        rowOf('outside-change')?.text.includes('feat-outside') === true,
+      `${rowOf('inside-change')?.text} / ${rowOf('outside-change')?.text}`,
+    )
+    // 成對 —— 少了這條，「標示恆常呈現」也會讓上一條通過。
+    check(
+      results,
+      '來自主工作目錄的 change 不標示來源',
+      rowOf('main-change') !== undefined &&
+        !rowOf('main-change').text.includes('master') &&
+        !rowOf('main-change').text.includes('feat-'),
+      rowOf('main-change')?.text,
+    )
+
+    // **續寫入口的條件 4 需要前三個條件全部成立** —— 否則擋住入口的會是 `noSession`，
+    // 而那條先於它回報（實測踩過：沒建 session 就斷言，讀到的說明是「Start a session…」）。
+    // 因此先在這個 repo 開一個執行中的 claude session（stub）。
+    await createSession(app.client, 'claude')
+
+    // 邊界**內**的 worktree：relPath 翻得出來 ⇒ 檔案導覽入口在
+    //
+    // **建立 session 會把側欄視圖帶回「本 change」**（新 session 尚無錨定 ⇒ 空狀態），
+    // 所以要重新切回瀏覽視圖並等樹畫出來 —— 直接點是在賭（實測：build 模式點空，
+    // 其後三條斷言全紅且看起來像「續寫入口壞了」）。
+    const insideAnchored = await anchorChange(app.client, 'inside-change')
+    check(results, '錨定切換至 inside-change', insideAnchored === 'inside-change', String(insideAnchored))
+
+    await app.client.evaluate(CLICK_VIEW(copy('openspec.tabChange')))
+    const insideOpen = await pollUntil(app.client, HAS_OPEN_IN_FILES, (v) => v === true, 12_000)
+    check(results, '邊界內 worktree 的 artifact 可跨身分導覽', insideOpen === true)
+
+    // 續寫入口：change 在另一個工作目錄，而 session 跑在 folder 根目錄 ⇒ 停用並說明
+    const wtEntry = await pollUntil(app.client, CONTINUE_ENTRY, (v) => v !== null, 10_000)
+    check(
+      results,
+      '來源為另一個工作目錄時續寫入口停用',
+      wtEntry?.disabled === true,
+      JSON.stringify(wtEntry),
+    )
+    check(
+      results,
+      '停用時說明原因',
+      wtEntry !== null && wtEntry.text.includes(copy('openspec.continueBlocked.foreignWorktree')),
+      wtEntry?.text,
+    )
+
+    // 邊界**外**的 worktree：內容完整，但翻不出 relPath ⇒ 沒有檔案導覽入口（成對於上面那條）
+    //
+    // **切回瀏覽視圖之後要等樹畫出來再點** —— 直接 `ACTIVATE_TREE_ROW` 是在賭渲染已經完成
+    // （實測：build 模式僥倖通過、dev 模式慢一步就點空，而後面兩條跟著紅）。
+    // 把中間狀態變成獨立的斷言 —— 否則錨定失敗時，紅的會是下面那條內容斷言，指向錯的方向。
+    const outsideAnchored = await anchorChange(app.client, 'outside-change')
+    check(results, '錨定切換至 outside-change', outsideAnchored === 'outside-change', String(outsideAnchored))
+
+    await app.client.evaluate(CLICK_VIEW(copy('openspec.tabChange')))
+    const outsideContent = await pollUntil(
+      app.client,
+      SPEC_CONTENT,
+      (text) => text.includes('邊界外 worktree 的 change'),
+      12_000,
+    )
+    check(
+      results,
+      '邊界外 worktree 的 change 內容完整',
+      String(outsideContent).includes('邊界外 worktree 的 change'),
+      String(outsideContent).slice(0, 160),
+    )
+    const outsideOpen = await pollUntil(app.client, HAS_OPEN_IN_FILES, (v) => v === false, 8000)
+    check(results, '邊界外 worktree 的 artifact 不提供檔案導覽入口', outsideOpen === false)
+
+    // agent 改 worktree 裡的檔案 → 側欄自己更新（監看的第二層）
+    await app.client.evaluate(CLICK_VIEW(copy('openspec.tabBrowse')))
+    writeFile(
+      join(worktree.inside, 'openspec/changes/inside-change/tasks.md'),
+      '## 1. 後端\n\n- [x] 1.1 做完了\n',
+    )
+    const afterEdit = await pollUntil(
+      app.client,
+      CHANGE_TREE_ROWS('Active'),
+      (list) => list.find((r) => r.slug === 'inside-change')?.text.includes('1/1') === true,
+      15_000,
+    )
+    check(
+      results,
+      'worktree 裡的變更使側欄自行更新',
+      afterEdit?.find((r) => r.slug === 'inside-change')?.text.includes('1/1') === true,
+      afterEdit?.find((r) => r.slug === 'inside-change')?.text,
+    )
+
+    // Timeline 的依 topic 分組 —— 聚合的 change 節點識別碼帶著 worktree key，若未正規化，
+    // 分組會**靜默**退化成全部落在「(no topic)」（圖照樣畫得出來）。
+    check(results, '自側欄開啟 Timeline', (await app.client.evaluate(CLICK_OPEN_VIZ('Timeline'))) === true)
+    await pollUntil(app.client, TIMELINE, (value) => value !== null, 12_000)
+    check(
+      results,
+      '開啟依 topic 分組',
+      (await app.client.evaluate(CLICK_VIZ_CHIP(copy('viz.groupByTopic')))) === true,
+    )
+    // **輪詢條件必須是「auth 出現了」，不能是「有東西」** —— 分組所需的關係圖是另一次非同步
+    // 取數，它抵達之前 lane 就是 `["(no topic)"]`，長度為 1 也滿足「有東西」，於是提早返回、
+    // 讀到一個還沒成形的狀態（實測踩過）。等不到才是真的紅。
+    const laneTitles = await pollUntil(
+      app.client,
+      TIMELINE_SECTIONS,
+      (list) => Array.isArray(list) && list.includes('auth'),
+      15_000,
+    )
+    check(
+      results,
+      '聚合後 Timeline 仍依 topic 分組（不是全部落在無 topic）',
+      Array.isArray(laneTitles) && laneTitles.includes('auth'),
+      JSON.stringify(laneTitles),
     )
   } finally {
     await app.close()

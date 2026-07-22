@@ -46,6 +46,33 @@ export function StatusBadge({ status }: { status: 'active' | 'archived' }): Reac
   )
 }
 
+/**
+ * change 的來源工作目錄（git worktree）。
+ *
+ * 規則對齊 spek 的 `WorktreeBadge`：**主工作目錄不標示** —— 在單一工作目錄的 repo 裡那會是
+ * 每一列都重複一次的雜訊（比照 rail 把「每列都喊一次的 OpenSpec」降級的判斷）。
+ *
+ * **唯一偏離 spek 的地方是沒有 tooltip**：它那顆的 `title` 是來源的**絕對路徑**，而 renderer
+ * 不持有該資訊（DTO 丟棄了它）。分支名本身已足以識別來源。
+ */
+export function WorktreeBadge({
+  worktree,
+}: {
+  worktree?: { branch: string | null; vcs: 'git' | 'jj'; isMain: boolean }
+}): React.JSX.Element | null {
+  const { t } = useTranslation()
+  if (!worktree || worktree.isMain) return null
+
+  const branch = worktree.branch ?? t('openspec.worktreeDetached')
+  const label = worktree.vcs === 'jj' ? `jj:${worktree.branch ?? ''}` : branch
+
+  return (
+    <span className="min-w-0 shrink truncate rounded border border-line px-[6px] py-[1px] font-mono text-2xs text-ink-faint">
+      {label}
+    </span>
+  )
+}
+
 /** delta 的動作。ADDED 是 amber、MODIFIED 是 blue（雛型的 .req-block badge）。 */
 export function DeltaBadge({ verb }: { verb: DeltaVerb }): React.JSX.Element {
   const tone =

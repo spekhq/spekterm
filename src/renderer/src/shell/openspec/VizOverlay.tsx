@@ -1,3 +1,4 @@
+import type { GraphData } from '@spekjs/core'
 import { ChangeTimeline, SpecGraph, buildLanes } from '@spekjs/ui'
 import { useEffect, useMemo, useState } from 'react'
 import { createPortal } from 'react-dom'
@@ -8,6 +9,43 @@ import { useTranslation } from 'react-i18next'
 
 /** overlay 裡的兩個視覺化。**它們是不同的東西** —— Graph 是關聯結構，Timeline 是生命週期。 */
 export type VizKind = 'graph' | 'timeline'
+
+const CHANGE_PREFIX = 'change:'
+
+/** `change:<worktreeKey>:<slug>` → `change:<slug>`；非 change 的識別碼原樣回傳。 */
+function plainChangeId(id: string): string {
+  if (!id.startsWith(CHANGE_PREFIX)) return id
+  const rest = id.slice(CHANGE_PREFIX.length)
+  const sep = rest.indexOf(':')
+  return sep === -1 ? id : `${CHANGE_PREFIX}${rest.slice(sep + 1)}`
+}
+
+/**
+ * 把聚合關係圖的 change 識別碼正規化，**專供 `buildLanes` 使用**。
+ *
+ * `@spekjs/ui` 內部對聚合識別碼的處理並不一致（已實測）：
+ *
+ * | | 對 `change:<key>:<slug>` |
+ * |---|---|
+ * | `SpecGraph` | **剝掉** key |
+ * | `buildLanes` / `changeTopicsMap` | **不剝** —— 只剝 `change:` 前綴，再以 slug 查表 |
+ *
+ * 於是查表恆不命中，Timeline 的「依 topic 分組」會**靜默退化**成全部落在「無 topic」——
+ * 圖照樣畫得出來，不會有任何錯誤。這裡在餵給 `buildLanes` 之前把識別碼換回非聚合的形式；
+ * `SpecGraph` 仍拿原始的那份（節點識別碼的唯一性是它的事）。
+ *
+ * `edges` 的兩端也要換 —— `changeTopicsMap` 是先用 edge 的端點查 node，再讀 `node.id`。
+ */
+function withPlainChangeIds(graph: GraphData | null): GraphData | null {
+  if (!graph) return null
+  return {
+    nodes: graph.nodes.map((node) => ({ ...node, id: plainChangeId(node.id) })),
+    edges: graph.edges.map((edge) => ({
+      source: plainChangeId(edge.source),
+      target: plainChangeId(edge.target),
+    })),
+  }
+}
 
 interface VizOverlayProps {
   folderId: string
@@ -174,7 +212,12 @@ function TimelinePane({
 
   // group by topic 才需要關係圖（它用來推 change → topic 的對應）。
   const { lanes, unknownCreated } = useMemo(
-    () => buildLanes(filtered, groupByTopic ? (graph.data ?? null) : null, groupByTopic),
+    () =>
+      buildLanes(
+        filtered,
+        groupByTopic ? withPlainChangeIds(graph.data ?? null) : null,
+        groupByTopic,
+      ),
     [filtered, graph.data, groupByTopic],
   )
 
