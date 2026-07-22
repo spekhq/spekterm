@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -6,6 +7,11 @@ import { afterEach, beforeEach, describe, it } from 'node:test'
 import type { AggregatedScanResult } from '@spekjs/core'
 import { OpenSpecService, OpenSpecServiceError } from './openspec-service'
 import type { FolderLookup, WorkspaceFolder } from './workspace-store'
+
+const SPEC_AUTH =
+  '# auth Specification\n\n## Purpose\n\n登入。\n\n## Requirements\n\n### Requirement: 可登入\n\n系統 SHALL 允許登入。\n\n#### Scenario: 正確的密碼\n\n- **WHEN** 密碼正確\n- **THEN** 登入成功\n'
+const DELTA_AUTH =
+  '## ADDED Requirements\n\n### Requirement: OAuth\n\n系統 SHALL 支援 OAuth。\n\n#### Scenario: Google\n\n- **WHEN** 選擇 Google\n- **THEN** 導向 Google\n'
 
 let base: string
 let repo: string
@@ -566,5 +572,180 @@ describe('OpenSpecService 的 worktree 監看層', () => {
     fs.writeFileSync(path.join(gone, 'openspec', 'b.md'), '# 不該再被看見\n')
     await delay(READY_MS)
     assert.deepEqual(changed, [], '已離開清單的工作目錄不該再推送通知')
+  })
+})
+
+/**
+ * 讀取根的分家（design D2b）。
+ *
+ * **這一組是補上來的** —— 獨立稽核發現 `#specRoot` 的 fallback 有迴歸，而當時整條分支
+ * 沒有任何測試會走到（聚合的 fixture 一律 `specs: []`）。一個拿掉之後不會有東西變紅的
+ * 修正，就是一個遲早會被改回去的修正。
+ */
+describe('OpenSpecService 的 spec 讀取根', () => {
+  function wt(wtPath: string, isMain: boolean) {
+    return {
+      path: wtPath,
+      branch: isMain ? 'master' : 'feat',
+      head: null,
+      isMain,
+      isBare: false,
+      key: path.basename(wtPath).slice(0, 8),
+      vcs: 'git' as const,
+    }
+  }
+
+  function scanOf(specTopics: string[], worktrees: unknown[], aggregated: boolean) {
+    return async (): Promise<AggregatedScanResult> =>
+      ({
+        specs: specTopics.map((topic) => ({
+          topic,
+          path: path.join(repo, `openspec/specs/${topic}/spec.md`),
+          historyCount: 0,
+        })),
+        activeChanges: [],
+        archivedChanges: [],
+        defaultSchema: null,
+        worktrees,
+        aggregated,
+      }) as unknown as AggregatedScanResult
+  }
+
+  /**
+   * **非聚合時不可看 `worktrees`。** core 在工作目錄 ≤ 1 時回的是 `scanOpenSpec(folder)`，
+   * 但 `worktrees` 仍帶著主工作目錄那筆 —— folder 是 repo 的**子目錄**時，那筆指向 repo 根，
+   * 而 specs 來自子目錄。看了它就會去錯的地方讀，spec 列得出來卻打不開。
+   */
+  it('非聚合時以 folder 自身為讀取根，即使 worktrees 指向別處', async () => {
+    const elsewhere = path.join(base, 'elsewhere')
+    fs.mkdirSync(path.join(elsewhere, 'openspec/specs/auth'), { recursive: true })
+    // 別處**也有**同名 spec，內容不同 —— 讀錯地方會讀到這一份，而不是靜靜地失敗。
+    fs.writeFileSync(path.join(elsewhere, 'openspec/specs/auth/spec.md'), '# WRONG SOURCE\n')
+
+    const svc = create(okFolder(), { scan: scanOf(['auth'], [wt(elsewhere, true)], false) })
+    const detail = await svc.getSpec('f1', 'auth')
+
+    assert.ok(!detail.content.includes('WRONG SOURCE'), '不得讀到 worktrees 指向的那個 repo')
+    assert.ok(detail.content.includes('auth'), `應讀到 folder 自己的 spec：${detail.content.slice(0, 40)}`)
+  })
+
+  /** 聚合時反過來 —— folder 是 linked worktree，spec 只存在於主工作目錄，仍要讀得到。 */
+  it('聚合時以主工作目錄為讀取根（folder 是 linked worktree 的情形）', async () => {
+    const mainWt = path.join(base, 'main-wt')
+    fs.mkdirSync(path.join(mainWt, 'openspec/specs/core'), { recursive: true })
+    fs.writeFileSync(
+      path.join(mainWt, 'openspec/specs/core/spec.md'),
+      '# core Specification\n\n## Purpose\n\nMAIN WORKTREE SPEC\n',
+    )
+
+    const svc = create(okFolder(), {
+      scan: scanOf(['core'], [wt(mainWt, true), wt(repo, false)], true),
+    })
+    const detail = await svc.getSpec('f1', 'core')
+
+    assert.ok(
+      detail.content.includes('MAIN WORKTREE SPEC'),
+      `folder 自己沒有這個 spec，必須從主工作目錄讀：${detail.content.slice(0, 60)}`,
+    )
+  })
+})
+
+/**
+ * 送往 renderer 的 DTO 一律不含絕對路徑 —— **關係圖也算**。
+ *
+ * 稽核發現：聚合的圖會在每個 change 節點掛一份完整的 `WorktreeSource`（含 `path`），
+ * 而原本唯一驗這件事的測試只 stringify change 清單。
+ */
+describe('OpenSpecService 的關係圖不洩漏路徑', () => {
+  /**
+   * **必須是真的 git repo 且真的有 linked worktree。**
+   *
+   * 這條測試的第一版用既有的（非 git）fixture，於是 core 靜默退回非聚合、節點上根本沒有
+   * `source` —— 把修正整個拿掉它照樣全綠（對照組實測）。那正是本 change 自己記載的頭號假綠
+   * 來源：`worktree ≤ 1 時 core 靜默退回非聚合`。
+   *
+   * `getGraphData` 不經注入的 `scan`（它直接呼叫 core 的 `buildGraphDataAggregated`），
+   * 因此這裡只能用真 git 造出聚合的情境。
+   */
+  function makeGitRepoWithWorktree(): string {
+    const gitRepo = path.join(base, 'graph-repo')
+    const wtPath = path.join(base, 'graph-wt')
+    const git = (args: string[]) =>
+      execFileSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', '-c', 'color.ui=false', ...args], {
+        cwd: gitRepo,
+        stdio: 'pipe',
+      })
+
+    const put = (target: string, content: string) => {
+      fs.mkdirSync(path.dirname(target), { recursive: true })
+      fs.writeFileSync(target, content)
+    }
+    put(path.join(gitRepo, 'openspec/config.yaml'), 'schema: spec-driven\n')
+    put(path.join(gitRepo, 'openspec/specs/auth/spec.md'), SPEC_AUTH)
+    put(path.join(gitRepo, 'openspec/changes/main-change/proposal.md'), '# m\n')
+    put(path.join(gitRepo, 'openspec/changes/main-change/specs/auth/spec.md'), DELTA_AUTH)
+    git(['init', '-q', '--initial-branch=master', '.'])
+    git(['add', '-A'])
+    git(['commit', '-qm', 'init'])
+    git(['worktree', 'add', '-q', '-b', 'feat-x', wtPath])
+    put(path.join(wtPath, 'openspec/changes/wt-change/proposal.md'), '# w\n')
+    put(path.join(wtPath, 'openspec/changes/wt-change/specs/auth/spec.md'), DELTA_AUTH)
+    return gitRepo
+  }
+
+  it('graph 的節點不含來源的絕對路徑', async () => {
+    const gitRepo = makeGitRepoWithWorktree()
+    const svc = create(lookup([{ id: 'g1', path: gitRepo, status: 'ok' }]))
+
+    // 前置：聚合真的發生了，否則下面的斷言沒有鑑別力。
+    const changes = await svc.getChanges('g1')
+    assert.ok(
+      changes.active.some((c) => c.slug === 'wt-change'),
+      `worktree 的 change 必須出現，否則不是聚合路徑：${changes.active.map((c) => c.slug).join(',')}`,
+    )
+
+    const graph = await svc.getGraphData('g1')
+    const payload = JSON.stringify(graph)
+
+    assert.ok(graph.nodes.length > 0, '圖不該是空的')
+    assert.ok(!payload.includes(base), `關係圖洩漏了絕對路徑：${payload.slice(0, 200)}`)
+  })
+})
+
+/**
+ * 工作目錄清單的監看，其解析起點必須容許「folder 不是工作目錄的根」。
+ *
+ * `resolveCommonDir` 只看 `<folder>/.git`、不往上找 —— folder 是 repo 的**子目錄**時
+ * （design D2b 明文接受的佈局）從它解不出 common dir，那一層 watcher 就不會存在，
+ * 於是「新建的 worktree 被納入」靜默失效。掃描回來之後才知道主工作目錄在哪，因此
+ * 那一層要在掃描後補建。
+ */
+describe('OpenSpecService 的工作目錄清單監看', () => {
+  it('folder 是 repo 的子目錄時，仍監看得到工作目錄清單', async () => {
+    const gitRepo = path.join(base, 'sub-repo')
+    const sub = path.join(gitRepo, 'packages/app')
+    const git = (args: string[]) =>
+      execFileSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', '-c', 'color.ui=false', ...args], {
+        cwd: gitRepo,
+        stdio: 'pipe',
+      })
+
+    fs.mkdirSync(path.join(sub, 'openspec/specs/x'), { recursive: true })
+    fs.writeFileSync(path.join(sub, 'openspec/config.yaml'), 'schema: spec-driven\n')
+    fs.writeFileSync(path.join(sub, 'openspec/specs/x/spec.md'), SPEC_AUTH)
+    git(['init', '-q', '--initial-branch=master', '.'])
+    git(['add', '-A'])
+    git(['commit', '-qm', 'init'])
+
+    const svc = create(lookup([{ id: 's1', path: sub, status: 'ok' }]))
+    await svc.getSpecs('s1') // 觸發掃描 —— 清單 watcher 於此之後才補建得起來
+    await delay(READY_MS)
+    changed.length = 0
+
+    // 模擬「多了一個工作目錄」：git 就是在 common dir 底下建這個目錄的
+    fs.mkdirSync(path.join(gitRepo, '.git/worktrees/newly-added'), { recursive: true })
+    await delay(READY_MS)
+
+    assert.deepEqual(changed, ['s1'], '新增工作目錄必須觸發通知（folder 為子目錄時亦然）')
   })
 })

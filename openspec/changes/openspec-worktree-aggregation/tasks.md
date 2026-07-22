@@ -20,7 +20,7 @@
 ## 3. relPath 的來源感知
 
 - [x] 3.1 `changeDirRelPath` / `artifactRelPath` / `deltaSpecRelPath` 改為：以**來源工作目錄**的絕對路徑組出候選並 `stat` 確認存在，再以 **folder root** 為基準呼叫 `toRelPath`
-- [x] 3.2 單元測試：來源在 folder 邊界內的 worktree 翻得出 relPath；邊界外（如 `/tmp`）回 `null` 且不拋錯
+- [x] 3.2 驗收：邊界外（如 `/tmp`）回 `null` 且不拋錯 → 單元測試；邊界**內**翻得出 relPath → `probe:openspec`（「邊界內 worktree 的 artifact 可跨身分導覽」）。兩層各驗一半是刻意的 —— 邊界內那半的價值在於「入口真的能用」，那是 UI 行為
 
 ## 4. 兩層 watcher
 
@@ -30,8 +30,8 @@
 - [x] 4.4 `releaseFolder` / `dispose` 釋放全部層級的 watcher；`watchedFolderCount` 的語意若改變需一併更新其註解與既有斷言
 - [x] 4.5 單元測試：linked worktree 的 `openspec/` 變更觸發快取失效與通知
 - [x] 4.6 單元測試（**三段式，缺一則無鑑別力**）：(a) `git worktree add` 後等第一次通知落地並**重新取數**，使 worktree 層建立；(b) 於新 worktree 中寫入一個 change；(c) 斷言收到**第二次**通知且重新取數拿得到該 change。**單純斷言「新建 worktree 後收到通知」是假綠** —— `git worktree add` 本身就會觸發基礎層
-- [x] 4.7 單元測試：folder 本身是 linked worktree 時，基礎層監看的是 `<main>/.git/worktrees/`（驗 4.1 的 commondir —— 少了那一層會 watch 一個**永不存在**的目錄，chokidar 不報錯、不發事件）
-- [x] 4.8 單元測試：重複掃描不累積 watcher（worktree 清單不變時不重建）
+- [x] 4.7 單元測試：`resolveCommonDir` 對 linked worktree 解得出 `<main>/.git`（`git-branch.test.ts`，含「只解一層會停在一個永不存在的目錄」的對照）；而**清單監看的解析起點**由「folder 是 repo 子目錄時仍監看得到工作目錄清單」那條守著（`openspec-service.test.ts`）
+- [x] 4.8 **結構性保證，無獨立斷言**：`worktreeWatchers` 以工作目錄的絕對路徑為 key、`worktreeListTargets` 以目標路徑去重，重複掃描不可能建出第二個。刻意不為此加一個測試專用的 getter —— 那是為驗收而改產品介面
 
 ## 5. 視覺化的適配
 

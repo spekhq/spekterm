@@ -263,7 +263,7 @@ PROBE_DISPLAY=physical npm run probe:terminal   # 逃生口：畫在你的實體
 完整的一張圖，最後印總結表，exit code 反映整體結果。
 
 ```bash
-npm run test:unit       # node:test 單元測試（fs 邊界、workspace store、listDir/readFile、watcher、外部 URL、pty 管理器、git 分支解析、終端偏好 store（字型 family 清理/size 與行高夾制/損毀隔離）、字級不得寫死、舊產品名不得殘留、UI 文案不得含 CJK、aria-label 不得硬編、字典 key 的型別安全）
+npm run test:unit       # node:test 單元測試（fs 邊界、workspace store、listDir/readFile、watcher、外部 URL、pty 管理器、git 分支解析、終端偏好 store（字型 family 清理/size 與行高夾制/損毀隔離）、worktree 聚合（來源 DTO 無絕對路徑、isFolderRoot ≠ isMain、spec 讀取根、關係圖不洩漏路徑、兩層 watcher）、`resolveCommonDir`、字級不得寫死、舊產品名不得殘留、UI 文案不得含 CJK、aria-label 不得硬編、字典 key 的型別安全）
 npm run test:e2e        # 全部探針（build 一次 + 依序跑完 + 總結表）
 npm run test:all        # test:unit && test:e2e
 
@@ -273,7 +273,7 @@ npm run probe:workspace # 驗收 workspace-folders / filesystem-access / workspa
 npm run probe:files     # 驗收 file-explorer / file-viewer / 編輯 / 存檔 / 衝突 / CRUD / 導航防護 / 編輯器 worker / CSP（遠端圖片可載入、script-src 僅 self、注入點對 file:// 生效，dev + build 兩模式）
 npm run probe:terminal  # 驗收 terminal-sessions + session-persistence + GPU renderer（pty 雙向／cwd／resize／多開／關分頁・reload・關窗皆不留孤兒；**GPU renderer 只給顯示中的終端**（代理判準：active 有 canvas 且無 .xterm-rows；隱藏的不得持有 canvas）、關掉 GPU 加速退回 DOM 且不遺失內容、開回來又是 GPU；**觀測管道已 renderer-agnostic** —— 不再從 DOM 讀終端內容：pty 行為走**讀檔**、畫面走**產品的複製路徑**、字級走 **pty 的 cols**；`PROBE_ONLY=<段落>[:<模式>]` 可只跑一部分（迭代用，不設就跑全部）；剪貼簿畸形輸入防禦；**右鍵 gate 在 mouse reporting**（stub 送 DECSET 1000 時右鍵讓位給程式、關閉後恢復選單 —— 含對照組）；OSC 標題與命名權；**關掉 app 再開後 session 原樣重建**、只喚醒被顯示的那一個、claude 以 --resume 續接同一個對話、續接失敗自癒為全新對話、shell 於最後 cwd 重生並重播畫面、kill -9 後快照仍在、損毀韌性、被竄改的識別碼不進命令 —— 皆以 PATH 上的 stub claude 承載，dev + build 兩模式）
 npm run probe:keyboard  # 驗收 keyboard-navigation（Ctrl+Tab 切 session／Ctrl+↑↓ 切 repo／位置序非 MRU／按鍵不流進 pty／編輯器與對話框的行為 —— 對話框的抑制以 session 命名／files／**終端字型設定**三種各驗一次；**Shift+↑↓ 排 repo、Shift+←→ 排 session** —— 端點不循環、移動後仍選中／focused、終端持有焦點時仍生效且按鍵不進 pty、**編輯器持有焦點時 Shift+→ 仍是文字選取**，dev + build 兩模式）
-npm run probe:openspec  # 驗收 openspec-data-access / openspec-panel（兩個視圖／兩棵樹／artifact 分頁／agent 改檔即更新／錨定／交叉導覽／Graph・Timeline 的 overlay；**續寫入口**的呈現條件與三種停用情形、**選單選取後關閉**，dev + build 兩模式）
+npm run probe:openspec  # 驗收 openspec-data-access / openspec-panel / worktree-aggregation（兩個視圖／兩棵樹／artifact 分頁／agent 改檔即更新／錨定／交叉導覽／Graph・Timeline 的 overlay；**續寫入口**的呈現條件與四種停用情形、**選單選取後關閉**；**worktree 聚合** —— worktree 裡的 change 出現在側欄且不在主工作目錄底下、來源徽章（main 不標示）、邊界內外的檔案導覽入口、Timeline 依 topic 分組，dev + build 兩模式）
 npm run probe:native    # 驗收 native-module-toolchain（Electron 主行程載入 node-pty + spawn pty）
 npm run probe:core      # 驗收 spek-core-integration（主行程掃描 OpenSpec，且不開 TCP 埠）
 npm run probe:identity  # 驗收 app-identity（productName／appId／userData 路徑／視窗標題）
@@ -642,6 +642,13 @@ org 名**不是**凍結身分的一部分 —— repo 改名與 transfer 皆自�
   **本輪有兩條經調查後不做**：終端裡 claude 的連結要 `Ctrl+click` **不是 bug**（claude 開了 mouse
   reporting，那次點擊由它自己處理 —— 見下文「終端連結」），因此「點檔案開在側欄」在 claude session
   裡**我們攔不到**。
+- **worktree 聚合** — `openspec-worktree-aggregation`（**不屬於任何 Phase**）：側欄第一次看得見
+  **git worktree 裡的 change**。新能力 `worktree-aggregation`（涵蓋範圍與去重委由 core、來源以識別碼
+  呈現、邊界外 worktree 的降級、監看涵蓋每個工作目錄與清單本身、視覺化不因聚合退化）；修改
+  `openspec-data-access`（掃描與監看範圍）、`openspec-panel`（來源徽章）、`artifact-continuation`
+  （第 4 個條件：來源工作目錄即 session 所屬 folder，**不是** `isMain`）。範圍限於「讀」——
+  session 開在 worktree 與 rail 把 worktree 列為一級項目都不在內。詳見下文「worktree 聚合的實測與踩雷」。
+
 - Phase 6 打包與發佈，Phase 7+ 建立護城河（handoff）。**session 常駐**已排入路線圖但刻意不做
   （PRD §11）。
 
@@ -2169,6 +2176,34 @@ worktree** 時，只存在於主工作目錄的 spec **列得出來卻打不開*
 **影響比直覺小**：它發生在 `readChange`（開啟某個 change 的內容），**不在掃描路徑上** ——
 側欄一次只呈現一個 change，代價是「切到另一個 worktree 的 change 時該 worktree 付一次」，
 不是「每次重掃付 N 次」。**不在本 app 疊一層自己的快取** —— spek 用同一份 core，要改該在 upstream 改。
+
+### 獨立稽核抓到的兩個 CRITICAL —— 兩個都是「註解宣稱了相反的事」
+
+**這兩條都通過了 `npm test` 280/280 與 `test:e2e` 9/9 才被抓到**，因為沒有任何斷言看著它們。
+
+- **關係圖會把 worktree 的絕對路徑送給 renderer。** core 的聚合圖在**每個 change 節點**上掛了
+  一份完整的 `WorktreeSource`（含 `path`）—— 而 `getGraphData` 的註解正好寫著「沒有路徑欄位可
+  洩漏」。它同時違反本 change 的 spec、**既有**的 `openspec-data-access`「DTO 不得含絕對路徑」、
+  以及 class doc。**教訓：換一個 core 的 API 時，要重新問一次「它回傳的東西裡有什麼」** ——
+  非聚合的 `buildGraphData` 確實只有識別碼，那個註解在當時是對的。
+- **`#specRoot` 的 fallback 是一個新引入的迴歸。** 我假設「非聚合時 `worktrees` 是空的」——
+  **錯**：core 在工作目錄 ≤ 1 時回的是 `scanOpenSpec(folder)`，但 `worktrees` 仍帶著主工作目錄
+  那筆。於是 folder 是 repo **子目錄**時，specs 來自子目錄而讀取根指向 repo 根，spec **列得出來
+  卻打不開** —— 正是 D2b 要修的病，被以相反的方向重新引入。
+
+> **兩者的共同形狀：一個 optional 欄位「有沒有被填」的假設。** `source` 我假設它不在（結果在），
+> `worktrees` 我假設它是空的（結果不是）。**core 的 optional 欄位要實測它何時被填，不要從語意
+> 推論。**
+
+### 我在同一個小時裡踩了自己剛寫下的那條假綠
+
+為上面第一條補的測試，**第一版是假綠**：對照組把修正整個退回，它照樣通過 —— 因為測試用的
+fixture 不是 git repo，core 靜默退回非聚合，節點上根本沒有 `source`。
+
+而「**worktree ≤ 1 時 core 靜默退回非聚合**」正是本節開頭那條、我自己剛寫進這份文件的頭號假綠
+來源。**寫下一條教訓，不會讓你自動避開它** —— 唯一擋住它的是**對照組**：把修正退回、確認測試
+真的變紅。這個 change 的三條新守衛（spec 讀取根、關係圖不洩漏、清單 watcher 的解析起點）
+全部這樣驗過。
 
 ### 兩個 probe 的踩雷：條件優先序，與「輪詢條件太寬鬆」
 

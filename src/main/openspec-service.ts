@@ -167,6 +167,8 @@ interface FolderWatch {
   watchers: FSWatcher[]
   /** 第二層：每個**其他**工作目錄的 `openspec/`，以其絕對路徑為 key。 */
   worktreeWatchers: Map<string, FSWatcher>
+  /** 已監看的工作目錄清單目錄（`<commonDir>/worktrees/`）—— 去重，避免重複建立。 */
+  worktreeListTargets: Set<string>
   timer: NodeJS.Timeout | null
 }
 
@@ -305,9 +307,14 @@ export class OpenSpecService {
    * worktree、或其中一個子目錄，兩種情形下 spec 都會**列得出來卻打不開**（已實測 `readSpec`
    * 回 `null` → NOT_FOUND）。
    *
-   * 找不到（非 git repo、或 core 未回報工作目錄）時退回 folder 自身 —— 那正是非聚合的情形。
+   * **非聚合時一律用 folder 自身，不可看 `worktrees`。** 這是個容易寫錯的地方：
+   * `scanOpenSpecAggregated` 在工作目錄 ≤ 1 時回的是 `scanOpenSpec(folder)` 的結果，**但
+   * `worktrees` 仍然帶著那唯一一筆（主工作目錄）**。於是「folder 是某個 repo 的子目錄」時，
+   * specs 來自子目錄、而 `isMain` 那筆指向 repo 根 —— 兩者不同源，spec 會**列得出來卻打不開**
+   * （已實測 `readSpec` 回 `null`）。那正是本 change 想修的病，只是方向相反。
    */
   #specRoot(root: string, result: AggregatedScanResult): string {
+    if (!result.aggregated) return root
     return result.worktrees.find((wt) => wt.isMain)?.path ?? root
   }
 
@@ -465,14 +472,26 @@ export class OpenSpecService {
     }
   }
 
+  /**
+   * spec ↔ change 的關係圖。
+   *
+   * **聚合的圖會在每個 change 節點上掛一份完整的 `WorktreeSource`，其中含絕對路徑** ——
+   * core 這樣做是對的（它是 library），但那不能出 IPC。這裡把它剝掉。
+   *
+   * 節點識別碼本身是安全的：`change:<key>:<slug>` 的 `key` 是路徑的 sha1 前 8 碼，不可逆、
+   * 不含路徑資訊。renderer 目前不需要圖上的來源（徽章走 change 清單那條路），因此直接剝除
+   * 而不翻譯 —— 日後若圖上要標來源，再比照 `#origin()` 翻成 `ChangeOrigin`。
+   */
   async getGraphData(folderId: string): Promise<GraphData> {
     const { root } = await this.#scan(folderId)
-    // 節點與邊只帶 `spec:<topic>` / `change:<key>:<slug>` 這類識別碼，沒有路徑欄位可洩漏
-    //（`key` 是路徑的 sha1 前 8 碼，不可逆）。
-    return this.#read(
+    const graph = await this.#read(
       () => buildGraphDataAggregated(root, { includeJj: false }),
       `graph not available: ${folderId}`,
     )
+    return {
+      nodes: graph.nodes.map(({ source: _source, ...node }) => node),
+      edges: graph.edges,
+    }
   }
 
   /** folder 自 workspace 移除，或 renderer 消失時釋放。 */
@@ -581,23 +600,43 @@ export class OpenSpecService {
   #ensureWatch(folderId: string, root: string): void {
     if (this.#watches.has(folderId)) return
 
-    const watch: FolderWatch = { watchers: [], worktreeWatchers: new Map(), timer: null }
+    const watch: FolderWatch = {
+      watchers: [],
+      worktreeWatchers: new Map(),
+      worktreeListTargets: new Set(),
+      timer: null,
+    }
     this.#watches.set(folderId, watch)
 
     watch.watchers.push(this.#watch(folderId, path.join(root, 'openspec')))
+    this.#watchWorktreeList(folderId, root)
+  }
 
-    const commonDir = resolveCommonDir(root)
-    if (commonDir !== null) {
-      // **只理會目錄的新增與移除。** 實測：在 worktree 裡跑一次 `git commit`，這個目錄下會產生
-      // 3 個檔案事件（index / logs/HEAD / COMMIT_EDITMSG）。這個 app 的前提是旁邊有 agent 一直
-      // 在跑 git —— 不收窄的話，每次 commit 都會使快取失效並重跑一次聚合掃描（約 175ms）。
-      watch.watchers.push(
-        this.#watch(folderId, path.join(commonDir, 'worktrees'), {
-          depth: 0,
-          events: ['addDir', 'unlinkDir'],
-        }),
-      )
-    }
+  /**
+   * 監看**工作目錄清單本身**（`<commonDir>/worktrees/`）。
+   *
+   * **解析的起點必須容許 folder 不是工作目錄的根** —— `resolveGitDir` 只看 `<folder>/.git`、
+   * 不往上找，因此 folder 是 repo 的**子目錄**時（D2b 明文接受的佈局）從它解不出 common dir。
+   * 掃描回來之後我們知道主工作目錄在哪，那時再補一次即可，所以這個方法會被呼叫兩次：
+   * 掃描前以 folder 自己試一次（多數情況就成了），掃描後以主工作目錄再試一次。
+   */
+  #watchWorktreeList(folderId: string, from: string): void {
+    const watch = this.#watches.get(folderId)
+    if (!watch) return
+
+    const commonDir = resolveCommonDir(from)
+    if (commonDir === null) return
+
+    const target = path.join(commonDir, 'worktrees')
+    if (watch.worktreeListTargets.has(target)) return
+    watch.worktreeListTargets.add(target)
+
+    // **只理會目錄的新增與移除。** 實測：在 worktree 裡跑一次 `git commit`，這個目錄下會產生
+    // 3 個檔案事件（index / logs/HEAD / COMMIT_EDITMSG）。這個 app 的前提是旁邊有 agent 一直
+    // 在跑 git —— 不收窄的話，每次 commit 都會使快取失效並重跑一次聚合掃描（約 175ms）。
+    watch.watchers.push(
+      this.#watch(folderId, target, { depth: 0, events: ['addDir', 'unlinkDir'] }),
+    )
   }
 
   /**
@@ -609,6 +648,10 @@ export class OpenSpecService {
   #syncWorktreeWatches(folderId: string, root: string, worktrees: WorktreeInfo[]): void {
     const watch = this.#watches.get(folderId)
     if (!watch) return
+
+    // folder 不是工作目錄的根時（例如 repo 的子目錄），掃描前那次解不出 common dir —— 補一次。
+    const mainPath = worktrees.find((wt) => wt.isMain)?.path
+    if (mainPath !== undefined) this.#watchWorktreeList(folderId, mainPath)
 
     const wanted = new Set(worktrees.map((wt) => wt.path).filter((wtPath) => wtPath !== root))
 
