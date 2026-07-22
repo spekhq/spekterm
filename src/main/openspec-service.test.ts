@@ -693,7 +693,7 @@ describe('OpenSpecService 的關係圖不洩漏路徑', () => {
     return gitRepo
   }
 
-  it('graph 的節點不含來源的絕對路徑', async () => {
+  it('graph 的節點不含來源的絕對路徑，且識別碼已還原為非聚合形式', async () => {
     const gitRepo = makeGitRepoWithWorktree()
     const svc = create(lookup([{ id: 'g1', path: gitRepo, status: 'ok' }]))
 
@@ -709,6 +709,36 @@ describe('OpenSpecService 的關係圖不洩漏路徑', () => {
 
     assert.ok(graph.nodes.length > 0, '圖不該是空的')
     assert.ok(!payload.includes(base), `關係圖洩漏了絕對路徑：${payload.slice(0, 200)}`)
+
+    // change 節點的識別碼恰為 `change:<slug>` —— 既不帶來源識別碼，也不是裸 slug。
+    // **裸 slug 那個錯誤特別危險**：`changeTopicsMap` 與 `SpecGraph` 對它照樣運作，
+    // Timeline 分組仍是綠的，只有這條斷言擋得住。
+    const changeNodes = graph.nodes.filter((n) => n.type === 'change')
+    const slugs = changes.active.map((c) => c.slug)
+    assert.ok(changeNodes.length >= 2, `應有兩個 change 節點：${changeNodes.length}`)
+    for (const node of changeNodes) {
+      const slug = node.id.slice('change:'.length)
+      assert.ok(node.id.startsWith('change:'), `裸 slug 或前綴遺失：${node.id}`)
+      assert.ok(slugs.includes(slug), `識別碼未還原（疑似仍帶來源識別碼）：${node.id}`)
+    }
+
+    // 邊的 **change 端**必須對得到節點（spec 端的懸空邊是掃描結果的合法狀態 —— 一個 change
+    // 可以提議尚未納入 specs 的 topic，見 spec 的但書）。
+    const ids = new Set(graph.nodes.map((n) => n.id))
+    const orphaned = graph.edges.filter((e) => e.source.startsWith('change:') && !ids.has(e.source))
+    assert.deepEqual(orphaned, [], `邊的 change 端對不到節點（只換節點沒換邊？）：${JSON.stringify(orphaned)}`)
+    assert.ok(graph.edges.length > 0, '圖不該沒有邊，否則上一條沒有鑑別力')
+  })
+
+  it('非聚合的 repo 其節點識別碼不變（正規化必須是 no-op）', async () => {
+    // `repo` 不是 git repo ⇒ core 走非聚合路徑，節點本來就沒有 source。
+    const graph = await create().getGraphData('f1')
+    const changeNodes = graph.nodes.filter((n) => n.type === 'change')
+
+    assert.ok(changeNodes.length > 0, '應有 change 節點')
+    for (const node of changeNodes) {
+      assert.match(node.id, /^change:[^:]+$/, `非聚合路徑不該改動識別碼：${node.id}`)
+    }
   })
 })
 

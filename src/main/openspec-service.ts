@@ -17,6 +17,7 @@ import {
   shouldUsePolling,
   withAuthoritativeChokidarEnv,
 } from '@spekjs/core'
+import { changeNodeSlug } from '@spekjs/core/graph-node-id'
 import { type FSWatcher, watch as chokidarWatch } from 'chokidar'
 import { isWithin } from './fs-boundary'
 import { resolveCommonDir } from './git-branch'
@@ -475,12 +476,20 @@ export class OpenSpecService {
   /**
    * spec ↔ change 的關係圖。
    *
-   * **聚合的圖會在每個 change 節點上掛一份完整的 `WorktreeSource`，其中含絕對路徑** ——
-   * core 這樣做是對的（它是 library），但那不能出 IPC。這裡把它剝掉。
+   * 送出前要做**兩件事，而它們是同一件事的兩面**：
    *
-   * 節點識別碼本身是安全的：`change:<key>:<slug>` 的 `key` 是路徑的 sha1 前 8 碼，不可逆、
-   * 不含路徑資訊。renderer 目前不需要圖上的來源（徽章走 change 清單那條路），因此直接剝除
-   * 而不翻譯 —— 日後若圖上要標來源，再比照 `#origin()` 翻成 `ChangeOrigin`。
+   * 1. **剝掉來源** —— 聚合的圖會在每個 change 節點上掛一份完整的 `WorktreeSource`，其中含
+   *    絕對路徑。core 這樣做是對的（它是 library），但那不能出 IPC。
+   * 2. **把識別碼還原成非聚合形式** —— 聚合的 change 節點是 `change:<worktreeKey>:<slug>`，
+   *    而**判斷那個 key 存不存在，靠的正是即將被剝掉的 `source`**。
+   *
+   * **順序因此是承重的：先還原，再剝除。** 只做第 1 件會送出一個**不自洽**的節點（識別碼帶
+   * key、卻沒有能證明那是 key 的資訊），下游於是無從還原 —— `SpecGraph` 會把整串
+   * `<key>:<slug>` 當成 slug 交出去（錨定到一個不存在的 change），`changeTopicsMap` 則查表
+   * 落空（Timeline 的分組全部掉到「無 topic」）。**兩者都不會報錯。**
+   *
+   * 剝離後的識別碼仍是安全的：`key` 是路徑的 sha1 前 8 碼，不可逆、不含路徑資訊；而 renderer
+   * 目前不需要圖上的來源（徽章走 change 清單那條路）。
    */
   async getGraphData(folderId: string): Promise<GraphData> {
     const { root } = await this.#scan(folderId)
@@ -488,9 +497,31 @@ export class OpenSpecService {
       () => buildGraphDataAggregated(root, { includeJj: false }),
       `graph not available: ${folderId}`,
     )
+
+    // 舊識別碼 → 新識別碼。**只有節點握有 `source`**，所以映射必須在這裡建立，
+    // 邊再據它改寫（邊只有兩個字串端點，自己看不出哪一段是 key）。
+    //
+    // `changeNodeSlug` 回傳的是 **slug**，不是識別碼 —— 前綴要自己補回去；而它對非 change
+    // 節點原樣回傳（`spec:auth` → `spec:auth`），所以**只能對 change 節點施加**，
+    // 否則 `spec:auth` 會變成 `change:spec:auth`。
+    const renamed = new Map<string, string>()
+    for (const node of graph.nodes) {
+      if (node.type !== 'change') continue
+      const plain = `change:${changeNodeSlug(node)}`
+      if (plain !== node.id) renamed.set(node.id, plain)
+    }
+
     return {
-      nodes: graph.nodes.map(({ source: _source, ...node }) => node),
-      edges: graph.edges,
+      nodes: graph.nodes.map(({ source: _source, ...node }) => ({
+        ...node,
+        id: renamed.get(node.id) ?? node.id,
+      })),
+      // 邊的 `source` / `target` 是**端點**，與 worktree 來源無關（同名，容易看混）。
+      // 消費端是先以端點查節點、再讀節點的識別碼 —— 只改節點不改邊，查表會全數落空。
+      edges: graph.edges.map((edge) => ({
+        source: renamed.get(edge.source) ?? edge.source,
+        target: renamed.get(edge.target) ?? edge.target,
+      })),
     }
   }
 

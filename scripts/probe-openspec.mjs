@@ -1766,25 +1766,77 @@ async function runMode(label, { port, rendererUrl }) {
       JSON.stringify(laneTitles),
     )
 
+    // ── 聚合 repo 的 Graph：點擊要錨定到**真的** slug ────────────────────────
+    //
+    // core 的聚合圖把 change 節點的識別碼命名為 `change:<worktreeKey>:<slug>`，並在節點上附
+    // `source`；而我們**刻意剝掉 `source`**（它含絕對路徑）。`SpecGraph` 的剝除是**條件式地**
+    // 依賴 `source` 的 —— 沒有它就把整串 `<key>:<slug>` 當成 slug 交出去，錨定到一個不存在的
+    // change，並且會被寫進 `sessions.json` 存活。
+    //
+    // 因此主行程必須**在剝掉 `source` 之前**把識別碼還原。這條斷言就是那件事的證明：
+    // **它在還原之前必定紅**，而既有那條 Graph 點擊斷言跑在單一工作目錄的 fixture 上，看不到它。
+    // Timeline 的 overlay 還開著 —— 先收掉再從側欄開 Graph（用關閉按鈕，理由見下方註解）。
+    await app.client.evaluate(CLICK_VIZ_CLOSE)
+    const timelineClosed = await pollUntil(app.client, OVERLAY, (v) => v === null, 8000)
+    check(results, '關閉 Timeline overlay', timelineClosed === null, JSON.stringify(timelineClosed))
+
+    check(
+      results,
+      '自聚合 repo 的側欄開啟 Graph',
+      (await app.client.evaluate(CLICK_OPEN_VIZ('Graph'))) === true,
+    )
+    const wtNodeRect = await pollUntil(
+      app.client,
+      GRAPH_NODE_RECT('change:inside-change'),
+      (value) => value !== null,
+      15_000,
+    )
+    check(
+      results,
+      'Graph 上以非聚合形式的識別碼找得到 worktree 的 change 節點',
+      wtNodeRect !== null,
+      JSON.stringify(wtNodeRect),
+    )
+
+    await sleep(1500) // simulation 收斂後還有一段 fit-to-viewport 的 transition
+    const wtSettled = await app.client.evaluate(GRAPH_NODE_RECT('change:inside-change'))
+    const wtTarget = wtSettled ?? wtNodeRect
+    if (wtTarget) {
+      await realClick(app.client, wtTarget)
+    } else {
+      // **找不到節點時也要把 overlay 收掉。** `realClick(null)` 會 throw，而 throw 不是紅燈 ——
+      // 它讓整支探針從這裡中斷，後面每一段都不會跑（實測：對照組驗鑑別力時就是這樣斷的）。
+      // 留著 overlay 也一樣糟：其後的真滑鼠事件全部點不到，`createSession` 同樣是 throw。
+      await app.client.evaluate(CLICK_VIZ_CLOSE)
+    }
+    await pollUntil(app.client, OVERLAY, (value) => value === null, 8000)
+
+    const anchoredFromGraph = await pollUntil(
+      app.client,
+      ANCHORED_SLUG,
+      (value) => value === 'inside-change',
+      12_000,
+    )
+    check(
+      results,
+      '於聚合 repo 的 Graph 觸發 change 後，錨定的是乾淨的 slug（不含來源識別碼）',
+      anchoredFromGraph === 'inside-change',
+      String(anchoredFromGraph),
+    )
+
     // ── folder 本身就是一個 linked worktree ──────────────────────────────────
     //
     // **這一段守的是 D7 的判準本身。** 此時該 folder 的 change 其 `isMain` 為 false（主工作
     // 目錄在別處）而 `isFolderRoot` 為 true（session 就跑在這裡）—— 兩者相反。把判準換回
     // `isMain`，續寫入口會被錯誤地停用，而那個錯誤**只有人的眼睛看得到**：DTO 層的單元測試
     // 驗的是欄位值，不是入口亮不亮。
-    // **關掉 overlay 之後要確認它真的關了。** 下面的 `createSession` 送的是**真滑鼠事件**，
-    // overlay 只要還蓋著就點不到「+ session」，而 `createSession` 是 throw 而不是回報紅燈 ——
-    // 整支探針會就此中斷（實測踩過）。`SELECT_FOLDER` 之類的 `evaluate` 直接點 DOM，不受遮擋，
-    // 所以「前一條是綠的」完全不代表 overlay 已經退場。
-    //
-    // **用關閉按鈕而不是 Esc —— 那是探針的限制，不是產品的問題。** 實測：在這個位置送 Esc
-    // 關不掉 overlay，而同一支探針早先那條 Esc 斷言是綠的，差別只在這裡點過 overlay 內的
-    // chip（`evaluate` 的 `btn.click()`）。**已由 dogfood 確認真鍵盤關得掉**，所以是 CDP 注入
-    // 的邊角，比照「探針證明不了真實鍵盤」那條既有紀錄。此處要的只是「把 overlay 收掉」，
-    // 而按鈕是使用者本來就有的路徑，且不依賴焦點落在哪。
-    await app.client.evaluate(CLICK_VIZ_CLOSE)
+    // 上面點 change 節點時 overlay 已自行關閉 —— 這裡只確認它真的不在了。
+    // 下面的 `createSession` 送的是**真滑鼠事件**，overlay 只要還蓋著就點不到「+ session」，
+    // 而 `createSession` 是 throw 而不是回報紅燈 —— 整支探針會就此中斷（實測踩過）。
+    // `SELECT_FOLDER` 之類的 `evaluate` 直接點 DOM，不受遮擋，所以「前一條是綠的」完全不代表
+    // overlay 已經退場。
     const overlayGone = await pollUntil(app.client, OVERLAY, (v) => v === null, 8000)
-    check(results, '關閉 Timeline overlay', overlayGone === null, JSON.stringify(overlayGone))
+    check(results, 'overlay 已退場（真滑鼠事件的前置）', overlayGone === null, JSON.stringify(overlayGone))
 
     console.log('\nfolder 本身是 linked worktree')
 

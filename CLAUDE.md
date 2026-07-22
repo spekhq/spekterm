@@ -377,8 +377,11 @@ ready 事件要等主 script 評估完成才觸發，會死鎖。
 
 ### core 套件的名稱與分發（已定案）
 
-core 對外發佈為 **`@spekjs/core`**（已於 npm public registry 發佈，本 repo 以 `^1.2.0`
-宣告依賴）。Phase 5 抽出的 UI 套件為 **`@spekjs/ui`**（`^1.0.1`）。
+core 對外發佈為 **`@spekjs/core`**（已於 npm public registry 發佈，本 repo 以 `^1.3.0`
+宣告依賴）。Phase 5 抽出的 UI 套件為 **`@spekjs/ui`**（`^1.2.0`）。
+
+> **兩者必須同時升**：`@spekjs/ui@1.2.0` 的 peer 是 **`@spekjs/core >=1.3.0`**（此前記載的
+> `>=1.0.0` 已過期），分兩次升會 `ERESOLVE`。
 
 > **1.2.0 是 jj（Jujutsu）workspace 聚合（upstream #23，隨 spek v1.9.0 發佈），對 spekterm 是
 > 純衛生性升級 —— 零功能變化。** 理由與 #17 完全同型：**變動全在聚合 API 裡**。排除那次 LF 正規化
@@ -2126,8 +2129,13 @@ DTO 因此帶**兩個**布林：`isMain`（來源的**性質**，呈現用 —�
 
 | | 對 `change:<key>:<slug>` |
 |---|---|
-| `SpecGraph` | **剝掉** key（`SpecGraph.js:149`） |
+| `SpecGraph` | **`node.source` 存在時**才剝掉 key |
 | `buildLanes` / `changeTopicsMap` | **不剝** —— 只剝 `change:` 前綴，再以 slug 查表 |
+
+> **這張表原本漏了那個條件，而那正是後續一個缺陷沒被發現的原因。** spekterm 是**唯一刻意剝掉
+> `source` 的宿主**（它含絕對路徑），於是「`SpecGraph` 會剝」這一列**對我們恰好是假的** ——
+> 它走的是另一條分支，把整串 `<key>:<slug>` 當成 slug 交出去。**一般形式：一個依賴 optional
+> 欄位的判定，在「刻意移除該欄位」的宿主眼中會反轉；抄別人的行為表時要連 guard 一起抄。**
 
 於是查表恆不命中，**Timeline 的「依 topic 分組」全部落到「(no topic)」，而圖照樣畫得出來**。
 實測（同一個 repo）：
@@ -2212,6 +2220,54 @@ fixture 不是 git repo，core 靜默退回非聚合，節點上根本沒有 `so
 來源。**寫下一條教訓，不會讓你自動避開它** —— 唯一擋住它的是**對照組**：把修正退回、確認測試
 真的變紅。這個 change 的三條新守衛（spec 讀取根、關係圖不洩漏、清單 watcher 的解析起點）
 全部這樣驗過。
+
+### 產生格式的地方與解析格式的地方應當同居（`graph-node-id-normalization`）
+
+聚合關係圖的 change 節點識別碼是 core 產生的（`change:<worktreeKey>:<slug>`），而解析它的
+`changeNodeSlug` 一度住在 `@spekjs/ui`。**產生與解析分居兩個套件**，正是 upstream #25 的溫床：
+core 開始加 worktree key，ui 的解析沒跟上，**沒有任何東西會紅**。
+
+已回報並由 upstream 採納（#28）：現在它是 **`@spekjs/core/graph-node-id`**（node-free subpath，
+比照 `./headings`、`./artifact-order`），ui 自它消費並 re-export。**於是主行程 import 得到它** ——
+`@spekjs/ui` 的入口會拉進 JSX／d3／React，Node 環境碰不得。
+
+> **判斷「該不該回報 upstream」的一個訊號：你正要手寫第二份它剛抽出來防止重寫的東西。**
+> 那通常表示它放錯了位置，而不是你少了一個 export。
+
+### 我們送出的圖必須先還原識別碼，**再**剝掉來源 —— 順序是承重的
+
+`getGraphData` 做兩件事：剝掉含絕對路徑的 `source`、把識別碼還原成非聚合形式。
+**而判斷「那個 key 存不存在」靠的正是即將被剝掉的 `source`。**
+
+只做第一件會送出一個**不自洽**的節點（識別碼帶 key、卻沒有能證明那是 key 的資訊），下游無從還原：
+
+| 消費端 | 症狀 |
+|---|---|
+| `SpecGraph` | 把整串 `<key>:<slug>` 當成 slug 交出去 → **錨定到一個不存在的 change**，還會寫進 `sessions.json` 存活 |
+| `changeTopicsMap` | 查表落空 → Timeline 的分組**全部掉到「無 topic」** |
+
+**兩者都不報錯。** 這個缺陷在 `openspec-worktree-aggregation` 就存在了，當時只想到 Timeline
+那一半（在 renderer 加適配層），沒想到 `SpecGraph` 吃的是同一份資料。
+
+- **`changeNodeSlug` 回傳的是 slug，不是識別碼** —— 前綴要自己補（`` `change:${…}` ``），
+  且**只能對 `type === 'change'` 的節點施加**（否則 `spec:auth` 會變成 `change:spec:auth`）。
+  **直接拿回傳值當 id（裸 slug）是最危險的寫法**：`changeTopicsMap` 與 `SpecGraph` 對它照樣
+  運作，Timeline 分組仍是綠的 —— 只有「識別碼恰為 `change:<slug>`」這條斷言擋得住。
+- **邊的兩端也要換**，而 `GraphEdge.source` 是**端點**、`GraphNode.source` 是 **worktree 來源**：
+  兩個 `source` 在同一段程式碼裡，極容易看混。消費端是先以端點查節點、再讀節點識別碼 ——
+  只換節點不換邊，查表全數落空，症狀與完全沒換相同。
+
+### 邊指向一個不存在的 spec 節點是**合法狀態**，不是 bug
+
+我曾為此開了 upstream issue，被正確地駁回（#29 → duplicate of #26，`not planned`）。
+關係圖的 spec 節點來自**已納入 specs 的 capability**，而一個 change 的 delta 可以提議一個
+**尚未納入**的 topic（promotion 發生在 archive 時）—— 於是「change → 不存在的 spec 節點」表達的
+正是「這個 change 提議一個新 capability」。**與聚合無關**（非聚合掃描同樣會產生，已實測）。
+
+> **而我宣稱「`SpecGraph` 會因此拋錯」是錯的，錯在實測方法。** 我讀到它內部用
+> `forceLink(links).id(d => d.id)`，就自己重建了「同一組 d3 force」來測 —— **跳過了它上游那道
+> `.filter((e) => nodeMap.has(e.source) && nodeMap.has(e.target))`**。我測的是我重建的東西，
+> 不是真正的消費端。**要測一個消費端的行為，就用那個消費端，不要重建它的一部分。**
 
 ### 兩個 probe 的踩雷：條件優先序，與「輪詢條件太寬鬆」
 
