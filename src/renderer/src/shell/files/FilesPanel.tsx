@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { t } from '@shared/i18n'
+import { useWorktreeRoots } from '../openspec/data'
 import type { FileRequest, OpenSpecTarget } from '../openspec/nav'
 import { targetOfPath } from '../openspec/nav'
 import type { FsFailure, FsResult, WorkspaceFolder } from '../types'
@@ -41,6 +42,9 @@ function describeOperationFailure(failure: FsFailure): string {
   }
 }
 
+/** 穩定的空陣列 —— 每次渲染新造一個會讓下游的依賴比較失效。 */
+const EMPTY_ROOTS: readonly string[] = []
+
 type Dialog =
   | { kind: 'newFile' | 'newDirectory'; parent: string }
   | { kind: 'rename'; target: string }
@@ -79,6 +83,18 @@ export function FilesPanel({
   onViewInOpenSpec = null,
 }: FilesPanelProps): React.JSX.Element {
   const { t } = useTranslation()
+
+  // 反向交叉導覽的判定依據：該 repo 各工作目錄的 folder-relative 根。
+  //
+  // **清單抵達之前不呈現入口**（`data` 為 null → 空陣列 → `targetOfPath` 恆為 null）。
+  // 它是一次 per-folder 的 IPC，於是首次進入 Files 身分時入口會晚一拍出現 —— 那是可接受的
+  // 窗口，換來的是「切換檔案時零 IPC 往返」（design D1）。
+  //
+  // **沒有 `openspec/` 的 folder 不取**：入口的 gate 本來就是 `hasOpenSpec`（`SidePanel` 於該
+  // 情形傳 `onViewInOpenSpec = null`），清單取了也用不到 —— 而取它會走 `#scan`，那條路上
+  // core 會 spawn `git worktree list`。此前只用 Files 身分的 folder 不會付這個成本。
+  const worktreeRoots =
+    useWorktreeRoots(folder?.hasOpenSpec ? folder.id : null).data ?? EMPTY_ROOTS
 
   // 自 OpenSpec 身分跳過來的請求，**初始值就要套用**。
   //
@@ -286,10 +302,10 @@ export function FilesPanel({
           </>
         ) : (
           <>
-            {/* 開著的是 openspec/ 底下的檔案 —— 提供跳回 OpenSpec 身分的入口（design D7）。 */}
+            {/* 開著的是某個工作目錄的 openspec/ 底下的檔案 —— 提供跳回 OpenSpec 身分的入口。 */}
             {onViewInOpenSpec &&
               (() => {
-                const target = targetOfPath(openPath)
+                const target = targetOfPath(openPath, worktreeRoots)
                 if (!target) return null
                 return (
                   <button

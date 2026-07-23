@@ -126,6 +126,24 @@ export function useSpecs(folderId: string | null): AsyncData<SpecSummary[]> {
   return useOpenSpecData(folderId, folderId, load)
 }
 
+/**
+ * 各工作目錄的 folder-relative 根 —— 反向交叉導覽的判定依據（`targetOfPath`）。
+ *
+ * 這個 hook 的消費者是 **Files 身分**（`FilesPanel`），而它與 OpenSpec 身分是互斥掛載的。
+ * 之所以能在那裡呼叫，是因為 `OpenSpecProvider` 位於 `MainStage` **之上**（AppShell 層），
+ * 兩個身分都在它的 context 之內 —— 不必把資料從別處灌進去，也自動跟著 revision 重取。
+ *
+ * **per-folder 取一次**：清單隨 `openspec:changed` 更新，切換檔案時不再有任何 IPC 往返。
+ * 這正是 design D1 否決「把反推整個移進主行程」的性質（那條會把窗口放在每次開檔的熱路徑上）。
+ */
+export function useWorktreeRoots(folderId: string | null): AsyncData<string[]> {
+  const load = useCallback(
+    (api: OpenSpecApi) => api.getWorktreeRoots(folderId as string),
+    [folderId],
+  )
+  return useOpenSpecData(folderId, folderId, load)
+}
+
 export function useSpec(folderId: string | null, topic: string | null): AsyncData<SpecDetailView> {
   const load = useCallback(
     (api: OpenSpecApi) => api.getSpec(folderId as string, topic as string),

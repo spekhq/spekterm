@@ -22,7 +22,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { check, connect, pollUntil, waitForPageTarget } from './lib/cdp.mjs'
-import { copy, suffixOf } from './lib/copy.mjs'
+import { copy, prefixOf, suffixOf } from './lib/copy.mjs'
 import { electronExtraArgs } from './lib/display.mjs'
 
 const BUILD_PORT = 9228
@@ -202,6 +202,15 @@ function makeWorktreeFixture() {
   writeFile(join(repo, 'openspec/changes/main-change/design.md'), '# design\n')
   writeFile(join(repo, 'openspec/changes/main-change/tasks.md'), TASKS)
   writeFile(join(repo, 'openspec/changes/main-change/specs/auth/spec.md'), DELTA)
+
+  // **反面 fixture：結構與 OpenSpec 完全相同，但不在任何工作目錄的 `openspec/` 底下。**
+  //
+  // 路徑必須帶 `changes/` 那一層。`docs/openspec/notes.md` 這種「只差一層」的誘餌**沒有
+  // 鑑別力** —— 鬆綁版判準（找第一個等於 `openspec` 的分段）對它也回 null，因為 `openspec`
+  // 之後只剩一段，既非 `specs` 亦非 `changes`。已實測，見 design D4。
+  //
+  // 寫在 commit 之前 ⇒ worktree 裡也有一份，於是「worktree 內的 docs」那條也驗得到。
+  writeFile(join(repo, 'docs/openspec/changes/decoy/proposal.md'), '# 這不是 OpenSpec artifact\n')
 
   git(['init', '-q', '--initial-branch=master', '.'], repo)
   git(['add', '-A'], repo)
@@ -599,6 +608,10 @@ const CLICK_VIEW_IN_OPENSPEC = `(() => {
   return true
 })()`
 
+const HAS_VIEW_IN_OPENSPEC = `Boolean(
+  document.querySelector('button[aria-label="${copy('files.viewInOpenSpec')}"]')
+)`
+
 /** Files 身分：當前開啟檔案的路徑（breadcrumb 的最後一段）。 */
 const OPEN_FILE_PATH = `(() => {
   const nav = document.querySelector('section[aria-label="${copy('files.label')}"] nav[aria-label="${copy('files.pathNav')}"]')
@@ -617,6 +630,34 @@ const SESSION_TABS = `[...document.querySelectorAll('[role="tablist"][aria-label
 const FILES_TREE = `section[aria-label="${copy('files.label')}"] [role="treeitem"]`
 
 const TREE_ROWS = `[...document.querySelectorAll('${FILES_TREE}')].map((r) => r.getAttribute('title'))`
+
+/** 某一列在不在（`title` 是完整的 folder-relative 路徑）。 */
+const FILES_HAS_ROW = (relPath) => `Boolean(
+  document.querySelector('${FILES_TREE}[title=${JSON.stringify(relPath)}]')
+)`
+
+/** 某一列的展開狀態：`'true'` / `'false'`（目錄）、`null`（檔案或不存在）。 */
+const FILES_ROW_EXPANDED = (relPath) => `(() => {
+  const row = document.querySelector('${FILES_TREE}[title=${JSON.stringify(relPath)}]')
+  return row ? row.getAttribute('aria-expanded') : null
+})()`
+
+/** 點一列：目錄＝展開／收合，檔案＝開啟。 */
+const FILES_CLICK_ROW = (relPath) => `(() => {
+  const row = document.querySelector('${FILES_TREE}[title=${JSON.stringify(relPath)}]')
+  if (!row) return false
+  row.click()
+  return true
+})()`
+
+/** breadcrumb 上的 `files` —— 關掉當前檔案、回到樹（檢視器與樹是互斥渲染的）。 */
+const CLICK_BREADCRUMB_ROOT = `(() => {
+  const nav = document.querySelector('section[aria-label="${copy('files.label')}"] nav[aria-label="${copy('files.pathNav')}"]')
+  const btn = nav?.querySelector('button')
+  if (!btn) return false
+  btn.click()
+  return true
+})()`
 
 const CLICK_ROW = (relPath) => `(() => {
   const row = [...document.querySelectorAll('${FILES_TREE}')]
@@ -862,6 +903,52 @@ async function createSession(client, target = 'shell') {
  *
  * 三次都沒成功才回傳當下的實際值，讓呼叫端的斷言紅得有話可說（鑑別力不因重試而消失）。
  */
+/**
+ * 於 Files 身分沿著路徑逐層展開，最後開啟該檔案。
+ *
+ * 檔案樹是 **lazy load** 的（展開一層才去列它的內容），所以每一層都要等它畫出來再點下一層 ——
+ * 「量完就點」在這裡是穩定失敗，不是偶發（實測：直接點深層路徑一定選不到）。
+ *
+ * 回傳是否走到底。中途某一層沒出現就回 false，讓呼叫端的斷言紅得有話可說。
+ */
+async function openInFileTree(client, relPath) {
+  // **檔案樹與檢視器互斥渲染**（`openPath === null ? <FileTree/> : <FileViewer/>`）——
+  // 開著某個檔案時樹根本不在 DOM 裡，逐層展開必定一步都走不動。
+  //
+  // 失效方式很惡劣：導航靜默失敗，而**先前開著的那個檔案還在畫面上**，於是其後「有沒有
+  // 跳回 OpenSpec 的入口」那類斷言驗的是上一個檔案 —— 該紅的紅得莫名，該綠的綠得虛假
+  // （實測：spec 檔案那條是綠的，但它驗到的是還開著的 `tasks.md`）。
+  //
+  // 用 breadcrumb 上那顆 `files` 回到樹（產品自己的路徑）。
+  //
+  // **不可改用「切走身分再切回來」** —— FilesPanel 刻意在 `useState` 的初始值就套用跨身分
+  // 請求（否則跳過去的那一次永遠不會開檔），於是重新掛載會把上一個 request **重播一次**，
+  // 又開回同一個檔案（實測：重置後仍停在 `tasks.md`）。
+  if ((await client.evaluate(OPEN_FILE_PATH)) !== null) {
+    await client.evaluate(CLICK_BREADCRUMB_ROOT)
+    const cleared = await pollUntil(client, OPEN_FILE_PATH, (value) => value === null, 8000)
+    if (cleared !== null) return false
+  }
+
+  const segments = relPath.split('/').filter(Boolean)
+  let prefix = ''
+
+  for (const segment of segments) {
+    prefix = prefix ? `${prefix}/${segment}` : segment
+    const appeared = await pollUntil(client, FILES_HAS_ROW(prefix), (value) => value === true, 8000)
+    if (appeared !== true) return false
+
+    // **點目錄是 toggle，不是「展開」** —— 已展開的再點一次會收合，其下每一層隨之消失，
+    // 而下一圈的等待只會逾時（實測：連續導航兩條路徑時，第二條的共同前綴被第一條展開過，
+    // 於是第一步就把樹關掉了）。`aria-expanded` 為 `'true'` 時跳過；檔案沒有這個屬性，
+    // 恆為 null，一律點下去開啟它。
+    if ((await client.evaluate(FILES_ROW_EXPANDED(prefix))) === 'true') continue
+    await client.evaluate(FILES_CLICK_ROW(prefix))
+  }
+
+  return true
+}
+
 async function anchorChange(client, slug) {
   for (let attempt = 1; attempt <= 3; attempt++) {
     // **切視圖本身也要納入重試** —— 建立 session 之後畫面仍在變動，`CLICK_VIEW` 會落空；
@@ -1823,6 +1910,195 @@ async function runMode(label, { port, rendererUrl }) {
       anchoredFromGraph === 'inside-change',
       String(anchoredFromGraph),
     )
+
+    // ── 反向導覽：worktree 裡的檔案跳得回 OpenSpec 身分 ──────────────────────
+    //
+    // **這一段驗的是一趟完整的往返**，不是兩個獨立的方向。此前 change → 檔案可用、
+    // 檔案 → change 不可用，於是同一個檔案「去得了、回不來」。
+    //
+    // 正向那一步順便當作**導航手段**：它會在 Files 身分開啟 worktree 裡的那個檔案，
+    // 省掉逐層展開檔案樹（而且它是使用者真正會走的路徑）。
+    console.log('\n反向導覽（worktree 內的檔案）')
+
+    await app.client.evaluate(CLICK_VIEW(copy('openspec.tabChange')))
+    // **把前置變成獨立的斷言** —— 少了它，下面點不到按鈕時紅的是「開啟檔案」那條，
+    // 而真正壞掉的是「視圖沒切過去 / artifact 還沒畫出來」，指向錯的方向。
+    const artifactReady = await pollUntil(app.client, HAS_OPEN_IN_FILES, (v) => v === true, 12_000)
+    check(results, '本 change 視圖已呈現 artifact 的檔案導覽入口', artifactReady === true)
+
+    // **needle 用 slug，不是檔名。** 預設選中的 artifact 不保證是 proposal —— 前面那條
+    // 「worktree 裡的變更使側欄自行更新」剛寫進 `tasks.md`，這個 change 因此多了一個 artifact
+    // （實測：以 `'proposal.md'` 當 needle 找不到按鈕）。slug 在每個 artifact 的路徑裡都有。
+    check(
+      results,
+      '自 worktree 的 change artifact 開啟其檔案',
+      (await app.client.evaluate(CLICK_OPEN_FILE('inside-change'))) === true,
+    )
+
+    const wtOpenPath = await pollUntil(
+      app.client,
+      OPEN_FILE_PATH,
+      (value) => typeof value === 'string' && value.startsWith('.claude/'),
+      8000,
+    )
+    check(
+      results,
+      '開啟的是 worktree 裡的檔案（首段不是 openspec）',
+      String(wtOpenPath).startsWith('.claude/worktrees/wt-inside/openspec/changes/inside-change/'),
+      String(wtOpenPath),
+    )
+
+    // **本 change 的核心斷言。** 判準若仍是「首段必須是 openspec」，這裡恆為 false。
+    const wtBackEntry = await pollUntil(app.client, HAS_VIEW_IN_OPENSPEC, (v) => v === true, 8000)
+    check(results, 'worktree 裡的檔案提供跳回 OpenSpec 的入口', wtBackEntry === true)
+
+    check(
+      results,
+      '觸發後跳回 OpenSpec 身分',
+      (await app.client.evaluate(CLICK_VIEW_IN_OPENSPEC)) === true,
+    )
+    const wtBackIdentity = await pollUntil(app.client, IDENTITY, (v) => v === 'openspec', 8000)
+    check(results, '身分切回 OpenSpec', wtBackIdentity === 'openspec')
+    const wtBackAnchor = await pollUntil(
+      app.client,
+      ANCHORED_SLUG,
+      (value) => value === 'inside-change',
+      8000,
+    )
+    check(
+      results,
+      '呈現的是原本那個 change（往返回到同一個實體）',
+      wtBackAnchor === 'inside-change',
+      String(wtBackAnchor),
+    )
+
+    // 反面：結構相同但不在任何工作目錄的 `openspec/` 底下 —— **成對於上面那條**。
+    //
+    // 少了它，一個把判準鬆綁成「路徑裡有 openspec 就算」的實作會通過上面每一條正面斷言。
+    // 誘餌必須帶 `changes/` 那一層（見 fixture 的註解與 design D4 的鑑別力矩陣）。
+    await app.client.evaluate(CLICK_IDENTITY('▤'))
+    await pollUntil(app.client, IDENTITY, (v) => v === 'files', 8000)
+
+    const decoyOpened = await openInFileTree(app.client, 'docs/openspec/changes/decoy/proposal.md')
+    check(results, '於檔案樹開啟 docs 底下的誘餌檔案', decoyOpened === true)
+    const decoyPath = await pollUntil(
+      app.client,
+      OPEN_FILE_PATH,
+      (value) => value === 'docs/openspec/changes/decoy/proposal.md',
+      8000,
+    )
+    check(results, '開啟的是誘餌檔案', decoyPath === 'docs/openspec/changes/decoy/proposal.md', String(decoyPath))
+    check(
+      results,
+      'docs 底下、結構相同的檔案不提供跳回 OpenSpec 的入口',
+      (await app.client.evaluate(HAS_VIEW_IN_OPENSPEC)) === false,
+    )
+
+    // 同一個誘餌，但在 worktree 之內 —— 剝掉工作目錄根之後首段是 `docs`，同樣不得命中。
+    const decoyInWt = await openInFileTree(
+      app.client,
+      '.claude/worktrees/wt-inside/docs/openspec/changes/decoy/proposal.md',
+    )
+    check(results, '於檔案樹開啟 worktree 內的誘餌檔案', decoyInWt === true)
+    check(
+      results,
+      'worktree 內 docs 底下的檔案同樣不提供入口',
+      (await app.client.evaluate(HAS_VIEW_IN_OPENSPEC)) === false,
+    )
+
+    // worktree 裡的 spec 檔案 → 該 topic（design D3：導覽的目標是 topic，不是檔案）
+    const wtSpecOpened = await openInFileTree(
+      app.client,
+      '.claude/worktrees/wt-inside/openspec/specs/auth/spec.md',
+    )
+    check(results, '於檔案樹開啟 worktree 內的 spec 檔案', wtSpecOpened === true)
+    check(
+      results,
+      'worktree 內的 spec 檔案提供跳回 OpenSpec 的入口',
+      (await app.client.evaluate(HAS_VIEW_IN_OPENSPEC)) === true,
+    )
+    await app.client.evaluate(CLICK_VIEW_IN_OPENSPEC)
+    const wtSpecText = await pollUntil(
+      app.client,
+      SPEC_CONTENT,
+      (text) => text.includes('auth Specification'),
+      12_000,
+    )
+    check(
+      results,
+      '呈現的是該 topic',
+      String(wtSpecText).includes('auth Specification'),
+      String(wtSpecText).slice(0, 120),
+    )
+    // **來源標示是 D3 的承重部分，不是裝飾**：使用者手上那個檔案與這裡呈現的是兩份，
+    // 而 archive 前在 worktree 裡 backfill main spec 是標準流程 ⇒ 分歧是常態。
+    check(
+      results,
+      'spec 檢視標示其內容來自主工作目錄',
+      String(wtSpecText).includes(prefixOf('openspec.specOrigin')),
+      String(wtSpecText).slice(0, 200),
+    )
+
+    // 執行期間新建一個邊界內 worktree —— 工作目錄根清單必須跟著更新，否則新 worktree 裡的
+    // 檔案沒有入口。清單走的是既有的 `openspec:changed` 監看（含「工作目錄清單本身」那一層），
+    // **本 change 不另造監看**，這條驗的正是那個沿用是否成立。
+    execFileSync(
+      'git',
+      [
+        '-c',
+        'user.email=probe@spekterm',
+        '-c',
+        'user.name=probe',
+        '-c',
+        'color.ui=false',
+        'worktree',
+        'add',
+        '-q',
+        '-b',
+        'feat-late',
+        '.claude/worktrees/wt-late',
+      ],
+      { cwd: worktree.repo, stdio: 'pipe' },
+    )
+    const lateDir = join(worktree.repo, '.claude/worktrees/wt-late')
+    changeMeta(join(lateDir, 'openspec/changes/late-change'), '2026-06-01')
+    writeFile(join(lateDir, 'openspec/changes/late-change/proposal.md'), '# 執行期間才出現的 change\n')
+
+    // 上一步停在 spec 檢視 —— `CHANGE_TREE_ROWS` 讀的是**瀏覽**視圖的樹，不先切回去會恆讀到
+    // 空陣列（而那看起來像「清單沒更新」，指向錯的方向）。
+    await app.client.evaluate(CLICK_VIEW(copy('openspec.tabBrowse')))
+    const lateListed = await pollUntil(
+      app.client,
+      CHANGE_TREE_ROWS('Active'),
+      (list) => list.some((r) => r.slug === 'late-change'),
+      20_000,
+    )
+    check(
+      results,
+      '執行期間新建的 worktree 其 change 出現在側欄',
+      Array.isArray(lateListed) && lateListed.some((r) => r.slug === 'late-change'),
+      JSON.stringify(lateListed?.map((r) => r.slug)),
+    )
+
+    await app.client.evaluate(CLICK_IDENTITY('▤'))
+    await pollUntil(app.client, IDENTITY, (v) => v === 'files', 8000)
+    const lateOpened = await openInFileTree(
+      app.client,
+      '.claude/worktrees/wt-late/openspec/changes/late-change/proposal.md',
+    )
+    check(results, '於檔案樹開啟新 worktree 內的檔案', lateOpened === true)
+    check(
+      results,
+      '新建的工作目錄已進入根清單（其檔案可反向導覽）',
+      (await app.client.evaluate(HAS_VIEW_IN_OPENSPEC)) === true,
+    )
+
+    // **把狀態還原給後面的段落。** 這一段結束時身分停在 Files、視圖停在 spec 檢視，而下一段
+    // （folder 本身是 linked worktree）要在 OpenSpec 的瀏覽視圖上點樹 —— 不還原的話它整段紅，
+    // 看起來像那一段壞了（實測踩過：6 條全紅，實際上只是身分沒切回來）。
+    await app.client.evaluate(CLICK_IDENTITY('◈'))
+    await pollUntil(app.client, IDENTITY, (v) => v === 'openspec', 8000)
+    await app.client.evaluate(CLICK_VIEW(copy('openspec.tabBrowse')))
 
     // ── folder 本身就是一個 linked worktree ──────────────────────────────────
     //

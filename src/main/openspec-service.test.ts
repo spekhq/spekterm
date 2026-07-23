@@ -366,16 +366,106 @@ describe('OpenSpecService 的 worktree 聚合', () => {
     }
   }
 
-  function aggregated(active: unknown[], worktrees: unknown[]): AggregatedScanResult {
+  function aggregated(
+    active: unknown[],
+    worktrees: unknown[],
+    isAggregated = true,
+  ): AggregatedScanResult {
     return {
       specs: [],
       activeChanges: active,
       archivedChanges: [],
       defaultSchema: null,
       worktrees,
-      aggregated: true,
+      aggregated: isAggregated,
     } as unknown as AggregatedScanResult
   }
+
+  /**
+   * 工作目錄根清單 —— renderer 反向交叉導覽的唯一依據。
+   *
+   * **這一組的重點是 folder 自身那一筆**：它有三條互相獨立的路可以被靜默弄丟（`toRelPath`
+   * 對 root 自身回 `null`、非 git 目錄的列舉是空的、folder 是 repo 子目錄時那筆指向邊界外），
+   * 而任何一條發生，**現行就能用**的 `openspec/…` 反向導覽都會消失。
+   */
+  describe('工作目錄根清單', () => {
+    it('folder 自身為空字串，邊界內的 worktree 為相對路徑', async () => {
+      const inside = worktree(path.join(repo, '.claude/worktrees/wt-a'))
+      const svc = create(okFolder(), {
+        scan: async () => aggregated([], [worktree(repo, { isMain: true }), inside]),
+      })
+
+      assert.deepEqual(await svc.getWorktreeRoots('f1'), ['', '.claude/worktrees/wt-a'])
+    })
+
+    it('邊界外的 worktree 不出現，且清單無絕對路徑亦無 null', async () => {
+      const outside = worktree(path.join(base, 'outside-wt'))
+      const svc = create(okFolder(), {
+        scan: async () => aggregated([], [worktree(repo, { isMain: true }), outside]),
+      })
+
+      const roots = await svc.getWorktreeRoots('f1')
+      assert.deepEqual(roots, [''])
+      assert.equal(
+        roots.some((root) => root.includes(base)),
+        false,
+        '不得含絕對路徑',
+      )
+      assert.equal(
+        roots.every((root) => typeof root === 'string'),
+        true,
+        '不得以 null 佔位 —— 空字串是 folder 自身的合法值，兩者會在消費端糾纏',
+      )
+    })
+
+    /**
+     * 非 git 目錄：core 的 `listWorktrees` 對 `execFile` 失敗回**空陣列**。
+     * 少了「folder 自身恆入清單」，這裡會回 `[]` —— 而 `probe:openspec` 的主 fixture 正是
+     * 建在 `/tmp` 的非 git 目錄，既有的反向導覽會整個消失。
+     */
+    it('folder 不在版控之下時，清單恰含 folder 自身', async () => {
+      const svc = create(okFolder(), { scan: async () => aggregated([], [], false) })
+
+      assert.deepEqual(await svc.getWorktreeRoots('f1'), [''])
+    })
+
+    /**
+     * folder 是某個 repo 的**子目錄**：`scanOpenSpecAggregated` 在工作目錄 ≤ 1 時退回
+     * `scanOpenSpec`（`aggregated: false`），**但 `worktrees` 仍帶著主工作目錄那筆** —— 它指向
+     * repo 根，落在 folder 邊界**外**。這是 `#specRoot` 踩過的同一個坑，失效方式是**靜默的**
+     * （沒有任何 fixture 是 repo 子目錄）。
+     */
+    it('folder 是 repo 子目錄時，清單恰含 folder 自身', async () => {
+      const repoRoot = worktree(base, { isMain: true }) // folder(repo) 的上一層
+      const svc = create(okFolder(), { scan: async () => aggregated([], [repoRoot], false) })
+
+      assert.deepEqual(await svc.getWorktreeRoots('f1'), [''])
+    })
+  })
+
+  /**
+   * `openspec-panel` 的 scenario「topic 僅存在於該 worktree」。
+   *
+   * core 的聚合其 `specs` 一律取自**主工作目錄**，所以某個 worktree 裡新增的 capability
+   * （backfill 之後它的 `openspec/specs/<topic>/spec.md` 只存在於那裡）**不在**側欄的 spec
+   * 清單中。反向導覽的判準刻意不驗存在性（design D5，那是 UI 自己的座標、不拿去拼路徑），
+   * 於是使用者會拿到一個指向不存在 topic 的入口 —— 點下去必須是誠實的「找不到」。
+   *
+   * **`probe:openspec` 碰不到這個情形**：它的 worktree 是從含 `openspec/specs/auth/spec.md`
+   * 的 commit 切出去的，兩份內容相同。故由這裡承擔。
+   */
+  it('僅存在於某個 worktree 的 topic 讀不到（specs 取自主工作目錄）', async () => {
+    const mainWt = worktree(repo, { isMain: true, branch: 'master' })
+    const other = worktree(path.join(repo, '.claude/worktrees/wt-a'))
+    // 掃描結果的 specs 只有主工作目錄那些 —— worktree 裡的 `new-capability` 不在其中。
+    const svc = create(okFolder(), { scan: async () => aggregated([], [mainWt, other]) })
+
+    await assert.rejects(
+      () => svc.getSpec('f1', 'new-capability'),
+      (error: unknown) => error instanceof OpenSpecServiceError && error.code === 'NOT_FOUND',
+      '只存在於 worktree 的 topic 應回報找不到，而不是呈現別的 topic',
+    )
+  })
 
   it('來源翻譯後不含絕對路徑，且其餘欄位原封流穿', async () => {
     const wt = worktree(path.join(base, 'wt-a'))

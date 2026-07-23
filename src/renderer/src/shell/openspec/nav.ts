@@ -22,14 +22,21 @@ export interface Request<T> {
 export type OpenSpecRequest = Request<OpenSpecTarget>
 export type FileRequest = Request<string>
 
+function segmentsOf(relPath: string): string[] {
+  return relPath.split('/').filter((segment) => segment !== '')
+}
+
+/** `segments` 是否落在 `root` 之下 —— **逐段比對，不是字串前綴**（見 `targetOfPath`）。 */
+function isUnder(segments: readonly string[], root: readonly string[]): boolean {
+  return root.every((expected, index) => segments[index] === expected)
+}
+
 /**
- * 由 `openspec/` 底下的檔案路徑反推它屬於哪個 spec 或 change。
+ * 一個工作目錄**之內**的相對路徑 → 它代表的 spec 或 change。
  *
- * 不在 `openspec/` 之下、或不符合任何已知結構的路徑回 `null` —— 呼叫端據此決定要不要顯示
- * 「在 OpenSpec 中檢視」的入口。
+ * 這是原本 `targetOfPath` 的全部內容；抽出來是因為現在要對每個工作目錄根各試一次。
  */
-export function targetOfPath(relPath: string): OpenSpecTarget | null {
-  const segments = relPath.split('/').filter((segment) => segment !== '')
+function structureOf(segments: readonly string[]): OpenSpecTarget | null {
   if (segments[0] !== 'openspec') return null
 
   // openspec/specs/<topic>/spec.md
@@ -44,6 +51,45 @@ export function targetOfPath(relPath: string): OpenSpecTarget | null {
     }
     // openspec/changes/<slug>/…
     return { kind: 'change', slug: segments[2] }
+  }
+
+  return null
+}
+
+/**
+ * 由**某個工作目錄**的 `openspec/` 底下的檔案路徑，反推它屬於哪個 spec 或 change。
+ *
+ * `worktreeRoots` 是該 folder 所屬 repo 各工作目錄的 folder-relative 根（主行程供應）——
+ * folder 自身是**空字串**，於是既有的 `openspec/…` 路徑仍走同一條規則，不是特例。
+ * 不落在任何工作目錄的 `openspec/` 之下、或不符合已知結構的路徑回 `null`，呼叫端據此決定
+ * 要不要顯示「View in OpenSpec」入口。
+ *
+ * **三個會靜默失敗的地方（全部實測，見 design D1／D7）：**
+ *
+ * 1. **逐一嘗試每個根，不是「挑最長的那個」就放棄。** 兩者在正常佈局下同解，但工作目錄開在
+ *    病態位置時（例如 `<repo>/openspec/wt`），最長的那個剝出來可能不成立，而較短的成立。
+ *    由長至短只是 tie-break（工作目錄可能巢狀，較深的才是它真正的歸屬）。
+ * 2. **比對逐段進行，不可用 `relPath.startsWith(root)`。** 清單中兩個根互為字串前綴時
+ *    （`…/wt` 與 `…/wt-a`），較短的會先命中並剝出 `-a/openspec/…` —— 首段不是 `openspec`，
+ *    於是整條路徑被判為 `null`。這與 `fs-boundary.ts` 那條「用 `path.relative`、絕不用
+ *    `startsWith`」同源。
+ * 3. **剝根之後仍必須要求首段是 `openspec`。** 少了它，`docs/openspec/changes/x/…` 這種
+ *    「結構相同但不在任何工作目錄的 openspec 底下」的檔案會被誤判 —— 而空字串是每個路徑的
+ *    前綴，folder 自身那個根對**所有**路徑都命中，這條要求是唯一擋住它的東西。
+ */
+export function targetOfPath(
+  relPath: string,
+  worktreeRoots: readonly string[],
+): OpenSpecTarget | null {
+  const segments = segmentsOf(relPath)
+  const roots = worktreeRoots
+    .map(segmentsOf)
+    .sort((a, b) => b.length - a.length)
+
+  for (const root of roots) {
+    if (!isUnder(segments, root)) continue
+    const target = structureOf(segments.slice(root.length))
+    if (target) return target
   }
 
   return null

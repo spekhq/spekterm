@@ -31,6 +31,8 @@ export interface OpenSpecApi {
   getChanges(folderId: string): Promise<ChangesData>
   getChange(folderId: string, slug: string): Promise<ChangeDetailView>
   getGraphData(folderId: string): Promise<GraphData>
+  /** 各工作目錄的 folder-relative 根（folder 自身為空字串）。供反向交叉導覽的判定。 */
+  getWorktreeRoots(folderId: string): Promise<string[]>
 }
 
 export class OpenSpecError extends Error {
@@ -79,5 +81,9 @@ export class IpcAdapter implements OpenSpecApi {
 
   getGraphData(folderId: string): Promise<GraphData> {
     return unwrap(window.workspace.openspec.getGraphData(folderId))
+  }
+
+  getWorktreeRoots(folderId: string): Promise<string[]> {
+    return unwrap(window.workspace.openspec.getWorktreeRoots(folderId))
   }
 }

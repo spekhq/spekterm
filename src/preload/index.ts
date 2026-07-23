@@ -98,6 +98,12 @@ const workspaceApi = {
       ipcRenderer.invoke('workspace:openspec:getChange', folderId, slug),
     getGraphData: (folderId: string): Promise<FsResult<GraphData>> =>
       ipcRenderer.invoke('workspace:openspec:getGraphData', folderId),
+    /**
+     * 該 folder 所屬 repo 各工作目錄的 folder-relative 根（folder 自身為空字串）。
+     * renderer 拿它判斷一個檔案是不是落在某個工作目錄的 `openspec/` 底下（反向交叉導覽）。
+     */
+    getWorktreeRoots: (folderId: string): Promise<FsResult<string[]>> =>
+      ipcRenderer.invoke('workspace:openspec:getWorktreeRoots', folderId),
     /** 該 folder 的 OpenSpec 結構已變更（agent 改了檔）。回傳取消訂閱的函式。 */
     onChanged: (listener: (folderId: string) => void): (() => void) => {
       const handler = (_event: IpcRendererEvent, folderId: string): void => {

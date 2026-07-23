@@ -57,6 +57,17 @@ export interface SpecDetailView {
   relatedChanges: string[]
   history: HistoryEntry[]
   relPath: string | null
+  /**
+   * 這份 spec 的來源工作目錄 —— **該 repo 有多於一個工作目錄時才填**。
+   *
+   * core 的聚合對 spec 與 change 的處理不同：`specs` 一律取自**主工作目錄**。於是使用者從
+   * 一個 worktree 的 `openspec/specs/<topic>/spec.md` 反向導覽過來時，看到的是**另一份檔案**
+   * 的內容 —— 而那不是邊角：`common-openspec-change` 的流程要求 archive 前在 worktree 裡
+   * backfill main spec，所以兩份分歧是每個 change 出貨前的常態。
+   *
+   * 單一工作目錄時為 `undefined`（沒有歧義，標示只是噪音 —— 比照 change 的來源徽章不標示 main）。
+   */
+  origin?: ChangeOrigin
 }
 
 export interface SpecVersionView {
@@ -342,6 +353,26 @@ export class OpenSpecService {
     }
   }
 
+  /**
+   * spec 的來源工作目錄 —— 恆為主工作目錄（`specs: main.scan.specs`），**但只在該 repo 有
+   * 多於一個工作目錄時才回傳**。
+   *
+   * 只有一個工作目錄時沒有任何歧義，標示是噪音；有多個時使用者無從得知自己看的是哪一份，
+   * 而他很可能剛從某個 worktree 的同名檔案跳過來（見 `SpecDetailView.origin` 的說明）。
+   */
+  #specOrigin(root: string, result: AggregatedScanResult): ChangeOrigin | undefined {
+    if (result.worktrees.length <= 1) return undefined
+    const main = result.worktrees.find((worktree) => worktree.isMain)
+    if (!main) return undefined
+    return {
+      key: main.key,
+      branch: main.branch,
+      vcs: main.vcs,
+      isMain: true,
+      isFolderRoot: main.path === root,
+    }
+  }
+
   /** `ChangeInfo` → `ChangeSummary`：只換掉 `source`，其餘欄位原封流穿（design D3）。 */
   #summary(root: string, change: ChangeInfo): ChangeSummary {
     const { source: _source, ...rest } = change
@@ -352,6 +383,38 @@ export class OpenSpecService {
   /** 驗收「快取命中不重掃」與「重新載入不累積 watcher」用得上。 */
   get watchedFolderCount(): number {
     return this.#watches.size
+  }
+
+  /**
+   * 該 folder 所屬 repo 各工作目錄的 **folder-relative 根**。
+   *
+   * renderer 拿它判斷一個檔案路徑是不是落在某個工作目錄的 `openspec/` 底下（反向交叉導覽）——
+   * 它沒有別的詞彙可以問這件事：`ChangeOrigin` 只有不可逆的 `key`、分支與兩個布林。
+   *
+   * **folder 自身恆為清單的第一筆（空字串），而且它不經 `toRelPath`。** 這一條是承重的，
+   * 三個獨立的事實會合謀把它弄丟：
+   *
+   * 1. `toRelPath(root, root)` 回 **`null`**（`rel === ''` 那一行）—— 照「翻不出來就省略」
+   *    直覺地寫成 `worktrees.map(toRelPath).filter(Boolean)`，folder 自己**第一個**被丟掉。
+   * 2. 非 git 目錄的 `listWorktrees` 回**空陣列**（core 對 `execFile` 失敗即 `resolve([])`），
+   *    於是清單裡連一筆都沒有。
+   * 3. folder 是某個 repo 的**子目錄**時，`worktrees` 那筆指向 repo 根 —— 落在 folder 邊界外，
+   *    翻譯出界後同樣被丟掉。
+   *
+   * 任何一條發生，`openspec/…` 這種**現行就能用**的路徑都會失去入口。folder 自身的
+   * `openspec/` 是這個能力自始就在供應的東西，它的可導覽性不該取決於 git 列舉的結果。
+   *
+   * 其餘工作目錄翻譯不出 folder-relative 路徑時**整筆省略** —— 不以 `null` 佔位：空字串是
+   * folder 自身的合法值，清單裡混進 `null` 會在消費端與它糾纏。
+   */
+  async getWorktreeRoots(folderId: string): Promise<string[]> {
+    const { root, result } = await this.#scan(folderId)
+    const roots = ['']
+    for (const worktree of result.worktrees) {
+      const rel = toRelPath(root, worktree.path)
+      if (rel !== null) roots.push(rel)
+    }
+    return roots
   }
 
   async getOverview(folderId: string): Promise<OverviewData> {
@@ -384,12 +447,14 @@ export class OpenSpecService {
       () => readSpec(specRoot, info.topic),
       `spec not readable: ${topic}`,
     )
+    const origin = this.#specOrigin(root, result)
     return {
       topic: detail.topic,
       content: detail.content,
       relatedChanges: detail.relatedChanges,
       history: detail.history,
       relPath: toRelPath(root, info.path),
+      ...(origin ? { origin } : {}),
     }
   }
 

@@ -57,6 +57,24 @@ export function SpecDetail({
           <Loading />
         ) : (
           <>
+            {/*
+              這份 spec 來自哪個工作目錄。**只在該 repo 有多個工作目錄時才有值** ——
+              使用者很可能剛從某個 worktree 的同名 `spec.md` 反向導覽過來，而 core 的 `specs`
+              一律取自主工作目錄：他手上那個檔案與這裡呈現的內容是**兩份**。archive 前在
+              worktree 裡 backfill main spec 是標準流程，所以分歧是常態而非邊角。
+            */}
+            {data.origin && (
+              <p
+                aria-label={t('openspec.specOrigin', {
+                  branch: data.origin.branch ?? t('openspec.worktreeDetached'),
+                })}
+                className="mb-3 border-b border-hairline pb-2 text-2xs text-ink-faint"
+              >
+                {t('openspec.specOrigin', {
+                  branch: data.origin.branch ?? t('openspec.worktreeDetached'),
+                })}
+              </p>
+            )}
             <MarkdownView text={data.content} />
             {data.relatedChanges.length > 0 && (
               <p className="mt-4 border-t border-hairline pt-3 text-xs text-ink-faint">

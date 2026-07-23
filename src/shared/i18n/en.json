@@ -152,6 +152,7 @@
     "continueArtifact": "Continue",
     "continueMissing": "Not written yet: {{artifacts}}",
     "worktreeDetached": "detached",
+    "specOrigin": "Shown from the main worktree ({{branch}}) — other worktrees may hold a different version.",
     "continueBlocked": {
       "noSession": "Start a session in this repo to continue this change.",
       "foreignSource": "The panel is showing another repo. Switch it back to the session repo to continue.",

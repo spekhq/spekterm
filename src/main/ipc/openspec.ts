@@ -21,6 +21,7 @@ export const OPENSPEC_CHANNELS = {
   getChanges: 'workspace:openspec:getChanges',
   getChange: 'workspace:openspec:getChange',
   getGraphData: 'workspace:openspec:getGraphData',
+  getWorktreeRoots: 'workspace:openspec:getWorktreeRoots',
   /** 主行程 → renderer：該 folder 的 OpenSpec 結構已變更（帶 folderId）。 */
   changed: 'workspace:openspec:changed',
 } as const
@@ -125,5 +126,11 @@ export function registerOpenSpecHandlers(store: FolderLookup): void {
     OPENSPEC_CHANNELS.getGraphData,
     (event, folderId: string): Promise<FsResult<GraphData>> =>
       toResult(() => serviceFor(store, event.sender).getGraphData(folderId)),
+  )
+
+  ipcMain.handle(
+    OPENSPEC_CHANNELS.getWorktreeRoots,
+    (event, folderId: string): Promise<FsResult<string[]>> =>
+      toResult(() => serviceFor(store, event.sender).getWorktreeRoots(folderId)),
   )
 }

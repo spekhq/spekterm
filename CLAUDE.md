@@ -273,7 +273,7 @@ npm run probe:workspace # 驗收 workspace-folders / filesystem-access / workspa
 npm run probe:files     # 驗收 file-explorer / file-viewer / 編輯 / 存檔 / 衝突 / CRUD / 導航防護 / 編輯器 worker / CSP（遠端圖片可載入、script-src 僅 self、注入點對 file:// 生效，dev + build 兩模式）
 npm run probe:terminal  # 驗收 terminal-sessions + session-persistence + GPU renderer（pty 雙向／cwd／resize／多開／關分頁・reload・關窗皆不留孤兒；**GPU renderer 只給顯示中的終端**（代理判準：active 有 canvas 且無 .xterm-rows；隱藏的不得持有 canvas）、關掉 GPU 加速退回 DOM 且不遺失內容、開回來又是 GPU；**觀測管道已 renderer-agnostic** —— 不再從 DOM 讀終端內容：pty 行為走**讀檔**、畫面走**產品的複製路徑**、字級走 **pty 的 cols**；`PROBE_ONLY=<段落>[:<模式>]` 可只跑一部分（迭代用，不設就跑全部）；剪貼簿畸形輸入防禦；**右鍵 gate 在 mouse reporting**（stub 送 DECSET 1000 時右鍵讓位給程式、關閉後恢復選單 —— 含對照組）；OSC 標題與命名權；**關掉 app 再開後 session 原樣重建**、只喚醒被顯示的那一個、claude 以 --resume 續接同一個對話、續接失敗自癒為全新對話、shell 於最後 cwd 重生並重播畫面、kill -9 後快照仍在、損毀韌性、被竄改的識別碼不進命令 —— 皆以 PATH 上的 stub claude 承載，dev + build 兩模式）
 npm run probe:keyboard  # 驗收 keyboard-navigation（Ctrl+Tab 切 session／Ctrl+↑↓ 切 repo／位置序非 MRU／按鍵不流進 pty／編輯器與對話框的行為 —— 對話框的抑制以 session 命名／files／**終端字型設定**三種各驗一次；**Shift+↑↓ 排 repo、Shift+←→ 排 session** —— 端點不循環、移動後仍選中／focused、終端持有焦點時仍生效且按鍵不進 pty、**編輯器持有焦點時 Shift+→ 仍是文字選取**，dev + build 兩模式）
-npm run probe:openspec  # 驗收 openspec-data-access / openspec-panel / worktree-aggregation（兩個視圖／兩棵樹／artifact 分頁／agent 改檔即更新／錨定／交叉導覽／Graph・Timeline 的 overlay；**續寫入口**的呈現條件與四種停用情形、**選單選取後關閉**；**worktree 聚合** —— worktree 裡的 change 出現在側欄且不在主工作目錄底下、來源徽章（main 不標示）、邊界內外的檔案導覽入口、Timeline 依 topic 分組，dev + build 兩模式）
+npm run probe:openspec  # 驗收 openspec-data-access / openspec-panel / worktree-aggregation（兩個視圖／兩棵樹／artifact 分頁／agent 改檔即更新／錨定／交叉導覽／Graph・Timeline 的 overlay；**續寫入口**的呈現條件與四種停用情形、**選單選取後關閉**；**worktree 聚合** —— worktree 裡的 change 出現在側欄且不在主工作目錄底下、來源徽章（main 不標示）、邊界內外的檔案導覽入口、Timeline 依 topic 分組；**反向導覽** —— worktree 內的檔案跳得回 OpenSpec（一趟完整往返）、worktree 內的 spec 檔案跳到該 topic 且標示來源、`docs/openspec/changes/<slug>/` 之下的誘餌**不**呈現入口（帶結構那一層才有鑑別力）、執行期間新建的 worktree 進得了根清單，dev + build 兩模式）
 npm run probe:native    # 驗收 native-module-toolchain（Electron 主行程載入 node-pty + spawn pty）
 npm run probe:core      # 驗收 spek-core-integration（主行程掃描 OpenSpec，且不開 TCP 埠）
 npm run probe:identity  # 驗收 app-identity（productName／appId／userData 路徑／視窗標題）
@@ -659,6 +659,16 @@ org 名**不是**凍結身分的一部分 —— repo 改名與 transfer 皆自�
   `openspec-data-access`（掃描與監看範圍）、`openspec-panel`（來源徽章）、`artifact-continuation`
   （第 4 個條件：來源工作目錄即 session 所屬 folder，**不是** `isMain`）。範圍限於「讀」——
   session 開在 worktree 與 rail 把 worktree 列為一級項目都不在內。詳見下文「worktree 聚合的實測與踩雷」。
+
+- **反向導覽** — `worktree-reverse-navigation`（**不屬於任何 Phase**，GitHub issue #3）：補上
+  worktree 佈局下 **Files → OpenSpec** 的那一半 —— 此前 change → 檔案可用、檔案 → change 不可用，
+  **同一個檔案去得了、回不來**。判準由「路徑首段是 `openspec`」改為「落在**某個工作目錄**的
+  `openspec/` 之下」；新增 `openspec.getWorktreeRoots`（`openspec-data-access` 的新 requirement ——
+  folder 自身**恆入清單**且為空字串，邊界外的整筆省略）、`openspec-panel` 的交叉導覽 requirement
+  放寬並新增誤判防護、`worktree-aggregation` 明文要求檔案導覽**雙向**。連帶：spec 檢視**標示其
+  內容來自主工作目錄**（core 的 `specs` 一律取自主工作目錄，而 archive 前的 backfill 讓分歧成為
+  常態）。詳見下文「反向導覽的實測與踩雷」—— 那裡記著**兩個沒有鑑別力的反面測試**與
+  **三條會靜默弄丟 folder 自身**的路。
 
 - Phase 6 打包與發佈，Phase 7+ 建立護城河（handoff）。**session 常駐**已排入路線圖但刻意不做
   （PRD §11）。
@@ -2285,6 +2295,106 @@ core 開始加 worktree key，ui 的解析沒跟上，**沒有任何東西會紅
   然後它 **throw 而不是回報紅燈** —— 整支探針從那裡中斷，看起來像「選單壞了」。
 - 附帶：**切換視圖後要等內容渲染再點**（`build` 模式僥倖通過、`dev` 慢一步就點空），而且
   **把中間狀態變成獨立的斷言**（「錨定切換成功了嗎」），否則紅的會是終點那條，指向錯的方向。
+
+## 反向導覽的實測與踩雷（`worktree-reverse-navigation`）
+
+`openspec-worktree-aggregation` 讓 change → 檔案通了，反向卻沒有 —— **同一個檔案，去得了、
+回不來**。根因是 `targetOfPath()` 要求路徑**第一段**是 `openspec`，而 worktree 裡的檔案是
+`.claude/worktrees/<slug>/openspec/…`。判準因此改為「**以工作目錄根由長至短逐一嘗試**，剝除該
+根之後首段為 `openspec` 且其後符合已知結構者即命中」，工作目錄根清單由主行程供應
+（`openspec.getWorktreeRoots`，folder 自身為**空字串**）。
+
+### 反面測試看起來像壞情況，不代表它擋得住壞實作 —— 兩個都踩了
+
+**這是本 change 最重要的收穫，而且兩條都是獨立稽核抓到的。** 一個反面案例的價值不在於「它看
+起來是個壞情況」，而在於**它能不能區分正確與錯誤的實作**。實測四個組合：
+
+| 反面案例 | 正確版 | 鬆綁版<br/>（找第一個 `openspec` 分段） | `startsWith` 版<br/>（取第一個命中） |
+|---|---|---|---|
+| `docs/openspec/changes/foo/proposal.md` | `null` | **`change:foo`** ← 抓得到 | `null` |
+| `docs/openspec/notes.md` | `null` | `null` | `null` ← **三種同解，無用** |
+| 兩個根互為前綴（**正面**） | `change:x` | `change:x` | **`null`** ← 抓得到 |
+| `<root>-suffix/openspec/…` | `null` | **`change:x`** | `null` |
+
+- **`docs/openspec/notes.md` 擋不住鬆綁版** —— `openspec` 之後只剩一段，既非 `specs` 亦非
+  `changes`，於是**兩種實作都回 `null`**。誘餌**必須帶 `changes/` 或 `specs/` 那一層**。
+  第一版的 spec、tasks 與 probe fixture 全部用了它，等於整個「防鬆綁」的驗收是空的。
+- **`<root>-suffix` 擋不住 `startsWith`** —— 剝掉 root 之後首段是 `-suffix` 而非 `openspec`，
+  兩者同解。前綴比對在這個方向產生的是**偽陰性**。擋得住它的是**正面**案例：清單同時有
+  `…/wt` 與 `…/wt-a`，開後者底下的檔案 —— `startsWith` 會命中較短的 `wt`、剝出 `-a/openspec/…`
+  而回 `null`。
+- **但 `<root>-suffix` 不是沒用，是標錯了它在測什麼**（它擋得住鬆綁版）。留著它，改標籤。
+
+**兩個對照組都跑過**：單元測試層（`startsWith` → 1 紅、鬆綁 → 7 紅）、probe 層（鬆綁 → 兩條
+反面斷言變紅）。**用原本的誘餌時 probe 層是全綠的。**
+
+### folder 自身必須恆入清單 —— 三條路都會靜默把它弄丟
+
+「翻不出來就省略」直覺地寫成 `worktrees.map(toRelPath).filter(Boolean)`，會讓**現行就能用**的
+`openspec/…` 反向導覽消失：
+
+| | |
+|---|---|
+| `toRelPath(root, root)` 回 **`null`** | `openspec-service.ts` 的 `rel === ''` 那一行 —— folder 自己第一個被丟掉 |
+| 非 git 目錄的 `listWorktrees` 回**空陣列** | core 對 `execFile` 失敗即 `resolve([])`；`probe:openspec` 的主 fixture 正是 `/tmp` 下的非 git 目錄 |
+| folder 是 repo **子目錄**時那筆指向 repo 根 | 落在 folder 邊界外 → 翻譯出界 → 同樣被丟掉。**這條是靜默的**（沒有任何 fixture 是 repo 子目錄）—— 與 `#specRoot` 踩過的是同一個坑 |
+
+因此 folder 自身**以空字串恆入清單，不經 `toRelPath`、不取決於 git 列舉是否成功**。單元測試的
+對照組（換回 `map+filter`）讓 4 條全紅。
+
+**清單裡不以 `null` 佔位** —— 空字串是 folder 自身的合法值，兩者會在消費端糾纏。這一條與
+`SpecInfo.path` 既有的「翻不出來就回 `null`」**不同**，別寫成「延續」。
+
+### spec 一律來自主工作目錄，所以它的入口要**標示來源**
+
+core 的聚合對 spec 與 change 處理不同（`specs: main.scan.specs`）。於是 worktree 裡的
+`openspec/specs/<topic>/spec.md` 跳過去呈現的是**主工作目錄那一份**，而往返（再按 `Open in
+Files`）會把使用者送到**另一個檔案**。
+
+**仍然給入口**（反向導覽的目標是 **topic** 這個實體，不是某個檔案；不給只會製造另一種不對稱），
+**但必須標示**：`SpecDetailView.origin` 在該 repo 有**多於一個**工作目錄時才填，spec 檢視據此
+呈現「Shown from the main worktree (…)」。單一工作目錄時不填 —— 沒有歧義，標示只是噪音。
+
+> **同一個決定上，頻率假設連錯兩次，方向還相反。** 第一版裁決「不給入口」，理由是「跳過去會
+> 看到不同內容」（把罕見當常態）；翻轉之後又寫「只有跑過 `/opsx:sync` 才會分歧」（把常態當
+> 罕見）。**實際上 `common-openspec-change` 的流程要求 archive 前在 worktree 裡 backfill main
+> spec** —— 分歧是每個 change 出貨前的**常態終局**，而那正是使用者最常盯著側欄的時刻。
+> 兩次裁決本身都不必動，該動的是**代價的處理**：分歧既然是常態，就必須標示，而不是備註。
+
+### probe 在 Files 身分導航檔案樹的四個坑（全部實測）
+
+- **檔案樹與檢視器互斥渲染**（`openPath === null ? <FileTree/> : <FileViewer/>`）—— 開著某個
+  檔案時樹**根本不在 DOM 裡**，逐層展開一步都走不動。而失效方式很惡劣：導航靜默失敗，
+  **先前開著的檔案還在畫面上**，於是其後的斷言驗的是上一個檔案（實測：「spec 檔案有入口」
+  是綠的，但它驗到的是還開著的 `tasks.md`）。用 breadcrumb 上那顆 `files` 回到樹。
+- **不可用「切走身分再切回來」重置** —— `FilesPanel` 刻意在 `useState` 的**初始值**就套用跨身分
+  請求（否則跳過去的那一次永遠不會開檔），於是重新掛載會把上一個 request **重播一次**，又開回
+  同一個檔案。
+- **點目錄是 toggle，不是「展開」** —— 已展開的再點一次會收合，其下每一層隨之消失。連續導航
+  兩條路徑時，第二條的共同前綴被第一條展開過，於是第一步就把樹關掉了。判 `aria-expanded`。
+- **`CLICK_OPEN_FILE` 的 needle 不能用檔名** —— 前面那條「worktree 裡的變更使側欄自行更新」
+  剛寫進 `tasks.md`，該 change 因此多了一個 artifact，預設分頁不再是 proposal。用 **slug**
+  （它在每個 artifact 的路徑裡都有）。
+
+**插入的 probe 段落要把狀態還原**（身分、視圖）—— 不還原的話，下一段既有的驗收會整段紅，
+看起來像那一段壞了（實測踩過 6 條全紅）。這條紀律 `shell-affordance-tweaks` 已經記過一次。
+
+### design 裡寫「由 X 承擔」，就要真的去做 X
+
+`/opsx:verify` 抓到兩條，兩條都不是實作錯誤，而是**文件與現實對不上**：
+
+- **design 的 Risks 寫著「`probe:openspec` 碰不到這個情形，故由單元測試承擔」，而那條單元
+  測試沒有寫**（`topic` 只存在於某個 worktree 時，spec 讀不到）。這與 `session-restore` 的
+  休眠提示是同一個形態：**spec 有 scenario、design 有交代、實作上零覆蓋**。「由 X 承擔」是一
+  句承諾，寫下它的時候就該同時把 X 排進 tasks。
+- **spec 寫「SHALL 標示來源」是無條件的，實作卻有條件**（僅在 >1 工作目錄時）。條件本身是對的
+  ——錯的是 spec 沒把它寫出來，照字面實作的人會在每個 repo 都加上那行字。**實作為了避免噪音而
+  自行收窄時，要回頭改 spec，不是讓兩者各自為政。**
+
+順帶一條同源的：**入口的 gate 在一個地方、取數卻無條件**。`FilesPanel` 一開始無條件取工作
+目錄根清單，而入口的 gate 是 `folder.hasOpenSpec`（在 `SidePanel`）—— 沒有 `openspec/` 的
+folder 於是為一份用不到的清單走了一趟 `#scan`（那條路上 core 會 spawn `git worktree list`）。
+不是迴歸（OpenSpec 身分本來就會），但**此前只用 Files 身分的 folder 不會付這個成本**。
 
 ## 混排字型的列要釘住行框（`leading-none`）
 
