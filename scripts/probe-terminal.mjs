@@ -22,7 +22,7 @@ import {
   writeFileSync,
 } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { check, connect, dragMouse, pollUntil, pressKey, waitForPageTarget } from './lib/cdp.mjs'
 import { copy, prefixOf } from './lib/copy.mjs'
@@ -53,6 +53,46 @@ function makeFixture() {
   const out = join(base, 'probe-out')
   mkdirSync(out, { recursive: true })
   return { repo, out }
+}
+
+/**
+ * `makeFixture()` + 真的 git repo + 兩個 worktree（各帶一個 change）—— **只給 `runWorktree`**。
+ *
+ * **不併進 `makeFixture()`**：那會污染共用它的其他段落。`runContinuation` 依賴「`add-widget` 是
+ * 唯一的 active change」才會自動錨定 → 續寫入口才呈現；worktree 裡多兩個 change 就有三個 active，
+ * 自動錨定不觸發、續寫入口不呈現、`realClick(null)` 拋錯（實測踩過，症狀是那一段莫名崩掉）。
+ *
+ * 工作目錄的列舉走 core，它對非 git 目錄回**空陣列** —— 於是這個 fixture 必須是真 git repo，
+ * 否則「在 worktree 開 session」一條都驗不到。比照 `probe-openspec.mjs` 的 `makeWorktreeFixture()`。
+ */
+function makeWorktreeFixture() {
+  const { repo, out } = makeFixture()
+  const base = dirname(repo)
+
+  const git = (args, cwd) =>
+    execFileSync(
+      'git',
+      ['-c', 'user.email=probe@spekterm', '-c', 'user.name=probe', '-c', 'color.ui=false', ...args],
+      { cwd, stdio: 'pipe' },
+    )
+  git(['init', '-q', '--initial-branch=master', '.'], repo)
+  git(['add', '-A'], repo)
+  git(['commit', '-qm', 'init'], repo)
+
+  // 邊界**內**與邊界**外**各一個 —— 後者是本 change 的重點（放寬前它必定被夾制掉）。
+  const inside = join(repo, '.claude/worktrees/wt-inside')
+  const outside = join(base, 'wt-outside')
+  git(['worktree', 'add', '-q', '-b', 'feat-inside', '.claude/worktrees/wt-inside'], repo)
+  git(['worktree', 'add', '-q', '-b', 'feat-outside', outside], repo)
+
+  // 各放一個 change —— **識別碼要向產品要**（change 的來源徽章帶著它），探針不自己算 sha1：
+  // 那會是一份平行實作，core 換演算法時它會靜默地與產品分歧，而斷言照樣全綠（兩邊各用各的）。
+  for (const [dir, slug] of [[inside, 'inside-change'], [outside, 'outside-change']]) {
+    mkdirSync(join(dir, 'openspec/changes', slug), { recursive: true })
+    writeFileSync(join(dir, 'openspec/changes', slug, 'proposal.md'), `# ${slug}\n`)
+  }
+
+  return { repo, out, inside, outside }
 }
 
 /**
@@ -3095,6 +3135,131 @@ async function runContinuation(label, { port, rendererUrl }) {
 }
 
 /**
+ * 某個 change 之來源工作目錄的識別碼 —— **向產品要，不自己算**。
+ *
+ * 走的是側欄真正在用的那條路徑（`getChanges` 的來源徽章）。探針若自己對路徑做 sha1，
+ * 那就是一份平行實作：core 換演算法時它會**靜默地**與產品分歧，而斷言仍然全綠 ——
+ * 因為兩邊各自用自己的 key。
+ *
+ * 這也正是產品的入口取得 key 的方式（design D1：從側欄的 change 觸發）。
+ */
+async function worktreeKeyOfChange(client, folderId, slug) {
+  return await client.evaluate(
+    `(async () => {
+      const res = await window.workspace.openspec.getChanges(${JSON.stringify(folderId)})
+      if (!res || res.ok !== true) return null
+      const hit = res.value.active.find((c) => c.slug === ${JSON.stringify(slug)})
+      return hit && hit.worktree ? hit.worktree.key : null
+    })()`,
+    { awaitPromise: true },
+  )
+}
+
+/**
+ * session 開在 git worktree（`session-in-worktree`）。
+ *
+ * **這一段獨立於 `runMode`**：它要一個帶 worktree 的 fixture，而且要直接打 IPC —— 產品上
+ * 「在 worktree 開 shell」沒有 UI（design D1 的入口只開 claude session，Open Question 明說
+ * 本 change 不做 shell 的入口）。這是 IPC 層的驗收，不是使用者路徑。
+ *
+ * **cwd 一律走讀檔**（`pwd > 檔案` 再讀檔），不讀畫面：tty 會回顯輸入行，「畫面上出現了那個
+ * 路徑」分不清回顯與執行。
+ */
+async function runWorktree(label, { port, rendererUrl }) {
+  console.log(`\n── ${label}（session 開在 worktree）──`)
+
+  const { repo, out, inside, outside } = makeWorktreeFixture()
+  const profile = seedProfile([['f1', repo]])
+  const stub = makeStubClaude()
+  const marker = `spek-term-wt-${process.pid}-${Date.now()}`
+
+  let app = null
+  try {
+    app = await launch({ port, profileDir: profile, rendererUrl, marker, stub })
+    await pollUntil(app.client, SELECT_FOLDER('repo-a'), (value) => value === true, 10_000)
+
+    // 主行程列舉出來的工作目錄 —— **識別碼由它產生，探針不自己算**（那會變成一份平行實作）。
+    const roots = await app.client.evaluate(
+      `window.workspace.openspec.getWorktreeRoots('f1').then((r) => r.ok ? r.value : null)`,
+      { awaitPromise: true },
+    )
+    check(results, `${label}：主行程列出了工作目錄的 folder-relative 根`,
+      Array.isArray(roots) && roots.includes('') && roots.includes('.claude/worktrees/wt-inside'),
+      JSON.stringify(roots))
+
+    /** 以 IPC 直接建 session，回傳結果物件（成功或失敗都拿得到）。 */
+    const createIn = (target, key) =>
+      app.client.evaluate(
+        `window.workspace.terminal.create('f1', ${JSON.stringify(target)}, ${JSON.stringify(key)})`,
+        { awaitPromise: true },
+      )
+
+    // ── 反面先做：偽造的識別碼必須被拒，且不產生 pty ─────────────────────
+    //
+    // **先做反面**，因為它斷言「pty 數不變」—— 排在正面之後的話，基準會被前面建立的 session 墊高。
+    const before = (await waitForPtyCount(marker, 0, 1500)).length
+    const rejected = await createIn('shell', 'deadbeef')
+    check(results, `${label}：查無對應的工作目錄識別碼被拒`,
+      rejected?.ok === false && rejected?.code === 'UNKNOWN_WORKTREE', JSON.stringify(rejected))
+    await sleep(800)
+    const after = (await waitForPtyCount(marker, before, 1500)).length
+    check(results, `${label}：被拒時不產生 pty`, after === before, `前 ${before} 後 ${after}`)
+
+    // ── 邊界內的 worktree ────────────────────────────────────────────────
+    const insideKey = await worktreeKeyOfChange(app.client, 'f1', 'inside-change')
+    check(results, `${label}：取得邊界內 worktree 的識別碼`, typeof insideKey === 'string', String(insideKey))
+
+    const madeInside = await createIn('shell', insideKey)
+    check(results, `${label}：於邊界內的 worktree 建立 session`, madeInside?.ok === true,
+      JSON.stringify(madeInside))
+    await waitForPtyCount(marker, before + 1, 15_000)
+
+    // **寫入也走 IPC** —— 這些 session 是繞過 renderer 建的，畫面上沒有它們的分頁，
+    // `typeLine` 送到的會是 focused 的那個終端（實測：讀回空字串）。整段都是 IPC 層驗收，
+    // 不假裝走使用者路徑。
+    const writeTo = (sessionId, line) =>
+      app.client.evaluate(
+        `window.workspace.terminal.write(${JSON.stringify(sessionId)}, ${JSON.stringify(line + '\r')})`,
+      )
+
+    const insideCwd = join(out, 'cwd-inside.txt')
+    await writeTo(madeInside.value.sessionId, `pwd > ${insideCwd}`)
+    const insideText = await waitForFile(insideCwd, (value) => value.trim().length > 0, 12_000)
+    check(results, `${label}：pty 的 cwd 就在該 worktree`, insideText.trim() === inside,
+      `期待 ${inside}；實得 ${JSON.stringify(insideText.trim())}`)
+
+    // ── 邊界外的 worktree —— 放寬前它必定被夾制掉 ────────────────────────
+    const outsideKey = await worktreeKeyOfChange(app.client, 'f1', 'outside-change')
+    const madeOutside = await createIn('shell', outsideKey)
+    check(results, `${label}：於 folder 邊界外的 worktree 建立 session`, madeOutside?.ok === true,
+      JSON.stringify(madeOutside))
+    await waitForPtyCount(marker, before + 2, 15_000)
+
+    const outsideCwd = join(out, 'cwd-outside.txt')
+    await writeTo(madeOutside.value.sessionId, `pwd > ${outsideCwd}`)
+    const outsideText = await waitForFile(outsideCwd, (value) => value.trim().length > 0, 12_000)
+    check(results, `${label}：pty 的 cwd 就在邊界外的那個 worktree`, outsideText.trim() === outside,
+      `期待 ${outside}；實得 ${JSON.stringify(outsideText.trim())}`)
+
+    // ── 重建與自癒的 cwd —— **這一段驗不到，刻意不放假斷言** ──────────────
+    //
+    // 上面那些 session 是**繞過 renderer** 以 IPC 建的（產品沒有「在 worktree 開 shell」的 UI），
+    // 而持久化靠 renderer 推送清單 —— 於是它們從來不進 `sessions.json`，關掉再開什麼都不會重建。
+    // 曾在這裡寫過「重開後 pty 仍在該 worktree」，實測必然紅（pty 0 個），因為前提就不成立。
+    //
+    // 這兩件事各自有更適合的載體：
+    //
+    // - **自癒後的 cwd** —— `terminal.test.ts` 的「自癒重生的 pty 仍在原本的工作目錄」，
+    //   而且**對照組驗過**（把 `#heal` 改回 folder 根，那條如期變紅）。
+    // - **重建後的 cwd** —— 走使用者路徑才有持久化，見 `probe:openspec` 的續寫入口段落。
+    //
+    // 與其在這裡放一條「因為前提不成立而恆紅（或更糟：恆綠）」的斷言，不如把缺口寫明。
+  } finally {
+    if (app) await app.destroy()
+  }
+}
+
+/**
  * 各段落。**這支探針會開真的視窗、送真的滑鼠事件** —— 跑完整支要好幾分鐘，而且那段期間
  * **使用者無法操作自己的電腦**（視窗會搶走焦點、滑鼠被驅動）。
  *
@@ -3103,6 +3268,7 @@ async function runContinuation(label, { port, rendererUrl }) {
  *   PROBE_ONLY=runMode                    只跑 runMode（build + dev 兩模式）
  *   PROBE_ONLY=runMode:build              只跑 runMode 的 build 模式
  *   PROBE_ONLY=runRestore,runAltScreen    跑這兩段
+ *   PROBE_ONLY=runWorktree                只跑「session 開在 worktree」
  */
 const SECTIONS = [
   ['runMode', runMode],
@@ -3112,6 +3278,7 @@ const SECTIONS = [
   ['runDormantHint', runDormantHint],
   ['runAgentStatus', runAgentStatus],
   ['runContinuation', runContinuation],
+  ['runWorktree', runWorktree],
 ]
 
 const ONLY = (process.env.PROBE_ONLY ?? '')

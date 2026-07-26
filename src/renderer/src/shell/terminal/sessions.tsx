@@ -21,6 +21,14 @@ export interface SessionState {
   /** 該 folder 內的建立序號（自 1 起）。pty 未宣告標題時，標籤的退路。 */
   ordinal: number
   /**
+   * 這個 session 開在哪個工作目錄（git worktree）—— core 算的不可逆識別碼。
+   * `undefined` ＝ folder 根。
+   *
+   * **它不是路徑，renderer 也解析不出路徑** —— 主行程只對查表命中的值解析
+   * （`terminal-sessions`）。續寫入口拿它與 change 的來源識別碼比對。
+   */
+  worktreeKey?: string
+  /**
    * pty 以 OSC 序列設定的終端標題。
    *
    * session 的身分由**跑在裡面的東西**宣告（`claude` 會主動送這個），而不是由我們的流水號
@@ -91,11 +99,14 @@ export interface SessionsApi {
   /**
    * `anchoredChange` 是新 session 的初始錨定。呼叫端（`MainStage`）在該 folder **恰有一個**
    * active change 時傳它，否則傳 `undefined` —— 多個候選之間不猜（design D3）。
+   *
+   * `worktreeKey` 指定它開在哪個工作目錄（不可逆識別碼，**不是路徑**）。省略＝ folder 根。
    */
   create(
     folderId: string,
     spawnTarget: SpawnTarget,
     anchoredChange?: string,
+    worktreeKey?: string,
   ): Promise<CreateOutcome>
   /** 把一個 change 錨定到某個 session。`null` 解除錨定。 */
   anchorChange(sessionId: string, slug: string | null): void
@@ -283,6 +294,7 @@ export function SessionsProvider({ children }: { children: React.ReactNode }): R
               customTitle: entry.customTitle,
               anchoredChange: entry.anchoredChange,
               panelFolderId: entry.panelFolderId,
+              worktreeKey: entry.worktreeKey,
             }))
           // 重建的排在前面 —— 它們是上次的順序，而在它們之前建立的那些是「新的」。
           return [...restoredSessions, ...previous]
@@ -322,6 +334,7 @@ export function SessionsProvider({ children }: { children: React.ReactNode }): R
             customTitle,
             anchoredChange,
             panelFolderId,
+            worktreeKey,
           }) => ({
             id,
             folderId,
@@ -331,6 +344,7 @@ export function SessionsProvider({ children }: { children: React.ReactNode }): R
             customTitle,
             anchoredChange,
             panelFolderId,
+            worktreeKey,
           }),
         ),
     )
@@ -384,8 +398,9 @@ export function SessionsProvider({ children }: { children: React.ReactNode }): R
       folderId: string,
       spawnTarget: SpawnTarget,
       anchoredChange?: string,
+      worktreeKey?: string,
     ): Promise<CreateOutcome> => {
-      const result = await window.workspace.terminal.create(folderId, spawnTarget)
+      const result = await window.workspace.terminal.create(folderId, spawnTarget, worktreeKey)
       if (!result.ok) return { status: 'failed', failure: result }
 
       const { sessionId } = result.value
@@ -394,7 +409,7 @@ export function SessionsProvider({ children }: { children: React.ReactNode }): R
 
       setSessions((previous) => [
         ...previous,
-        { id: sessionId, folderId, spawnTarget, status: 'running', ordinal, anchoredChange },
+        { id: sessionId, folderId, spawnTarget, status: 'running', ordinal, anchoredChange, worktreeKey },
       ])
       setFocused((previous) => new Map(previous).set(folderId, sessionId))
 

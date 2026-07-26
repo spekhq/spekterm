@@ -23,8 +23,15 @@ interface ChangeViewProps {
   slug: string | null
   /** 續寫入口不可用的原因；`null` ＝ 可用。 */
   continuationBlock: ContinuationBlock | null
+  /**
+   * focused session 開在哪個工作目錄（`undefined` ＝ folder 根，或根本沒有 session）。
+   * 條件 4 拿它與 change 的來源識別碼比對。
+   */
+  sessionWorktreeKey?: string
   /** 請 agent 續寫下一個 artifact。 */
   onContinue: () => void
+  /** 於這個 change 的來源工作目錄開一個 claude session（並錨定它）。 */
+  onOpenSessionHere: (worktreeKey: string) => void
   onOpenFile: (relPath: string) => void
   onGoToChanges: () => void
 }
@@ -46,7 +53,9 @@ export function ChangeView({
   folderId,
   slug,
   continuationBlock,
+  sessionWorktreeKey,
   onContinue,
+  onOpenSessionHere,
   onOpenFile,
   onGoToChanges,
 }: ChangeViewProps): React.JSX.Element {
@@ -148,14 +157,37 @@ export function ChangeView({
       */}
       <ContinuationBar
         missing={data.missingArtifacts}
-        blocked={
-          continuationBlock ??
-          (data.worktree && !data.worktree.isFolderRoot ? 'foreignWorktree' : null)
-        }
+        blocked={continuationBlock ?? (foreignWorktree(data.worktree, sessionWorktreeKey) ? 'foreignWorktree' : null)}
         onContinue={onContinue}
+        onOpenSessionHere={
+          // 來源必須有識別碼（＝出現在工作目錄的列舉裡）才開得了 session。
+          // **位於 folder 邊界外不構成不可用** —— 那只影響檔案導覽（`worktree-aggregation`）。
+          data.worktree && foreignWorktree(data.worktree, sessionWorktreeKey)
+            ? () => onOpenSessionHere((data.worktree as { key: string }).key)
+            : null
+        }
       />
     </div>
   )
+}
+
+/**
+ * 這個 change 是不是住在「不是 session 所在」的工作目錄裡（`artifact-continuation` 的條件 4）。
+ *
+ * **兩段式，不是直接比對兩個識別碼。** 開在 folder 根的 session **沒有識別碼**，而 folder 本身
+ * 就是 linked worktree 時，**它自己的 change 帶著識別碼**（主行程恆填 `key`，不論 `isFolderRoot`）
+ * —— 直接比對會得到 `undefined !== '0ceceaeb'` 而錯誤地停用一個會成功的入口，打破
+ * 「folder 本身是 linked worktree 時入口可用」那條 scenario（`probe:openspec` 已經在守它）。
+ *
+ * 沒有識別碼的語意是「開在 folder 根」，而那正是 `isFolderRoot` 回答的問題 —— 舊判準沒有消失，
+ * 它降級成了新判準的一個分支。
+ */
+function foreignWorktree(
+  origin: { key: string; isFolderRoot: boolean } | undefined,
+  sessionWorktreeKey: string | undefined,
+): boolean {
+  if (!origin) return false
+  return sessionWorktreeKey ? origin.key !== sessionWorktreeKey : !origin.isFolderRoot
 }
 
 /**
@@ -172,10 +204,19 @@ function ContinuationBar({
   missing,
   blocked,
   onContinue,
+  onOpenSessionHere,
 }: {
   missing: string[]
   blocked: ContinuationBlock | null
   onContinue: () => void
+  /**
+   * 於這個 change 的工作目錄開一個 session。`null` ＝ 不呈現。
+   *
+   * **它不受「因條件 4 而停用」限制**：停用原因有優先序，`noSession`／`notClaude`／`notRunning`
+   * 都先於條件 4 回報，而「剛開 app、還沒有任何 session」正是使用者最常遇到的 —— 只在條件 4
+   * 停用時呈現的話，他得**先在錯的地方開一個 session**，才看得見「在對的地方開一個」的入口。
+   */
+  onOpenSessionHere: (() => void) | null
 }): React.JSX.Element | null {
   const { t } = useTranslation()
 
@@ -198,6 +239,17 @@ function ContinuationBar({
       >
         {t('openspec.continueArtifact')}
       </button>
+      {onOpenSessionHere && (
+        <button
+          type="button"
+          onClick={onOpenSessionHere}
+          aria-label={t('openspec.openSessionHere')}
+          title={t('openspec.openSessionHereTooltip')}
+          className="shrink-0 rounded border border-hairline px-3 py-1 text-xs text-ink-dim hover:border-accent hover:text-accent"
+        >
+          {t('openspec.openSessionHere')}
+        </button>
+      )}
       <span className="min-w-0 truncate text-xs text-ink-faint">
         {blocked
           ? t(`openspec.continueBlocked.${blocked}`)

@@ -206,6 +206,29 @@ export function MainStage({ folder, folders }: MainStageProps): React.JSX.Elemen
   }, [focusedId, anchoredChange, continuationBlock, sessions])
 
   /**
+   * 於當前呈現的 change 之來源工作目錄開一個 claude session，**並錨定該 change**。
+   *
+   * **錨定是承重的，不是順手**：新 session 成為 focused 之後，側欄呈現的 change 由它的錨定決定。
+   * 不錨定的話會落入「尚無錨定」的空狀態（衍生預設只在該 repo 恰有一個 active change 時成立，
+   * 而「一個 change 一個 worktree」的工作流下通常不只一個）—— 續寫入口連呈現的機會都沒有，
+   * 使用者按了一顆按鈕卻看見側欄變空白。
+   *
+   * **只開 session，不送續寫指示**：兩件可各自失敗的事併成一次點擊時，使用者無從得知壞的是哪一件。
+   */
+  const openSessionInChangeWorktree = useCallback(
+    (worktreeKey: string) => {
+      if (!panelFolder || !anchoredChange) return
+      setSessionError(null)
+      void sessions
+        .create(panelFolder.id, 'claude', anchoredChange, worktreeKey)
+        .then((outcome) => {
+          if (outcome.status === 'failed') setSessionError(outcome.failure.message)
+        })
+    },
+    [panelFolder, anchoredChange, sessions],
+  )
+
+  /**
    * 來源指示器選了一個 folder：設定 focused session 的側欄來源。
    *
    * 只在有 focused session 時有效 —— 側欄來源是 per-session 的狀態，沒有 session 就沒地方存
@@ -350,7 +373,9 @@ export function MainStage({ folder, folders }: MainStageProps): React.JSX.Elemen
               anchoredChange={anchoredChange}
               onAnchor={anchorChange}
               continuationBlock={continuationBlock}
+              sessionWorktreeKey={displayed?.worktreeKey}
               onContinue={continueArtifacts}
+              onOpenSessionHere={openSessionInChangeWorktree}
               onOpenFile={openFileFromOpenSpec}
               onViewInOpenSpec={viewInOpenSpec}
               fileRequest={fileRequest}

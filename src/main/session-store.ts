@@ -32,9 +32,14 @@ export function isUuid(value: unknown): value is string {
  * 欄位分兩類，這個區分是承重的（design D7／D9）：
  *
  * - **renderer 供應**：`folderId`／`spawnTarget`／`ordinal`／`customTitle`／`title`／`anchoredChange`
- *   —— 使用者在 renderer 上建立的身分與順序。
+ *   ／`panelFolderId`／`worktreeKey` —— 使用者在 renderer 上做的選擇。
  * - **主行程供應**：`claudeSessionId`／`cwd` —— renderer **從來沒有**這兩個詞彙。前者是拼進命令的
  *   識別碼，後者是一個絕對路徑；把任何一個交給 renderer 去保管再送回來，等於把邊界拱手讓出。
+ *
+ * **`worktreeKey` 為什麼可以是 renderer 供應的**：它是**不可逆**的識別碼（core 算的路徑 sha1
+ * 前 8 碼，不含路徑片段），而主行程只對**查表命中**的值解析出路徑。於是 renderer 可達的位置
+ * 集合恆等於工作目錄的列舉結果 —— 邊界仍由結構保證，只是保證的形式從「沒有詞彙」換成了
+ * 「詞彙不可逆且受查表約束」（`terminal-sessions` 與本能力的 spec 都明文寫了這件事）。
  */
 export interface PersistedSession {
   id: string
@@ -53,6 +58,13 @@ export interface PersistedSession {
    */
   title?: string
   anchoredChange?: string
+  /**
+   * 這個 session 開在哪個工作目錄（git worktree）—— core 算的不可逆識別碼，`undefined` ＝ folder 根。
+   *
+   * **記錄的是使用者的選擇，不是某個時刻的觀測值**：claude 的 pty cwd 不會漂移（agent 的 `cd`
+   * 發生在子行程），所以重建時以它查表解析比讀 `/proc` 更準。
+   */
+  worktreeKey?: string
   /**
    * 側欄來源：這個 session 的 side panel 呈現哪個 repo（folderId）。
    *
@@ -95,6 +107,11 @@ function optionalString(value: unknown): string | undefined {
  * **這與 `workspace-store.parseWorkspace` 的策略刻意不同**（那一份對任何一個壞掉的項目就整份放棄）：
  * 一個壞掉的 session 不該讓使用者其餘所有 session 一起消失。
  */
+/** core 算的工作目錄識別碼：路徑 sha1 的前 8 碼。 */
+function isWorktreeKey(value: unknown): value is string {
+  return typeof value === 'string' && /^[0-9a-f]{8}$/.test(value)
+}
+
 export function parseSessionEntry(entry: unknown): PersistedSession | null {
   if (typeof entry !== 'object' || entry === null) return null
   const raw = entry as Record<string, unknown>
@@ -108,6 +125,10 @@ export function parseSessionEntry(entry: unknown): PersistedSession | null {
   // 對話重建（spec：「不合法的對話識別碼不進入命令」）。
   const claudeSessionId = isUuid(raw.claudeSessionId) ? raw.claudeSessionId : undefined
 
+  // 工作目錄識別碼同理：格式不合就丟棄那一筆，該 session 於 folder 根重建。**在這裡擋掉，
+  // 不要讓一個損毀的值走到查表** —— 比照 `claudeSessionId` 的 `isUuid`。
+  const worktreeKey = isWorktreeKey(raw.worktreeKey) ? raw.worktreeKey : undefined
+
   return {
     id: raw.id,
     folderId: raw.folderId,
@@ -117,6 +138,7 @@ export function parseSessionEntry(entry: unknown): PersistedSession | null {
     title: optionalString(raw.title),
     anchoredChange: optionalString(raw.anchoredChange),
     panelFolderId: optionalString(raw.panelFolderId),
+    worktreeKey,
     claudeSessionId,
     // 絕對路徑才有意義；相對路徑無從解讀，丟棄後退回 folder 根目錄。
     cwd: typeof raw.cwd === 'string' && path.isAbsolute(raw.cwd) ? raw.cwd : undefined,

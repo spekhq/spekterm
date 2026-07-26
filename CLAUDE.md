@@ -660,6 +660,15 @@ org 名**不是**凍結身分的一部分 —— repo 改名與 transfer 皆自�
   （第 4 個條件：來源工作目錄即 session 所屬 folder，**不是** `isMain`）。範圍限於「讀」——
   session 開在 worktree 與 rail 把 worktree 列為一級項目都不在內。詳見下文「worktree 聚合的實測與踩雷」。
 
+- **session 開在 worktree** — `session-in-worktree`（**不屬於任何 Phase**，GitHub issue #4）：
+  側欄看得見也走得到 worktree 裡的 change 之後，**駕駛不了**它 —— session 一律 spawn 在 folder 根。
+  `terminal-sessions` 的定址新增**不可逆的工作目錄識別碼**（主行程查表，查無即拒絕）、初始 cwd 的
+  夾制放寬為「folder 根**或**該 repo 任一工作目錄」；`session-persistence` 記住 session 開在哪、
+  新增「claude 目標於其建立時的工作目錄重生（**含自癒**）」，並修改「持久化不得把路徑詞彙交給
+  renderer」（它明文宣告自己是前者邊界論證的延續）；`artifact-continuation` 的第 4 個條件**改判準
+  而非取消**，並新增「於該 change 的工作目錄開啟 session」的入口。**不做 rail 的 worktree 呈現**
+  —— 那是 issue #5。詳見下文「session 開在 worktree 的實測與踩雷」。
+
 - **反向導覽** — `worktree-reverse-navigation`（**不屬於任何 Phase**，GitHub issue #3）：補上
   worktree 佈局下 **Files → OpenSpec** 的那一半 —— 此前 change → 檔案可用、檔案 → change 不可用，
   **同一個檔案去得了、回不來**。判準由「路徑首段是 `openspec`」改為「落在**某個工作目錄**的
@@ -2395,6 +2404,93 @@ Files`）會把使用者送到**另一個檔案**。
 目錄根清單，而入口的 gate 是 `folder.hasOpenSpec`（在 `SidePanel`）—— 沒有 `openspec/` 的
 folder 於是為一份用不到的清單走了一趟 `#scan`（那條路上 core 會 spawn `git worktree list`）。
 不是迴歸（OpenSpec 身分本來就會），但**此前只用 Files 身分的 folder 不會付這個成本**。
+
+## session 開在 worktree 的實測與踩雷（`session-in-worktree`）
+
+側欄看得見也走得到 worktree 裡的 change 之後，**駕駛不了**它 —— session 一律 spawn 在 folder 根。
+本 change 讓 session 開在該 repo 的任一工作目錄（**含邊界外的**），入口長在續寫入口停用的那句話上。
+
+### 邊界保證換了形式 —— 而三個前提**各自擔保不同的事**
+
+`terminal-sessions` 原本的保證是「**renderer 沒有路徑詞彙**」。現在多了一個工作目錄識別碼參數，
+保證改為「**不可逆識別碼 + 主行程查表**」。第一版的 design 把三個前提寫成「缺一不可」，**那是錯誤
+的推理**（獨立稽核指出）：
+
+| 前提 | 擔保什麼 | 破壞它會怎樣 |
+|---|---|---|
+| 解析是**查表**，不是拼接 | **圍堵性** | 可達集合不再受限於列舉結果 ⇒ 邊界失守 |
+| 集合的來源是 **git 的列舉** | **圍堵性** | 同上 |
+| key **不可逆**（sha1 前 8 碼） | 路徑不外洩到 renderer | 洩漏路徑，但**可達集合一點也不會變大** |
+| 查無此 key **即拒絕**，不 fallback | **誠實性** | 退回 folder 根**逸出不了**任何邊界（那是舊邊界之內），但使用者會以為 session 開在他選的地方 |
+
+**為什麼要分清楚**：日後任一條被鬆動時，得能判斷「這會不會破壞邊界」。在 key 裡塞分支名破壞的是
+「不外洩」，圍堵性毫髮無傷；加一個 fallback 破壞的是誠實性，同樣不影響圍堵性。捆成一句「缺一不可」
+就沒有判準可用了。
+
+**而改一條邊界論證時，要把所有宣稱自己是它延續的規格一起找出來。** `session-persistence` 的
+「持久化不得把路徑詞彙交給 renderer」明文寫著「此為 `terminal-sessions` 的延續」—— 第一版的 delta
+漏了它，主 spec 會同時存在兩條互相矛盾的 SHALL（稽核抓到的 CRITICAL）。
+
+### 一個條件依賴的「巧合」被打破時，它通常不是變得多餘，而是需要更精確的判準
+
+issue 寫著「本 change 完成後續寫入口的第 4 個條件可以取消」。**調查推翻了它**：那個條件比對的是
+「change 的來源 vs session 所屬的 **folder**」，而它之所以成立，依賴「session 的 cwd 恆為 folder 根」
+這個**當時為真的巧合**。取消它會讓「change 在 worktree A、session 開在 folder 根或 worktree B」
+被誤判為可用 —— 而後果正是這個條件當初要防的（agent 在錯的地方建出一個同名的空 change）。
+
+**而判準不能寫成「比對兩個識別碼」**（稽核抓到的）：開在 folder 根的 session **沒有識別碼**，
+而 folder 本身是 linked worktree 時**它自己的 change 帶著識別碼** ⇒ `undefined !== '0ceceaeb'`
+⇒ 錯誤地停用一個會成功的入口。正確的是兩段式 ——
+`session 有 key ? origin.key === session.key : origin.isFolderRoot`。**舊判準沒有消失，它降級成了
+新判準的一個分支。**
+
+### 兩道夾制，只放寬一道等於沒放寬
+
+`#initialCwd`（重建側）與 `cwdOf()`（**記錄側**）是**獨立的兩道**。只放寬前者的話，`cd` 到邊界外
+worktree 的位置**從一開始就不會被寫進 `sessions.json`** —— 重建側收到 `undefined`，一切看起來正常。
+**失效方向是靜默的。** 兩道共用同一個判定（`withinAny`）。
+
+而 `cwdOf` 的合法根集合**由 session 自己記住**，不由呼叫端供應：`refreshCwd` 走的是**同步**路徑
+（關視窗、reload 時的 `flush`），而工作目錄的列舉是非同步的。
+
+### `#heal()` 是主線情境，而它對 renderer 完全不可見
+
+自癒重生的 pty 若一律回到 folder 根，一個開在 worktree 的 session 就會**靜默地**站到別的地方。
+而自癒的觸發條件正是「開了 session 卻還沒跟 agent 講過話」（那時它不寫 transcript，`--resume`
+必定失敗）—— **主線，不是邊角**。`Session` 因此要記住自己的 cwd，`#heal` 沿用它。
+
+這與既有的「繼承將死那顆 pty 的 cols／rows」是**同一個位置、同一種疏漏**（那一行當年也是漏掉後
+才補的）。**而第一次的對照組沒抓到它** —— 我修了實作卻沒寫測試，是把 `#heal` 改回 folder 根之後
+「測試照樣全綠」才發現的。
+
+### `claude --resume` 的查找是 **git repo 關聯**的（實測）
+
+| 對話開在 | 從哪 `--resume` | 結果 |
+|---|---|---|
+| 主工作目錄 | 邊界內／邊界外 worktree | ✅ 記得 |
+| worktree | 主工作目錄 | ✅ 記得 |
+| 主工作目錄 | 無關目錄（非 git repo） | ❌ `No conversation found` |
+
+第三列是對照組（排除「全域掃 id」），第二列排除「路徑前綴」假說。**於是「worktree 消失 → 退回
+folder 根」這條退路是安全的**，對話不會丟 —— issue 當初擔心的正是這件事，已證偽。
+
+> 限制：走 `-p` 非互動模式，且這是 claude 的**內部行為**，可能隨版本改變。但**降級方向安全**
+> （猜錯的下場是自癒成新對話，不是撞號讓 session 死掉），與 `claude-status-bridge` 採用
+> `--settings` 時是同一條判準。
+
+### 探針的兩個「驗不到」，都寫明而不留假綠
+
+- **`probe:shell` 看不到簽名改變**。它比的是 key 的集合差，加參數不會改變 key 集合。試過以
+  `create.length` 釘住參數個數：**contextBridge 複製函式時把 `Function.length` 抹成 0**
+  （實測 `arity=0`，不論 preload 那側宣告幾個參數）。那條斷言不是守衛，是一盞恆綠的燈，已移除。
+- **`probe:terminal` 驗不到「重建後仍在該 worktree」**。那一段的 session 是**繞過 renderer** 以
+  IPC 建的（產品沒有「在 worktree 開 shell」的 UI），而持久化靠 renderer 推送 —— 它們從不進
+  `sessions.json`。缺口寫在原處，並指向真正的載體：自癒的 cwd 由單元測試（有對照組）承擔，
+  重建的 cwd 由 `probe:openspec` 的使用者路徑段落承擔。
+
+**而探針取識別碼要向產品要，不自己算 sha1** —— 那會是一份平行實作，core 換演算法時它會靜默地與
+產品分歧，而斷言照樣全綠（兩邊各用各的 key）。走 `getChanges` 的來源徽章，那也正是產品入口取得
+它的方式。
 
 ## 混排字型的列要釘住行框（`leading-none`）
 

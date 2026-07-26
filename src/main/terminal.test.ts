@@ -328,6 +328,41 @@ describe('claude 目標的對話續接', () => {
     assert.equal(service.sessionCount, 1)
   })
 
+  /**
+   * **自癒重生的 pty 必須留在原本的工作目錄。**
+   *
+   * 這條的失效方式是最惡劣的那種：自癒對 renderer **完全不可見**（`status` 一直是 `running`），
+   * 使用者拿到一個能用的 agent，只是它**站在錯的地方**，沒有任何訊號。而自癒是**主線情境**
+   * ——「開了 session 卻還沒跟 agent 講過話」時它不寫 transcript，`--resume` 必定失敗。
+   *
+   * 與旁邊那條「繼承將死那顆 pty 的 cols／rows」同一個位置、同一種疏漏（那一行當年也是漏掉
+   * 後才補的）。
+   */
+  it('自癒重生的 pty 仍在原本的工作目錄，不回到 folder 根', async () => {
+    const wt = fs.mkdtempSync(path.join(tmpdir(), 'spekterm-wt-'))
+    const real = fs.realpathSync(wt)
+    installStubClaude({ resumeFails: true })
+    const stale = '77777777-7777-4777-8777-777777777777'
+    service = new TerminalService(lookup([{ id: 'f1', path: repo, status: 'ok' }]), sink())
+
+    // 這個 session 開在一個（邊界外的）工作目錄裡，然後續接失敗。
+    const { sessionId } = service.create('f1', 'claude', {
+      resumeConversationId: stale,
+      cwd: real,
+      worktreeRoots: [real],
+    })
+
+    await waitFor(() => conversations.length === 1, { label: '自癒發生了' })
+    await waitFor(() => output().includes('STUB_READY'), { label: '自癒後的 claude 起來了' })
+
+    // stub 收尾是一個可以打字的互動 shell —— 問它自己站在哪。
+    service.write(sessionId, 'echo CWD=$(pwd)\n')
+    await waitFor(() => output().includes(`CWD=${real}`), {
+      label: '自癒後的 pty 仍在該工作目錄',
+    })
+    fs.rmSync(wt, { recursive: true, force: true })
+  })
+
   it('自癒至多一次 —— claude 根本起不來時不反覆重試', async () => {
     const stub = installStubClaude({ alwaysFails: true })
     const stale = '66666666-6666-4666-8666-666666666666'
@@ -374,6 +409,53 @@ describe('重建的工作目錄', () => {
     service = new TerminalService(lookup([{ id: 'f1', path: repo, status: 'ok' }]), sink())
 
     const { sessionId } = service.create('f1', 'shell', { cwd: path.join(repo, 'gone') })
+
+    service.write(sessionId, 'echo CWD=$(pwd)\n')
+    await waitFor(() => output().includes(`CWD=${repo}`), { label: 'cwd 退回 folder 根目錄' })
+  })
+
+  /**
+   * 夾制的範圍由「folder 邊界內」放寬為「folder 根，**或該 repo 任一工作目錄**」。
+   *
+   * 邊界外的 worktree（`/tmp/...`）是本 change 的重點：它在放寬前必定被夾制掉，
+   * 而那正是「`cd` 到邊界外的 worktree、關 app 再開就回到 folder 根」那個既有缺陷。
+   */
+  it('落在工作目錄之下的 cwd 不再被夾制掉（即使該工作目錄在 folder 邊界外）', async () => {
+    const outside = fs.mkdtempSync(path.join(tmpdir(), 'spekterm-wt-'))
+    const real = fs.realpathSync(outside)
+    service = new TerminalService(lookup([{ id: 'f1', path: repo, status: 'ok' }]), sink())
+
+    const { sessionId } = service.create('f1', 'shell', {
+      cwd: real,
+      worktreeRoots: [real],
+    })
+
+    service.write(sessionId, 'echo CWD=$(pwd)\n')
+    await waitFor(() => output().includes(`CWD=${real}`), { label: 'cwd 為邊界外的工作目錄' })
+    fs.rmSync(outside, { recursive: true, force: true })
+  })
+
+  it('兩者皆非的 cwd 仍退回根目錄', async () => {
+    const outside = fs.mkdtempSync(path.join(tmpdir(), 'spekterm-elsewhere-'))
+    const wt = fs.mkdtempSync(path.join(tmpdir(), 'spekterm-wt-'))
+    service = new TerminalService(lookup([{ id: 'f1', path: repo, status: 'ok' }]), sink())
+
+    // 合法根集合裡有一個工作目錄，但 cwd 不在它底下，也不在 folder 底下。
+    const { sessionId } = service.create('f1', 'shell', {
+      cwd: fs.realpathSync(outside),
+      worktreeRoots: [fs.realpathSync(wt)],
+    })
+
+    service.write(sessionId, 'echo CWD=$(pwd)\n')
+    await waitFor(() => output().includes(`CWD=${repo}`), { label: 'cwd 退回 folder 根目錄' })
+    fs.rmSync(outside, { recursive: true, force: true })
+    fs.rmSync(wt, { recursive: true, force: true })
+  })
+
+  it('工作目錄集合為空時行為與放寬前一致', async () => {
+    service = new TerminalService(lookup([{ id: 'f1', path: repo, status: 'ok' }]), sink())
+
+    const { sessionId } = service.create('f1', 'shell', { cwd: fs.realpathSync(tmpdir()) })
 
     service.write(sessionId, 'echo CWD=$(pwd)\n')
     await waitFor(() => output().includes(`CWD=${repo}`), { label: 'cwd 退回 folder 根目錄' })

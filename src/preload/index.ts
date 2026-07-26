@@ -228,8 +228,18 @@ const workspaceApi = {
    * 語意**不同**，不要把它當成沙箱來推論。
    */
   terminal: {
-    create: (folderId: string, spawnTarget: SpawnTarget): Promise<FsResult<{ sessionId: string }>> =>
-      ipcRenderer.invoke('workspace:terminal:create', folderId, spawnTarget),
+    /**
+     * 建立一個 session。`worktreeKey` 指定它開在哪個工作目錄（git worktree），省略＝ folder 根。
+     *
+     * **那是一個不可逆的識別碼，不是路徑** —— renderer 仍然沒有任何詞彙可以表達一個任意位置；
+     * 主行程只對查表命中的值解析出路徑，查無對應即拒絕（`terminal-sessions`）。
+     */
+    create: (
+      folderId: string,
+      spawnTarget: SpawnTarget,
+      worktreeKey?: string,
+    ): Promise<FsResult<{ sessionId: string }>> =>
+      ipcRenderer.invoke('workspace:terminal:create', folderId, spawnTarget, worktreeKey),
     /**
      * 喚醒一個休眠的 session（重建後尚無 pty）。
      *

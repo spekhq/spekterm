@@ -608,6 +608,17 @@ const CLICK_VIEW_IN_OPENSPEC = `(() => {
   return true
 })()`
 
+const HAS_OPEN_SESSION_HERE = `Boolean(
+  document.querySelector('button[aria-label="${copy('openspec.openSessionHere')}"]')
+)`
+
+const CLICK_OPEN_SESSION_HERE = `(() => {
+  const btn = document.querySelector('button[aria-label="${copy('openspec.openSessionHere')}"]')
+  if (!btn) return false
+  btn.click()
+  return true
+})()`
+
 const HAS_VIEW_IN_OPENSPEC = `Boolean(
   document.querySelector('button[aria-label="${copy('files.viewInOpenSpec')}"]')
 )`
@@ -1783,6 +1794,62 @@ async function runMode(label, { port, rendererUrl }) {
       '停用時說明原因',
       wtEntry !== null && wtEntry.text.includes(copy('openspec.continueBlocked.foreignWorktree')),
       wtEntry?.text,
+    )
+
+    // ── session 開在 change 的工作目錄（session-in-worktree）────────────────
+    //
+    // **上面那兩條在本 change 之後仍然應該是綠的**（session 跑在 folder 根、change 在 worktree
+    // ⇒ 依規格必須停用）。判準從「來源 vs folder」改成了「來源 vs session 的工作目錄」，
+    // 但這個情境的可觀察行為不變 —— 改寫它們就是把準心移開去閃避一條正確的守衛。
+    check(
+      results,
+      '停用時提供「於該工作目錄開啟 session」的入口',
+      (await app.client.evaluate(HAS_OPEN_SESSION_HERE)) === true,
+    )
+
+    const tabsBefore = (await app.client.evaluate(SESSION_TABS)) ?? []
+    check(results, '觸發該入口', (await app.client.evaluate(CLICK_OPEN_SESSION_HERE)) === true)
+
+    const tabsAfter = await pollUntil(
+      app.client,
+      SESSION_TABS,
+      (list) => Array.isArray(list) && list.length === tabsBefore.length + 1,
+      15_000,
+    )
+    check(
+      results,
+      '於該工作目錄建立了一個 session',
+      Array.isArray(tabsAfter) && tabsAfter.length === tabsBefore.length + 1,
+      `之前 ${tabsBefore.length} 個、之後 ${tabsAfter?.length} 個`,
+    )
+
+    // **新 session 必須錨定該 change** —— 否則側欄落入「尚無錨定」的空狀態，續寫入口連呈現的
+    // 機會都沒有（衍生預設只在該 repo 恰有一個 active change 時成立，而這裡有三個）。
+    const anchoredAfterOpen = await pollUntil(
+      app.client,
+      ANCHORED_SLUG,
+      (value) => value === 'inside-change',
+      12_000,
+    )
+    check(results, '新 session 錨定了該 change', anchoredAfterOpen === 'inside-change',
+      String(anchoredAfterOpen))
+
+    const enabled = await pollUntil(app.client, CONTINUE_ENTRY, (v) => v?.disabled === false, 15_000)
+    check(results, 'session 開在該 change 的工作目錄後，續寫入口可用', enabled?.disabled === false,
+      JSON.stringify(enabled))
+
+    // **成對的那一半**：session 開在**另一個**工作目錄時仍然停用。
+    // 少了它，一個把條件 4 直接取消的實作會通過上面那條 —— 而那正是 issue 原本建議的做法。
+    const outsideAnchoredNow = await anchorChange(app.client, 'outside-change')
+    check(results, '錨定切換至另一個工作目錄的 change', outsideAnchoredNow === 'outside-change',
+      String(outsideAnchoredNow))
+    await app.client.evaluate(CLICK_VIEW(copy('openspec.tabChange')))
+    const stillBlocked = await pollUntil(app.client, CONTINUE_ENTRY, (v) => v?.disabled === true, 12_000)
+    check(
+      results,
+      'session 開在另一個工作目錄時，續寫入口仍然停用',
+      stillBlocked?.disabled === true,
+      JSON.stringify(stillBlocked),
     )
 
     // 邊界**外**的 worktree：內容完整，但翻不出 relPath ⇒ 沒有檔案導覽入口（成對於上面那條）

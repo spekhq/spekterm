@@ -24,6 +24,8 @@ interface OpenSpecPanelProps {
   onAnchor: (slug: string) => void
   /** 續寫入口不可用的原因；`null` ＝ 可用。 */
   continuationBlock: ContinuationBlock | null
+  sessionWorktreeKey?: string
+  onOpenSessionHere: (worktreeKey: string) => void
   /** 請 agent 續寫下一個 artifact。 */
   onContinue: () => void
   /** 跳到 Files 身分並開啟該檔（design D7 的跨身分導航）。 */
@@ -50,7 +52,9 @@ export function OpenSpecPanel({
   anchoredChange,
   onAnchor,
   continuationBlock,
+  sessionWorktreeKey,
   onContinue,
+  onOpenSessionHere,
   onOpenFile,
   request,
   onOpenViz,
@@ -163,7 +167,9 @@ export function OpenSpecPanel({
             folderId={folder.id}
             slug={anchoredChange}
             continuationBlock={continuationBlock}
+            sessionWorktreeKey={sessionWorktreeKey}
             onContinue={onContinue}
+            onOpenSessionHere={onOpenSessionHere}
             onOpenFile={onOpenFile}
             onGoToChanges={() => {
               setOpenSpec(null)

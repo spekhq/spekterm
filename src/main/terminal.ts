@@ -13,6 +13,7 @@ export type SpawnTarget = 'claude' | 'shell'
 export type TerminalCode =
   | 'UNKNOWN_FOLDER'
   | 'UNKNOWN_SESSION'
+  | 'UNKNOWN_WORKTREE'
   | 'FOLDER_UNAVAILABLE'
   | 'SPAWN_FAILED'
 
@@ -160,8 +161,15 @@ export interface SpawnOptions {
   sessionId?: string
   /** claude：續接這個對話。非 UUID 一律忽略並以全新對話開始 —— 絕不拼接未經驗證的值。 */
   resumeConversationId?: string
-  /** shell：最後已知的工作目錄。夾制於 folder 邊界內；越界或不可用時退回根目錄。 */
+  /** shell：最後已知的工作目錄。夾制於下方 `worktreeRoots` 所定義的範圍內；越界或不可用時退回根目錄。 */
   cwd?: string
+  /**
+   * 該 folder 所屬 repo 的工作目錄根（絕對路徑）—— cwd 夾制的合法範圍，folder 根之外的部分。
+   *
+   * **由呼叫端供應，`TerminalService` 不自行查詢** —— 列舉住在 OpenSpec 資料層，而這個服務
+   * 不該認識它（見 `ipc/openspec.ts` 的 `worktreesFor`）。
+   */
+  worktreeRoots?: readonly string[]
 }
 
 export interface SpawnResult {
@@ -173,6 +181,25 @@ export interface SpawnResult {
 interface Session {
   pty: IPty
   folderPath: string
+  /**
+   * 這顆 pty 誕生時的工作目錄。
+   *
+   * **`#heal()` 需要它**：自癒重生的 pty 若一律回到 `folderPath`，一個開在 worktree 的 session
+   * 就會**靜默地**站到別的地方 —— 而自癒是主線情境（沒跟 agent 講過話的 session，`--resume`
+   * 必定失敗），且它對 renderer **完全不可見**。與旁邊那條「繼承將死那顆 pty 的 cols／rows」
+   * 同一個理由、同一個位置。
+   */
+  cwd: string
+  /**
+   * cwd 夾制的合法根集合（spawn 當下的快照）。
+   *
+   * **由 session 自己記住，不由 `cwdOf` 的呼叫端供應** —— `refreshCwd` 走的是同步路徑
+   * （關視窗、reload 時的 `flush`），而工作目錄的列舉是非同步的。
+   *
+   * 快照可能過期（spawn 之後才新建的 worktree 不在其中）。後果是「`cd` 到那個新 worktree 後，
+   * 位置不被記錄」⇒ 重建時退回 folder 根 —— 與本 change 之前的行為相同，降級方向安全。
+   */
+  worktreeRoots: readonly string[]
   target: SpawnTarget
   conversation?: ClaudeConversation
   startedAt: number
@@ -195,6 +222,18 @@ function readPtyCwd(pid: number): string | undefined {
   } catch {
     return undefined
   }
+}
+
+/**
+ * `cwd` 是否落在 folder 根、或該 repo 任一工作目錄之下。
+ *
+ * **兩道夾制共用它**（`#initialCwd` 與 `cwdOf`）—— 只放寬其中一道是沒有用的：記錄側若仍夾制回
+ * folder 邊界內，邊界外 worktree 的位置**從一開始就不會被寫進 `sessions.json`**，於是重建側收到
+ * 的是 `undefined`，看起來一切正常。失效方向是靜默的。
+ */
+function withinAny(folderPath: string, worktreeRoots: readonly string[], cwd: string): boolean {
+  if (isWithin(folderPath, cwd)) return true
+  return worktreeRoots.some((root) => isWithin(root, cwd))
 }
 
 /**
@@ -277,8 +316,10 @@ export class TerminalService {
           ? { id: options.resumeConversationId as string, mode: 'resume' }
           : { id: randomUUID(), mode: 'new' }
 
+    const worktreeRoots = options.worktreeRoots ?? []
     this.#spawn(sessionId, folder.path, target, conversation, {
-      cwd: this.#initialCwd(folder.path, options.cwd),
+      cwd: this.#initialCwd(folder.path, options.cwd, worktreeRoots),
+      worktreeRoots,
       cols: INITIAL_COLS,
       rows: INITIAL_ROWS,
       healed: false,
@@ -288,14 +329,18 @@ export class TerminalService {
   }
 
   /**
-   * 重建的工作目錄 —— **夾制於 folder 邊界內**。
+   * 重建的工作目錄 —— **夾制於 folder 根或該 repo 任一工作目錄之下**。
    *
-   * 越界（使用者關 app 前 `cd` 出去了）或已不存在時退回根目錄。`folderPath` 與 `/proc` 讀回的
-   * cwd 都已經是解析過 symlink 的真實路徑，故可直接比對。
+   * 越界（使用者關 app 前 `cd` 到別處了）或已不存在時退回 folder 根。`folderPath`、
+   * `worktreeRoots` 與 `/proc` 讀回的 cwd 都已經是解析過 symlink 的真實路徑，故可直接比對。
+   *
+   * **這是重建路徑的寬容，建立路徑不得沿用它**：識別碼查無對應時 `create` 要**拒絕**
+   * （`terminal-sessions` 明文），而這裡對「路徑消失」是退回根目錄 —— 同一個問題，
+   * 兩條路徑的正確行為相反。
    */
-  #initialCwd(folderPath: string, cwd?: string): string {
+  #initialCwd(folderPath: string, cwd: string | undefined, worktreeRoots: readonly string[] = []): string {
     if (!cwd) return folderPath
-    if (!isWithin(folderPath, cwd)) return folderPath
+    if (!withinAny(folderPath, worktreeRoots, cwd)) return folderPath
     try {
       if (!fs.statSync(cwd).isDirectory()) return folderPath
     } catch {
@@ -309,7 +354,7 @@ export class TerminalService {
     folderPath: string,
     target: SpawnTarget,
     conversation: ClaudeConversation | undefined,
-    options: { cwd: string; cols: number; rows: number; healed: boolean },
+    options: { cwd: string; cols: number; rows: number; healed: boolean; worktreeRoots?: readonly string[] },
   ): void {
     const { cwd, cols, rows, healed } = options
     // 注入只對 claude 目標有意義（statusLine 是它的概念）。
@@ -339,6 +384,8 @@ export class TerminalService {
     this.#sessions.set(sessionId, {
       pty,
       folderPath,
+      cwd,
+      worktreeRoots: options.worktreeRoots ?? [],
       target,
       conversation,
       startedAt: Date.now(),
@@ -382,7 +429,9 @@ export class TerminalService {
     const conversation: ClaudeConversation = { id: randomUUID(), mode: 'new' }
     try {
       this.#spawn(sessionId, session.folderPath, session.target, conversation, {
-        cwd: this.#initialCwd(session.folderPath, undefined),
+        // **沿用將死那顆 pty 的工作目錄**（見 `Session.cwd`）—— 不是回到 folder 根。
+        cwd: session.cwd,
+        worktreeRoots: session.worktreeRoots,
         // **繼承將死那顆 pty 的尺寸。**
         //
         // 自癒對 renderer **完全不可見**（`status` 一直是 `running`，它收不到任何事件）——
@@ -408,14 +457,22 @@ export class TerminalService {
     return true
   }
 
-  /** pty 當下的工作目錄（shell 目標才有意義）。取不到時 `undefined`。 */
+  /**
+   * pty 當下的工作目錄（shell 目標才有意義）。取不到、或落在合法範圍之外時 `undefined`。
+   *
+   * **這是第二道、與 `#initialCwd` 獨立的夾制**，兩道必須用同一個判定。只放寬重建側是沒有用的：
+   * 這裡若仍夾制回 folder 邊界內，使用者 `cd` 到邊界外 worktree 的位置**根本不會被寫進
+   * `sessions.json`**，重建側於是收到 `undefined` 而一切看起來正常（靜默失效）。
+   *
+   * 合法範圍現在涵蓋該 repo 的工作目錄，於是 `sessions.json` 裡可能出現 folder 邊界外的絕對
+   * 路徑 —— **那是主行程擁有的欄位**（`RendererSession` 會把 `cwd` 剝掉），不違反
+   * 「持久化不得把路徑詞彙交給 renderer」。
+   */
   cwdOf(sessionId: string): string | undefined {
     const session = this.#sessions.get(sessionId)
     if (!session || session.target !== 'shell') return undefined
     const cwd = readPtyCwd(session.pty.pid)
-    // 邊界外的 cwd 不予記錄 —— 存了它，下次重建時也只會被夾制回根目錄，徒然把一個 workspace
-    // 之外的路徑寫進設定檔。
-    return cwd && isWithin(session.folderPath, cwd) ? cwd : undefined
+    return cwd && withinAny(session.folderPath, session.worktreeRoots, cwd) ? cwd : undefined
   }
 
   /** renderer → pty。未知或已結束的 session 靜默忽略（renderer 可能有時序落差）。 */

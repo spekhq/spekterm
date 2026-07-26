@@ -73,6 +73,27 @@ function serviceFor(store: FolderLookup, contents: WebContents): OpenSpecService
   return service
 }
 
+/**
+ * 該 folder 所屬 repo 的工作目錄（識別碼 + **絕對路徑**）—— 供 terminal 解析 session 要開在哪。
+ *
+ * **導出這個函式，而不是導出 `services`。** 兩件事因此成立：
+ *
+ * - **列舉與側欄同源同參數**（`terminal-sessions` 的 requirement）。`OpenSpecService` 用
+ *   `includeJj: false`，而 core 的 `listWorkspaces` **預設是 `includeJj: true`** —— 誰要是繞過
+ *   這裡自己呼叫 core，renderer 可達的位置集合就會大於它在側欄看得到的那一組。
+ * - **`TerminalService` 不必認識 OpenSpec 資料層**。解析在 IPC 層完成，它收到的是路徑。
+ *
+ * 以 `contents` 取實例（與側欄同一個 renderer 同一份快取與監看），故**不會**額外建立 watcher。
+ * 回傳值含絕對路徑，**不得經 IPC 送往 renderer**。
+ */
+export function worktreesFor(
+  store: FolderLookup,
+  contents: WebContents,
+  folderId: string,
+): Promise<{ key: string; path: string }[]> {
+  return serviceFor(store, contents).worktreesOf(folderId)
+}
+
 /** folder 自 workspace 移除時，所有 renderer 對它的監看與快取都該一併釋放。 */
 export function releaseFolderOpenSpec(folderId: string): void {
   for (const service of services.values()) {

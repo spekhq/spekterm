@@ -152,13 +152,15 @@
     "continueArtifact": "Continue",
     "continueMissing": "Not written yet: {{artifacts}}",
     "worktreeDetached": "detached",
+    "openSessionHere": "Open a session there",
+    "openSessionHereTooltip": "Start a claude session in this change's working directory and anchor it to this change",
     "specOrigin": "Shown from the main worktree ({{branch}}) — other worktrees may hold a different version.",
     "continueBlocked": {
       "noSession": "Start a session in this repo to continue this change.",
       "foreignSource": "The panel is showing another repo. Switch it back to the session repo to continue.",
       "notClaude": "The focused session is a shell. Focus a claude session to continue.",
       "notRunning": "The focused session is not running. Open it to continue.",
-      "foreignWorktree": "This change lives in another worktree. The session runs in this folder, so it cannot continue it."
+      "foreignWorktree": "This change lives in another working directory. The focused session is not there, so it cannot continue it."
     }
   },
   "viz": {
@@ -178,6 +180,7 @@
   },
   "fsError": {
     "unknownFolder": "Unknown folder: {{folderId}}",
+    "unknownWorktree": "That working directory is no longer part of this repository",
     "folderUnavailable": "Folder is unavailable: {{path}}",
     "notADirectory": "Not a directory: {{path}}",
     "notAFile": "Not a file: {{path}}",
@@ -196,6 +199,7 @@
   },
   "terminalError": {
     "unknownFolder": "Unknown folder: {{folderId}}",
+    "unknownWorktree": "That working directory is no longer part of this repository",
     "folderUnavailable": "Folder is unavailable: {{path}}",
     "invalidConversationId": "The conversation id is not a valid UUID",
     "spawnFailed": "Failed to allocate a pty: {{reason}}"

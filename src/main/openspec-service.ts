@@ -407,6 +407,22 @@ export class OpenSpecService {
    * 其餘工作目錄翻譯不出 folder-relative 路徑時**整筆省略** —— 不以 `null` 佔位：空字串是
    * folder 自身的合法值，清單裡混進 `null` 會在消費端與它糾纏。
    */
+  /**
+   * 該 folder 所屬 repo 的工作目錄 —— **識別碼與絕對路徑**。
+   *
+   * **這是主行程內部 API，回傳值不得經 IPC 送往 renderer**（它含絕對路徑）。renderer 那一側
+   * 用的是 `getWorktreeRoots()`，回的是 folder-relative 的根。
+   *
+   * 存在的理由是 `terminal-sessions` 的一條 requirement：session 的工作目錄以不可逆識別碼指定，
+   * 而**列舉必須與側欄同源且同參數** —— 兩者若各自列舉，可達的位置集合就可能大於使用者在介面上
+   * 看得到的集合。特別是 core 的 `listWorkspaces` 預設 `includeJj: true`，而這裡（與側欄）用的
+   * 是 `includeJj: false`；繞過這個方法直接呼叫 core，那條「恆等於」的保證就沒了。
+   */
+  async worktreesOf(folderId: string): Promise<{ key: string; path: string }[]> {
+    const { result } = await this.#scan(folderId)
+    return result.worktrees.map((worktree) => ({ key: worktree.key, path: worktree.path }))
+  }
+
   async getWorktreeRoots(folderId: string): Promise<string[]> {
     const { root, result } = await this.#scan(folderId)
     const roots = ['']

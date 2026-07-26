@@ -23,6 +23,10 @@ interface SidePanelProps {
   onAnchor: (slug: string) => void
   /** 續寫入口不可用的原因；`null` ＝ 可用。 */
   continuationBlock: ContinuationBlock | null
+  /** focused session 開在哪個工作目錄（不可逆識別碼）。條件 4 的判準。 */
+  sessionWorktreeKey?: string
+  /** 於當前 change 的來源工作目錄開一個 session。 */
+  onOpenSessionHere: (worktreeKey: string) => void
   /** 請 agent 續寫下一個 artifact。 */
   onContinue: () => void
   /** OpenSpec → Files 的跨身分導航。 */
@@ -52,7 +56,9 @@ export function SidePanel({
   anchoredChange,
   onAnchor,
   continuationBlock,
+  sessionWorktreeKey,
   onContinue,
+  onOpenSessionHere,
   onOpenFile,
   onViewInOpenSpec,
   fileRequest,
@@ -92,7 +98,9 @@ export function SidePanel({
         anchoredChange={anchoredChange}
         onAnchor={onAnchor}
         continuationBlock={continuationBlock}
+        sessionWorktreeKey={sessionWorktreeKey}
         onContinue={onContinue}
+        onOpenSessionHere={onOpenSessionHere}
         onOpenFile={onOpenFile}
         request={openSpecRequest}
         onOpenViz={onOpenViz}

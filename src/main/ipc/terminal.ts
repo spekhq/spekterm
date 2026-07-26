@@ -4,6 +4,8 @@ import { SessionStatusService } from '../session-status'
 import type { RendererSession, SessionStore } from '../session-store'
 import { type SpawnTarget, TerminalError, TerminalService } from '../terminal'
 import type { FolderLookup } from '../workspace-store'
+import { worktreesFor } from './openspec'
+import { pickWorktree } from '../worktree-pick'
 import type { FsResult } from './fs'
 
 export const TERMINAL_CHANNELS = {
@@ -151,6 +153,42 @@ function refreshCwd(service: TerminalService, sessions: SessionStore): void {
   }
 }
 
+/**
+ * 工作目錄識別碼 → 這次 spawn 要用的 cwd，以及 cwd 夾制的合法根集合。
+ *
+ * **查無對應即拒絕，不退回 folder 根**（`terminal-sessions` 明文）：靜默退回會讓一個錯誤的
+ * 識別碼把 session 開在別的地方，而使用者以為它開在他選的工作目錄裡。這是**誠實性**要求 ——
+ * 退回 folder 根其實逸出不了任何邊界（那是舊邊界之內），但它會說謊。
+ *
+ * 未指定識別碼時 `cwd` 為 `undefined`（＝ folder 根），但**合法根集合照樣供應** —— 重建的
+ * shell 其 cwd 可能落在某個 worktree 裡，夾制要認得它。
+ */
+async function resolveWorktree(
+  store: FolderLookup,
+  contents: WebContents,
+  folderId: string,
+  worktreeKey?: string,
+): Promise<{ cwd?: string; worktreeRoots: string[] }> {
+  return pickWorktree(await worktreesFor(store, contents, folderId), worktreeKey, { strict: true })
+}
+
+/**
+ * 重建路徑的解析 —— **與 `resolveWorktree` 的差別是「查無對應」的處置，那是刻意的**。
+ *
+ * 建立時查無對應要拒絕（使用者剛選了一個工作目錄，開錯地方是說謊）；**重建時查無對應是正常的**
+ * ——那個 worktree 可能在應用程式沒開的時候被移除了。此時退回 folder 根且不使重建失敗
+ * （`session-persistence` 明文）。**而對話不會因此丟失**：`claude --resume` 的查找是 git repo
+ * 關聯的，跨工作目錄仍找得到（實測，見該 change 的 proposal）。
+ */
+async function resolveWorktreeForRebuild(
+  store: FolderLookup,
+  contents: WebContents,
+  folderId: string,
+  worktreeKey?: string,
+): Promise<{ cwd?: string; worktreeRoots: string[] }> {
+  return pickWorktree(await worktreesFor(store, contents, folderId), worktreeKey, { strict: false })
+}
+
 /** 把待落盤的東西立刻寫下去。關視窗與 reload 都必須先走這裡，否則最後一次改動就飛了。 */
 function flush(service: TerminalService, sessions: SessionStore): void {
   for (const [contentsId, entry] of pending) {
@@ -172,9 +210,18 @@ export function registerTerminalHandlers(
     statusServiceFor(service, event.sender).watch(target)
   })
 
-  ipcMain.handle(TERMINAL_CHANNELS.create, (event, folderId: string, target: SpawnTarget) =>
-    toResult(() => {
-      const result = serviceFor(store, sessions, preferences, event.sender).create(folderId, target)
+  ipcMain.handle(
+    TERMINAL_CHANNELS.create,
+    (event, folderId: string, target: SpawnTarget, worktreeKey?: string) =>
+    toResult(async () => {
+      // **識別碼 → 路徑的解析在這裡完成，不在 `TerminalService` 裡**：列舉住在 OpenSpec 資料層，
+      // 而 terminal 服務不該認識它。`worktreesFor` 走的是**與側欄同一個實例與同一組參數** ——
+      // 繞過它直接呼叫 core 會因 `includeJj` 預設不同而讓可達的位置集合大於使用者看得到的那組。
+      const { cwd, worktreeRoots } = await resolveWorktree(store, event.sender, folderId, worktreeKey)
+      const result = serviceFor(store, sessions, preferences, event.sender).create(folderId, target, {
+        cwd,
+        worktreeRoots,
+      })
 
       // **對話識別碼必須在這裡就落下去。** 它是主行程在 `create` 回傳當下就知道的東西，而 renderer
       // 永遠不會看到它 —— 漏掉這一行，claude session 的對話 id 就從來沒有被持久化過，於是每次
@@ -191,15 +238,28 @@ export function registerTerminalHandlers(
   // 喚醒＝以持久化的續接資訊重新 spawn，**沿用同一個 sessionId**（分頁、名字、順序、錨定都掛在
   // 它身上，不能因為重建而改變）。renderer 只給 sessionId —— 對話識別碼與 cwd 都在主行程手上。
   ipcMain.handle(TERMINAL_CHANNELS.wake, (event, sessionId: string) =>
-    toResult(() => {
+    toResult(async () => {
       const persisted = sessions.get(sessionId)
       if (!persisted) throw new TerminalError('UNKNOWN_SESSION', `unknown session: ${sessionId}`)
+
+      const { cwd: worktreeCwd, worktreeRoots } = await resolveWorktreeForRebuild(
+        store,
+        event.sender,
+        persisted.folderId,
+        persisted.worktreeKey,
+      )
+
+      // **claude 用識別碼解析出的位置，不用觀測值**（design D4）：它的 pty cwd 不會漂移
+      // （agent 的 `cd` 發生在子行程），而識別碼記錄的是使用者的**選擇**。
+      // **shell 相反** —— 使用者真的會 `cd`，所以用記錄的最後位置；沒有記錄時退回建立時的位置。
+      const cwd = persisted.spawnTarget === 'shell' ? (persisted.cwd ?? worktreeCwd) : worktreeCwd
 
       const service = serviceFor(store, sessions, preferences, event.sender)
       const result = service.create(persisted.folderId, persisted.spawnTarget, {
         sessionId: persisted.id,
         resumeConversationId: persisted.claudeSessionId,
-        cwd: persisted.cwd,
+        cwd,
+        worktreeRoots,
       })
       if (result.conversationId) {
         sessions.update(sessionId, { claudeSessionId: result.conversationId })

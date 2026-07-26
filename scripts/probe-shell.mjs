@@ -134,6 +134,18 @@ const PROBE_EXPRESSION = `(async () => {
           'onStatus',
         ].includes(key),
     ),
+    // **這道守衛看不到簽名改變，而那個缺口補不起來（實測）。**
+    //
+    // 它比的是 key 的集合差 —— 給 create 加一個參數不會改變 key 集合，它一聲都不會響。
+    // session-in-worktree 正是這樣加了工作目錄識別碼（那是 renderer 唯一能影響 session 初始
+    // cwd 的途徑）。
+    //
+    // 試過以 create.length 釘住參數個數：**contextBridge 複製函式時把 Function.length
+    // 抹成 0**，renderer 這側量不到真正的 arity（實測 arity=0，不論 preload 那側宣告幾個參數）。
+    // 於是那條斷言不是守衛，是一盞恆綠的燈 —— 已移除。
+    //
+    // 缺口由 code review 與 spec 承擔（terminal-sessions：「建立介面不接受任何路徑參數」，
+    // 且有一條 scenario 明列它接受哪些參數）。比照 OSC 8 linkHandler 與真實鍵盤的先例。
     // settings 的能力（terminal-rendering-and-preferences，terminal-preferences 規格）。同一條
     // 白名單原則 —— 從第一天就補上守衛，避免重蹈 folders.*／terminal.* 當年「整個 namespace 沒有
     // 守衛」的覆轍。get／setTerminalFont：值由主行程的 store 清理／夾制，介面上沒有任何路徑詞彙。

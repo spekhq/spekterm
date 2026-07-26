@@ -130,6 +130,30 @@ describe('parseSessions', () => {
     assert.equal(parsed?.[1].panelFolderId, undefined)
     assert.equal(parsed?.[2].panelFolderId, undefined)
   })
+
+  /**
+   * 工作目錄識別碼是 core 算的路徑 sha1 前 8 碼。
+   *
+   * **格式在這裡就擋掉，不要讓損毀的值走到查表** —— 比照 `claudeSessionId` 的 `isUuid`。
+   * 而格式不合**不丟棄整個 session**：它於 folder 根重建，與從未指定工作目錄的 session 一樣。
+   */
+  it('工作目錄識別碼（worktreeKey）被保留；格式不合者丟成 undefined 但不丟棄 session', () => {
+    const parsed = parseSessions(
+      JSON.stringify({
+        version: 1,
+        sessions: [
+          { id: UUID_A, folderId: 'f1', spawnTarget: 'claude', ordinal: 1, worktreeKey: '0ceceaeb' },
+          // 大寫、過長、含路徑、非字串 —— 一律丟棄那一筆，但 session 本身留著
+          { id: UUID_B, folderId: 'f1', spawnTarget: 'shell', ordinal: 2, worktreeKey: '0CECEAEB' },
+          { id: UUID_C, folderId: 'f1', spawnTarget: 'shell', ordinal: 3, worktreeKey: '../../etc' },
+        ],
+      }),
+    )
+    assert.equal(parsed?.length, 3, '格式不合不得使該 session 消失')
+    assert.equal(parsed?.[0].worktreeKey, '0ceceaeb')
+    assert.equal(parsed?.[1].worktreeKey, undefined)
+    assert.equal(parsed?.[2].worktreeKey, undefined)
+  })
 })
 
 describe('SessionStore 的損毀韌性', () => {
