@@ -211,6 +211,24 @@ worktree 列舉、active change 的 git 分歧選舉去重、archived 去重、g
 `npm test` 280/280、`probe:openspec` 新增 14 條。詳見下文「worktree 聚合」——那裡記著五個**會靜默
 失敗**的實測踩雷，其中三個是獨立稽核抓到的**我自己寫錯的宣稱**。
 
+`files-in-worktree`（**不屬於任何 Phase**）是**第八次 dogfooding 的回饋**——「我在 files 沒辦法
+切換到另一個 worktree 看實際的內容」。此前 Files 身分的檔案樹根**恆為 folder 根**：OpenSpec 那半
+早已聚合 worktree 的 change（`openspec-worktree-aggregation`）、session 也開得進去
+（`session-in-worktree`），唯獨 Files 停在原地——**同一個 repo，一半看得見、一半看不見**。
+
+它交付新能力 **`side-panel-worktree`**：麵包屑中段的工作目錄選擇器（`<folder> / [⑂ 分支 ▾] /
+files / …`）、per-session 的選擇與落盤、邊界外工作目錄的**呈現但停用**、跨身分導覽時工作目錄
+一併切換。**而它刻意不動任何安全邊界**——可選的工作目錄一律位於 folder 邊界內，「切根」在定址上
+只是換一個路徑前綴，`filesystem-access` 的 20 條 requirement 一條都沒改。
+
+**但「不需要識別碼」只對 `fs.*` 成立，對持久化是錯的**（design D2）：`session-persistence` 明文
+禁止**絕對或相對**路徑進入落盤資料，於是 renderer 同時需要兩者——識別碼用於狀態與落盤、相對路徑
+用於組路徑。落盤禁路徑的理由是獨立的：那些內容**下次啟動時會被解析**，一個落盤的路徑等同一個
+繞過查表的位置指定。
+
+`npm test` 357/357、`probe:openspec` 344/344、`probe:workspace` 全綠。詳見下文「Files 的工作目錄」
+——那裡記著六個**會靜默失敗**的實測踩雷，其中兩個 CRITICAL 是獨立稽核抓到的。
+
 尚未開始：打包（Phase 6）、handoff（Phase 7+）。**session 常駐**（讓 pty 活過 app 的生命）已排入
 路線圖但**刻意不做** —— 見 `docs/PRD.md` §11 的「session 常駐」，那裡記著 tmux 與自寫 daemon 的取捨。
 
@@ -678,6 +696,17 @@ org 名**不是**凍結身分的一部分 —— repo 改名與 transfer 皆自�
   內容來自主工作目錄**（core 的 `specs` 一律取自主工作目錄，而 archive 前的 backfill 讓分歧成為
   常態）。詳見下文「反向導覽的實測與踩雷」—— 那裡記著**兩個沒有鑑別力的反面測試**與
   **三條會靜默弄丟 folder 自身**的路。
+
+- **Files 的工作目錄** — `files-in-worktree`（**不屬於任何 Phase**）：第八次 dogfooding 的回饋。
+  新能力 `side-panel-worktree`（樹根可切至該 repo 任一**邊界內**工作目錄、per-session 且落盤、
+  邊界外**呈現但停用**、跨身分導覽時一併切換、切換時關閉開啟中的檔案）；`openspec-data-access`
+  新增「可供選擇的工作目錄清單」（與既有的「folder-relative 根」**兩者並存** —— 它們回答不同的
+  問題：定位 OpenSpec 內容 vs 有哪些工作目錄可選）；`file-explorer`（樹根、路徑、項目數以工作
+  目錄為基準，**而未存變更總數維持 folder-wide**）、`file-operations`（根層新增入口的「根」＝
+  當前樹根）、`session-persistence`（第二個工作目錄事實，同樣以識別碼落盤）、`side-panel-source`
+  （「兩身分共用同一來源」的作用域**明確化為 repo 維度**）。**`filesystem-access` 一條未改** ——
+  切根在定址上只是換前綴。與 issue #5 的關係見該 change 的 proposal（不合併，但欄位命名為側欄
+  來源的維度而非 Files 專屬，#5 到來時是擴充消費者）。詳見下文「Files 的工作目錄」。
 
 - Phase 6 打包與發佈，Phase 7+ 建立護城河（handoff）。**session 常駐**已排入路線圖但刻意不做
   （PRD §11）。
@@ -2491,6 +2520,111 @@ folder 根」這條退路是安全的**，對話不會丟 —— issue 當初擔
 **而探針取識別碼要向產品要，不自己算 sha1** —— 那會是一份平行實作，core 換演算法時它會靜默地與
 產品分歧，而斷言照樣全綠（兩邊各用各的 key）。走 `getChanges` 的來源徽章，那也正是產品入口取得
 它的方式。
+
+## Files 的工作目錄（`files-in-worktree`）
+
+Files 身分的檔案樹根可切至該 repo 的任一**邊界內**工作目錄。核心約束：**`fs.*` 的定址一行未改** ——
+可選的工作目錄一律在 folder 邊界內，切根只是換一個路徑前綴，`filesystem-access` 的 20 條 requirement
+一條都沒動。
+
+### `toRelPath` 對 folder 自身回 `null`，於是「合成 + 翻譯其餘」會產生兩筆
+
+**獨立稽核抓到的 CRITICAL，而它躲得過整套原訂的驗收。**
+
+```ts
+const rel = path.relative(root, abs)
+if (rel === '') return null      // ← folder 自身「翻不出」相對路徑
+```
+
+既有的 `getWorktreeRoots` 因此是「先塞一個合成的 `''`，再讓 `path === root` 的那一筆被
+`rel !== null` **靜默過濾掉**」。照抄那個結構寫新 API，**每一個 folder 即其 repo 主工作目錄的普通
+repo**（最常見的情形）都會得到兩筆：一筆合成的 folder 自身，加一筆 `relPath: null` 的主工作目錄
+—— 而後者正是使用者當下所在的位置，卻標著「位於此 folder 之外、無法瀏覽」，於是選擇器**在每個
+git repo 都冒出來**。
+
+**正解是「合併」而非「附加」**：列舉中 `path === root` 的那一筆**就是**代表 folder 自身的那一筆
+（`relPath` 強制為 `''`）；沒有那一筆時才合成。以 `self` / `others` 的**互斥分割**表達，讓不變式
+由結構保證，而不是靠事後去重。
+
+> **為什麼整套驗收原本抓不到它**：`probe:files` 的 fixture 非 git（`listWorktrees` 回空陣列），
+> `probe:openspec` 的有 **3 個** worktree —— 「**恰好 1 個**工作目錄的 git repo」這條路徑一次都
+> 沒被走到。這是「worktree ≤ 1 時 core 靜默退回非聚合 ⇒ 假綠」的變體，**分歧點落在 0 與 1 之間**。
+> 載體是 `probe:workspace` 的 `repo-openspec`（唯一「真 git repo + 恰好一個工作目錄」的 fixture）。
+> 單元測試的對照組（改回「合成 + map」）必須變紅 —— 實測 4 條。
+
+### 定址可以用路徑，落盤**不行** —— 兩者作用域不同
+
+`session-persistence` 禁止 renderer 把**絕對或相對**路徑送進持久化。而切根又需要 renderer 手上有
+folder-relative 前綴。兩者並存的理由：
+
+| | 作用域 | 用什麼 |
+|---|---|---|
+| 呼叫 `fs.*` | renderer 的記憶體與 IPC 參數 | folder-relative 路徑（本來就是它的合法詞彙） |
+| 存進 `sessions.json` | **落盤的事實** | 不可逆識別碼 |
+
+**落盤禁路徑的理由是獨立的，且與「它影不影響某個行程的 cwd」無關**：那些內容會在**下次啟動時**
+被主行程拿去解析，一個落盤的路徑等同一個繞過查表的位置指定。
+
+而 **folder 自身以「省略識別碼」表示**（比照 `terminal-sessions` 的「省略即 folder 根」）：folder
+不在版控之下時 `listWorktrees` 回空陣列，**根本沒有 key 可放**；若改用「主工作目錄的 key」，同一個
+邏輯狀態會有兩種落盤表示，而「切來源時重置」與「工作目錄已消失時退回」就沒有唯一的正確值可寫。
+
+### 兩種座標系並存 —— 而 `title` 屬於**權威**那一側
+
+權威恆為**完整的 folder-relative 路徑**，只有「呈現給人看的那一段」剝前綴。回報是三件事免費成立：
+未存變更跨工作目錄切換自然存活（鍵沒變）、`targetOfPath()` 的反向導覽判定**一行都不用改**、watch
+不受影響。
+
+**`title` 必須留在完整座標系** —— 它同時是 6 個 probe 助手的選擇器（`FILES_HAS_ROW` /
+`FILES_CLICK_ROW` / …）。剝掉它，那些助手**選不到元素而回 `false`**，導航靜默停住，其後的斷言驗的
+是上一個狀態。這是「`aria-label` 同時是選擇器」的同一條結構性事實，換了一個屬性。麵包屑因此
+`title={完整路徑}` 而顯示剝前綴 —— **兩者要成對驗**，只驗一邊的話「兩邊都不剝」或「兩邊都剝」都會通過。
+
+### 樹根解析必須在**父層**，因為它同時是 key
+
+工作目錄清單是一次非同步 IPC。在 `FilesPanel` 內解析的話，樹會先以 folder 根建起來、清單抵達後再
+整棵換掉 —— 而 key 沒變，`useFileTree` 的初始狀態也不會重設。解析移到 `SidePanel`，用 `rootPrefix`
+當 key。**預設情形零往返**：未選定工作目錄時不等清單。
+
+連帶：`useFileTree` 的**根狀態鍵是 `rootPrefix` 而非 `ROOT_PATH`** —— `rootLoading` / `rootError`
+漏改，工作目錄根的「載入中…」與根層錯誤訊息會**靜默地永遠不出現**。
+
+### 「使用者主動切換」四個字是規範性的
+
+切換工作目錄要關閉開啟中的檔案，但**跨身分導覽也會切換工作目錄**，而它緊接著就要開一個檔案。
+兩者若共用觸發點（掛在工作目錄 setter 上），會變成「開了又關」或「關了又開」，取決於順序。
+**而 bug 的方向不對稱**：關檔那條 scenario 兩種順序都會通過，只有跨身分導覽那條會時綠時紅 ——
+紅燈會指向錯的地方。觸發點因此是**選擇器的選取事件**。
+
+### 一個新行為會讓既有探針段落靜默過期
+
+`openFileFromOpenSpec` 現在會把樹根切到目標所在的工作目錄（spec 要求）。於是**任何「先跨身分跳去
+看 worktree 的檔案、再以 folder 根座標展開別的路徑」的既有段落，第二步會靜默落空** —— 實測
+`probe:openspec` 一次紅 15 條，而其中兩條「不提供入口」反而**變成假綠**（檔案根本沒開）。
+
+修法是加一個 `resetWorktreeToSelf()`（走產品自己的選擇器路徑）並在受影響的段落前呼叫。
+**而新段落不該假設前面每一段都還原了** —— 它自己建一個 session 當前置（新 session 的工作目錄必為
+預設），於是「預設以 folder 自身為根」驗的是真的預設值。
+
+### 三個探針自身的坑（全部實測）
+
+- **`nav` 裡的第一個 `button` 不再是「回到樹」** —— 工作目錄選擇器排在它之前。既有的
+  `CLICK_BREADCRUMB_ROOT` 因此會點開下拉。修法是給那顆按鈕一個字典來源的 `aria-label`（順帶改善
+  無障礙），而**不是**改用位置。
+- **`panelSwitch.files` 與 `files.label` 的字典值是同一個字串** —— 以該標籤屬性選取會命中 Files
+  面板那個 `<section>`（對它 `click()` 什麼都不會發生）。身分 tab **沒有** aria-label，只有 `title`
+  與文字，必須以 tablist 限定再取文字。
+- **`aria-label` 守衛會掃到註解裡的字面** —— 在註解裡寫出那個屬性的字面形式就會被判違規（走的是
+  行掃描，不是 AST）。描述它時用文字敘述，不要寫出字面。
+
+### reload 的驗收有兩個前置，缺一就變成「看起來像沒還原」
+
+- **必須切回同一個 session** —— 側欄的工作目錄是 per-session 的，focus 落在別的 session 上讀到的
+  是那一個的值（＝預設），於是斷言會以「沒有還原」的樣貌失敗，而真正的原因只是問錯了對象。
+- **必須先選 folder 再判定身分** —— 沒有選中任何 folder 時側欄是空狀態，而那個 section 的
+  `aria-label` 是身分切換器的字串、不是 OpenSpec 面板的，`IDENTITY` 於是回 `null`。
+- 另外 persist 有 **500ms 的 debounce**，reload 太快會把這次選擇丟掉 —— 而那個失敗與「持久化整個
+  沒做」長得一模一樣。
 
 ## 混排字型的列要釘住行框（`leading-none`）
 

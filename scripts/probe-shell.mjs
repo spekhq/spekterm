@@ -88,6 +88,7 @@ const PROBE_EXPRESSION = `(async () => {
           'getChange',
           'getGraphData',
           'getWorktreeRoots',
+          'getWorktrees',
           'onChanged',
         ].includes(key),
     ),

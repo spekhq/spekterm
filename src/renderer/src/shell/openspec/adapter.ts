@@ -6,6 +6,7 @@ import type {
   SpecDetailView,
   SpecSummary,
   SpecVersionView,
+  WorktreeOption,
 } from '../types'
 
 /**
@@ -33,6 +34,8 @@ export interface OpenSpecApi {
   getGraphData(folderId: string): Promise<GraphData>
   /** 各工作目錄的 folder-relative 根（folder 自身為空字串）。供反向交叉導覽的判定。 */
   getWorktreeRoots(folderId: string): Promise<string[]>
+  /** 可供選擇的工作目錄（含邊界外者，其 `relPath` 為 `null`）。供 Files 的樹根選擇器。 */
+  getWorktrees(folderId: string): Promise<WorktreeOption[]>
 }
 
 export class OpenSpecError extends Error {
@@ -85,5 +88,9 @@ export class IpcAdapter implements OpenSpecApi {
 
   getWorktreeRoots(folderId: string): Promise<string[]> {
     return unwrap(window.workspace.openspec.getWorktreeRoots(folderId))
+  }
+
+  getWorktrees(folderId: string): Promise<WorktreeOption[]> {
+    return unwrap(window.workspace.openspec.getWorktrees(folderId))
   }
 }

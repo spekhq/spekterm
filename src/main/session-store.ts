@@ -76,6 +76,22 @@ export interface PersistedSession {
    */
   panelFolderId?: string
   /**
+   * 側欄來源的**工作目錄**維度：side panel 的 Files 身分以哪個工作目錄為檔案樹的根。
+   *
+   * **與 `worktreeKey` 是兩個各自獨立的工作目錄事實，兩者可不相同** —— 前者決定 pty 開在哪，
+   * 這個決定側欄讀哪一份原始碼。「在主工作目錄駕駛 agent、同時閱讀某個 worktree 的內容」是合法
+   * 且有用的，於是它們不可合併為一個欄位。（兩者型別相同、名字只差一個前綴，是本能力最容易看混
+   * 的一對。）
+   *
+   * `undefined` ＝ folder 自身，**不是**「該 repo 的主工作目錄」—— folder 本身可能就是一個
+   * linked worktree，而 folder 不在版控之下時根本不存在任何識別碼可用。以「省略」表示它，
+   * 同一個邏輯狀態才只有一種落盤表示（比照上面的 `worktreeKey`）。
+   *
+   * 它以識別碼而非路徑保存的理由與 `worktreeKey` 相同，且**與它是否影響某個行程的 cwd 無關**：
+   * 落盤的內容會在下次啟動時被解析，一個落盤的路徑等同一個繞過查表的位置指定。
+   */
+  panelWorktreeKey?: string
+  /**
    * claude 的**對話**識別碼。與 `id`（spekterm 的 session identity）**刻意分離**：
    * 續接失敗時必須換一個全新的對話 id（沿用舊的會撞上 `Session ID … is already in use.`），
    * 若兩者是同一個欄位，換號就等於換掉 session 的身分（design D1）。
@@ -129,6 +145,10 @@ export function parseSessionEntry(entry: unknown): PersistedSession | null {
   // 不要讓一個損毀的值走到查表** —— 比照 `claudeSessionId` 的 `isUuid`。
   const worktreeKey = isWorktreeKey(raw.worktreeKey) ? raw.worktreeKey : undefined
 
+  // 側欄的工作目錄走同一道驗證。**這兩筆各自獨立**：其中一筆損毀不影響另一筆 —— session 仍開在
+  // 它原本的工作目錄，只是側欄退回 folder 自身（或反之）。
+  const panelWorktreeKey = isWorktreeKey(raw.panelWorktreeKey) ? raw.panelWorktreeKey : undefined
+
   return {
     id: raw.id,
     folderId: raw.folderId,
@@ -139,6 +159,7 @@ export function parseSessionEntry(entry: unknown): PersistedSession | null {
     anchoredChange: optionalString(raw.anchoredChange),
     panelFolderId: optionalString(raw.panelFolderId),
     worktreeKey,
+    panelWorktreeKey,
     claudeSessionId,
     // 絕對路徑才有意義；相對路徑無從解讀，丟棄後退回 folder 根目錄。
     cwd: typeof raw.cwd === 'string' && path.isAbsolute(raw.cwd) ? raw.cwd : undefined,

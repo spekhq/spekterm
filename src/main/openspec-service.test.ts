@@ -444,6 +444,107 @@ describe('OpenSpecService 的 worktree 聚合', () => {
   })
 
   /**
+   * 可供選擇的工作目錄 —— Files 身分的樹根選擇器。
+   *
+   * **這一組的核心是第一條**：代表 folder 自身的那一筆必須由**合併**產生，不是額外附加。
+   * `toRelPath()` 對「與 root 相同的位置」回的是 `null`（不是 `''`），於是照抄
+   * `getWorktreeRoots` 的「合成一筆 + 翻譯其餘」結構，會在**每一個 folder 即其 repo 主工作目錄
+   * 的普通 repo**（最常見的情形）上產出兩筆：一筆合成的 folder 自身，加一筆 `relPath === null`
+   * 的主工作目錄 —— 而後者正是使用者當下所在的位置，卻會被呈現為「不可瀏覽」，並讓選擇器在每個
+   * git repo 都冒出來。
+   *
+   * 沒有任何探針走得到那條路徑：`probe:files` 的 fixture 非 git（列舉為空），`probe:openspec`
+   * 的有 3 個 worktree。**這裡是它唯一的守衛。**
+   */
+  describe('可供選擇的工作目錄', () => {
+    it('folder 即其 repo 主工作目錄且無 linked worktree 時，清單恰含一筆', async () => {
+      const svc = create(okFolder(), {
+        scan: async () => aggregated([], [worktree(repo, { isMain: true, branch: 'master' })], false),
+      })
+
+      const options = await svc.getWorktrees('f1')
+
+      assert.equal(options.length, 1, '折疊失敗會讓選擇器在每個普通 git repo 都出現')
+      assert.equal(options[0].relPath, '')
+      assert.equal(options[0].branch, 'master', '合併而非合成 —— 分支要保留下來')
+      assert.equal(
+        options.some((option) => option.relPath === null),
+        false,
+        '使用者當下所在的位置不得被呈現為「位於此 folder 之外」',
+      )
+    })
+
+    it('folder 自身之外的工作目錄各自成列，邊界外者 relPath 為 null 但仍在列', async () => {
+      const inside = worktree(path.join(repo, '.claude/worktrees/wt-a'), { branch: 'feat-inside' })
+      const outside = worktree(path.join(base, 'outside-wt'), { branch: 'feat-outside' })
+      const svc = create(okFolder(), {
+        scan: async () => aggregated([], [worktree(repo, { isMain: true }), inside, outside]),
+      })
+
+      const options = await svc.getWorktrees('f1')
+
+      assert.equal(options.length, 3)
+      assert.equal(options[0].relPath, '', 'folder 自身恆為第一筆（它是預設值）')
+      assert.equal(options[1].relPath, '.claude/worktrees/wt-a')
+      assert.equal(options[2].relPath, null, '邊界外的必須在列且標示為不可瀏覽，不得省略')
+      assert.equal(options[2].branch, 'feat-outside', '不可瀏覽仍要能被辨識')
+    })
+
+    it('清單不含任何絕對路徑', async () => {
+      const outside = worktree(path.join(base, 'outside-wt'))
+      const svc = create(okFolder(), {
+        scan: async () => aggregated([], [worktree(repo, { isMain: true }), outside]),
+      })
+
+      const serialized = JSON.stringify(await svc.getWorktrees('f1'))
+
+      assert.equal(serialized.includes(base), false, '邊界外的工作目錄不得洩漏其絕對路徑')
+    })
+
+    it('folder 不在版控之下時恰含一筆，且該筆不帶識別碼', async () => {
+      const svc = create(okFolder(), { scan: async () => aggregated([], [], false) })
+
+      const options = await svc.getWorktrees('f1')
+
+      assert.equal(options.length, 1)
+      assert.equal(options[0].relPath, '')
+      assert.equal(
+        options[0].key,
+        undefined,
+        '列舉為空時根本沒有 key 可放 —— folder 自身以「省略識別碼」表示（比照 terminal）',
+      )
+    })
+
+    it('folder 本身是 linked worktree 時，它自己 relPath 為空字串且非主工作目錄', async () => {
+      // folder(repo) 自己是 linked worktree，該 repo 的主工作目錄在 folder 邊界外。
+      const main = worktree(path.join(base, 'main-wt'), { isMain: true, branch: 'master' })
+      const svc = create(okFolder(), {
+        scan: async () => aggregated([], [main, worktree(repo, { branch: 'feat-self' })]),
+      })
+
+      const options = await svc.getWorktrees('f1')
+      const self = options.find((option) => option.relPath === '')
+
+      assert.ok(self, 'folder 自身恆入清單')
+      assert.equal(self.isMain, false, 'isMain 與「是不是 folder 自身」是兩件事，不可互相代用')
+      assert.equal(self.branch, 'feat-self')
+      assert.equal(options.find((option) => option.isMain)?.relPath, null, '主工作目錄在邊界外')
+    })
+
+    it('detached HEAD 的工作目錄以 head 承擔辨識', async () => {
+      const detached = worktree(path.join(repo, '.claude/worktrees/wt-d'), { branch: null })
+      const svc = create(okFolder(), {
+        scan: async () => aggregated([], [worktree(repo, { isMain: true }), detached]),
+      })
+
+      const options = await svc.getWorktrees('f1')
+
+      assert.equal(options[1].branch, null)
+      assert.ok(options[1].head, '分支缺席時，選擇器上不得是一個空標籤')
+    })
+  })
+
+  /**
    * `openspec-panel` 的 scenario「topic 僅存在於該 worktree」。
    *
    * core 的聚合其 `specs` 一律取自**主工作目錄**，所以某個 worktree 裡新增的 capability

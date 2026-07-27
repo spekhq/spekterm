@@ -154,6 +154,61 @@ describe('parseSessions', () => {
     assert.equal(parsed?.[1].worktreeKey, undefined)
     assert.equal(parsed?.[2].worktreeKey, undefined)
   })
+
+  /**
+   * 側欄的工作目錄（`panelWorktreeKey`）與 session 開啟的工作目錄（`worktreeKey`）是**兩個各自
+   * 獨立的事實**：前者決定側欄讀哪一份原始碼，後者決定 pty 開在哪。
+   *
+   * 「在主工作目錄駕駛 agent、同時閱讀某個 worktree 的內容」是合法且有用的 —— 兩者若被合併成
+   * 一個欄位，那個情境就表達不出來。兩個欄位型別相同、名字只差一個前綴，是本能力最容易看混的
+   * 一對，故這裡以「兩者不同」為主要斷言。
+   */
+  it('側欄的工作目錄與 session 的工作目錄各自獨立保存，且可不相同', () => {
+    const parsed = parseSessions(
+      JSON.stringify({
+        version: 1,
+        sessions: [
+          {
+            id: UUID_A,
+            folderId: 'f1',
+            spawnTarget: 'claude',
+            ordinal: 1,
+            worktreeKey: '0ceceaeb',
+            panelWorktreeKey: 'deadbeef',
+          },
+          // 側欄選了某個 worktree，而 session 本身開在 folder 根 —— 主線情境。
+          { id: UUID_B, folderId: 'f1', spawnTarget: 'shell', ordinal: 2, panelWorktreeKey: 'cafe1234' },
+        ],
+      }),
+    )
+
+    assert.equal(parsed?.[0].worktreeKey, '0ceceaeb')
+    assert.equal(parsed?.[0].panelWorktreeKey, 'deadbeef', '兩者不得互相覆寫')
+    assert.equal(parsed?.[1].worktreeKey, undefined, 'session 開在 folder 根')
+    assert.equal(parsed?.[1].panelWorktreeKey, 'cafe1234', '而側欄看著另一個工作目錄')
+  })
+
+  it('側欄的工作目錄識別碼格式不合時丟成 undefined，且不影響 session 自己的工作目錄', () => {
+    const parsed = parseSessions(
+      JSON.stringify({
+        version: 1,
+        sessions: [
+          {
+            id: UUID_A,
+            folderId: 'f1',
+            spawnTarget: 'claude',
+            ordinal: 1,
+            worktreeKey: '0ceceaeb',
+            panelWorktreeKey: '../../etc',
+          },
+        ],
+      }),
+    )
+
+    assert.equal(parsed?.length, 1, '格式不合不得使該 session 消失')
+    assert.equal(parsed?.[0].panelWorktreeKey, undefined, '損毀的值不得走到查表')
+    assert.equal(parsed?.[0].worktreeKey, '0ceceaeb', '兩筆各自獨立 —— 一筆損毀不牽連另一筆')
+  })
 })
 
 describe('SessionStore 的損毀韌性', () => {

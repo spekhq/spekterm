@@ -14,6 +14,7 @@ import type {
   SpecDetailView,
   SpecSummary,
   SpecVersionView,
+  WorktreeOption,
 } from '../main/openspec-service'
 import type { SpawnTarget } from '../main/terminal'
 import type { WatchBatch } from '../main/watch-service'
@@ -104,6 +105,14 @@ const workspaceApi = {
      */
     getWorktreeRoots: (folderId: string): Promise<FsResult<string[]>> =>
       ipcRenderer.invoke('workspace:openspec:getWorktreeRoots', folderId),
+    /**
+     * 該 folder 所屬 repo **可供選擇**的工作目錄（Files 身分的樹根選擇器）。
+     *
+     * 與 `getWorktreeRoots` 的差別在於它**含邊界外的工作目錄**（`relPath` 為 `null`，呈現為停用）
+     * 並帶分支／HEAD 供顯示。folder 自身那一筆的 `key` 省略 —— 比照 `terminal.create`。
+     */
+    getWorktrees: (folderId: string): Promise<FsResult<WorktreeOption[]>> =>
+      ipcRenderer.invoke('workspace:openspec:getWorktrees', folderId),
     /** 該 folder 的 OpenSpec 結構已變更（agent 改了檔）。回傳取消訂閱的函式。 */
     onChanged: (listener: (folderId: string) => void): (() => void) => {
       const handler = (_event: IpcRendererEvent, folderId: string): void => {

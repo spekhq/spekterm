@@ -111,6 +111,30 @@ export interface ChangeOrigin {
 }
 
 /**
+ * 一個**可供選擇**的工作目錄，送往 renderer 的形狀（Files 身分的樹根選擇器）。
+ *
+ * 與 `getWorktreeRoots()` 是兩個不同的問題，故兩者並存：那個回答「哪些根可用於**定位 OpenSpec
+ * 內容**」（反向交叉導覽），邊界外的與該問題無關故整筆省略；這個回答「這個 repo **有哪些工作
+ * 目錄、各自能不能瀏覽**」，邊界外的**必須在列**且標示為不可瀏覽 —— 省略它，使用者無從得知那是
+ * 刻意的限制還是應用程式沒看見它。
+ *
+ * **`key` 對「folder 自身」那一筆是省略的**，比照 `terminal-sessions` 的「省略即 folder 根」
+ * （`worktree-pick.ts` 的 `if (!worktreeKey)`）。folder 不在版控之下時列舉為空，根本沒有任何
+ * key 可放 —— 若改以「主工作目錄的 key」表示 folder 自身，同一個邏輯狀態就會有兩種落盤表示。
+ *
+ * `head` 存在的理由只有一個：`branch` 於 detached HEAD 為 `null`，那時得有東西能辨識該工作目錄，
+ * 否則選擇器上是一個空標籤。
+ */
+export interface WorktreeOption {
+  key?: string
+  /** folder-relative 根。folder 自身為空字串；翻不出來（位於 folder 邊界外）為 `null`。 */
+  relPath: string | null
+  branch: string | null
+  head: string | null
+  isMain: boolean
+}
+
+/**
  * 送往 renderer 的 change 摘要。
  *
  * `Omit<ChangeInfo, 'source'>` 而非逐欄列舉是刻意的：core 日後新增欄位仍會**自己流穿**到
@@ -431,6 +455,42 @@ export class OpenSpecService {
       if (rel !== null) roots.push(rel)
     }
     return roots
+  }
+
+  /**
+   * 可供選擇的工作目錄（Files 身分的樹根選擇器）。
+   *
+   * **代表 folder 自身的那一筆是「合併」出來的，不是額外附加的。** 這是承重的：`toRelPath()` 對
+   * 「與 root 相同的位置」回的是 `null`（不是 `''`），於是 `getWorktreeRoots` 那種「先塞一個合成
+   * 的 `''`、再翻譯其餘各筆」的結構，在**每一個 folder 即其 repo 主工作目錄的普通 repo**（最常見
+   * 的情形）上會產出兩筆 —— 一筆合成的 folder 自身，加一筆 `relPath === null` 的主工作目錄，而
+   * 後者正是使用者當下所在的位置，卻會被呈現為「位於此 folder 之外、不可瀏覽」。
+   *
+   * 這裡以 `self` / `others` 的**互斥分割**表達「兩者擇一，恆不並存」—— 讓那個不變式由結構保證，
+   * 而不是靠後續的去重。folder 自身恆為第一筆（它是預設值）。
+   */
+  async getWorktrees(folderId: string): Promise<WorktreeOption[]> {
+    const { root, result } = await this.#scan(folderId)
+
+    // 與 root 相同的位置：不能用 `toRelPath` 判定 —— 它對「相同」與「邊界外」都回 `null`，
+    // 兩者在這裡的意義恰好相反。
+    const isSelf = (worktree: WorktreeInfo): boolean => path.relative(root, worktree.path) === ''
+    const self = result.worktrees.find(isSelf)
+    const others = result.worktrees.filter((worktree) => !isSelf(worktree))
+
+    return [
+      self
+        ? { key: self.key, relPath: '', branch: self.branch, head: self.head, isMain: self.isMain }
+        : // folder 不在版控之下、或是某個 repo 的子目錄 —— 沒有對應的工作目錄可合併，也就沒有 key
+          { relPath: '', branch: null, head: null, isMain: false },
+      ...others.map((worktree) => ({
+        key: worktree.key,
+        relPath: toRelPath(root, worktree.path),
+        branch: worktree.branch,
+        head: worktree.head,
+        isMain: worktree.isMain,
+      })),
+    ]
   }
 
   async getOverview(folderId: string): Promise<OverviewData> {

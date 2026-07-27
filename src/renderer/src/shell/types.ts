@@ -43,6 +43,15 @@ export type SpecDetailView = OkValue<Awaited<ReturnType<WorkspaceOpenSpec['getSp
 
 export type SpecVersionView = OkValue<Awaited<ReturnType<WorkspaceOpenSpec['getSpecAtChange']>>>
 
+/**
+ * 一個可供選擇的工作目錄（Files 身分的樹根選擇器）。
+ *
+ * 與其他 DTO 同樣**自 preload 推導**而非重新宣告 —— 主行程日後在其上加欄位，會自己流穿到這裡。
+ */
+export type WorktreeOption = OkValue<
+  Awaited<ReturnType<WorkspaceOpenSpec['getWorktrees']>>
+>[number]
+
 export type ChangesData = OkValue<Awaited<ReturnType<WorkspaceOpenSpec['getChanges']>>>
 
 /** change 清單裡的一列。 */

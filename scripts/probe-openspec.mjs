@@ -631,6 +631,48 @@ const OPEN_FILE_PATH = `(() => {
   return last ? last.getAttribute('title') : null
 })()`
 
+/**
+ * Files 身分：麵包屑最後一段**呈現的文字**。
+ *
+ * 與 `OPEN_FILE_PATH`（讀 `title`）成對 —— 兩者刻意不同：`title` 是完整的 folder-relative
+ * 路徑（它同時是本檔案其餘助手的選擇器），而呈現的文字剝掉了樹根前綴。**兩條一起驗，才證明
+ * 得了「兩種座標系各自正確」**；只驗一邊的話，把顯示也留成完整路徑（或把 title 也剝掉）都會通過。
+ */
+const OPEN_FILE_DISPLAY = `(() => {
+  const nav = document.querySelector('section[aria-label="${copy('files.label')}"] nav[aria-label="${copy('files.pathNav')}"]')
+  const last = nav?.querySelector('span[title]')
+  return last ? last.innerText.trim() : null
+})()`
+
+// ── Files 的工作目錄選擇器（side-panel-worktree）──────────────────────────
+
+const WORKTREE_BUTTON = `section[aria-label="${copy('files.label')}"] button[aria-label="${copy('files.worktree.change')}"]`
+
+/** 選擇器當前的標籤；**不呈現時為 null**（工作目錄恰有一個）。 */
+const WORKTREE_PICKER = `(() => {
+  const btn = document.querySelector('${WORKTREE_BUTTON}')
+  return btn ? btn.innerText.trim() : null
+})()`
+
+const CLICK_WORKTREE_PICKER = `(() => {
+  const btn = document.querySelector('${WORKTREE_BUTTON}')
+  if (!btn || btn.disabled) return false
+  btn.click()
+  return true
+})()`
+
+/** 下拉的項目。停用者的 `innerText` 含說明，故比對一律用前綴。 */
+const WORKTREE_MENU = `[...document.querySelectorAll('[role="menu"] button[role="menuitem"]')]
+  .map((b) => ({ label: b.innerText.trim().split('\\n')[0], disabled: b.disabled }))`
+
+const CLICK_WORKTREE_ITEM = (label) => `(() => {
+  const item = [...document.querySelectorAll('[role="menu"] button[role="menuitem"]')]
+    .find((b) => b.innerText.trim().startsWith(${JSON.stringify(label)}))
+  if (!item || item.disabled) return false
+  item.click()
+  return true
+})()`
+
 const SESSION_TABS = `[...document.querySelectorAll('[role="tablist"][aria-label="${copy('sessions.tabs')}"] button[role="tab"]')]
   .map((t) => ({ label: t.innerText.trim(), selected: t.getAttribute('aria-selected') === 'true' }))`
 
@@ -661,10 +703,17 @@ const FILES_CLICK_ROW = (relPath) => `(() => {
   return true
 })()`
 
-/** breadcrumb 上的 `files` —— 關掉當前檔案、回到樹（檢視器與樹是互斥渲染的）。 */
+/**
+ * breadcrumb 上的 `files` —— 關掉當前檔案、回到樹（檢視器與樹是互斥渲染的）。
+ *
+ * **以 `aria-label` 指名，不能取「nav 裡的第一個 button」** —— 麵包屑中段還有一顆工作目錄
+ * 選擇器（`side-panel-worktree`），而它排在這一顆之前。取第一個會點開那個下拉，然後這裡的
+ * 導航靜默不發生，其後的斷言驗的是上一個狀態。
+ */
 const CLICK_BREADCRUMB_ROOT = `(() => {
-  const nav = document.querySelector('section[aria-label="${copy('files.label')}"] nav[aria-label="${copy('files.pathNav')}"]')
-  const btn = nav?.querySelector('button')
+  const btn = document.querySelector(
+    'section[aria-label="${copy('files.label')}"] button[aria-label="${copy('files.backToTree')}"]',
+  )
   if (!btn) return false
   btn.click()
   return true
@@ -922,7 +971,26 @@ async function createSession(client, target = 'shell') {
  *
  * 回傳是否走到底。中途某一層沒出現就回 false，讓呼叫端的斷言紅得有話可說。
  */
-async function openInFileTree(client, relPath) {
+/**
+ * 把 Files 的樹根切回 folder 自身。
+ *
+ * **跨身分導覽會把樹根切到目標所在的工作目錄**（`side-panel-worktree` 的要求）—— 於是任何
+ * 「先自 OpenSpec 跳去看某個 worktree 的檔案、再以 folder 根座標展開別的路徑」的段落，第二步
+ * 會靜默落空（那些列在新的樹根下根本不在根層）。而失效方式很惡劣：`openInFileTree` 回 false，
+ * 但先前開著的檔案還在畫面上，於是其後「有沒有跳回 OpenSpec 的入口」那類斷言驗的是**上一個
+ * 檔案** —— 該紅的紅得莫名，該綠的綠得虛假。
+ *
+ * 走產品自己的路徑（選擇器選 folder 自身那一筆），不繞過 UI。沒有選擇器（工作目錄恰一個）
+ * 時是 no-op。
+ */
+async function resetWorktreeToSelf(client, selfBranch = 'master') {
+  if ((await client.evaluate(WORKTREE_PICKER)) === null) return
+  await client.evaluate(CLICK_WORKTREE_PICKER)
+  await client.evaluate(CLICK_WORKTREE_ITEM(selfBranch))
+  await pollUntil(client, WORKTREE_PICKER, (v) => v?.includes(selfBranch) === true, 8000)
+}
+
+async function openInFileTree(client, relPath, rootPrefix = '') {
   // **檔案樹與檢視器互斥渲染**（`openPath === null ? <FileTree/> : <FileViewer/>`）——
   // 開著某個檔案時樹根本不在 DOM 裡，逐層展開必定一步都走不動。
   //
@@ -941,8 +1009,12 @@ async function openInFileTree(client, relPath) {
     if (cleared !== null) return false
   }
 
-  const segments = relPath.split('/').filter(Boolean)
-  let prefix = ''
+  // **逐層展開必須自樹根開始，而樹根不一定是 folder 根**（`side-panel-worktree`）。列的 `title`
+  // 恆為完整的 folder-relative 路徑，但選定某個工作目錄之後，根層的列是
+  // `<工作目錄>/openspec` 而不是 `.claude` —— 從第一段開始找會在第一步就落空。
+  const inner = rootPrefix ? relPath.slice(rootPrefix.length + 1) : relPath
+  const segments = inner.split('/').filter(Boolean)
+  let prefix = rootPrefix
 
   for (const segment of segments) {
     prefix = prefix ? `${prefix}/${segment}` : segment
@@ -2046,6 +2118,10 @@ async function runMode(label, { port, rendererUrl }) {
     await app.client.evaluate(CLICK_IDENTITY('▤'))
     await pollUntil(app.client, IDENTITY, (v) => v === 'files', 8000)
 
+    // 上面那次跨身分導覽把樹根切到了 `wt-inside`（`side-panel-worktree` 的要求）。以下三條
+    // 都以 folder 根為座標，先切回來 —— 少了這一步，它們會靜默落空而其後的斷言驗到上一個檔案。
+    await resetWorktreeToSelf(app.client)
+
     const decoyOpened = await openInFileTree(app.client, 'docs/openspec/changes/decoy/proposal.md')
     check(results, '於檔案樹開啟 docs 底下的誘餌檔案', decoyOpened === true)
     const decoyPath = await pollUntil(
@@ -2253,6 +2329,198 @@ async function runMode(label, { port, rendererUrl }) {
       'spec 的內容真的讀得到（讀取根不是 folder 自己）',
       String(mainSpecText).includes('auth Specification'),
       String(mainSpecText).slice(0, 120),
+    )
+
+    // ── Files 的工作目錄選擇器（side-panel-worktree）──────────────────────────
+    //
+    // **這一段放在最後**，因為它會 `Page.reload`（驗持久化）—— 那會把前面每一段建立的 UI 狀態
+    // 洗掉。它也不必還原狀態，後面沒有段落了。
+    console.log('\nFiles 的工作目錄選擇器')
+
+    check(
+      results,
+      '切回含三個工作目錄的 repo',
+      (await pollUntil(app.client, SELECT_FOLDER('repo-worktree'), (ok) => ok === true, 8000)) === true,
+    )
+    // **前置由這一段自己建立，不假設前面每一段都把狀態還原了。** 新 session 的工作目錄必為
+    // 預設（folder 自身）—— 於是下面那條「預設以 folder 自身為根」驗的是真的預設值，而不是
+    // 「前面剛好沒人改過」。
+    await createSession(app.client, 'shell')
+
+    await app.client.evaluate(CLICK_IDENTITY('▤'))
+    check(
+      results,
+      '切至 Files 身分',
+      (await pollUntil(app.client, IDENTITY, (v) => v === 'files', 8000)) === 'files',
+    )
+
+    const picker = await pollUntil(app.client, WORKTREE_PICKER, (v) => v !== null, 12_000)
+    check(
+      results,
+      '工作目錄多於一個時呈現選擇器，且標示當前為 folder 自身的分支',
+      picker !== null && picker.includes('master'),
+      String(picker),
+    )
+
+    // **前置兼反向斷言的對照組**：預設以 folder 自身為根。
+    //
+    // 判準是**根的直接子項目**，不是「某個 title 存不存在」—— worktree 目錄本來就位於 folder
+    // 邊界內，`.claude/worktrees/wt-inside/openspec` 這個 title 在**未切根**的樹上展開三層之後
+    // 一樣看得到。兩者真正的差別是「不必展開就在根層」。
+    const rootRowsSelf = await pollUntil(
+      app.client,
+      TREE_ROWS,
+      (list) => list.includes('openspec'),
+      12_000,
+    )
+    check(
+      results,
+      '預設以 folder 自身為根（根層是 folder 自己的項目）',
+      rootRowsSelf?.includes('openspec') === true &&
+        rootRowsSelf?.includes('.claude/worktrees/wt-inside/openspec') === false,
+      JSON.stringify(rootRowsSelf),
+    )
+
+    check(results, '開啟工作目錄選擇器', (await app.client.evaluate(CLICK_WORKTREE_PICKER)) === true)
+    const wtItems = await pollUntil(app.client, WORKTREE_MENU, (list) => list.length >= 3, 8000)
+    check(
+      results,
+      '三個工作目錄都列出（含邊界外者）',
+      (wtItems ?? []).some((i) => i.label.startsWith('master')) &&
+        (wtItems ?? []).some((i) => i.label.startsWith('feat-inside')) &&
+        (wtItems ?? []).some((i) => i.label.startsWith('feat-outside')),
+      JSON.stringify(wtItems),
+    )
+    // **成對**：只驗「邊界外的停用」的話，一個「整個選單都壞掉／全部停用」的實作也會通過。
+    check(
+      results,
+      '邊界外的工作目錄呈現但停用',
+      (wtItems ?? []).find((i) => i.label.startsWith('feat-outside'))?.disabled === true,
+      JSON.stringify(wtItems?.find((i) => i.label.startsWith('feat-outside'))),
+    )
+    check(
+      results,
+      '而邊界內的可選取（成對的對照組）',
+      (wtItems ?? []).find((i) => i.label.startsWith('feat-inside'))?.disabled === false,
+      JSON.stringify(wtItems?.find((i) => i.label.startsWith('feat-inside'))),
+    )
+
+    check(
+      results,
+      '選取邊界內的工作目錄',
+      (await app.client.evaluate(CLICK_WORKTREE_ITEM('feat-inside'))) === true,
+    )
+
+    const rootRowsWt = await pollUntil(
+      app.client,
+      TREE_ROWS,
+      (list) => list.includes('.claude/worktrees/wt-inside/openspec'),
+      12_000,
+    )
+    check(
+      results,
+      '樹根換成該工作目錄（根層是它的項目）',
+      rootRowsWt?.includes('.claude/worktrees/wt-inside/openspec') === true,
+      JSON.stringify(rootRowsWt),
+    )
+    // **這條是防假綠的關鍵**：切根若沒生效，上一條在展開之後也會成立。folder 自身的根層項目
+    // 消失，才是「換了一棵樹」而非「多展開了幾層」的證據。
+    check(
+      results,
+      '且不再呈現 folder 自身的根層項目',
+      rootRowsWt?.includes('openspec') === false && rootRowsWt?.includes('docs') === false,
+      JSON.stringify(rootRowsWt),
+    )
+
+    // 開一個**只存在於該 worktree** 的檔案 —— `main-change` 兩邊都有（commit 過），拿它當
+    // 目標對「切根有沒有生效」零鑑別力。
+    const insideProposal = '.claude/worktrees/wt-inside/openspec/changes/inside-change/proposal.md'
+    await openInFileTree(app.client, insideProposal, '.claude/worktrees/wt-inside')
+    const openedInside = await pollUntil(app.client, OPEN_FILE_PATH, (v) => v === insideProposal, 12_000)
+    check(
+      results,
+      '開得了只存在於該 worktree 的檔案',
+      openedInside === insideProposal,
+      String(openedInside),
+    )
+    // 兩種座標系各自正確：`title` 完整（它是選擇器與反向導覽的輸入），呈現的文字剝掉前綴。
+    check(
+      results,
+      '麵包屑呈現的路徑自樹根算起（而 title 仍為完整路徑）',
+      (await app.client.evaluate(OPEN_FILE_DISPLAY)) ===
+        'openspec/changes/inside-change/proposal.md',
+      String(await app.client.evaluate(OPEN_FILE_DISPLAY)),
+    )
+    check(
+      results,
+      '該檔案仍提供跳回 OpenSpec 身分的入口（反向導覽不因切根失效）',
+      (await app.client.evaluate(HAS_VIEW_IN_OPENSPEC)) === true,
+    )
+
+    // ── 持久化：reload 後仍在該工作目錄 ──────────────────────────────────────
+    //
+    // **必須先選定一個非預設值再 reload。** 預設就是 folder 自身，若在預設態 reload，
+    // 整個功能死掉也是綠的（CLAUDE.md：「先把狀態改成非預設值」）。
+    //
+    // **而 reload 之後必須切回同一個 session** —— 側欄的工作目錄是 per-session 的，focus 落在
+    // 別的 session 上時讀到的是那一個的值（＝預設），於是斷言會以「沒有還原」的樣貌失敗，
+    // 而真正的原因只是問錯了對象。
+    const tabsBeforeReload = await app.client.evaluate(SESSION_TABS)
+    const myTabIndex = (tabsBeforeReload ?? []).findIndex((tab) => tab.selected)
+    check(
+      results,
+      '（前置）記下 reload 前 focused 的 session 分頁',
+      myTabIndex >= 0,
+      JSON.stringify(tabsBeforeReload),
+    )
+
+    // persist 有 500ms 的 debounce（`PERSIST_DEBOUNCE_MS`）—— reload 太快會把這次選擇丟掉，
+    // 而那個失敗看起來與「持久化整個沒做」完全一樣。
+    await sleep(1200)
+    await app.client.send('Page.reload', {})
+    await sleep(1500)
+    await pollUntil(app.client, MOUNTED, (v) => v === true, 20_000)
+
+    // **先選 folder 再判定身分** —— 沒有選中任何 folder 時側欄是空狀態，而那個 section 的
+    // `aria-label` 是身分切換器的字串、不是 OpenSpec 面板的，`IDENTITY` 於是回 null。
+    check(
+      results,
+      'reload 後重新選中該 repo',
+      (await pollUntil(app.client, SELECT_FOLDER('repo-worktree'), (ok) => ok === true, 15_000)) === true,
+    )
+    check(
+      results,
+      'reload 後回到預設身分（證明頁面真的重新載入了）',
+      (await pollUntil(app.client, IDENTITY, (v) => v === 'openspec', 12_000)) === 'openspec',
+    )
+
+    check(
+      results,
+      'reload 後切回同一個 session',
+      (await pollUntil(app.client, FOCUS_SESSION_TAB(myTabIndex), (ok) => ok === true, 12_000)) === true,
+    )
+    await app.client.evaluate(CLICK_IDENTITY('▤'))
+    await pollUntil(app.client, IDENTITY, (v) => v === 'files', 8000)
+
+    const restoredWt = await pollUntil(app.client, WORKTREE_PICKER, (v) => v?.includes('feat-inside') === true, 15_000)
+    check(
+      results,
+      '側欄的工作目錄跨 reload 還原',
+      restoredWt?.includes('feat-inside') === true,
+      String(restoredWt),
+    )
+    const restoredRows = await pollUntil(
+      app.client,
+      TREE_ROWS,
+      (list) => list.includes('.claude/worktrees/wt-inside/openspec'),
+      15_000,
+    )
+    check(
+      results,
+      '而且樹根確實還原到該工作目錄（不只是標籤對）',
+      restoredRows?.includes('.claude/worktrees/wt-inside/openspec') === true &&
+        restoredRows?.includes('openspec') === false,
+      JSON.stringify(restoredRows),
     )
   } finally {
     await app.close()

@@ -76,6 +76,18 @@ export interface SessionState {
    * 可能已被移除，該退回由 `MainStage`（它手上有 folder 清單）處理。
    */
   panelFolderId?: string
+  /**
+   * 側欄來源的**工作目錄**維度：Files 身分以哪個工作目錄為檔案樹的根（`side-panel-worktree`）。
+   *
+   * **與上面的 `worktreeKey` 是兩個各自獨立的事實，且可不相同** —— 那個決定 pty 開在哪，這個
+   * 決定側欄讀哪一份原始碼。「在主工作目錄駕駛 agent、同時閱讀某個 worktree 的內容」是合法且
+   * 有用的。兩者型別相同、名字只差一個前綴，是本能力最容易看混的一對。
+   *
+   * `undefined` ＝ folder 自身（**不是**該 repo 的主工作目錄 —— folder 本身可能就是一個 linked
+   * worktree，且 folder 不在版控之下時根本沒有識別碼可用）。指向的工作目錄可能已被移除，該退回
+   * 由 `FilesPanel` 於查表時處理 —— **那個查表不承擔安全**，邊界仍由主行程對每次 `fs.*` 夾制。
+   */
+  panelWorktreeKey?: string
 }
 
 export type CreateOutcome =
@@ -115,11 +127,16 @@ export interface SessionsApi {
   /** 該 session 的側欄來源 folderId。未曾設定時退回 session 自己的 `folderId`。 */
   panelSourceOf(sessionId: string | null): string | null
   /**
-   * 設定某個 session 的側欄來源。切換來源時**一併重置該 session 的 `anchoredChange`** ——
-   * change 的 slug 隸屬於某個 repo，換 repo 後舊 slug 在新 repo 不存在（`side-panel-source` D2）。
+   * 設定某個 session 的側欄來源。切換來源時**一併重置該 session 的 `anchoredChange` 與
+   * `panelWorktreeKey`** —— 兩者的識別碼都隸屬於某個 repo，換 repo 後在新 repo 都不存在
+   * （`side-panel-source` D2、`side-panel-worktree`）。
    * `folderId` 等於 session 自身的 folder 時清為預設（不占欄位）。
    */
   setPanelSource(sessionId: string, folderId: string): void
+  /** 該 session 的側欄工作目錄識別碼。`undefined` ＝ folder 自身。 */
+  panelWorktreeOf(sessionId: string | null): string | undefined
+  /** 設定某個 session 的側欄工作目錄。`undefined` ＝ 回到 folder 自身。 */
+  setPanelWorktree(sessionId: string, worktreeKey: string | undefined): void
   /**
    * 喚醒一個休眠的 session（＝為它 spawn pty）。
    *
@@ -295,6 +312,7 @@ export function SessionsProvider({ children }: { children: React.ReactNode }): R
               anchoredChange: entry.anchoredChange,
               panelFolderId: entry.panelFolderId,
               worktreeKey: entry.worktreeKey,
+              panelWorktreeKey: entry.panelWorktreeKey,
             }))
           // 重建的排在前面 —— 它們是上次的順序，而在它們之前建立的那些是「新的」。
           return [...restoredSessions, ...previous]
@@ -335,6 +353,7 @@ export function SessionsProvider({ children }: { children: React.ReactNode }): R
             anchoredChange,
             panelFolderId,
             worktreeKey,
+            panelWorktreeKey,
           }) => ({
             id,
             folderId,
@@ -345,6 +364,7 @@ export function SessionsProvider({ children }: { children: React.ReactNode }): R
             anchoredChange,
             panelFolderId,
             worktreeKey,
+            panelWorktreeKey,
           }),
         ),
     )
@@ -433,9 +453,32 @@ export function SessionsProvider({ children }: { children: React.ReactNode }): R
         // 來源等於自己的 folder ＝ 回到預設，存 undefined（不占欄位、不落盤）。
         const next = folderId === session.folderId ? undefined : folderId
         if (session.panelFolderId === next) return session
-        // 切換來源＝重置錨定：舊 repo 的 change slug 在新 repo 不存在（`side-panel-source` D2）。
-        return { ...session, panelFolderId: next, anchoredChange: undefined }
+        // 切換來源＝重置錨定與工作目錄：兩者的識別碼都隸屬於某個 repo，在新 repo 不存在
+        //（`side-panel-source` D2 與 `side-panel-worktree`）。沿用舊值會讓側欄對著一個不存在的
+        // change 或一個不存在的樹根呈現空狀態，看起來像壞掉。
+        return {
+          ...session,
+          panelFolderId: next,
+          anchoredChange: undefined,
+          panelWorktreeKey: undefined,
+        }
       }),
+    )
+  }, [])
+
+  /**
+   * 側欄的工作目錄：Files 身分以哪個工作目錄為樹根。
+   *
+   * `undefined` ＝ folder 自身。**不重置 `anchoredChange`** —— 換工作目錄沒有換 repo，同一個
+   * change 的 slug 在聚合的視野裡仍然有效（OpenSpec 身分本來就聚合全部工作目錄）。
+   */
+  const setPanelWorktree = useCallback((sessionId: string, worktreeKey: string | undefined) => {
+    setSessions((previous) =>
+      previous.map((session) =>
+        session.id === sessionId && session.panelWorktreeKey !== worktreeKey
+          ? { ...session, panelWorktreeKey: worktreeKey }
+          : session,
+      ),
     )
   }, [])
 
@@ -601,7 +644,12 @@ export function SessionsProvider({ children }: { children: React.ReactNode }): R
         const session = sessions.find((candidate) => candidate.id === sessionId)
         return session ? (session.panelFolderId ?? session.folderId) : null
       },
+      panelWorktreeOf: (sessionId) =>
+        sessionId === null
+          ? undefined
+          : sessions.find((session) => session.id === sessionId)?.panelWorktreeKey,
       setPanelSource,
+      setPanelWorktree,
       focus,
       create,
       wake,

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { DirEntry, DirEntryKind, FsFailure } from '../types'
-import { ROOT_PATH, joinRelPath, parentOf } from './paths'
+import { joinRelPath, parentOf } from './paths'
 import { t } from '@shared/i18n'
 
 export interface TreeRow {
@@ -22,11 +22,11 @@ interface TreeState {
 }
 
 /** 根目錄自第一幀起就在載入中 —— 於初始狀態表達，而非在 effect 裡同步 setState。 */
-function initialState(folderId: string | null): TreeState {
+function initialState(folderId: string | null, rootPrefix: string): TreeState {
   return {
     children: {},
     expanded: {},
-    loading: folderId ? { [ROOT_PATH]: true } : {},
+    loading: folderId ? { [rootPrefix]: true } : {},
     errors: {},
   }
 }
@@ -74,9 +74,9 @@ function buildRows(state: TreeState, dir: string, depth: number, rows: TreeRow[]
   }
 }
 
-function collectWatchTargets(rows: TreeRow[]): string[] {
+function collectWatchTargets(rows: TreeRow[], rootPrefix: string): string[] {
   // 監看集合恆等於「可見且已展開」的目錄集合，加上永遠展開的根目錄。
-  const targets = [ROOT_PATH]
+  const targets = [rootPrefix]
   for (const row of rows) {
     if (row.expanded) targets.push(row.relPath)
   }
@@ -93,14 +93,20 @@ export interface FileTreeState {
 }
 
 /**
- * 呼叫端須以 `folderId` 為 key 掛載本 hook 的宿主元件 —— 換 folder 等於換一棵樹，
- * 讓 React 重新掛載比用 effect 把狀態清空乾淨（後者會多渲染一次，順序也難以推理）。
+ * 呼叫端須以 **`(folderId, rootPrefix)`** 為 key 掛載本 hook 的宿主元件 —— 換 folder **或換工作
+ * 目錄**都等於換一棵樹，讓 React 重新掛載比用 effect 把狀態清空乾淨（後者會多渲染一次，順序也
+ * 難以推理）。少了 `rootPrefix` 那一半，換工作目錄時初始的「載入中」狀態不會被設。
+ *
+ * **本 hook 內部的位址一律是完整的 folder-relative 路徑，樹根即 `rootPrefix`。** `TreeRow.relPath`
+ * 因此可以直接餵給 `fs.*`、未存變更的鍵、`title` 屬性與反向交叉導覽 —— 剝除前綴是**呈現**那一端
+ * 的事（`paths.ts` 的 `stripRoot`）。`rootPrefix` 為空字串時，這一切退化為改動前的行為。
  */
 export function useFileTree(
   folderId: string | null,
+  rootPrefix: string,
   onOpenFile: (relPath: string) => void,
 ): FileTreeState {
-  const [state, setState] = useState<TreeState>(() => initialState(folderId))
+  const [state, setState] = useState<TreeState>(() => initialState(folderId, rootPrefix))
 
   /** 同一目錄的載入不重複發出；載入期間又被要求重載時，結束後補跑一次。 */
   const inFlight = useRef(new Set<string>())
@@ -173,11 +179,11 @@ export function useFileTree(
 
   const rows = useMemo(() => {
     const collected: TreeRow[] = []
-    buildRows(state, ROOT_PATH, 0, collected)
+    buildRows(state, rootPrefix, 0, collected)
     return collected
-  }, [state])
+  }, [state, rootPrefix])
 
-  const watchTargets = useMemo(() => collectWatchTargets(rows), [rows])
+  const watchTargets = useMemo(() => collectWatchTargets(rows, rootPrefix), [rows, rootPrefix])
   // 以 JSON 當 effect 的相依 key，不用分隔符串接 —— Linux 的檔名可以含換行字元，
   // 用 `join('\n')` 再 `split` 會把一個目錄拆成兩個，對帳集合就算錯了。
   const watchKey = useMemo(() => JSON.stringify(watchTargets), [watchTargets])
@@ -310,8 +316,10 @@ export function useFileTree(
   return {
     rows,
     visibleCount: rows.length,
-    rootLoading: Boolean(state.loading[ROOT_PATH]),
-    rootError: state.errors[ROOT_PATH] ?? null,
+    // 樹根的鍵是 `rootPrefix`，不是 `ROOT_PATH` —— 漏掉這兩行，工作目錄根的「載入中…」與根層
+    // 錯誤訊息會**靜默地永遠不出現**（`FilesPanel` 正在渲染它們）。
+    rootLoading: Boolean(state.loading[rootPrefix]),
+    rootError: state.errors[rootPrefix] ?? null,
     activate,
   }
 }

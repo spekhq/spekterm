@@ -5,6 +5,7 @@ import type {
   GraphData,
   SpecDetailView,
   SpecSummary,
+  WorktreeOption,
 } from '../types'
 import { IpcAdapter, type OpenSpecApi } from './adapter'
 
@@ -141,6 +142,18 @@ export function useWorktreeRoots(folderId: string | null): AsyncData<string[]> {
     (api: OpenSpecApi) => api.getWorktreeRoots(folderId as string),
     [folderId],
   )
+  return useOpenSpecData(folderId, folderId, load)
+}
+
+/**
+ * 該 folder 所屬 repo **可供選擇**的工作目錄（Files 身分的樹根選擇器）。
+ *
+ * 與 `useWorktreeRoots` 並存而非取代它：那個回答「哪些根可用於定位 OpenSpec 內容」（反向交叉
+ * 導覽，邊界外的與該問題無關故省略），這個回答「有哪些工作目錄、各自能不能瀏覽」（邊界外的必須
+ * 在列且標示為不可瀏覽）。兩者同為一份掃描結果的投影，不會分歧。
+ */
+export function useWorktrees(folderId: string | null): AsyncData<WorktreeOption[]> {
+  const load = useCallback((api: OpenSpecApi) => api.getWorktrees(folderId as string), [folderId])
   return useOpenSpecData(folderId, folderId, load)
 }
 

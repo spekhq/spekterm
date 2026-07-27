@@ -145,6 +145,15 @@ export interface MenuItem {
   tone?: 'danger'
   /** 停用而非隱藏 —— 使用者要看得到這個操作存在，只是此刻不可用（例如沒有選取內容時的複製）。 */
   disabled?: boolean
+  /**
+   * 次要說明，置於標籤下方。
+   *
+   * **停用的項目尤其需要它** —— 一個沒有原因的停用項只會讓人以為壞了。這正是「呈現但停用」
+   * 相對於「整筆省略」的價值所在：省略讓使用者無從分辨那是刻意的限制還是應用程式沒看見它。
+   */
+  hint?: string
+  /** React key。標籤可能重複時給它（例如兩個 detached 於同一 commit 的工作目錄）。 */
+  key?: string
 }
 
 interface ContextMenuProps {
@@ -235,7 +244,7 @@ export function ContextMenu({ x, y, items, onClose }: ContextMenuProps): React.J
     >
       {items.map((item) => (
         <button
-          key={item.label}
+          key={item.key ?? item.label}
           type="button"
           role="menuitem"
           disabled={item.disabled}
@@ -258,6 +267,7 @@ export function ContextMenu({ x, y, items, onClose }: ContextMenuProps): React.J
           }`}
         >
           {item.label}
+          {item.hint && <span className="block text-2xs text-ink-faint">{item.hint}</span>}
         </button>
       ))}
     </div>

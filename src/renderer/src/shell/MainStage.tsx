@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Group, Panel, Separator, usePanelRef } from 'react-resizable-panels'
 import { type ContinuationBlock, continuationCommand } from './openspec/continuation'
-import { useChanges } from './openspec/data'
+import { useChanges, useWorktrees } from './openspec/data'
 import { VizOverlay, type VizKind } from './openspec/VizOverlay'
 import type { FileRequest, OpenSpecRequest, OpenSpecTarget } from './openspec/nav'
 import { PanelSwitch } from './side-panel/PanelSwitch'
@@ -10,7 +10,10 @@ import { SidePanel } from './side-panel/SidePanel'
 import { SessionTabs } from './terminal/SessionTabs'
 import { TerminalView } from './terminal/TerminalView'
 import { useSessions } from './terminal/sessions'
-import type { PanelIdentity, SpawnTarget, WorkspaceFolder } from './types'
+import type { PanelIdentity, SpawnTarget, WorkspaceFolder, WorktreeOption } from './types'
+
+/** 穩定的空陣列 —— 每次渲染新造一個會讓下游的依賴比較失效。 */
+const EMPTY_WORKTREES: WorktreeOption[] = []
 
 interface MainStageProps {
   /** rail 的 focused folder —— 「駕駛」那半（header、session 分頁、terminal）。 */
@@ -127,6 +130,14 @@ export function MainStage({ folder, folders }: MainStageProps): React.JSX.Elemen
   const soleActiveChangeForPanel =
     panelChanges && panelChanges.active.length === 1 ? panelChanges.active[0].slug : undefined
 
+  // 側欄來源的工作目錄清單 —— 跨身分導覽要靠它判定「這個檔案屬於哪個工作目錄」。
+  //
+  // **不以 `hasOpenSpec` gate**（design D12）：工作目錄選擇器必須對「有 worktree 但沒有
+  // `openspec/`」的 repo 也出現，否則使用者無從分辨那是刻意的限制還是壞了。代價是那些 folder
+  // 首次進入 Files 身分時走一次掃描 —— 已裁決接受（結果為 per-folder 快取，成本一次性）。
+  const { data: panelWorktreeData } = useWorktrees(panelFolder?.id ?? null)
+  const panelWorktrees = panelWorktreeData ?? EMPTY_WORKTREES
+
   const createSession = useCallback(
     (spawnTarget: SpawnTarget) => {
       if (!focusedFolder) return
@@ -242,15 +253,44 @@ export function MainStage({ folder, folders }: MainStageProps): React.JSX.Elemen
     [focusedId, sessions],
   )
 
-  /** OpenSpec → Files：切到 Files 身分並開啟該檔。 */
+  /** 側欄的工作目錄：Files 身分以哪個工作目錄為樹根。無 focused session 時為預設（folder 自身）。 */
+  const panelWorktreeKey = sessions.panelWorktreeOf(focusedId)
+
+  /** 選擇器選了一個工作目錄。與側欄來源同理 —— 沒有 focused session 就沒地方存這個選擇。 */
+  const changePanelWorktree = useCallback(
+    (worktreeKey: string | undefined) => {
+      if (!focusedId) return
+      sessions.setPanelWorktree(focusedId, worktreeKey)
+    },
+    [focusedId, sessions],
+  )
+
+  /**
+   * OpenSpec → Files：切到 Files 身分並開啟該檔。
+   *
+   * **目標所屬的工作目錄一併切換**（`side-panel-worktree`）—— 否則會把使用者送到一棵不含該檔案
+   * 的樹上，麵包屑與樹的內容自相矛盾。切換在**這裡**完成，不由 `FilesPanel` 收到請求後回呼：
+   * 它是在渲染期間套用請求的，而渲染期間不得呼叫父層的 setState（與 `viewInOpenSpec` 對錨定的
+   * 處理同一條理由）。
+   *
+   * 歸屬以**最長相符根**判定 —— 工作目錄的根可能互為前綴（例如 `…/wt` 與 `…/wt-a`），取第一個
+   * 命中會把後者的檔案誤判為前者的。
+   */
   const openFileFromOpenSpec = useCallback(
     (relPath: string) => {
+      const owner = [...panelWorktrees]
+        .filter((option) => option.relPath !== null && option.relPath !== '')
+        .sort((a, b) => (b.relPath as string).length - (a.relPath as string).length)
+        .find((option) => relPath.startsWith(`${option.relPath}/`))
+
+      if (focusedId) sessions.setPanelWorktree(focusedId, owner?.key)
+
       nonce.current += 1
       setFileRequest({ target: relPath, nonce: nonce.current })
       setIdentity('files')
       expandSidePanel()
     },
-    [expandSidePanel],
+    [expandSidePanel, focusedId, panelWorktrees, sessions],
   )
 
   /**
@@ -374,6 +414,8 @@ export function MainStage({ folder, folders }: MainStageProps): React.JSX.Elemen
               onAnchor={anchorChange}
               continuationBlock={continuationBlock}
               sessionWorktreeKey={displayed?.worktreeKey}
+              panelWorktreeKey={panelWorktreeKey}
+              onSelectWorktree={changePanelWorktree}
               onContinue={continueArtifacts}
               onOpenSessionHere={openSessionInChangeWorktree}
               onOpenFile={openFileFromOpenSpec}

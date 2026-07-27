@@ -66,6 +66,7 @@
   "files": {
     "label": "Files",
     "pathNav": "Path",
+    "backToTree": "Back to file tree",
     "tree": "File tree",
     "unsaved": "Unsaved changes",
     "itemCount_one": "{{count}} item",
@@ -96,6 +97,12 @@
       "forbiddenChars": "The name contains characters that are not allowed (for example / \\ : * ? \" < > |)",
       "trailing": "The name cannot end with a space or a period",
       "reserved": "That is a reserved name on this operating system"
+    },
+    "worktree": {
+      "change": "Change working directory",
+      "outside": "Outside this folder — cannot be browsed here",
+      "unknown": "unknown",
+      "needSession": "Start a session in this repo to switch working directory"
     }
   },
   "viewer": {

@@ -814,6 +814,70 @@ try {
   // 定成一組合法的值，供下面的重啟斷言使用。
   await app.client.evaluate(`window.workspace.settings.setTerminalFont('Fira Code', 15, 1.1)`)
 
+  // ── 單一工作目錄的 git repo 不呈現工作目錄選擇器 ──────────────────────────
+  //
+  // **這一條的載體只有這裡。** `side-panel-worktree` 要求「清單恰有一筆時不呈現選擇器」，而它
+  // 真正防的缺陷是：代表 folder 自身的那一筆若以「合成一筆 + 翻譯其餘各筆」產生，**每一個
+  // folder 即其 repo 主工作目錄的普通 repo**（最常見的情形）都會得到兩筆 —— 第二筆是使用者
+  // 當下所在的位置，卻標著「位於此 folder 之外」。
+  //
+  // 其他探針走不到這條路徑：`probe:files` 的 fixture 非 git（列舉為空陣列），`probe:openspec`
+  // 的 fixture 有三個工作目錄。**`repo-openspec` 是唯一「真 git repo + 恰好一個工作目錄」的
+  // fixture**，於是這裡是那個缺陷唯一會現形的地方。
+  console.log('\nFiles：單一工作目錄不呈現工作目錄選擇器')
+
+  await app.client.evaluate(`(() => {
+    const row = [...document.querySelectorAll('aside[aria-label="${copy('rail.label')}"] div[role="button"]')]
+      .find((el) => el.innerText.includes('repo-openspec'))
+    if (!row) return false
+    row.click()
+    return true
+  })()`)
+  await sleep(300)
+  // **身分 tab 沒有無障礙標籤** —— 它只有 `title` 與文字。而 `panelSwitch.files` 與
+  // `files.label` 的字典值**是同一個字串**，於是以該標籤屬性選取會命中 Files 面板那個
+  // `<section>`（對它 `click()` 什麼都不會發生）。必須以 tablist 限定再取文字。
+  const CLICK_FILES_TAB = `(() => {
+    const tab = [...document.querySelectorAll(
+      '[role="tablist"][aria-label="${copy('panelSwitch.label')}"] button[role="tab"]',
+    )].find((b) => b.innerText.includes(${JSON.stringify(copy('panelSwitch.files'))}))
+    if (!tab) return false
+    if (tab.getAttribute('aria-selected') === 'true') return true
+    tab.click()
+    return true
+  })()`
+
+  await app.client.evaluate(CLICK_FILES_TAB)
+  const filesShown = await pollUntil(
+    app.client,
+    `document.querySelector('[role="tablist"][aria-label="${copy('panelSwitch.label')}"] button[role="tab"][aria-selected="true"]')?.innerText ?? null`,
+    (v) => typeof v === 'string' && v.includes(copy('panelSwitch.files')),
+    8000,
+  )
+  check(results, '（前置）切至 Files 身分', typeof filesShown === 'string', String(filesShown))
+
+  // 樹畫出來了才算數 —— 選擇器與樹同時渲染，只確認 section 存在會在清單抵達前就斷言。
+  await pollUntil(
+    app.client,
+    `document.querySelectorAll('section[aria-label="${copy('files.label')}"] [role="treeitem"]').length`,
+    (n) => n > 0,
+    10_000,
+  )
+  const soloPicker = await app.client.evaluate(
+    `(() => {
+      const btn = document.querySelector(
+        'section[aria-label="${copy('files.label')}"] button[aria-label="${copy('files.worktree.change')}"]',
+      )
+      return btn ? btn.innerText.trim() : null
+    })()`,
+  )
+  check(
+    results,
+    '真 git repo 但只有一個工作目錄時，不呈現工作目錄選擇器',
+    soloPicker === null,
+    String(soloPicker),
+  )
+
   await app.close()
 
   // ── workspace-folders：重啟後還原**使用者排定的順序** ─────────────────────

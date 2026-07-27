@@ -4,12 +4,13 @@ import { t } from '@shared/i18n'
 import { useWorktreeRoots } from '../openspec/data'
 import type { FileRequest, OpenSpecTarget } from '../openspec/nav'
 import { targetOfPath } from '../openspec/nav'
-import type { FsFailure, FsResult, WorkspaceFolder } from '../types'
+import type { FsFailure, FsResult, WorkspaceFolder, WorktreeOption } from '../types'
 import { ConfirmDelete, ContextMenu, type MenuItem, NameDialog } from './dialogs'
 import { FileTree } from './FileTree'
 import { FileViewer } from './FileViewer'
+import { WorktreePicker } from './WorktreePicker'
 import { useDirtyBuffers } from './dirty-buffers'
-import { ROOT_PATH, baseNameOf, joinRelPath, parentOf } from './paths'
+import { ROOT_PATH, baseNameOf, joinRelPath, parentOf, stripRoot } from './paths'
 import { type TreeRow, useFileTree } from './useFileTree'
 
 /** 相對時間會過期。面板開著的時候，每分鐘讓它重算一次。 */
@@ -44,6 +45,7 @@ function describeOperationFailure(failure: FsFailure): string {
 
 /** 穩定的空陣列 —— 每次渲染新造一個會讓下游的依賴比較失效。 */
 const EMPTY_ROOTS: readonly string[] = []
+const EMPTY_WORKTREES: WorktreeOption[] = []
 
 type Dialog =
   | { kind: 'newFile' | 'newDirectory'; parent: string }
@@ -62,6 +64,21 @@ interface FilesPanelProps {
   request?: FileRequest | null
   /** 跳回 OpenSpec 身分。該 folder 沒有 `openspec/` 時為 null —— 那個身分本來就停用。 */
   onViewInOpenSpec?: ((target: OpenSpecTarget) => void) | null
+  /**
+   * 檔案樹的根（`side-panel-worktree`）。空字串 ＝ folder 自身。
+   *
+   * **由呼叫端解析並用於 key** —— 換工作目錄等於換一棵樹，而查表需要一次非同步的清單，
+   * 在這裡解析會讓樹先以 folder 根建起來、清單到達後再整棵換掉。
+   */
+  rootPrefix?: string
+  /** 可供選擇的工作目錄。恰一筆時選擇器不呈現。 */
+  worktrees?: WorktreeOption[]
+  /** 當前選定者的識別碼；`undefined` ＝ folder 自身。 */
+  worktreeKey?: string
+  /** 使用者經選擇器切換工作目錄。 */
+  onSelectWorktree?: (worktreeKey: string | undefined) => void
+  /** 有 focused session 才能改工作目錄（per-session 狀態）。 */
+  canSelectWorktree?: boolean
 }
 
 /**
@@ -81,6 +98,11 @@ export function FilesPanel({
   folder,
   request = null,
   onViewInOpenSpec = null,
+  rootPrefix = ROOT_PATH,
+  worktrees = EMPTY_WORKTREES,
+  worktreeKey,
+  onSelectWorktree,
+  canSelectWorktree = false,
 }: FilesPanelProps): React.JSX.Element {
   const { t } = useTranslation()
 
@@ -123,7 +145,21 @@ export function FilesPanel({
   const folderId = folder?.id ?? ''
 
   const openFile = useCallback((relPath: string) => setOpenPath(relPath), [])
-  const tree = useFileTree(folder?.id ?? null, openFile)
+  const tree = useFileTree(folder?.id ?? null, rootPrefix, openFile)
+
+  /**
+   * **使用者主動**切換工作目錄 —— 關閉開啟中的檔案，回到樹。
+   *
+   * 觸發點是選擇器的選取事件，**不是工作目錄狀態的變更**：跨身分導覽也會切換工作目錄，而它
+   * 緊接著就要開一個檔案，兩者若共用觸發點會變成「開了又關」（design D7）。
+   */
+  const selectWorktree = useCallback(
+    (key: string | undefined) => {
+      setOpenPath(null)
+      onSelectWorktree?.(key)
+    },
+    [onSelectWorktree],
+  )
 
   const closeMenu = useCallback(() => setMenu(null), [])
   const closeDialog = useCallback(() => {
@@ -207,7 +243,9 @@ export function FilesPanel({
   const menuItems = ((): MenuItem[] => {
     if (!menu) return []
     const row = menu.row
-    const parent = row === null ? ROOT_PATH : row.kind === 'directory' ? row.relPath : parentOf(row.relPath)
+    // 根層的新增以**當前樹根**為目標，不是 folder 根 —— 否則選定工作目錄後，於根新增的檔案會
+    // 落在當下可見的樹之外，使用者看到的是「按了沒反應」（`file-operations` 的 delta）。
+    const parent = row === null ? rootPrefix : row.kind === 'directory' ? row.relPath : parentOf(row.relPath)
 
     const items: MenuItem[] = [
       {
@@ -252,23 +290,40 @@ export function FilesPanel({
   return (
     <section aria-label={t('files.label')} className="relative flex h-full flex-col overflow-hidden">
       <header className="flex items-center gap-2 border-b border-hairline px-3 py-2 text-sm">
-        <nav aria-label={t('files.pathNav')} className="min-w-0 flex-1 truncate text-ink-faint">
-          <span>{folder.name}</span>
+        <nav
+          aria-label={t('files.pathNav')}
+          className="flex min-w-0 flex-1 items-center truncate text-ink-faint"
+        >
+          <span className="shrink-0">{folder.name}</span>
           <span className="px-1">/</span>
+          {/* 工作目錄在概念上正介於 repo 與檔案路徑之間 —— 放在這裡，它自己就說明了
+              「路徑自這裡算起」。恰一筆時 `WorktreePicker` 回 null，麵包屑退回原樣。 */}
+          <WorktreePicker
+            worktrees={worktrees}
+            selectedKey={worktreeKey}
+            canSelect={canSelectWorktree}
+            onSelect={selectWorktree}
+          />
+          {worktrees.length > 1 && <span className="px-1">/</span>}
           {openPath === null ? (
             <span className="text-ink">files</span>
           ) : (
             <>
+              {/* `aria-label` 不只是無障礙 —— 麵包屑裡現在有兩顆按鈕（工作目錄選擇器排在前面），
+                  「nav 裡的第一個 button」不再指向這一顆。 */}
               <button
                 type="button"
+                aria-label={t('files.backToTree')}
                 onClick={() => setOpenPath(null)}
-                className="text-ink-dim underline decoration-dotted underline-offset-2 hover:text-accent"
+                className="shrink-0 text-ink-dim underline decoration-dotted underline-offset-2 hover:text-accent"
               >
                 files
               </button>
               <span className="px-1">/</span>
-              <span className="text-ink" title={openPath}>
-                {openPath}
+              {/* 顯示剝掉樹根前綴，**`title` 留完整路徑** —— 它同時是探針的選擇器，而對使用者
+                  而言 title 的作用本來就是「看完整位置」，兩邊在此不衝突（design D6）。 */}
+              <span className="truncate text-ink" title={openPath}>
+                {stripRoot(rootPrefix, openPath)}
               </span>
             </>
           )}

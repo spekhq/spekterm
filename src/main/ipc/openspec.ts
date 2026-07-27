@@ -9,6 +9,7 @@ import {
   type SpecDetailView,
   type SpecSummary,
   type SpecVersionView,
+  type WorktreeOption,
 } from '../openspec-service'
 import type { FolderLookup } from '../workspace-store'
 import type { FsResult } from './fs'
@@ -22,6 +23,7 @@ export const OPENSPEC_CHANNELS = {
   getChange: 'workspace:openspec:getChange',
   getGraphData: 'workspace:openspec:getGraphData',
   getWorktreeRoots: 'workspace:openspec:getWorktreeRoots',
+  getWorktrees: 'workspace:openspec:getWorktrees',
   /** 主行程 → renderer：該 folder 的 OpenSpec 結構已變更（帶 folderId）。 */
   changed: 'workspace:openspec:changed',
 } as const
@@ -153,5 +155,11 @@ export function registerOpenSpecHandlers(store: FolderLookup): void {
     OPENSPEC_CHANNELS.getWorktreeRoots,
     (event, folderId: string): Promise<FsResult<string[]>> =>
       toResult(() => serviceFor(store, event.sender).getWorktreeRoots(folderId)),
+  )
+
+  ipcMain.handle(
+    OPENSPEC_CHANNELS.getWorktrees,
+    (event, folderId: string): Promise<FsResult<WorktreeOption[]>> =>
+      toResult(() => serviceFor(store, event.sender).getWorktrees(folderId)),
   )
 }
