@@ -9,9 +9,9 @@ side panel 的 Files 身分所呈現的檔案樹。核心要求不是「顯示�
 ### Requirement: Files 身分呈現當前 folder 的檔案樹
 
 side panel 的 Files 身分 SHALL 呈現**側欄來源** repo 的檔案樹（見 `side-panel-source`），根目錄
-預設展開。此處的「當前 folder」即**側欄來源** —— 它是 focused session 的側欄來源，SHALL 可與
-rail 的 focused folder 不同（沒有任何 session 時退回 focused folder）。每個項目 SHALL 呈現其名稱，
-並以可辨識的方式區分目錄與檔案。
+預設展開。此處的「當前 folder」即**側欄來源** —— 它是 **rail 上選中之項目的側欄座標**所指的 repo，
+SHALL 可與 rail 的 focused folder 不同，且 SHALL NOT 以「該 folder 是否已有 session」為前提。
+每個項目 SHALL 呈現其名稱，並以可辨識的方式區分目錄與檔案。
 
 樹的**根**為該側欄來源 repo 的**當前選定工作目錄**（見 `side-panel-worktree`），而非恆為 folder
 根目錄。folder 自身是其預設值。隨之，樹上呈現的路徑、麵包屑的尾段、以及本能力其餘要求中的
@@ -30,8 +30,14 @@ rail 的 focused folder 不同（沒有任何 session 時退回 focused folder�
 
 #### Scenario: 側欄來源指向另一個 repo
 
-- **WHEN** focused session 屬於 repoA，其側欄來源被設為 repoB，使用者切換至 Files 身分
+- **WHEN** rail 上選中的 folder 為 repoA，其側欄來源被設為 repoB，使用者切換至 Files 身分
 - **THEN** Files 身分呈現 repoB 的檔案樹，而非 repoA 的
+
+#### Scenario: 尚無 session 的 folder 同樣呈現其側欄來源
+
+- **WHEN** 使用者選中一個尚未建立任何 session 的 folder，將其側欄來源設為 repoB 並切換至
+  Files 身分
+- **THEN** Files 身分呈現 repoB 的檔案樹
 
 #### Scenario: 選定工作目錄後根隨之改變
 

@@ -7,6 +7,7 @@ import { StatusBar } from './StatusBar'
 import { WorkspaceRail } from './WorkspaceRail'
 import { DirtyBuffersProvider } from './files/dirty-buffers'
 import { OpenSpecProvider } from './openspec/data'
+import { PanelCoordinateProvider } from './panel-coordinate'
 import { SessionsProvider } from './terminal/sessions'
 import { useWorkspaceFolders } from './useWorkspaceFolders'
 
@@ -27,6 +28,12 @@ export function AppShell(): React.JSX.Element {
     <PreferencesProvider>
       <DirtyBuffersProvider folders={folders}>
         <SessionsProvider>
+          {/*
+            側欄座標的 Provider 與 SessionsProvider 同一層 —— 它有兩個消費者（MainStage 與
+            StatusBar），兩者都在這一層之下。座標隸屬於 rail 的項目而非 session，但它與 session
+            一樣必須活過「切換 folder」，因此掛在同一個高度。
+          */}
+          <PanelCoordinateProvider>
           <OpenSpecProvider>
             {/*
               必須在 `SessionsProvider` 之內（它要 `useSessions()`），而 `AppShell` 本身正是渲染
@@ -80,6 +87,7 @@ export function AppShell(): React.JSX.Element {
             <StatusBar folders={folders} selectedId={selectedId} />
             </div>
           </OpenSpecProvider>
+          </PanelCoordinateProvider>
         </SessionsProvider>
       </DirtyBuffersProvider>
     </PreferencesProvider>

@@ -11,6 +11,15 @@ export type FsResult<T> = { ok: true; value: T } | FsFailure
 
 export type WorkspaceFolder = Awaited<ReturnType<Window['workspace']['folders']['list']>>[number]
 
+/**
+ * 側欄座標：rail 上的每個項目各記著「我站在這裡時，側欄看什麼」（`side-panel-source`）。
+ *
+ * 與其他 DTO 同樣**自 preload 推導** —— 主行程日後在座標上加維度，會自己流穿到這裡。
+ */
+export type PanelCoordinates = Awaited<ReturnType<Window['workspace']['panel']['get']>>
+
+export type PanelCoordinate = PanelCoordinates[string]
+
 export type DirEntry = Extract<
   Awaited<ReturnType<WorkspaceFs['listDir']>>,
   { ok: true }

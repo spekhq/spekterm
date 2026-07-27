@@ -78,7 +78,6 @@ interface FilesPanelProps {
   /** 使用者經選擇器切換工作目錄。 */
   onSelectWorktree?: (worktreeKey: string | undefined) => void
   /** 有 focused session 才能改工作目錄（per-session 狀態）。 */
-  canSelectWorktree?: boolean
 }
 
 /**
@@ -102,7 +101,6 @@ export function FilesPanel({
   worktrees = EMPTY_WORKTREES,
   worktreeKey,
   onSelectWorktree,
-  canSelectWorktree = false,
 }: FilesPanelProps): React.JSX.Element {
   const { t } = useTranslation()
 
@@ -301,7 +299,6 @@ export function FilesPanel({
           <WorktreePicker
             worktrees={worktrees}
             selectedKey={worktreeKey}
-            canSelect={canSelectWorktree}
             onSelect={selectWorktree}
           />
           {worktrees.length > 1 && <span className="px-1">/</span>}

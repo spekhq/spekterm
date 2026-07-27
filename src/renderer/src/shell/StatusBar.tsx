@@ -2,6 +2,7 @@ import { useTranslation } from 'react-i18next'
 import { useDirtyBuffers } from './files/dirty-buffers'
 import { useChanges, useSpecs } from './openspec/data'
 import { useSessionStatus } from './useSessionStatus'
+import { usePanelCoordinate } from './panel-coordinate'
 import { useSessions } from './terminal/sessions'
 import { sessionTitle, statusTitle } from './terminal/session-badge'
 import type { SessionStatus, WorkspaceFolder } from './types'
@@ -29,28 +30,35 @@ export function StatusBar({
 }): React.JSX.Element {
   const { t } = useTranslation()
   const sessions = useSessions()
+  const panel = usePanelCoordinate()
 
   const folder = folders.find((candidate) => candidate.id === selectedId) ?? null
   const focusedId = folder ? sessions.focusedIdFor(folder.id) : null
   const focused = focusedId ? sessions.all().find((s) => s.id === focusedId) : undefined
 
   // 側欄來源 —— 指向別的 repo 時才標示（相等是常態，標它等於每次都重複同一個值）。
-  const panelSourceId = sessions.panelSourceOf(focusedId)
+  // **座標的鍵是 rail 上選中的 folder，不是 focused session**（`side-panel-source`）。
+  const coordinate = panel.coordinateOf(folder?.id ?? null)
   const panelSource =
-    panelSourceId && focused && panelSourceId !== focused.folderId
-      ? (folders.find((candidate) => candidate.id === panelSourceId) ?? null)
+    coordinate.sourceFolderId && folder && coordinate.sourceFolderId !== folder.id
+      ? (folders.find((candidate) => candidate.id === coordinate.sourceFolderId) ?? null)
       : null
 
   /**
-   * 錨定的 change 與其進度。
+   * 錨定的 change 與其進度。解析方式與側欄一致（明確錨定 → 該 repo 恰有一個 active change）。
    *
-   * 解析方式與側欄一致（明確錨定 → 該 repo 恰有一個 active change），**但不含側欄那條「沒有
-   * session 時的 viewing 狀態」** —— 沒有 session 時這條列本來就是空狀態，兩者不會互相矛盾。
+   * **錨定隸屬於 rail 上選中的項目，不是該 session** —— 於是同一個 folder 的多個 session 在此
+   * 呈現同一個 change。那不構成歧義：這條列的其餘欄位（標籤、執行狀態、工作目錄）本就逐
+   * session 而異，而 change 回答的是「這個 repo 我正在看哪一個」。
+   *
+   * **沒有 focused session 時整條列仍是空狀態** —— 座標在無 session 時依然存在，但這條
+   * requirement 呈現的是「focused session 的脈絡」，少了 session 就沒有脈絡可言。以
+   * `focused &&` 保持那個前提（`status-bar`）。
    */
-  const anchorSource = panelSource?.id ?? focused?.folderId ?? null
+  const anchorSource = panelSource?.id ?? folder?.id ?? null
   const { data: changes } = useChanges(focused && anchorSource ? anchorSource : null)
   const soleActive = changes?.active.length === 1 ? changes.active[0].slug : null
-  const anchored = (focusedId ? sessions.anchoredChangeOf(focusedId) : null) ?? soleActive
+  const anchored = (focused ? (coordinate.anchoredChange ?? null) : null) ?? soleActive
   const anchoredInfo = anchored ? changes?.active.find((c) => c.slug === anchored) : undefined
   const stats = anchoredInfo?.taskStats ?? null
 

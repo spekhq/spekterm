@@ -8,6 +8,7 @@ import { registerClipboardHandlers } from './ipc/clipboard'
 import { registerFsHandlers } from './ipc/fs'
 import { registerFolderHandlers } from './ipc/folders'
 import { registerOpenSpecHandlers } from './ipc/openspec'
+import { registerPanelHandlers } from './ipc/panel'
 import { registerSettingsHandlers } from './ipc/settings'
 import { registerShellHandlers } from './ipc/shell'
 import { registerTerminalHandlers } from './ipc/terminal'
@@ -15,6 +16,7 @@ import { applyNavigationGuards } from './navigation'
 import { formatScanSummary, scanRepo } from './openspec'
 import { guardUnsavedChanges } from './unsaved-changes'
 import { configureAgentStatus } from './agent-status'
+import { PanelStore } from './panel-store'
 import { PreferencesStore } from './preferences-store'
 import { SessionStore } from './session-store'
 import { WorkspaceStore } from './workspace-store'
@@ -114,6 +116,13 @@ void app.whenReady().then(() => {
   const preferencesStore = new PreferencesStore(join(app.getPath('userData'), 'preferences.json'))
   preferencesStore.load()
 
+  // 側欄座標（來源 repo／工作目錄／錨定的 change）。**刻意不與 folder 清單同居於
+  // `workspace.json`**：那份檔案的解析是 all-or-nothing，而它損毀的代價是「使用者失去所有 repo」
+  // —— 一個偏好性質的欄位不該有機會造成那個結果；而且錨定一次 change 就要重寫一次那份使用者
+  // 精心維護的清單（見本 change 的 design D2）。
+  const panelStore = new PanelStore(join(app.getPath('userData'), 'panel.json'))
+  panelStore.load()
+
   // agent 狀態橋接的落點（payload 與注入用的 settings 檔）。與偏好同在 userData 之下。
   configureAgentStatus(app.getPath('userData'))
 
@@ -126,7 +135,7 @@ void app.whenReady().then(() => {
   // 否則 production 政策永遠不會被任何 probe 覆蓋（見 content-security-policy.ts）。
   applyContentSecurityPolicy(session.defaultSession, Boolean(process.env.ELECTRON_RENDERER_URL))
 
-  registerFolderHandlers(store)
+  registerFolderHandlers(store, panelStore)
   registerFsHandlers(store)
   registerOpenSpecHandlers(store)
   registerShellHandlers()
@@ -134,6 +143,7 @@ void app.whenReady().then(() => {
   registerTerminalHandlers(store, sessionStore, preferencesStore)
   registerClipboardHandlers()
   registerSettingsHandlers(preferencesStore)
+  registerPanelHandlers(panelStore)
 
   createWindow(dirty)
 

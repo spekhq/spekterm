@@ -229,6 +229,34 @@ files / …`）、per-session 的選擇與落盤、邊界外工作目錄的**呈
 `npm test` 357/357、`probe:openspec` 344/344、`probe:workspace` 全綠。詳見下文「Files 的工作目錄」
 ——那裡記著六個**會靜默失敗**的實測踩雷，其中兩個 CRITICAL 是獨立稽核抓到的。
 
+`panel-coordinate-per-folder`（**不屬於任何 Phase**）是**第八次 dogfooding 的第二個發現**——「沒有
+開 session 時，Files 的 repo 選擇器與工作目錄選擇器都完全無法使用」。根因寫在 `side-panel-source`
+的規格裡：「沒有任何 session 時，側欄來源 SHALL **退回** rail 的 focused folder」——「退回」是一個
+**唯讀的 fallback**，於是兩個選擇器都被 gate 在 `focusedId !== null`，字典裡甚至有一句
+`"Start a session in this repo to switch working directory"` 在向使用者解釋這個限制。**而側欄是一個
+「閱讀」工具，不該需要先開一個 terminal 才能用。**
+
+它把側欄座標的三個維度 —— **來源 repo、工作目錄、錨定的 change** —— 一併自 per-session 改基為
+**per-folder**（隸屬於 rail 上的項目），落盤自 `sessions.json` 搬到新的 **`panel.json`**。
+
+**最有力的證據是 codebase 自己給的**：`MainStage.tsx` 有一個 per-folder 的 `viewing` map，註解自陳
+「錨定無處可去，**改由 folder 持有**」—— 三個維度中已經有一個自發長出 per-folder 的影子，只因為
+per-session 回答不了「沒有 session」。那不是補丁，是模型錯了的徵狀，本 change 把它刪掉了。
+
+**per-session 的假設滲透得比初估更深**：proposal 初稿列了 5 份 delta，逐條盤點後是 **9 份**。其中
+`terminal-sessions` 有一整條「session 可錨定一個 change」（5 個 scenario）—— 那是「錨定為
+per-session」的**根**；而它與 `session-persistence` **互相矛盾且是既有的**（前者寫「錨定關係 SHALL
+NOT 持久化」，後者有一條「錨定的 change 一併回來」的 scenario ——`session-restore` 加了持久化卻沒
+回寫），移除它順手清掉那個矛盾。
+
+**一個由使用者拍板的行為退步**：衍生預設（「該 repo 恰有一個 active change 就顯示它」）由「半黏著」
+統一為**動態** —— 於是 agent 建出第二個 active change 時，側欄會**讓位給空狀態**。判準是「規則數」
+與「需不需要額外裁決」：動態是一條規則、零額外裁決；黏著需要「何時固化」，而那個問題沒有自明的答案。
+
+`npm test` 370/370、`probe:openspec` 390/390、`probe:shell` 19/19、`test:all` 8/9（唯一紅燈為
+issue #8 的既有偶發，單獨重跑確認）。詳見下文「側欄座標」——那裡記著五個實測踩雷，其中三個是
+**我自己造成、且分別由不同一道防線抓到的**。
+
 尚未開始：打包（Phase 6）、handoff（Phase 7+）。**session 常駐**（讓 pty 活過 app 的生命）已排入
 路線圖但**刻意不做** —— 見 `docs/PRD.md` §11 的「session 常駐」，那裡記著 tmux 與自寫 daemon 的取捨。
 
@@ -291,7 +319,7 @@ npm run probe:workspace # 驗收 workspace-folders / filesystem-access / workspa
 npm run probe:files     # 驗收 file-explorer / file-viewer / 編輯 / 存檔 / 衝突 / CRUD / 導航防護 / 編輯器 worker / CSP（遠端圖片可載入、script-src 僅 self、注入點對 file:// 生效，dev + build 兩模式）
 npm run probe:terminal  # 驗收 terminal-sessions + session-persistence + GPU renderer（pty 雙向／cwd／resize／多開／關分頁・reload・關窗皆不留孤兒；**GPU renderer 只給顯示中的終端**（代理判準：active 有 canvas 且無 .xterm-rows；隱藏的不得持有 canvas）、關掉 GPU 加速退回 DOM 且不遺失內容、開回來又是 GPU；**觀測管道已 renderer-agnostic** —— 不再從 DOM 讀終端內容：pty 行為走**讀檔**、畫面走**產品的複製路徑**、字級走 **pty 的 cols**；`PROBE_ONLY=<段落>[:<模式>]` 可只跑一部分（迭代用，不設就跑全部）；剪貼簿畸形輸入防禦；**右鍵 gate 在 mouse reporting**（stub 送 DECSET 1000 時右鍵讓位給程式、關閉後恢復選單 —— 含對照組）；OSC 標題與命名權；**關掉 app 再開後 session 原樣重建**、只喚醒被顯示的那一個、claude 以 --resume 續接同一個對話、續接失敗自癒為全新對話、shell 於最後 cwd 重生並重播畫面、kill -9 後快照仍在、損毀韌性、被竄改的識別碼不進命令 —— 皆以 PATH 上的 stub claude 承載，dev + build 兩模式）
 npm run probe:keyboard  # 驗收 keyboard-navigation（Ctrl+Tab 切 session／Ctrl+↑↓ 切 repo／位置序非 MRU／按鍵不流進 pty／編輯器與對話框的行為 —— 對話框的抑制以 session 命名／files／**終端字型設定**三種各驗一次；**Shift+↑↓ 排 repo、Shift+←→ 排 session** —— 端點不循環、移動後仍選中／focused、終端持有焦點時仍生效且按鍵不進 pty、**編輯器持有焦點時 Shift+→ 仍是文字選取**，dev + build 兩模式）
-npm run probe:openspec  # 驗收 openspec-data-access / openspec-panel / worktree-aggregation（兩個視圖／兩棵樹／artifact 分頁／agent 改檔即更新／錨定／交叉導覽／Graph・Timeline 的 overlay；**續寫入口**的呈現條件與四種停用情形、**選單選取後關閉**；**worktree 聚合** —— worktree 裡的 change 出現在側欄且不在主工作目錄底下、來源徽章（main 不標示）、邊界內外的檔案導覽入口、Timeline 依 topic 分組；**反向導覽** —— worktree 內的檔案跳得回 OpenSpec（一趟完整往返）、worktree 內的 spec 檔案跳到該 topic 且標示來源、`docs/openspec/changes/<slug>/` 之下的誘餌**不**呈現入口（帶結構那一層才有鑑別力）、執行期間新建的 worktree 進得了根清單，dev + build 兩模式）
+npm run probe:openspec  # 驗收 openspec-data-access / openspec-panel / worktree-aggregation / side-panel-source（**尚無 session 的 folder，來源與工作目錄兩個選擇器皆可用、且錨定得了 change** —— 本 change 的核心驗收，排在探針最前段以確保「尚無 session」這個前置成立；**座標跨 session 共用**（三個維度都先設成非預設值才切 session，否則舊實作也會通過）；**座標跨重建還原**（來源／錨定各一條，工作目錄那一維由 Files 段落承擔）；**衍生預設隨 active change 數量重新解析**（專屬 fixture repo —— 那一段污染的是磁碟，走 UI 的還原助手救不回來）；兩個視圖／兩棵樹／artifact 分頁／agent 改檔即更新／錨定／交叉導覽／Graph・Timeline 的 overlay；**續寫入口**的呈現條件與四種停用情形、**選單選取後關閉**；**worktree 聚合** —— worktree 裡的 change 出現在側欄且不在主工作目錄底下、來源徽章（main 不標示）、邊界內外的檔案導覽入口、Timeline 依 topic 分組；**反向導覽** —— worktree 內的檔案跳得回 OpenSpec（一趟完整往返）、worktree 內的 spec 檔案跳到該 topic 且標示來源、`docs/openspec/changes/<slug>/` 之下的誘餌**不**呈現入口（帶結構那一層才有鑑別力）、執行期間新建的 worktree 進得了根清單，dev + build 兩模式）
 npm run probe:native    # 驗收 native-module-toolchain（Electron 主行程載入 node-pty + spawn pty）
 npm run probe:core      # 驗收 spek-core-integration（主行程掃描 OpenSpec，且不開 TCP 埠）
 npm run probe:identity  # 驗收 app-identity（productName／appId／userData 路徑／視窗標題）
@@ -553,6 +581,10 @@ org 名**不是**凍結身分的一部分 —— repo 改名與 transfer 皆自�
 - 使用 `/openspec-new-change` 或 `/opsx:new` 建立新的 change。
 - 實作完成後使用 `/openspec-verify-change` 驗證，再用 `/openspec-archive-change` 封存。
 - **Archive 時必須**：更新相關文件（CLAUDE.md、README 等若有影響），並建立 git commit。
+- **Archive 時 `tasks.md` 必須全部打勾** —— 做完，或**明確轉為 issue** 並把那一條改寫成
+  「本 change 不做，已轉為 issue #N」再打勾。**一個帶著未打勾方框的已封存 change，等於宣稱
+  自己完成了卻沒有**，而那些缺口從此不在任何工作清單上（archive 目錄不會有人再去翻）。
+  「已知的缺口」與「被追蹤的缺口」是兩件事，前者只活在寫下它的人的腦子裡。
 
 ### 路線圖與 change 的對應
 
@@ -707,6 +739,18 @@ org 名**不是**凍結身分的一部分 —— repo 改名與 transfer 皆自�
   （「兩身分共用同一來源」的作用域**明確化為 repo 維度**）。**`filesystem-access` 一條未改** ——
   切根在定址上只是換前綴。與 issue #5 的關係見該 change 的 proposal（不合併，但欄位命名為側欄
   來源的維度而非 Files 專屬，#5 到來時是擴充消費者）。詳見下文「Files 的工作目錄」。
+
+- **側欄座標改基為 per-folder** — `panel-coordinate-per-folder`（**不屬於任何 Phase**）：第八次
+  dogfooding 的第二個發現。三個維度（來源 repo／工作目錄／錨定的 change）自 per-session 改基到
+  **rail 的項目**上，落盤自 `sessions.json` 搬到 **`panel.json`**（**刻意不與 folder 清單同居** ——
+  `parseWorkspace` 是 all-or-nothing 且它損毀的代價是「失去所有 repo」，而錨定一次 change 就要重寫
+  一次那份清單）。九份 delta：`side-panel-source`（升格為座標的 umbrella，+2 ADDED）、
+  `terminal-sessions`（**REMOVED** 整條「session 可錨定一個 change」）、`openspec-panel`、
+  `side-panel-worktree`、`session-persistence`、`artifact-continuation`、`status-bar`、
+  `file-explorer`、`openspec-data-access`。**`filesystem-access` 一條未改。** 與 issue #5 的關係：
+  鍵刻意措辭為「rail 項目的識別碼」（今日等於 folder id），#5 是**擴充鍵空間**而非重做；且
+  per-folder 的模型順帶回答了 #5 自陳未解的那個問題（**rail 選中 worktree ＝ 設定工作目錄維度，
+  不是 repo 維度** ⇒ OpenSpec 維持聚合、Files 以該 worktree 為根）。詳見下文「側欄座標」。
 
 - Phase 6 打包與發佈，Phase 7+ 建立護城河（handoff）。**session 常駐**已排入路線圖但刻意不做
   （PRD §11）。
@@ -2625,6 +2669,85 @@ folder-relative 前綴。兩者並存的理由：
   `aria-label` 是身分切換器的字串、不是 OpenSpec 面板的，`IDENTITY` 於是回 `null`。
 - 另外 persist 有 **500ms 的 debounce**，reload 太快會把這次選擇丟掉 —— 而那個失敗與「持久化整個
   沒做」長得一模一樣。
+
+## 側欄座標（`panel-coordinate-per-folder`）
+
+三個維度（來源 repo／工作目錄／錨定的 change）隸屬於 **rail 上的項目**，不隸屬於任何 session；
+落盤於 `panel.json`。以下五條全部是實測，其中三條是**我自己造成、而分別由不同一道防線抓到的**
+—— 那個分佈本身就是這一節的重點。
+
+### 移除一個欄位，不等於它不會再被寫進磁碟
+
+`session-persistence` 新增了一條負向要求「側欄座標 SHALL NOT 由 session 持久化」。我以為把三個欄位
+自 `PersistedSession` 移除就夠了 —— **不夠**：`SessionStore.replace()` 是
+
+```ts
+next.push({ ...entry, claudeSessionId: …, cwd: … })   // renderer 送什麼就存什麼
+```
+
+只檢查 `isUuid(entry.id)`，其餘**原樣展開**。於是一個過期的 renderer（或一次沒清乾淨的重構）送來
+那三個鍵，它們照樣會被寫進 `sessions.json`。
+
+**是新加的負向守衛紅了才發現的** —— 而那條守衛正是為了這條 requirement 才寫的。已改為逐欄位白名單。
+**「不接受某個東西」要由結構保證，不是由「沒有人再送它」保證。**
+
+> 同一個病在 `panel-store` 是**獨立稽核**先指出來的（「落盤不含路徑」是一條關於磁碟內容的 SHALL，
+> 而驗證只發生在讀取端 ⇒ 那條 SHALL 沒有人負責，且任何「寫一份合法值再讀回來」的測試都會通過）。
+> 兩處同源，一處由稽核抓到、一處由測試抓到 —— **驗證的價值在於它們互不重疊。**
+
+### 補一條 scenario 與覆蓋一條 scenario 是兩個動作
+
+spec 稽核階段我抓到 `side-panel-source` 漏了「錨定的 change 跨重啟還原」，親手補進去；**實作階段
+卻沒有回頭覆蓋它**。它躲過了 `openspec validate --strict`（scenario 存在且格式合法）、躲過了我自己
+寫的 header／scenario 稽核腳本（那支只比對 delta 與主 spec，不看驗收），也躲過了 384/384 的探針
+全綠（沒有人在看那條）。是 `/opsx:verify` 抓到的。
+
+**同一個形狀在這個 repo 是第三次**：`session-restore` 的休眠提示（spec 有 scenario、design 有交代、
+實作零覆蓋）、`worktree-reverse-navigation` 的「design 寫『由單元測試承擔』而那條測試沒寫」。
+**而這一次是在寫下那兩條教訓之後犯的** —— 所以「記得要小心」顯然不是機制。
+
+**能結構性擋住它的做法**：稽核腳本除了比對 delta 與主 spec，還應對**每一條新增的 scenario** 要求
+一個對應的驗收指認（哪支探針、哪條斷言、或明寫「不覆蓋，理由是…」）。
+
+### 探針裡的變數遮蔽，會偽裝成產品的 bug —— 而且非常有說服力
+
+D9 的驗收紅了四輪。`runMode` 的 `try` 區塊裡早就有
+
+```js
+const derived = await pollUntil(app.client, ANCHORED_SLUG, …)   // 值是 'solo-change'
+```
+
+它**遮蔽**了函式頂端解構出來的 fixture 路徑，於是 `join(derived, …)` 變成相對路徑，檔案被寫進了
+**repo 的工作目錄**（`solo-change/openspec/changes/…`），fixture 裡什麼都沒變。
+
+**我連續提出三個假設，每一個都言之成理且有旁證**：chokidar 初次掃描的窗口（單元測試裡真的有一個
+`READY_MS` 常數）、新目錄看不見、inotify instance 耗盡（`max_user_instances` 真的只有 128、本機已
+用掉 97）。三輪探針（約 30 分鐘）全花在懷疑產品，**而答案在探針行程裡一行 `existsSync` 就有**。
+
+CLAUDE.md 早就有「把懷疑的中間狀態變成獨立的斷言」這條。我把它用在了下游（拆成「資料更新了嗎／
+視圖重解析了嗎」），**卻沒有回頭套用到最上游的前置條件**（「檔案到底寫出去了嗎」）。那條前置斷言
+已補進探針。**診斷要往下走一層，不要在最貴的那一層重試。**
+
+### `watcher.on('error', () => {})` 使「watcher 建不起來」與「檔案沒變」無法區分
+
+追查上一條時撿到的，**與本 change 無關但是真的**：`openspec-service.ts` 對 watcher 的錯誤是靜默
+吞掉的，而 `inotify` 的 `max_user_instances` 是 **per-user 的 128**（不是 per-process），app 每監看
+一個 folder／工作目錄／檔案樹就吃一個。
+
+後果：**workspace 加夠多 repo 之後，側欄可能安靜地停止更新，而且沒有任何跡象。** 已開為獨立議題 ——
+要不要降級為 polling、要不要呈現給使用者，各自需要論證，不宜順手改。
+
+### 這個 repo 沒有 prettier
+
+只有 eslint（`npm run lint`）。我順手跑了一次 `npx prettier --write`，它用預設值把兩個檔案改成
+**分號 + 雙引號**（repo 的風格是無分號 + 單引號）。已 `git checkout` 還原並手寫重來。
+**動格式之前先確認 repo 用什麼工具** —— `package.json` 沒有 `prettier` 這個 key，也沒有設定檔。
+
+### 順帶：`aria-label` 是選擇器（又一次，這次是反向驗證）
+
+本 change 改了三處文案（`panelSource.foreign`／`backToOwn`、`openspec.continueBlocked.foreignSource`
+的「session repo」→「selected repo」）並刪掉 `files.worktree.needSession`。**探針零改動即全綠** ——
+因為六處選擇器全部走 `copy()` 自字典取字串。這條紀律在這裡是以「什麼都沒發生」的形式被驗證的。
 
 ## 混排字型的列要釘住行框（`leading-none`）
 

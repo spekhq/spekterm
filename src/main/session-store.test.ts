@@ -5,6 +5,7 @@ import path from 'node:path'
 import { afterEach, beforeEach, describe, it } from 'node:test'
 import {
   SCROLLBACK_MAX_BYTES,
+  type RendererSession,
   SessionStore,
   clampScrollback,
   isUuid,
@@ -115,22 +116,6 @@ describe('parseSessions', () => {
     assert.equal(parsed?.[0].cwd, undefined)
   })
 
-  it('側欄來源（panelFolderId）被保留；空字串與非字串丟成 undefined', () => {
-    const parsed = parseSessions(
-      JSON.stringify({
-        version: 1,
-        sessions: [
-          { id: UUID_A, folderId: 'f1', spawnTarget: 'shell', ordinal: 1, panelFolderId: 'f2' },
-          { id: UUID_B, folderId: 'f1', spawnTarget: 'shell', ordinal: 2, panelFolderId: '' },
-          { id: UUID_C, folderId: 'f1', spawnTarget: 'shell', ordinal: 3, panelFolderId: 123 },
-        ],
-      }),
-    )
-    assert.equal(parsed?.[0].panelFolderId, 'f2')
-    assert.equal(parsed?.[1].panelFolderId, undefined)
-    assert.equal(parsed?.[2].panelFolderId, undefined)
-  })
-
   /**
    * 工作目錄識別碼是 core 算的路徑 sha1 前 8 碼。
    *
@@ -155,60 +140,6 @@ describe('parseSessions', () => {
     assert.equal(parsed?.[2].worktreeKey, undefined)
   })
 
-  /**
-   * 側欄的工作目錄（`panelWorktreeKey`）與 session 開啟的工作目錄（`worktreeKey`）是**兩個各自
-   * 獨立的事實**：前者決定側欄讀哪一份原始碼，後者決定 pty 開在哪。
-   *
-   * 「在主工作目錄駕駛 agent、同時閱讀某個 worktree 的內容」是合法且有用的 —— 兩者若被合併成
-   * 一個欄位，那個情境就表達不出來。兩個欄位型別相同、名字只差一個前綴，是本能力最容易看混的
-   * 一對，故這裡以「兩者不同」為主要斷言。
-   */
-  it('側欄的工作目錄與 session 的工作目錄各自獨立保存，且可不相同', () => {
-    const parsed = parseSessions(
-      JSON.stringify({
-        version: 1,
-        sessions: [
-          {
-            id: UUID_A,
-            folderId: 'f1',
-            spawnTarget: 'claude',
-            ordinal: 1,
-            worktreeKey: '0ceceaeb',
-            panelWorktreeKey: 'deadbeef',
-          },
-          // 側欄選了某個 worktree，而 session 本身開在 folder 根 —— 主線情境。
-          { id: UUID_B, folderId: 'f1', spawnTarget: 'shell', ordinal: 2, panelWorktreeKey: 'cafe1234' },
-        ],
-      }),
-    )
-
-    assert.equal(parsed?.[0].worktreeKey, '0ceceaeb')
-    assert.equal(parsed?.[0].panelWorktreeKey, 'deadbeef', '兩者不得互相覆寫')
-    assert.equal(parsed?.[1].worktreeKey, undefined, 'session 開在 folder 根')
-    assert.equal(parsed?.[1].panelWorktreeKey, 'cafe1234', '而側欄看著另一個工作目錄')
-  })
-
-  it('側欄的工作目錄識別碼格式不合時丟成 undefined，且不影響 session 自己的工作目錄', () => {
-    const parsed = parseSessions(
-      JSON.stringify({
-        version: 1,
-        sessions: [
-          {
-            id: UUID_A,
-            folderId: 'f1',
-            spawnTarget: 'claude',
-            ordinal: 1,
-            worktreeKey: '0ceceaeb',
-            panelWorktreeKey: '../../etc',
-          },
-        ],
-      }),
-    )
-
-    assert.equal(parsed?.length, 1, '格式不合不得使該 session 消失')
-    assert.equal(parsed?.[0].panelWorktreeKey, undefined, '損毀的值不得走到查表')
-    assert.equal(parsed?.[0].worktreeKey, '0ceceaeb', '兩筆各自獨立 —— 一筆損毀不牽連另一筆')
-  })
 })
 
 describe('SessionStore 的損毀韌性', () => {
@@ -342,19 +273,36 @@ describe('SessionStore：已結束的 session 不得被復活', () => {
     )
   })
 
-  it('錨定的 change 跨 replace 保留', () => {
+  /**
+   * **側欄座標不隨 session 落盤**（`session-persistence`）。
+   *
+   * 三個維度（來源 repo／側欄的工作目錄／錨定的 change）已改基到 rail 的項目上，由 `panel-store`
+   * 自行持久化 —— 一個沒有任何 session 的 folder，其座標同樣要跨重啟存活，而掛在 session 上的
+   * 資料做不到那件事。
+   *
+   * 這是一條**負向守衛**：它擋的是「有人為了方便，把座標又順手塞回 session 的 payload」。少了
+   * 它，那種回歸不會有任何一條斷言變紅 —— 座標照樣運作（renderer 有自己的來源），只是磁碟上
+   * 多了一份會過期的影子。
+   */
+  it('renderer 送來的側欄座標欄位不進入落盤結果', () => {
     const kept = store()
     kept.replace([
-      { id: UUID_A, folderId: 'f1', spawnTarget: 'claude', ordinal: 1, anchoredChange: 'my-change' },
+      {
+        id: UUID_A,
+        folderId: 'f1',
+        spawnTarget: 'claude',
+        ordinal: 1,
+        // 刻意送出三個已被移除的欄位（型別上不存在，故以 cast 模擬一個過期的 renderer）。
+        anchoredChange: 'my-change',
+        panelFolderId: 'f2',
+        panelWorktreeKey: 'deadbeef',
+      } as unknown as RendererSession,
     ])
-    assert.equal(kept.list()[0].anchoredChange, 'my-change')
-  })
 
-  it('側欄來源（panelFolderId）跨 replace 保留', () => {
-    const kept = store()
-    kept.replace([
-      { id: UUID_A, folderId: 'f1', spawnTarget: 'claude', ordinal: 1, panelFolderId: 'f2' },
-    ])
-    assert.equal(kept.list()[0].panelFolderId, 'f2')
+    const persisted = kept.list()[0] as unknown as Record<string, unknown>
+    assert.equal(persisted.anchoredChange, undefined)
+    assert.equal(persisted.panelFolderId, undefined)
+    assert.equal(persisted.panelWorktreeKey, undefined)
+    assert.equal(persisted.worktreeKey, undefined, 'session 自己的工作目錄不受牽連')
   })
 })

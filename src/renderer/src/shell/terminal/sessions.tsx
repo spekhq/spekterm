@@ -54,40 +54,6 @@ export interface SessionState {
    * 交還命名權：把名字清空（見 `rename`）。
    */
   customTitle?: string
-  /**
-   * 這個 session 正在做的 change。側欄的「本 change」視圖跟著它走。
-   *
-   * **由使用者建立，不由系統從 pty 的輸出推測**（`openspec-side-panel` 的 design D3）。
-   * pty 裡跑的 agent 不會宣告它在處理哪個 change —— 拿終端標題去比對 slug，會在「標題碰巧
-   * 提到某個 slug」時假陽性、在「agent 用別的說法描述同一件事」時假陰性。一個偶爾莫名其妙
-   * 跳到別的 change 的側欄，比沒有側欄更糟，因為使用者會開始不信任它。
-   *
-   * 這與「標籤跟隨 pty 宣告的標題」不矛盾：那條之所以成立，是因為 pty **真的用 OSC 序列宣告
-   * 了標題**（一個明確的協定）。change 的錨定沒有這樣的協定。
-   *
-   * 唯一的自動值來自建立時：該 folder 恰有一個 active change 時錨定它，否則留空。
-   */
-  anchoredChange?: string
-  /**
-   * 側欄來源：這個 session 的 side panel 呈現哪個 repo（folderId）。
-   *
-   * per-session（比照 `anchoredChange`），使用者透過來源指示器選定（`side-panel-source`）。
-   * `undefined` ＝ 未曾改動 —— 解析時退回自己的 `folderId`（見 `panelSourceOf`）。指向的 folder
-   * 可能已被移除，該退回由 `MainStage`（它手上有 folder 清單）處理。
-   */
-  panelFolderId?: string
-  /**
-   * 側欄來源的**工作目錄**維度：Files 身分以哪個工作目錄為檔案樹的根（`side-panel-worktree`）。
-   *
-   * **與上面的 `worktreeKey` 是兩個各自獨立的事實，且可不相同** —— 那個決定 pty 開在哪，這個
-   * 決定側欄讀哪一份原始碼。「在主工作目錄駕駛 agent、同時閱讀某個 worktree 的內容」是合法且
-   * 有用的。兩者型別相同、名字只差一個前綴，是本能力最容易看混的一對。
-   *
-   * `undefined` ＝ folder 自身（**不是**該 repo 的主工作目錄 —— folder 本身可能就是一個 linked
-   * worktree，且 folder 不在版控之下時根本沒有識別碼可用）。指向的工作目錄可能已被移除，該退回
-   * 由 `FilesPanel` 於查表時處理 —— **那個查表不承擔安全**，邊界仍由主行程對每次 `fs.*` 夾制。
-   */
-  panelWorktreeKey?: string
 }
 
 export type CreateOutcome =
@@ -109,34 +75,19 @@ export interface SessionsApi {
   focusedIdFor(folderId: string): string | null
   focus(folderId: string, sessionId: string): void
   /**
-   * `anchoredChange` 是新 session 的初始錨定。呼叫端（`MainStage`）在該 folder **恰有一個**
-   * active change 時傳它，否則傳 `undefined` —— 多個候選之間不猜（design D3）。
-   *
    * `worktreeKey` 指定它開在哪個工作目錄（不可逆識別碼，**不是路徑**）。省略＝ folder 根。
+   *
+   * **尾參是 options 物件而不是位置參數。** 此前這裡是
+   * `create(folderId, spawnTarget, anchoredChange?, worktreeKey?)` —— 兩個相鄰的
+   * `string | undefined`，移除中間那個時漏改任一呼叫點，slug 會**靜默地**被當成工作目錄
+   * 識別碼傳下去（型別檢查一聲不響），而主行程對查無的識別碼是拒絕建立 ⇒ 使用者看到一顆
+   * 沒反應的按鈕。把同型相鄰消掉，比記得改每一個呼叫點可靠。
    */
   create(
     folderId: string,
     spawnTarget: SpawnTarget,
-    anchoredChange?: string,
-    worktreeKey?: string,
+    options?: { worktreeKey?: string },
   ): Promise<CreateOutcome>
-  /** 把一個 change 錨定到某個 session。`null` 解除錨定。 */
-  anchorChange(sessionId: string, slug: string | null): void
-  /** 該 session 錨定的 change。 */
-  anchoredChangeOf(sessionId: string | null): string | null
-  /** 該 session 的側欄來源 folderId。未曾設定時退回 session 自己的 `folderId`。 */
-  panelSourceOf(sessionId: string | null): string | null
-  /**
-   * 設定某個 session 的側欄來源。切換來源時**一併重置該 session 的 `anchoredChange` 與
-   * `panelWorktreeKey`** —— 兩者的識別碼都隸屬於某個 repo，換 repo 後在新 repo 都不存在
-   * （`side-panel-source` D2、`side-panel-worktree`）。
-   * `folderId` 等於 session 自身的 folder 時清為預設（不占欄位）。
-   */
-  setPanelSource(sessionId: string, folderId: string): void
-  /** 該 session 的側欄工作目錄識別碼。`undefined` ＝ folder 自身。 */
-  panelWorktreeOf(sessionId: string | null): string | undefined
-  /** 設定某個 session 的側欄工作目錄。`undefined` ＝ 回到 folder 自身。 */
-  setPanelWorktree(sessionId: string, worktreeKey: string | undefined): void
   /**
    * 喚醒一個休眠的 session（＝為它 spawn pty）。
    *
@@ -309,10 +260,7 @@ export function SessionsProvider({ children }: { children: React.ReactNode }): R
               ordinal: entry.ordinal,
               title: entry.title,
               customTitle: entry.customTitle,
-              anchoredChange: entry.anchoredChange,
-              panelFolderId: entry.panelFolderId,
               worktreeKey: entry.worktreeKey,
-              panelWorktreeKey: entry.panelWorktreeKey,
             }))
           // 重建的排在前面 —— 它們是上次的順序，而在它們之前建立的那些是「新的」。
           return [...restoredSessions, ...previous]
@@ -335,6 +283,10 @@ export function SessionsProvider({ children }: { children: React.ReactNode }): R
    * 沒有錯誤、沒有訊息，只有「重開之後什麼都不見了」。
    *
    * payload **不含 cwd、不含對話識別碼** —— 那兩個是主行程的欄位（design D9）。
+   *
+   * **也不含側欄座標**（來源 repo／工作目錄／錨定的 change）。它們隸屬於 rail 的項目而非
+   * session，由 `PanelCoordinateProvider` 自行落盤 —— 一個沒有任何 session 的 folder，其座標
+   * 同樣要跨重啟存活，而掛在 session 上的資料做不到這件事（`session-persistence`）。
    */
   useEffect(() => {
     if (!restored) return
@@ -343,28 +295,14 @@ export function SessionsProvider({ children }: { children: React.ReactNode }): R
         // 已結束的 session 不持久化：重開時不該把一個死掉的分頁重建回來（使用者裁決）。
         .filter((session) => session.status !== 'exited')
         .map(
-          ({
+          ({ id, folderId, spawnTarget, ordinal, title, customTitle, worktreeKey }) => ({
             id,
             folderId,
             spawnTarget,
             ordinal,
             title,
             customTitle,
-            anchoredChange,
-            panelFolderId,
             worktreeKey,
-            panelWorktreeKey,
-          }) => ({
-            id,
-            folderId,
-            spawnTarget,
-            ordinal,
-            title,
-            customTitle,
-            anchoredChange,
-            panelFolderId,
-            worktreeKey,
-            panelWorktreeKey,
           }),
         ),
     )
@@ -417,9 +355,9 @@ export function SessionsProvider({ children }: { children: React.ReactNode }): R
     async (
       folderId: string,
       spawnTarget: SpawnTarget,
-      anchoredChange?: string,
-      worktreeKey?: string,
+      options?: { worktreeKey?: string },
     ): Promise<CreateOutcome> => {
+      const worktreeKey = options?.worktreeKey
       const result = await window.workspace.terminal.create(folderId, spawnTarget, worktreeKey)
       if (!result.ok) return { status: 'failed', failure: result }
 
@@ -429,7 +367,7 @@ export function SessionsProvider({ children }: { children: React.ReactNode }): R
 
       setSessions((previous) => [
         ...previous,
-        { id: sessionId, folderId, spawnTarget, status: 'running', ordinal, anchoredChange, worktreeKey },
+        { id: sessionId, folderId, spawnTarget, status: 'running', ordinal, worktreeKey },
       ])
       setFocused((previous) => new Map(previous).set(folderId, sessionId))
 
@@ -437,50 +375,6 @@ export function SessionsProvider({ children }: { children: React.ReactNode }): R
     },
     [],
   )
-
-  const anchorChange = useCallback((sessionId: string, slug: string | null) => {
-    setSessions((previous) =>
-      previous.map((session) =>
-        session.id === sessionId ? { ...session, anchoredChange: slug ?? undefined } : session,
-      ),
-    )
-  }, [])
-
-  const setPanelSource = useCallback((sessionId: string, folderId: string) => {
-    setSessions((previous) =>
-      previous.map((session) => {
-        if (session.id !== sessionId) return session
-        // 來源等於自己的 folder ＝ 回到預設，存 undefined（不占欄位、不落盤）。
-        const next = folderId === session.folderId ? undefined : folderId
-        if (session.panelFolderId === next) return session
-        // 切換來源＝重置錨定與工作目錄：兩者的識別碼都隸屬於某個 repo，在新 repo 不存在
-        //（`side-panel-source` D2 與 `side-panel-worktree`）。沿用舊值會讓側欄對著一個不存在的
-        // change 或一個不存在的樹根呈現空狀態，看起來像壞掉。
-        return {
-          ...session,
-          panelFolderId: next,
-          anchoredChange: undefined,
-          panelWorktreeKey: undefined,
-        }
-      }),
-    )
-  }, [])
-
-  /**
-   * 側欄的工作目錄：Files 身分以哪個工作目錄為樹根。
-   *
-   * `undefined` ＝ folder 自身。**不重置 `anchoredChange`** —— 換工作目錄沒有換 repo，同一個
-   * change 的 slug 在聚合的視野裡仍然有效（OpenSpec 身分本來就聚合全部工作目錄）。
-   */
-  const setPanelWorktree = useCallback((sessionId: string, worktreeKey: string | undefined) => {
-    setSessions((previous) =>
-      previous.map((session) =>
-        session.id === sessionId && session.panelWorktreeKey !== worktreeKey
-          ? { ...session, panelWorktreeKey: worktreeKey }
-          : session,
-      ),
-    )
-  }, [])
 
   const close = useCallback((sessionId: string) => {
     const target = sessionsRef.current.find((session) => session.id === sessionId)
@@ -635,28 +529,12 @@ export function SessionsProvider({ children }: { children: React.ReactNode }): R
         if (explicit && sessions.some((session) => session.id === explicit)) return explicit
         return sessions.find((session) => session.folderId === folderId)?.id ?? null
       },
-      anchoredChangeOf: (sessionId) =>
-        sessionId === null
-          ? null
-          : (sessions.find((session) => session.id === sessionId)?.anchoredChange ?? null),
-      panelSourceOf: (sessionId) => {
-        if (sessionId === null) return null
-        const session = sessions.find((candidate) => candidate.id === sessionId)
-        return session ? (session.panelFolderId ?? session.folderId) : null
-      },
-      panelWorktreeOf: (sessionId) =>
-        sessionId === null
-          ? undefined
-          : sessions.find((session) => session.id === sessionId)?.panelWorktreeKey,
-      setPanelSource,
-      setPanelWorktree,
       focus,
       create,
       wake,
       close,
       setTitle,
       rename,
-      anchorChange,
       reorder,
       attach,
       sendInput,
@@ -672,8 +550,6 @@ export function SessionsProvider({ children }: { children: React.ReactNode }): R
       close,
       setTitle,
       rename,
-      anchorChange,
-      setPanelSource,
       reorder,
       attach,
       sendInput,

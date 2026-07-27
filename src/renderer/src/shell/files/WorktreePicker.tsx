@@ -23,11 +23,6 @@ interface WorktreePickerProps {
   worktrees: WorktreeOption[]
   /** 當前選定者的識別碼；`undefined` ＝ folder 自身。 */
   selectedKey: string | undefined
-  /**
-   * 有 focused session 才能改 —— 這個選擇是 per-session 的狀態，沒有 session 就沒地方存
-   * （與側欄來源同一條理由）。**停用而非隱藏**：使用者要看得見自己在哪個工作目錄。
-   */
-  canSelect: boolean
   onSelect: (worktreeKey: string | undefined) => void
 }
 
@@ -40,11 +35,14 @@ interface WorktreePickerProps {
  * **呈現與否的判準是清單的筆數，不是可選取的筆數。** 一個項目全部停用的清單仍然在回答「這個
  * repo 還有哪些工作目錄」—— 噪音的定義是「沒有資訊」，不是「沒有可點的東西」。以可選取的筆數
  * 為判準，會把「有東西但你看不了」整個藏起來，與「呈現但停用」的用意自相矛盾。
+ *
+ * **它不因「該 folder 尚無 session」而停用。** 這個選擇隸屬於 rail 的項目而非 session
+ * （`side-panel-worktree`）—— 此前那道 gate 讓一個剛加入、還沒開 terminal 的 repo 連換個
+ * worktree 看看都做不到。
  */
 export function WorktreePicker({
   worktrees,
   selectedKey,
-  canSelect,
   onSelect,
 }: WorktreePickerProps): React.JSX.Element | null {
   const { t } = useTranslation()
@@ -79,16 +77,13 @@ export function WorktreePicker({
       <button
         type="button"
         aria-label={t('files.worktree.change')}
-        title={canSelect ? t('files.worktree.change') : t('files.worktree.needSession')}
-        disabled={!canSelect}
+        title={t('files.worktree.change')}
         onClick={(event) => {
           event.stopPropagation()
           const rect = event.currentTarget.getBoundingClientRect()
           setMenu({ x: rect.left, y: rect.bottom })
         }}
-        className={`min-w-0 max-w-[12rem] shrink truncate rounded px-1 text-ink-dim ${
-          canSelect ? 'hover:text-accent' : 'cursor-default'
-        }`}
+        className="min-w-0 max-w-[12rem] shrink truncate rounded px-1 text-ink-dim hover:text-accent"
       >
         {worktreeLabel(current, fallback)} ▾
       </button>

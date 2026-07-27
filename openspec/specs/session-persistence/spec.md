@@ -17,12 +17,15 @@
 ### Requirement: session 跨應用程式重啟與 renderer 重新載入存活
 
 重建一個 session 所需的**事實** SHALL 被持久化，並於下次開啟應用程式時重建：所屬 folder、
-spawn 目標、使用者取的名字、分頁順序、錨定的 change、**側欄來源**（見 `side-panel-source`）、
-**側欄的工作目錄**（見 `side-panel-worktree`）、**它開在哪個工作目錄**，以及 **pty 最近一次宣告
-的終端標題**。renderer 重新載入時 SHALL 同樣重建。
+spawn 目標、使用者取的名字、分頁順序、**它開在哪個工作目錄**，以及 **pty 最近一次宣告的終端
+標題**。renderer 重新載入時 SHALL 同樣重建。
 
 持久化的內容 SHALL 限於重建所必需的事實，SHALL NOT 包含**可由當下環境廉價重算**的衍生狀態
 （例如 folder 是否含 `openspec/`、git 分支 —— 那些每次載入都重算，存下來只是持久化謊言）。
+
+**側欄座標（來源 repo、側欄的工作目錄、錨定的 change）SHALL NOT 由 session 持久化。** 它隸屬於
+rail 上的項目而非任何 session（見 `side-panel-source`），由該能力自行持久化 —— 一個沒有任何
+session 的 folder，其側欄座標同樣要跨重啟存活，而掛在 session 上的資料做不到這件事。
 
 pty 宣告的標題屬於「必需」而非「衍生」：**休眠的 session 沒有 pty 可以再宣告一次**，不存它，重開後
 那些分頁就全部退回流水號標籤，而它們正是被 agent 依任務命名的那些 —— 使用者認不出哪個是哪個。
@@ -32,15 +35,6 @@ pty 宣告的標題屬於「必需」而非「衍生」：**休眠的 session �
 某個時刻的觀測值。以工作目錄識別碼保存，重建時查表解析 —— 該工作目錄若已不存在（worktree 於應用
 程式未開啟時被移除），該 session SHALL 於其 folder 的根目錄重建，SHALL NOT 使重建失敗。
 
-**側欄的工作目錄**是與上者**各自獨立的第二個工作目錄事實** —— 前者決定 pty 開在哪，後者決定側欄
-的 Files 身分讀哪一份原始碼，兩者 SHALL 可不相同（在主工作目錄駕駛 agent、同時閱讀某個 worktree
-的內容是合法且有用的）。它同樣以工作目錄識別碼保存（見下一段的邊界要求）；重建時該工作目錄若已
-不存在，該 session 的側欄工作目錄 SHALL 退回 folder 自身，SHALL NOT 使重建失敗。
-
-**側欄來源**指向的 folder 於重建時可能已不在 workspace（使用者重開前移除了它）—— 此時該 session
-的側欄來源 SHALL 退回其所屬 folder，SHALL NOT 使 session 重建失敗。持久化的座標不保證重開後仍然
-有效，這與「folder 路徑失效 → 喚醒錯誤」是同一種防禦姿態。
-
 重建 SHALL NOT 使既有的 pty 生命週期鬆動 —— 重建產生的是**新的** pty；`terminal-sessions` 的
 「關閉分頁／重新載入／關閉視窗三路徑皆不留孤兒行程」不受影響。
 
@@ -49,36 +43,10 @@ pty 宣告的標題屬於「必需」而非「衍生」：**休眠的 session �
 - **WHEN** 使用者建立若干 session、為其中之一命名、調整順序，然後關閉並重新開啟應用程式
 - **THEN** 這些 session 以相同的名字與順序重新出現於其所屬的 folder
 
-#### Scenario: 錨定的 change 一併回來
+#### Scenario: 側欄座標不隨 session 落盤
 
-- **WHEN** 一個錨定了某個 change 的 session，經歷應用程式關閉並重新開啟
-- **THEN** 該 session 重建後仍錨定同一個 change
-
-#### Scenario: 側欄來源一併回來
-
-- **WHEN** 一個側欄來源指向另一個 repo 的 session，經歷應用程式關閉並重新開啟
-- **THEN** 該 session 重建後其側欄仍指向同一個 repo
-
-#### Scenario: 側欄的工作目錄一併回來
-
-- **WHEN** 一個 Files 身分選定了某個 worktree 的 session，經歷應用程式關閉並重新開啟
-- **THEN** 該 session 重建後其 Files 身分仍以該 worktree 為樹根
-
-#### Scenario: 側欄的工作目錄與 session 開啟的工作目錄各自保存
-
-- **WHEN** 一個開在 folder 根、而側欄選定了某個 worktree 的 session，經歷應用程式關閉並重新開啟
-  後被喚醒
-- **THEN** 新的 pty 的工作目錄為 folder 根，而其 Files 身分以該 worktree 為樹根
-
-#### Scenario: 側欄來源指向的 folder 已被移除
-
-- **WHEN** 一個側欄來源指向 repoB 的 session，於重開前 repoB 已從 workspace 移除
-- **THEN** 該 session 重建成功，其側欄來源退回自己所屬的 folder
-
-#### Scenario: 側欄的工作目錄已消失
-
-- **WHEN** 一個 Files 身分選定了某個 worktree 的 session，該 worktree 於應用程式未開啟期間被移除
-- **THEN** 該 session 重建成功，其 Files 身分以 folder 自身為樹根
+- **WHEN** 檢視 renderer 送往 session 持久化的資料
+- **THEN** 其中不含側欄來源、側欄的工作目錄與錨定的 change
 
 #### Scenario: renderer 重新載入後 session 回來
 
@@ -97,7 +65,7 @@ pty 宣告的標題屬於「必需」而非「衍生」：**休眠的 session �
 
 ### Requirement: 重建的 session 為休眠態，於首次被顯示時才啟動 pty
 
-重建出來的 session SHALL 處於**休眠**狀態 —— 具備完整身分（名字、順序、錨定）但**沒有 pty**。
+重建出來的 session SHALL 處於**休眠**狀態 —— 具備完整身分（名字、順序）但**沒有 pty**。
 休眠的 session SHALL 於**首次被顯示**時才啟動其 pty。
 
 於是開啟應用程式時 SHALL **至多一個** session 被啟動 —— 即被選中的 folder 之 focused session；
@@ -147,7 +115,7 @@ spawn 目標為 `claude` 的 session SHALL 以一個由應用程式指定、且�
 並更新持久化的對話識別碼；SHALL NOT 沿用原識別碼重新建立對話。使用者從未與該 session 對話過時
 即屬此情形 —— 那時不存在任何對話紀錄可供續接。
 
-自癒 SHALL NOT 改變該 session 於應用程式中的身分 —— 其分頁、名字、順序與錨定的 change 皆 SHALL 不受影響。
+自癒 SHALL NOT 改變該 session 於應用程式中的身分 —— 其分頁、名字與順序皆 SHALL 不受影響。
 
 自癒 SHALL 至多嘗試一次 —— `claude` 本身無法啟動時，該 session 依 `terminal-sessions` 的既有要求
 呈現為已結束並於終端顯示訊息，SHALL NOT 反覆重試。
@@ -155,7 +123,7 @@ spawn 目標為 `claude` 的 session SHALL 以一個由應用程式指定、且�
 #### Scenario: 從未對話過的 session 於重建後仍可用
 
 - **WHEN** 使用者建立一個 claude session 但從未與它對話，關閉應用程式，重新開啟並喚醒該 session
-- **THEN** 該 session 啟動一個可用的全新 claude，且其名字、順序與錨定的 change 不變
+- **THEN** 該 session 啟動一個可用的全新 claude，且其名字與順序不變
 
 #### Scenario: claude 無法啟動時不反覆重試
 
@@ -281,10 +249,11 @@ SHALL NOT 能指定任何路徑。
 **識別碼不構成例外**：它不可逆推為路徑，且主行程只對查表命中的值解析 —— 於是 renderer 可達的
 位置集合仍恆等於工作目錄的列舉結果，而不是任意路徑。
 
-**本要求涵蓋落盤資料中的每一個工作目錄事實**，包含 session 開啟的工作目錄與側欄的工作目錄
-（見 `side-panel-worktree`）。後者雖然只決定側欄呈現哪一份原始碼、不涉及任何行程的工作目錄，
-仍 SHALL 以不可逆識別碼保存：落盤的內容會在**下次啟動時**被解析，一個落盤的路徑等同一個繞過
-查表的位置指定，其危害與它當初是為了什麼用途而寫入無關。
+**本要求涵蓋 session 落盤資料中的每一個工作目錄事實。** 側欄的工作目錄已不在其中（它隨側欄座標
+改基到 rail 的項目上，見 `side-panel-source`）—— **但那條原則 SHALL NOT 因此鬆動**，它由
+`side-panel-source` 的「側欄座標跨應用程式重啟存活」以相同的措辭承接：落盤的內容會在**下次啟動
+時**被解析，一個落盤的路徑等同一個繞過查表的位置指定，其危害與它當初是為了什麼用途、又寫進哪
+一個檔案，都無關。
 
 **這與 renderer 記憶體中持有 folder-relative 路徑並不衝突** —— 那本來就是它對檔案系統定址的
 合法詞彙（見 `filesystem-access`）。本要求約束的是**送往持久化的內容**。
@@ -300,11 +269,6 @@ SHALL NOT 能指定任何路徑。
 
 - **WHEN** 檢視 renderer 送往持久化、以及自持久化取回的 session 資料
 - **THEN** 其中的工作目錄僅以不可逆識別碼表示，不含任何路徑片段
-
-#### Scenario: 側欄的工作目錄同樣以識別碼落盤
-
-- **WHEN** 一個 Files 身分選定了某個 worktree 的 session 被持久化，檢視落盤的資料
-- **THEN** 其側欄的工作目錄以不可逆識別碼表示，不含該 worktree 的路徑或其任何片段
 
 ### Requirement: 持久化檔案的損毀不得使應用程式無法啟動
 

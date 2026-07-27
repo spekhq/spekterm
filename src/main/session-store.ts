@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import type { SpawnTarget } from './terminal'
+import { isWorktreeKey } from './worktree-key'
 
 /**
  * session 清單的結構版本。比照 `workspace-store` —— 從第一天就寫入。
@@ -31,8 +32,8 @@ export function isUuid(value: unknown): value is string {
  *
  * 欄位分兩類，這個區分是承重的（design D7／D9）：
  *
- * - **renderer 供應**：`folderId`／`spawnTarget`／`ordinal`／`customTitle`／`title`／`anchoredChange`
- *   ／`panelFolderId`／`worktreeKey` —— 使用者在 renderer 上做的選擇。
+ * - **renderer 供應**：`folderId`／`spawnTarget`／`ordinal`／`customTitle`／`title`／`worktreeKey`
+ *   —— 使用者在 renderer 上做的選擇。
  * - **主行程供應**：`claudeSessionId`／`cwd` —— renderer **從來沒有**這兩個詞彙。前者是拼進命令的
  *   識別碼，後者是一個絕對路徑；把任何一個交給 renderer 去保管再送回來，等於把邊界拱手讓出。
  *
@@ -40,6 +41,11 @@ export function isUuid(value: unknown): value is string {
  * 前 8 碼，不含路徑片段），而主行程只對**查表命中**的值解析出路徑。於是 renderer 可達的位置
  * 集合恆等於工作目錄的列舉結果 —— 邊界仍由結構保證，只是保證的形式從「沒有詞彙」換成了
  * 「詞彙不可逆且受查表約束」（`terminal-sessions` 與本能力的 spec 都明文寫了這件事）。
+ *
+ * **側欄座標（來源 repo／側欄的工作目錄／錨定的 change）刻意不在此列。** 它們隸屬於 rail 的
+ * 項目而非 session，由 `panel-store` 自行持久化 —— 一個沒有任何 session 的 folder，其側欄座標
+ * 同樣要跨重啟存活，而掛在 session 上的資料做不到這件事（`session-persistence` 明文要求它們
+ * SHALL NOT 由 session 持久化）。
  */
 export interface PersistedSession {
   id: string
@@ -57,7 +63,6 @@ export interface PersistedSession {
    * 要重新求得它，只能把 pty 叫起來然後等。session 一被喚醒，pty 的下一次宣告就會覆蓋它。
    */
   title?: string
-  anchoredChange?: string
   /**
    * 這個 session 開在哪個工作目錄（git worktree）—— core 算的不可逆識別碼，`undefined` ＝ folder 根。
    *
@@ -65,32 +70,6 @@ export interface PersistedSession {
    * 發生在子行程），所以重建時以它查表解析比讀 `/proc` 更準。
    */
   worktreeKey?: string
-  /**
-   * 側欄來源：這個 session 的 side panel 呈現哪個 repo（folderId）。
-   *
-   * per-session（比照 `anchoredChange`），**renderer 供應、主行程原樣保存** —— 它是使用者在
-   * renderer 上做的選擇（`side-panel-source`）。`undefined` ＝ 未曾改動，解析時退回 session
-   * 自己的 `folderId`。指向的 folder 於重建時可能已不在 workspace（使用者重開前移除了它）——
-   * 那道退回在 renderer 解析側欄來源時處理（重建 effect 跑時 folder 清單尚未必載入），主行程
-   * 只負責原樣保存。
-   */
-  panelFolderId?: string
-  /**
-   * 側欄來源的**工作目錄**維度：side panel 的 Files 身分以哪個工作目錄為檔案樹的根。
-   *
-   * **與 `worktreeKey` 是兩個各自獨立的工作目錄事實，兩者可不相同** —— 前者決定 pty 開在哪，
-   * 這個決定側欄讀哪一份原始碼。「在主工作目錄駕駛 agent、同時閱讀某個 worktree 的內容」是合法
-   * 且有用的，於是它們不可合併為一個欄位。（兩者型別相同、名字只差一個前綴，是本能力最容易看混
-   * 的一對。）
-   *
-   * `undefined` ＝ folder 自身，**不是**「該 repo 的主工作目錄」—— folder 本身可能就是一個
-   * linked worktree，而 folder 不在版控之下時根本不存在任何識別碼可用。以「省略」表示它，
-   * 同一個邏輯狀態才只有一種落盤表示（比照上面的 `worktreeKey`）。
-   *
-   * 它以識別碼而非路徑保存的理由與 `worktreeKey` 相同，且**與它是否影響某個行程的 cwd 無關**：
-   * 落盤的內容會在下次啟動時被解析，一個落盤的路徑等同一個繞過查表的位置指定。
-   */
-  panelWorktreeKey?: string
   /**
    * claude 的**對話**識別碼。與 `id`（spekterm 的 session identity）**刻意分離**：
    * 續接失敗時必須換一個全新的對話 id（沿用舊的會撞上 `Session ID … is already in use.`），
@@ -123,10 +102,6 @@ function optionalString(value: unknown): string | undefined {
  * **這與 `workspace-store.parseWorkspace` 的策略刻意不同**（那一份對任何一個壞掉的項目就整份放棄）：
  * 一個壞掉的 session 不該讓使用者其餘所有 session 一起消失。
  */
-/** core 算的工作目錄識別碼：路徑 sha1 的前 8 碼。 */
-function isWorktreeKey(value: unknown): value is string {
-  return typeof value === 'string' && /^[0-9a-f]{8}$/.test(value)
-}
 
 export function parseSessionEntry(entry: unknown): PersistedSession | null {
   if (typeof entry !== 'object' || entry === null) return null
@@ -145,10 +120,6 @@ export function parseSessionEntry(entry: unknown): PersistedSession | null {
   // 不要讓一個損毀的值走到查表** —— 比照 `claudeSessionId` 的 `isUuid`。
   const worktreeKey = isWorktreeKey(raw.worktreeKey) ? raw.worktreeKey : undefined
 
-  // 側欄的工作目錄走同一道驗證。**這兩筆各自獨立**：其中一筆損毀不影響另一筆 —— session 仍開在
-  // 它原本的工作目錄，只是側欄退回 folder 自身（或反之）。
-  const panelWorktreeKey = isWorktreeKey(raw.panelWorktreeKey) ? raw.panelWorktreeKey : undefined
-
   return {
     id: raw.id,
     folderId: raw.folderId,
@@ -156,10 +127,7 @@ export function parseSessionEntry(entry: unknown): PersistedSession | null {
     ordinal: raw.ordinal,
     customTitle: optionalString(raw.customTitle),
     title: optionalString(raw.title),
-    anchoredChange: optionalString(raw.anchoredChange),
-    panelFolderId: optionalString(raw.panelFolderId),
     worktreeKey,
-    panelWorktreeKey,
     claudeSessionId,
     // 絕對路徑才有意義；相對路徑無從解讀，丟棄後退回 folder 根目錄。
     cwd: typeof raw.cwd === 'string' && path.isAbsolute(raw.cwd) ? raw.cwd : undefined,
@@ -315,8 +283,18 @@ export class SessionStore {
       const kept = previous.get(entry.id)
       const waiting = this.#pendingMainFields.get(entry.id)
       this.#pendingMainFields.delete(entry.id)
+      // **逐欄位挑，不用 `...entry`。** renderer 送來的物件是不受信任的輸入，原樣展開等於讓
+      // 落盤的形狀由對方決定 —— 一個過期的 renderer（或一次沒清乾淨的重構）送來已被移除的欄位，
+      // 它們會靜默地寫進 `sessions.json`，而 `session-persistence` 明文要求側欄座標
+      // **SHALL NOT** 由 session 持久化。白名單讓那條要求由結構保證，而不是靠沒有人犯錯。
       next.push({
-        ...entry,
+        id: entry.id,
+        folderId: entry.folderId,
+        spawnTarget: entry.spawnTarget,
+        ordinal: entry.ordinal,
+        customTitle: entry.customTitle,
+        title: entry.title,
+        worktreeKey: entry.worktreeKey,
         claudeSessionId: waiting?.claudeSessionId ?? kept?.claudeSessionId,
         cwd: waiting?.cwd ?? kept?.cwd,
       })

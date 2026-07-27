@@ -1,5 +1,6 @@
 import { BrowserWindow, type WebContents, dialog, ipcMain } from 'electron'
 import { BranchService } from '../branch-service'
+import type { PanelStore } from '../panel-store'
 import type { WorkspaceFolder, WorkspaceStore } from '../workspace-store'
 import { releaseFolderWatchers } from './fs'
 import { releaseFolderOpenSpec } from './openspec'
@@ -57,7 +58,7 @@ async function pickDirectory(): Promise<string | null> {
   return result.filePaths[0]
 }
 
-export function registerFolderHandlers(store: WorkspaceStore): void {
+export function registerFolderHandlers(store: WorkspaceStore, panel: PanelStore): void {
   ipcMain.handle(FOLDER_CHANNELS.list, (event): WorkspaceFolder[] => {
     // 第一次列清單時順帶掛上分支 watcher —— renderer 不必為此多發一個請求，也就不需要一個
     // 「開始監看分支」的 API（分支不是 renderer 要求來的能力，它是 folder 狀態的一部分）。
@@ -88,6 +89,9 @@ export function registerFolderHandlers(store: WorkspaceStore): void {
     releaseFolderWatchers(id)
     releaseFolderOpenSpec(id)
     store.remove(id)
+    // folder 走了，它的側欄座標也跟著走（`side-panel-source`）。**這是座標唯一的清除點** ——
+    // 載入時刻意不主動修剪（見 `PanelStore.remove` 的說明）。
+    panel.remove(id)
     branchServiceFor(store, event.sender).sync()
     return store.list()
   })

@@ -158,6 +158,22 @@ const PROBE_EXPRESSION = `(async () => {
           key,
         ),
     ),
+    // **頂層 namespace 的守衛。** 上面每一條 surplus*Keys 都只看某個既有 namespace 的內部
+    // —— 於是「加一整個新的 namespace」在此前是**完全沒有守衛**的（folders 與 terminal 當年
+    // 就是這樣長出來的，兩次都是事後才補上各自的清單）。少了這一條，每加一個 namespace 就要有
+    // 人記得同時加一條斷言，而「記得」不是一種機制。
+    //
+    // （本區塊在一個模板字串之內 —— 註解裡不可出現反引號，它會把字串提前結束。）
+    //
+    // panel 於 panel-coordinate-per-folder 引入（side-panel-source 規格）：側欄座標的讀取與
+    // 落盤。介面上沒有任何路徑詞彙 —— 工作目錄以不可逆識別碼表示，且驗證在主行程的寫入入口。
+    surplusApiKeys: Object.keys(api ?? {}).filter(
+      (key) =>
+        !['fs', 'openspec', 'folders', 'terminal', 'settings', 'clipboard', 'app', 'shell', 'panel'].includes(
+          key,
+        ),
+    ),
+    surplusPanelKeys: Object.keys(api?.panel ?? {}).filter((key) => !['get', 'persist'].includes(key)),
     // symlink 絕不可出現在白名單上。
     //
     // 寫入邊界的 TOCTOU 論證（file-editing-and-crud 的 design D3）整個建立在「renderer 既造不出、
@@ -241,6 +257,14 @@ try {
   check(results, 'settings 介面只暴露已定義邊界要求的能力',
     r?.surplusSettingsKeys?.length === 0,
     r?.surplusSettingsKeys?.length ? `多出：${r.surplusSettingsKeys.join(', ')}` : '無多餘能力')
+  check(results, 'panel 介面只暴露已定義邊界要求的能力',
+    r?.surplusPanelKeys?.length === 0,
+    r?.surplusPanelKeys?.length ? `多出：${r.surplusPanelKeys.join(', ')}` : '無多餘能力')
+  // 這一條守的是「有沒有人偷偷加了一整個 namespace」—— 其餘 surplus* 全都只看既有 namespace
+  // 的內部，加一個新的它們一聲都不會響。
+  check(results, 'preload 未暴露任何未經定義的頂層 namespace',
+    r?.surplusApiKeys?.length === 0,
+    r?.surplusApiKeys?.length ? `多出：${r.surplusApiKeys.join(', ')}` : '無多餘 namespace')
 
   exitCode = results.every(Boolean) ? 0 : 1
 } catch (error) {

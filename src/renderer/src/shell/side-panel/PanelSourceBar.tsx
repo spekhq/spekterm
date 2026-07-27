@@ -8,10 +8,17 @@ interface PanelSourceBarProps {
   folders: WorkspaceFolder[]
   /** 當前的側欄來源（panelFolder）。 */
   current: WorkspaceFolder
-  /** focused session 自己所屬的 folder id（「回到自身 repo」的目標）。無 session 時為 null。 */
-  ownerId: string | null
-  /** 有 focused session 才能改側欄來源 —— 它是 per-session 的狀態，無 session 無處可存。 */
-  canSelect: boolean
+  /**
+   * rail 上選中的 folder id —— 「回到自身 repo」的目標，也是「自身」的**定義**。
+   *
+   * 此前它的值同樣是 focused folder，但論證是「focused session 所屬的 folder」—— 兩者相等是
+   * 一個巧合（session 一律經 `forFolder(focusedFolder.id)` 取得）。座標改基為 per-folder 之後，
+   * rail 上選中的 folder **就是**座標的鍵，於是它從「碰巧等於」變成了定義本身。
+   *
+   * 不可為 null：`current`（panelFolder）非 null ⟺ focused folder 非 null，而本元件只在前者
+   * 非 null 時被渲染。
+   */
+  ownerId: string
   onSelect: (folderId: string) => void
 }
 
@@ -22,20 +29,23 @@ interface PanelSourceBarProps {
  * `ContextMenu`（鍵盤可全操作是這個 repo 的紀律）。它取代了 proposal 一度設想的「跟隨/釘住」
  * toggle —— session 所屬的 folder 不隨 pty 的 cwd 浮動，「跟隨」退化為「釘在自身 folder」，一個
  * toggle 無事可做（`side-panel-source` D1）。「回到自身 repo」的一鍵捷徑補上它唯一有用的部分。
+ *
+ * **它不因「該 folder 尚無 session」而停用。** 側欄座標隸屬於 rail 的項目而非 session，而側欄
+ * 是一個閱讀工具 —— 要求使用者先開一個 terminal 才能選要讀哪個 repo，是把兩件無關的事綁在一起
+ * （那正是 `panel-coordinate-per-folder` 要修的痛點）。
  */
 export function PanelSourceBar({
   folders,
   current,
   ownerId,
-  canSelect,
   onSelect,
 }: PanelSourceBarProps): React.JSX.Element {
   const { t } = useTranslation()
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null)
 
-  // 側欄來源 ≠ session 自身的 folder ＝ 使用者刻意指向了別的 repo。視覺上與預設態區分，並提供
-  // 一鍵回到自身（ownerId 為 null＝沒有 session，此時來源恆為 focusedFolder，無「非自身」可言）。
-  const isForeign = ownerId !== null && current.id !== ownerId
+  // 側欄來源 ≠ rail 上選中的 folder ＝ 使用者刻意指向了別的 repo。視覺上與預設態區分，並提供
+  // 一鍵回到自身。
+  const isForeign = current.id !== ownerId
 
   const openMenu = (event: React.MouseEvent<HTMLButtonElement>): void => {
     const rect = event.currentTarget.getBoundingClientRect()
@@ -51,20 +61,19 @@ export function PanelSourceBar({
     <div className="flex items-center gap-1 border-b border-hairline px-2 py-1">
       <button
         type="button"
-        onClick={canSelect ? openMenu : undefined}
-        disabled={!canSelect}
+        onClick={openMenu}
         aria-label={t('panelSource.change')}
         title={isForeign ? t('panelSource.foreign', { name: current.name }) : current.path}
-        className={`flex min-w-0 items-center gap-1 rounded px-2 py-0.5 text-sm ${
+        className={`flex min-w-0 items-center gap-1 rounded px-2 py-0.5 text-sm hover:text-accent ${
           isForeign ? 'text-accent' : 'text-ink-dim'
-        } ${canSelect ? 'hover:text-accent' : 'cursor-default'}`}
+        }`}
       >
         <span className="shrink-0 text-ink-faint">▸</span>
         <span className="truncate">{current.name}</span>
-        {canSelect && <span className="shrink-0 text-ink-faint">▾</span>}
+        <span className="shrink-0 text-ink-faint">▾</span>
       </button>
 
-      {isForeign && canSelect && (
+      {isForeign && (
         <button
           type="button"
           onClick={() => onSelect(ownerId)}

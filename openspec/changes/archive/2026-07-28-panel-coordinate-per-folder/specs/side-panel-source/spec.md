@@ -1,35 +1,4 @@
-# side-panel-source Specification
-
-## Purpose
-
-**側欄座標** —— side panel 站在 rail 的某個項目上時，看的是什麼。
-
-座標有三個維度：**來源 repo**（本能力）、**工作目錄**（`side-panel-worktree`）、**錨定的 change**
-（`openspec-panel`）。三者同屬一筆記錄、隸屬於 **rail 上的項目**（今日恰為 workspace 的 folder），
-**不隸屬於任何 session** —— 側欄是一個閱讀工具，要求使用者先開一個 terminal 才能選要讀什麼，是把
-兩件無關的事綁在一起。本能力另負責整組座標的持久化。
-
-核心情境是 agent 主場才有的：在一個 session 裡 `claude` 會 `cd` 到另一個 repo 或拿絕對路徑改另一個
-repo，而使用者需要在**不切走正在跑的 agent** 的前提下讀那個 repo 的 spec 與檔案。terminal 那半
-因此完全不受側欄來源影響。
-
-## Requirements
-### Requirement: 側欄的來源獨立於 rail 的 focused folder
-
-side panel（OpenSpec 與 Files 兩個身分）所呈現的 repo SHALL 由一個**側欄來源**決定，該來源
-SHALL 可與 rail 的 focused folder 不同。terminal（session 分頁、focused session、pty 的顯示）
-SHALL NOT 受側欄來源影響 —— 側欄指向另一個 repo 時，terminal 仍呈現 focused folder 的 session。
-
-這解一個 agent 主場才有的情境：在一個 session 裡，`claude` 會 `cd` 到另一個 repo 或拿絕對路徑改
-另一個 repo。使用者需要在**不切走正在跑的 agent** 的前提下，讀那個 repo 的 spec 與檔案。
-
-**本要求於該 folder 有無 session 時皆 SHALL 成立** —— 沒有 session 時 terminal 那半本就是空的，
-而側欄仍然可以指向任何一個 repo。
-
-#### Scenario: 側欄指向另一個 repo，terminal 不受影響
-
-- **WHEN** rail 上選中的 folder 為 repoA 且其中有正在執行的 session，其側欄來源被設為 repoB
-- **THEN** side panel 呈現 repoB 的內容，而 terminal 仍呈現 repoA 的 focused session 與分頁列
+## ADDED Requirements
 
 ### Requirement: 側欄座標為 per-folder，不以 session 的存在為前提
 
@@ -169,6 +138,25 @@ SHALL NOT 使啟動失敗。folder 自 workspace 被移除時，其座標 SHALL 
 - **WHEN** 使用者將一個曾改動過側欄座標的 folder 自 workspace 移除
 - **THEN** 該 folder 的座標自持久化資料中消失
 
+## MODIFIED Requirements
+
+### Requirement: 側欄的來源獨立於 rail 的 focused folder
+
+side panel（OpenSpec 與 Files 兩個身分）所呈現的 repo SHALL 由一個**側欄來源**決定，該來源
+SHALL 可與 rail 的 focused folder 不同。terminal（session 分頁、focused session、pty 的顯示）
+SHALL NOT 受側欄來源影響 —— 側欄指向另一個 repo 時，terminal 仍呈現 focused folder 的 session。
+
+這解一個 agent 主場才有的情境：在一個 session 裡，`claude` 會 `cd` 到另一個 repo 或拿絕對路徑改
+另一個 repo。使用者需要在**不切走正在跑的 agent** 的前提下，讀那個 repo 的 spec 與檔案。
+
+**本要求於該 folder 有無 session 時皆 SHALL 成立** —— 沒有 session 時 terminal 那半本就是空的，
+而側欄仍然可以指向任何一個 repo。
+
+#### Scenario: 側欄指向另一個 repo，terminal 不受影響
+
+- **WHEN** rail 上選中的 folder 為 repoA 且其中有正在執行的 session，其側欄來源被設為 repoB
+- **THEN** side panel 呈現 repoB 的內容，而 terminal 仍呈現 repoA 的 focused session 與分頁列
+
 ### Requirement: 來源指示器可選取任一 folder，並提供回到自身 repo 的捷徑
 
 side panel SHALL 於其頂部呈現一條**來源指示器**，標示當前的側欄來源，並 SHALL 允許使用者將側欄
@@ -194,42 +182,6 @@ side panel SHALL 於其頂部呈現一條**來源指示器**，標示當前的�
 - **WHEN** 使用者選中一個尚未建立任何 session 的 folder 並觸發來源指示器
 - **THEN** 下拉呈現 workspace 的全部 folder 供選取，且該控制項未呈現為停用
 
-### Requirement: OpenSpec 與 Files 兩個身分共用同一個側欄來源
-
-side panel 的 OpenSpec 與 Files 兩個身分 SHALL 共用同一個側欄來源。切換身分 SHALL NOT 改變側欄
-來源所指的 repo。
-
-Files 身分的檔案樹是單一 repo 的階層結構，本就一次只能呈現一個來源 —— 這也是側欄採「選一個
-repo」而非「聚合多個 repo」的決定性理由：若 OpenSpec 聚合而 Files 只能選一個，兩個身分的來源
-語意就會分裂。
-
-**本要求的作用域為 repo 維度。** 側欄來源另有一個工作目錄維度（見 `side-panel-worktree`），
-而該維度**不受本要求約束** —— OpenSpec 身分聚合該 repo 的全部工作目錄，Files 身分則選定其中
-一個。上述「分裂」的論證在該維度不適用，因為兩件事的價值恰好相反：
-
-- 聚合多個 **repo** 的 change 沒有意義（那是不同的專案）；聚合同一個 repo **各工作目錄**的
-  change 有意義，且那正是 `worktree-aggregation` 的價值主張（一次看見全部進行中的 change）。
-- 反過來，聚合同一組檔案的多個版本毫無意義 —— 那是同一棵樹疊在一起。
-
-於是工作目錄維度的分裂是**既存事實而非新引入**：`worktree-aggregation` 之後，現況已是
-「OpenSpec 聚合、Files 恆為 folder 自身」，`side-panel-worktree` 只是把 Files 那一側的「選哪
-一個」由寫死改為使用者可控，分裂的程度並未改變。
-
-#### Scenario: 切換身分不改變側欄來源
-
-- **WHEN** 側欄來源指向 repoB，使用者於 OpenSpec 與 Files 身分之間切換
-- **THEN** 兩個身分皆呈現 repoB 的內容
-
-#### Scenario: 切換身分不改變已選定的工作目錄
-
-- **WHEN** Files 身分選定了某個 worktree，使用者切至 OpenSpec 身分後再切回
-- **THEN** Files 身分仍以該 worktree 為樹根
-
-#### Scenario: OpenSpec 身分不因 Files 選定工作目錄而收窄
-
-- **WHEN** Files 身分選定了某個 worktree，使用者切至 OpenSpec 身分
-- **THEN** OpenSpec 身分仍聚合呈現該 repo 全部工作目錄的 change，而非僅該 worktree 的
-
 ### Requirement: 切換側欄來源時重置錨定的 change
 
 使用者切換側欄來源時，**該 folder 座標中**錨定的 change SHALL 被重置。change 的 slug 隸屬於某個
@@ -242,3 +194,20 @@ change 時呈現它，否則呈現空狀態讓使用者自行挑選）。
 - **WHEN** 某個 folder 的座標錨定了 repoA 的某個 change，使用者將其側欄來源切至 repoB
 - **THEN** 該 folder 不再錨定 repoA 的 change；本 change 視圖依 repoB 的狀態重新解析
 
+## REMOVED Requirements
+
+### Requirement: 側欄來源為 per-session，預設為 session 所屬的 folder
+
+**Reason**: 本 change 的目的正是推翻這條 requirement 的粒度。它把「沒有任何 session 時，側欄來源
+SHALL **退回** rail 的 focused folder」定義為一個**唯讀的 fallback** —— 於是側欄的來源指示器與
+工作目錄選擇器在尚無 session 的 folder 上皆無法使用，而側欄是一個閱讀工具，不該需要先開一個
+terminal 才能用。
+
+per-session 這個粒度當初是由「比照 `anchoredChange` 的自然擴展」推導出來的，而那個類比不成立：
+`anchoredChange` per-session 有道理（每個 session 在做不同的 change），側欄**來源**沒有同樣的
+道理 —— 它回答的是「我現在要讀哪個 repo」，那是一個與 terminal 無關的問題。
+
+**Migration**: 由 `## ADDED Requirements` 的「側欄座標為 per-folder，不以 session 的存在
+為前提」承接，並把工作目錄與錨定的 change 一併納入同一組座標。既有的「切換 focused session 時
+side panel 隨之改變」語意由「切換 rail 上選中的項目時座標隨之改變」取代 —— **跟隨的語意保留，
+只換跟隨的單位**。持久化由新增的「側欄座標跨應用程式重啟存活」承接（不再隨 session 落盤）。

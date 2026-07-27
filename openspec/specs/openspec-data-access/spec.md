@@ -256,8 +256,9 @@ HEAD 識別（供分支缺席時呈現）、它是否為該 repo 的主工作目
 主工作目錄 —— 而後者正是使用者當下所在的位置，卻會被呈現為位於此 folder 之外、不可瀏覽。
 
 **識別碼與 folder-relative 根兩者皆為必要，且用途不同**：識別碼供 renderer 保存選擇並落盤
-（`session-persistence` 禁止路徑進入持久化），folder-relative 根供 renderer 組成檔案系統請求的
-路徑前綴。
+（**落盤的座標不得含路徑** —— 見 `side-panel-source` 的「側欄座標跨應用程式重啟存活」；
+`session-persistence` 對 session 自己的落盤資料有同源的要求），folder-relative 根供 renderer
+組成檔案系統請求的路徑前綴。
 
 清單 SHALL 與 `terminal-sessions` 用於解析 session 工作目錄的列舉**同源同參數** —— 兩者若各自
 列舉，使用者在 Files 中看得到的工作目錄集合就可能與他能在其中開 session 的集合不一致。

@@ -162,7 +162,21 @@ function makeFixture() {
   const plain = join(base, 'repo-plain')
   mkdirSync(plain, { recursive: true })
 
-  return { many, single, archivedOnly, plain }
+  /**
+   * **衍生預設動態性的專屬 fixture。**
+   *
+   * 驗「active change 由 1 變 2 → 本 change 視圖讓位給空狀態」必須在磁碟上真的多出一個
+   * change，而那種污染是走 UI 的還原助手救不回來的 —— 在 `repo-single` 上做，它的
+   * `solo-change` 是其前後數十條斷言的前提（錨定的 slug、tasks 進度…），會波及一整片。
+   * 於是它自己一個 repo，用完即可原地不管。
+   */
+  const derived = join(base, 'repo-derived')
+  writeFile(join(derived, 'openspec/config.yaml'), 'schema: spec-driven\n')
+  writeFile(join(derived, 'openspec/specs/core/spec.md'), SPEC('core'))
+  changeMeta(join(derived, 'openspec/changes/only-change'), '2026-06-01')
+  writeFile(join(derived, 'openspec/changes/only-change/proposal.md'), '# 唯一的\n\n## Why\n\n因為。\n')
+
+  return { many, single, archivedOnly, plain, derived }
 }
 
 /**
@@ -654,6 +668,12 @@ const WORKTREE_PICKER = `(() => {
   return btn ? btn.innerText.trim() : null
 })()`
 
+/** 選擇器是否停用 —— `panel-coordinate-per-folder` 之後它恆不停用。不呈現時為 null。 */
+const WORKTREE_PICKER_DISABLED = `(() => {
+  const btn = document.querySelector('${WORKTREE_BUTTON}')
+  return btn ? btn.disabled === true : null
+})()`
+
 const CLICK_WORKTREE_PICKER = `(() => {
   const btn = document.querySelector('${WORKTREE_BUTTON}')
   if (!btn || btn.disabled) return false
@@ -797,7 +817,32 @@ const CONTINUE_ENTRY = `(() => {
   return { disabled: btn.disabled === true, text: btn.parentElement?.textContent ?? '' }
 })()`
 
+/** 狀態列的文字。`status-bar` 呈現的是 **focused session 的脈絡**。 */
+const STATUS_BAR_TEXT = `(() => {
+  const bar = document.querySelector('footer[aria-label="${copy('statusBar.label')}"]')
+  return bar ? (bar.textContent ?? '') : null
+})()`
+
 const HAS_BACK_TO_OWN = `Boolean(document.querySelector('[aria-label="${copy('panelSource.backToOwn')}"]'))`
+
+/** 側欄來源控制項是否停用 —— `panel-coordinate-per-folder` 之後它恆不停用。 */
+const PANEL_SOURCE_DISABLED = `(() => {
+  const el = document.querySelector('[aria-label="${copy('panelSource.change')}"]')
+  return el ? el.disabled === true : null
+})()`
+
+/**
+ * 開啟中的選單是否完整落在 viewport 內。
+ *
+ * 側欄最窄只有 320px 起跳，而下拉錨定在來源列上 —— 溢出 viewport 的選單使用者點不到，
+ * 但以選擇器直接觸發項目的測試照樣會過（那會跳過定位）。
+ */
+const MENU_WITHIN_VIEWPORT = `(() => {
+  const menu = document.querySelector('[role="menu"]')
+  if (!menu) return null
+  const r = menu.getBoundingClientRect()
+  return r.left >= 0 && r.top >= 0 && r.right <= window.innerWidth && r.bottom <= window.innerHeight
+})()`
 
 /** Timeline 的分組標題（`.spekui-timeline-section` 的 title；套件內部的 class，不歸字典管）。 */
 const TIMELINE_SECTIONS = `(() => {
@@ -1059,12 +1104,13 @@ async function anchorChange(client, slug) {
 async function runMode(label, { port, rendererUrl }) {
   console.log(`\n── ${label} ──`)
 
-  const { many, single, archivedOnly, plain } = makeFixture()
+  const { many, single, archivedOnly, plain, derived: derivedRepo } = makeFixture()
   const worktree = makeWorktreeFixture()
   const profile = seedProfile([
     ['f-many', many],
     ['f-single', single],
     ['f-archived', archivedOnly],
+    ['f-derived', derivedRepo],
     ['f-plain', plain],
     ['f-worktree', worktree.repo],
     ['f-worktree-inside', worktree.inside],
@@ -1109,6 +1155,170 @@ async function runMode(label, { port, rendererUrl }) {
       derived === 'solo-change',
       String(derived),
     )
+
+    // ── 尚無任何 session 時，側欄座標仍然可改（panel-coordinate-per-folder）──
+    //
+    // **本段是這個 change 的核心驗收，而它的位置是承重的**：座標隸屬於 folder 且跨 session
+    // 存活，因此「尚無任何 session」這個前置條件必須在**任何一段建立 session 之前**成立。
+    // 這裡是 runMode 的最前面，此刻整個 workspace 一個 session 都沒有。
+    //
+    // 此前這兩個控制項都 gate 在 `focusedId !== null`（側欄來源是 per-session 的狀態，沒有
+    // session 就沒地方存）—— 於是一個剛加入、還沒開 terminal 的 repo，連「側欄要讀哪個 repo」
+    // 都選不了。而側欄是一個**閱讀**工具。
+    console.log('\n尚無 session 時側欄座標仍可改')
+    check(results, '此刻該 folder 尚無任何 session',
+      (await app.client.evaluate(SESSION_TABS)).length === 0)
+    check(results, '來源指示器未呈現為停用',
+      (await app.client.evaluate(PANEL_SOURCE_DISABLED)) === false)
+
+    // **狀態列在沒有 focused session 時仍是空狀態**（`status-bar`）。
+    //
+    // 這條在座標改基之後才需要明寫：錨定現在**跨 session 存在**於 folder 上，於是「有錨定」
+    // 不再蘊含「有 session」—— 照字面實作很容易得到一條只剩半截的列（呈現一個 change，卻沒有
+    // 它所屬的 session 脈絡）。此刻 repo-single 恰好**有**一個由衍生預設呈現的 change，
+    // 因此這條斷言有鑑別力。
+    const barNoSession = await pollUntil(app.client, STATUS_BAR_TEXT, (v) => v !== null, 5000)
+    check(results, '尚無 session 時狀態列呈現空狀態，不單獨呈現 change',
+      String(barNoSession).includes(copy('statusBar.noSession')) &&
+        !String(barNoSession).includes('solo-change'),
+      String(barNoSession))
+
+    await realClick(app.client, await stableRect(app.client, PANEL_SOURCE_RECT))
+    const sourceMenuItem = await pollUntil(
+      app.client,
+      MENU_ITEM_RECT('repo-many'),
+      (v) => v !== null,
+      3000,
+    )
+    check(results, '尚無 session 時來源下拉開得起來', sourceMenuItem !== null)
+    // 下拉必須整個落在 viewport 內 —— 以選擇器直接觸發項目會跳過定位，那種測法看不出溢出。
+    check(results, '下拉完整落在 viewport 內',
+      (await app.client.evaluate(MENU_WITHIN_VIEWPORT)) === true)
+    await realClick(app.client, sourceMenuItem)
+
+    // **斷言側欄內容真的換了，不是只驗選單關掉。** repo-many 有兩個 active change，於是
+    // 「本 change」落入空狀態（衍生預設不在多個候選之間猜）—— 那本身就是內容換了的證據。
+    const noSessionSource = await pollUntil(
+      app.client,
+      PANEL_SOURCE_LABEL,
+      (v) => String(v).includes('repo-many'),
+      8000,
+    )
+    check(results, '尚無 session 也選得了另一個 repo 作為側欄來源',
+      String(noSessionSource).includes('repo-many'), String(noSessionSource))
+
+    // Changes 樹住在「瀏覽」視圖 —— 不先切過去，下面的輪詢會對著一棵不存在的樹等到逾時。
+    await app.client.evaluate(CLICK_VIEW(copy('openspec.tabBrowse')))
+    const foreignRows = await pollUntil(
+      app.client,
+      CHANGE_TREE_ROWS('Active'),
+      (list) => list.length === 2,
+      8000,
+    )
+    check(results, '側欄內容確實換成該 repo 的（repo-many 有兩個 active change）',
+      foreignRows.length === 2, foreignRows.map((r) => r.slug).join(', '))
+
+    // 尚無 session 也建立得了錨定 —— 此前那條路徑唯一的存放處是 `MainStage` 的 `viewing`
+    // map（一個 per-folder 的影子狀態），本 change 把它刪掉了，這條斷言看著它。
+    await app.client.evaluate(ACTIVATE_TREE_ROW('add-oauth'))
+    const noSessionAnchor = await pollUntil(app.client, ANCHORED_SLUG, (v) => v === 'add-oauth', 8000)
+    check(results, '尚無 session 時仍可於 Changes 樹建立錨定',
+      noSessionAnchor === 'add-oauth', String(noSessionAnchor))
+
+    // **還原**：把來源帶回自身，後面每一段才站在它預期的 repo 上（座標現在跨 session 存活）。
+    check(results, '來源非自身時呈現「回到自身」捷徑',
+      (await app.client.evaluate(HAS_BACK_TO_OWN)) === true)
+    await realClick(app.client, await stableRect(app.client, BACK_TO_OWN_RECT))
+    await pollUntil(app.client, PANEL_SOURCE_LABEL, (v) => String(v).includes('repo-single'), 8000)
+    await pollUntil(app.client, ANCHORED_SLUG, (v) => v === 'solo-change', 8000)
+
+    // ── 衍生預設是動態的（openspec-panel）──────────────────────────────────
+    //
+    // **這一段刻意排在探針的最前段。** app 每監看一個 folder／工作目錄／檔案樹就佔用一個
+    // inotify instance，而那個上限是 **per-user 的 128**（不是 per-process）—— 跑到後段時，
+    // 一個新註冊的 watcher 可能根本建不起來，而 `openspec-service` 的 `watcher.on('error')`
+    // 是靜默的：於是「watcher 建不起來」與「檔案沒變」在外部看起來一模一樣（實測：把這一段
+    // 放在後段時，連改一個**既有**檔案都不會觸發更新）。
+    //
+    // 「側欄來源恰有一個 active change 時就呈現它」是一個**衍生的預設值**，它隨 active change
+    // 的數量重新解析，**不會於任何時刻被系統自行固化成明確的錨定**。於是第二個 active change
+    // 一出現，本 change 視圖就讓位給空狀態 —— 那是規格而非缺陷（系統不在多個候選之間猜），
+    // 寫成斷言是為了讓下一次 dogfood 不把它當 bug 修掉。
+    //
+    // **這一段用自己的 fixture repo**（`repo-derived`）：它要在磁碟上真的長出第二個 change，
+    // 而那種污染走 UI 的還原助手救不回來。
+    console.log('\n衍生預設隨 active change 數量重新解析')
+    await app.client.evaluate(SELECT_FOLDER('repo-derived'))
+    const derivedOne = await pollUntil(app.client, ANCHORED_SLUG, (v) => v === 'only-change', 10_000)
+    check(results, '恰一個 active change 時由衍生預設呈現它', derivedOne === 'only-change',
+      String(derivedOne))
+
+    // chokidar 的初次掃描是非同步的，而 `ignoreInitial: true` 表示 ready 之前的變更收不到 ——
+    // 這個 repo 是上一行的輪詢才第一次掃到的。比照 `openspec-service.test.ts` 的 `READY_MS`。
+    await sleep(1500)
+    changeMeta(join(derivedRepo, 'openspec/changes/second-change'), '2026-06-02')
+    writeFile(
+      join(derivedRepo, 'openspec/changes/second-change/proposal.md'),
+      '# 第二個\n\n## Why\n\n因為。\n',
+    )
+    // **把中間狀態變成獨立的斷言。** 這一段曾因一個 shadowing 而把 fixture 寫到別的地方
+    // （`runMode` 的 try 區塊裡另有一個同名的 `derived`，值是輪詢回來的 slug）—— 症狀是
+    // 「側欄沒更新」，於是三輪診斷全都在懷疑 watcher 與快取。檔案有沒有真的寫出去，是可以
+    // 當場在探針行程裡驗的，不必勞駕 app。
+    check(
+      results,
+      '（前置）新的 change 確實寫進了該 repo 的 fixture',
+      existsSync(join(derivedRepo, 'openspec/changes/second-change/proposal.md')),
+      join(derivedRepo, 'openspec/changes/second-change/proposal.md'),
+    )
+
+    // **先確認資料真的更新了，再問視圖。** 兩者是不同的問題，混在一條斷言裡的話，紅燈會
+    // 指不出是「watcher 沒看見」還是「看見了但視圖沒重解析」。
+    await app.client.evaluate(CLICK_VIEW(copy('openspec.tabBrowse')))
+    const twoActive = await pollUntil(
+      app.client,
+      CHANGE_TREE_ROWS('Active'),
+      (list) => list.length === 2,
+      20_000,
+    )
+    check(results, '新增的 change 出現在樹上（agent 改檔 → 側欄自己更新）',
+      (twoActive ?? []).length === 2, (twoActive ?? []).map((r) => r.slug).join(', '))
+
+    await app.client.evaluate(CLICK_VIEW(copy('openspec.tabChange')))
+    const wentEmpty = await pollUntil(
+      app.client,
+      CHANGE_EMPTY_TEXT,
+      (v) => typeof v === 'string' && v.includes(copy('openspec.noAnchoredChange')),
+      15_000,
+    )
+    check(
+      results,
+      'active 由 1 變 2 後衍生預設讓位給空狀態（規格，非缺陷）',
+      typeof wentEmpty === 'string' && wentEmpty.includes(copy('openspec.noAnchoredChange')),
+      String(wentEmpty).split('\n').filter(Boolean)[0],
+    )
+
+    // **成對的對照組**：明確的錨定不受 active 數量影響 —— 少了它，「衍生預設整個壞掉」
+    // （永遠回空狀態）也會讓上面那條通過。
+    const explicit = await anchorChange(app.client, 'second-change')
+    check(results, '明確錨定之後本 change 視圖呈現它', explicit === 'second-change', String(explicit))
+
+    changeMeta(join(derivedRepo, 'openspec/changes/third-change'), '2026-06-03')
+    writeFile(
+      join(derivedRepo, 'openspec/changes/third-change/proposal.md'),
+      '# 第三個\n\n## Why\n\n因為。\n',
+    )
+    await pollUntil(app.client, CHANGE_TREE_ROWS('Active'), () => true, 3000)
+    check(
+      results,
+      '明確的錨定不因 active change 增加而改變',
+      (await pollUntil(app.client, ANCHORED_SLUG, (v) => v === 'second-change', 10_000)) ===
+        'second-change',
+    )
+
+    // **還原**：後面每一段都站在 repo-single 上（下一段就要讀它的 artifact 分頁）。
+    await pollUntil(app.client, SELECT_FOLDER('repo-single'), (ok) => ok === true, 8000)
+    await pollUntil(app.client, ANCHORED_SLUG, (v) => v === 'solo-change', 10_000)
 
     // ── 本 change：artifact 分頁 ────────────────────────────────────────────
     console.log('\n本 change：每個 artifact 一個分頁')
@@ -1444,12 +1654,21 @@ async function runMode(label, { port, rendererUrl }) {
       marked.filter((r) => r.anchored).map((r) => r.slug).join(', '),
     )
 
-    // ── 錨定為 per-session，側欄跟隨 focused session ────────────────────────
+    // ── 錨定為 per-folder：同一個 folder 的多個 session 共用它 ──────────────
+    //
+    // **這一段的斷言在 `panel-coordinate-per-folder` 被反轉了。** 此前錨定是 per-session
+    // （「不同 session 各自保有其錨定」），而現在它隸屬於 rail 上選中的項目 —— 切 session
+    // 不改變側欄看的 change。
+    //
+    // **鑑別力來自「非預設值」**：`repo-many` 有**兩個** active change，於是衍生預設不成立
+    // （系統不在多個候選之間猜），`add-invoice` 只可能來自使用者的明確選擇。若這裡用一個
+    // 恰有一個 active change 的 repo，「切 session 前後一樣」在 per-session 的舊實作上**也**
+    // 必定成立，斷言就沒有任何鑑別力。
     //
     // **第二個 session 用 claude 目標**：後面「錨定不隨 pty 的輸出改變」要在它身上驗「標題
     // 真的變了、而錨定沒有跟著變」—— 而 login shell 已不再採用 pty 宣告的標題，那個前提在
     // shell session 上永遠不成立（見 `makeStubClaude`）。
-    console.log('\n側欄跟隨 focused session 的錨定')
+    console.log('\n錨定為 per-folder，跨 session 共用')
     await createSession(app.client, 'claude')
     const twoTabs = await pollUntil(app.client, SESSION_TABS, (list) => list.length === 2, 10_000)
     check(results, '該 folder 有兩個 session', twoTabs.length === 2)
@@ -1458,15 +1677,17 @@ async function runMode(label, { port, rendererUrl }) {
     await pollUntil(app.client, CHANGE_TREE_ROWS('Active'), (list) => list.length > 0, 8000)
     await app.client.evaluate(ACTIVATE_TREE_ROW('add-invoice'))
     const second = await pollUntil(app.client, ANCHORED_SLUG, (value) => value === 'add-invoice', 8000)
-    check(results, '第二個 session 錨定另一個 change', second === 'add-invoice')
+    check(results, '於第二個 session 期間改錨定（非衍生預設 —— 該 repo 有兩個 active change）',
+      second === 'add-invoice', String(second))
 
     check(results, '切回第一個 session', (await app.client.evaluate(FOCUS_SESSION_TAB(0))) === true)
-    const followed = await pollUntil(app.client, ANCHORED_SLUG, (value) => value === 'add-oauth', 8000)
-    check(results, '側欄隨 focused session 呈現其錨定的 change', followed === 'add-oauth', String(followed))
+    const shared = await pollUntil(app.client, ANCHORED_SLUG, (value) => value === 'add-invoice', 8000)
+    check(results, '切 session 不改變錨定（座標隸屬於 folder，非 session）',
+      shared === 'add-invoice', String(shared))
 
     check(results, '切到第二個 session', (await app.client.evaluate(FOCUS_SESSION_TAB(1))) === true)
-    const followedBack = await pollUntil(app.client, ANCHORED_SLUG, (value) => value === 'add-invoice', 8000)
-    check(results, '不同 session 各自保有其錨定', followedBack === 'add-invoice', String(followedBack))
+    const sharedBack = await pollUntil(app.client, ANCHORED_SLUG, (value) => value === 'add-invoice', 8000)
+    check(results, '兩個 session 共用同一個錨定', sharedBack === 'add-invoice', String(sharedBack))
 
     // ── 錨定不隨 pty 的輸出改變 ─────────────────────────────────────────────
     //
@@ -1723,19 +1944,27 @@ async function runMode(label, { port, rendererUrl }) {
       shellEntry !== null && shellEntry.text.includes(copy('openspec.continueBlocked.notClaude')),
       shellEntry?.text)
 
-    // 側欄來源為 per-session：第二個 session 指到 repo-many，切 session 側欄來源跟著走
+    // ── 側欄來源為 per-folder：同一個 folder 的多個 session 共用它 ──────────
+    //
+    // **這一段的斷言在 `panel-coordinate-per-folder` 被反轉了。** 此前來源是 per-session
+    // （「每個 session 各自保有側欄來源」），現在它隸屬於 rail 上選中的項目。
+    //
+    // 判準用 `PANEL_SOURCE_LABEL`（來源列上的 repo 名）而**不是** `ANCHORED_SLUG`：後者在
+    // repo-single 上恆為 `solo-change`，而那正是它的**衍生預設** —— 拿它當「來源是自身」的
+    // 證據，不論實作對錯都會通過（既有的假綠，一併修掉）。
     await createSession(app.client)
     await realClick(app.client, await stableRect(app.client, PANEL_SOURCE_RECT))
     await realClick(app.client, await pollUntil(app.client, MENU_ITEM_RECT('repo-many'), (v) => v !== null, 3000))
     await pollUntil(app.client, CHANGE_EMPTY_TEXT, (v) => v !== null, 10_000)
 
     check(results, '切回第一個 session', (await app.client.evaluate(FOCUS_SESSION_TAB(0))) === true)
-    const s1 = await pollUntil(app.client, ANCHORED_SLUG, (v) => v === 'solo-change', 8000)
-    check(results, '每個 session 各自保有側欄來源（session 1 仍為 repo-single）', s1 === 'solo-change', String(s1))
+    const s1 = await pollUntil(app.client, PANEL_SOURCE_LABEL, (v) => String(v).includes('repo-many'), 8000)
+    check(results, '切 session 不改變側欄來源（座標隸屬於 folder，非 session）',
+      String(s1).includes('repo-many'), String(s1))
 
     check(results, '切到第二個 session', (await app.client.evaluate(FOCUS_SESSION_TAB(1))) === true)
     const s2 = await pollUntil(app.client, PANEL_SOURCE_LABEL, (v) => String(v).includes('repo-many'), 8000)
-    check(results, '側欄來源跟隨 focused session（session 2 為 repo-many）', String(s2).includes('repo-many'), String(s2))
+    check(results, '兩個 session 共用同一個側欄來源', String(s2).includes('repo-many'), String(s2))
 
     // OpenSpec 與 Files 共用同一側欄來源：切 Files，樹是 repo-many 的（有 openspec、無 notes.txt）
     await app.client.evaluate(CLICK_IDENTITY('▤'))
@@ -1747,10 +1976,30 @@ async function runMode(label, { port, rendererUrl }) {
       foreignTree.join(', '),
     )
 
-    // ── 側欄來源跨重建還原（session-persistence）────────────────────────────
+    // ── 側欄座標跨重建還原（side-panel-source）──────────────────────────────
     //
-    // reload 走與「關 app 重開」**同一條** persist→restore 落盤路徑（sessions.json）。此刻
-    // session 1 的來源是自身 repo-single、session 2 指向 repo-many —— 重建後兩者都該原樣回來。
+    // reload 走與「關 app 重開」**同一條** persist→restore 落盤路徑 —— 但落點已由
+    // `sessions.json` 改為 **`panel.json`**（座標隸屬於 rail 的項目，一個沒有任何 session 的
+    // folder 其座標同樣要跨重啟存活）。
+    //
+    // **還原前的值必須是非預設的**：此刻 repo-single 的來源指向 repo-many（使用者選的），
+    // 預設則是它自身 —— 只驗預設值的話，功能全死也是綠的。
+    //
+    // 落盤有 500ms 的 debounce，reload 太快會把這次選擇丟掉，而那個失敗與「持久化整個沒做」
+    // 長得一模一樣。
+    //
+    // **三個維度各要一條**。此處驗來源與**錨定的 change**；工作目錄那一維由「Files 的工作目錄
+    // 選擇器」段落的 reload 承擔（那裡才有多個工作目錄可選）。
+    //
+    // 錨定用的是 repo-many 的 change —— 該 repo 有**兩個** active change，於是衍生預設不成立，
+    // 還原回來的值只可能來自落盤。用一個恰有一個 active change 的 repo 會讓這條斷言在功能全死
+    // 時照樣通過（衍生預設會把同一個 slug 填回去）。
+    await app.client.evaluate(CLICK_IDENTITY('◈'))
+    const anchoredBeforeReload = await anchorChange(app.client, 'add-oauth')
+    check(results, '（前置）reload 前錨定一個非衍生預設的 change',
+      anchoredBeforeReload === 'add-oauth', String(anchoredBeforeReload))
+
+    await sleep(900)
     await app.client.send('Page.reload', {})
     await sleep(1500)
     await pollUntil(app.client, MOUNTED, (v) => v === true, 20_000)
@@ -1759,8 +2008,7 @@ async function runMode(label, { port, rendererUrl }) {
     const rebuiltTabs = await pollUntil(app.client, SESSION_TABS, (l) => l.length === 2, 15_000)
     check(results, '重新載入後兩個 session 原樣重建', rebuiltTabs.length === 2, JSON.stringify(rebuiltTabs))
 
-    await app.client.evaluate(FOCUS_SESSION_TAB(1))
-    const restoredForeign = await pollUntil(
+    const restoredSource = await pollUntil(
       app.client,
       PANEL_SOURCE_LABEL,
       (v) => String(v).includes('repo-many'),
@@ -1768,19 +2016,39 @@ async function runMode(label, { port, rendererUrl }) {
     )
     check(
       results,
-      '側欄來源跨重建還原（session 2 仍指向 repo-many）',
-      String(restoredForeign).includes('repo-many'),
-      String(restoredForeign),
+      '側欄來源跨重建還原（repo-single 的座標仍指向 repo-many）',
+      String(restoredSource).includes('repo-many'),
+      String(restoredSource),
     )
 
-    await app.client.evaluate(FOCUS_SESSION_TAB(0))
-    const restoredOwn = await pollUntil(app.client, ANCHORED_SLUG, (v) => v === 'solo-change', 10_000)
+    // 座標既然隸屬於 folder，切到哪一個 session 都該讀到同一筆 —— 重建之後仍然如此。
+    await app.client.evaluate(FOCUS_SESSION_TAB(1))
+    const restoredOnOther = await pollUntil(
+      app.client,
+      PANEL_SOURCE_LABEL,
+      (v) => String(v).includes('repo-many'),
+      10_000,
+    )
     check(
       results,
-      '側欄來源跨重建還原（session 1 仍指向自身 repo）',
-      restoredOwn === 'solo-change',
-      String(restoredOwn),
+      '重建後座標仍跨 session 共用',
+      String(restoredOnOther).includes('repo-many'),
+      String(restoredOnOther),
     )
+
+    const restoredAnchor = await pollUntil(app.client, ANCHORED_SLUG, (v) => v === 'add-oauth', 10_000)
+    check(
+      results,
+      '錨定的 change 跨重建還原',
+      restoredAnchor === 'add-oauth',
+      String(restoredAnchor),
+    )
+
+    // **把來源還原成自身** —— 座標現在跨 session 存活於 folder 上，不還原的話後面每一段站在
+    // repo-single 上的斷言都會看到 repo-many（`files-in-worktree` 為同型的污染付過代價：
+    // 一次紅 15 條，其中兩條反而變成假綠）。
+    await realClick(app.client, await stableRect(app.client, BACK_TO_OWN_RECT))
+    await pollUntil(app.client, PANEL_SOURCE_LABEL, (v) => String(v).includes('repo-single'), 8000)
 
     // ── worktree 聚合 ───────────────────────────────────────────────────────
     //
@@ -1792,6 +2060,42 @@ async function runMode(label, { port, rendererUrl }) {
       '選中含 worktree 的 repo',
       (await pollUntil(app.client, SELECT_FOLDER('repo-worktree'), (ok) => ok === true, 8000)) === true,
     )
+
+    // ── 尚無 session 時工作目錄選擇器仍可用（panel-coordinate-per-folder）────
+    //
+    // **位置是承重的**：本段必須排在這個 repo 建立任何 session **之前**（下面幾行就會建一個）。
+    // 工作目錄的選擇此前與側欄來源共用同一道 `canSelect` gate，於是一個還沒開 terminal 的 repo
+    // 連換個 worktree 看看都做不到 —— 而那正是第八次 dogfooding 撞上的那道牆。
+    check(results, '此刻該 folder 尚無任何 session',
+      (await app.client.evaluate(SESSION_TABS)).length === 0)
+    await app.client.evaluate(CLICK_IDENTITY('▤'))
+    await pollUntil(app.client, WORKTREE_PICKER, (v) => v !== null, 12_000)
+    check(results, '尚無 session 時工作目錄選擇器未停用',
+      (await app.client.evaluate(WORKTREE_PICKER_DISABLED)) === false)
+
+    // `CLICK_WORKTREE_PICKER` 對停用的按鈕回 false —— 它同時是「開得起來」與「沒被 gate」的判準。
+    check(results, '尚無 session 時工作目錄下拉開得起來',
+      (await app.client.evaluate(CLICK_WORKTREE_PICKER)) === true)
+    const wtNoSessionItems = await pollUntil(app.client, WORKTREE_MENU, (l) => l.length >= 3, 8000)
+    check(results, '下拉列出該 repo 的工作目錄', (wtNoSessionItems ?? []).length >= 3,
+      (wtNoSessionItems ?? []).map((i) => i.label).join(', '))
+
+    check(results, '尚無 session 也選得了另一個工作目錄',
+      (await app.client.evaluate(CLICK_WORKTREE_ITEM('feat-inside'))) === true)
+    // 斷言樹根**真的換了** —— 不是只驗選單關掉。判準是根的直接子項目。
+    const insideTree = await pollUntil(
+      app.client,
+      WORKTREE_PICKER,
+      (v) => String(v).includes('feat-inside'),
+      10_000,
+    )
+    check(results, '樹根確實切到該工作目錄', String(insideTree).includes('feat-inside'),
+      String(insideTree))
+
+    // **還原**：座標跨 session 存活於 folder 上，不還原的話後面每一段都會站在這個 worktree。
+    await resetWorktreeToSelf(app.client)
+    await app.client.evaluate(CLICK_IDENTITY('◈'))
+
     await app.client.evaluate(CLICK_VIEW(copy('openspec.tabBrowse')))
 
     const wtActive = await pollUntil(

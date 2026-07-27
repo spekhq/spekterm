@@ -5,6 +5,7 @@ import { type ContinuationBlock, continuationCommand } from './openspec/continua
 import { useChanges, useWorktrees } from './openspec/data'
 import { VizOverlay, type VizKind } from './openspec/VizOverlay'
 import type { FileRequest, OpenSpecRequest, OpenSpecTarget } from './openspec/nav'
+import { usePanelCoordinate } from './panel-coordinate'
 import { PanelSwitch } from './side-panel/PanelSwitch'
 import { SidePanel } from './side-panel/SidePanel'
 import { SessionTabs } from './terminal/SessionTabs'
@@ -37,13 +38,11 @@ export function MainStage({ folder, folders }: MainStageProps): React.JSX.Elemen
   const [openSpecRequest, setOpenSpecRequest] = useState<OpenSpecRequest | null>(null)
   const nonce = useRef(0)
 
-  /** 沒有任何 session 時，「本 change」看的是哪個 change —— 錨定無處可去，改由 folder 持有。 */
-  const [viewing, setViewing] = useState<ReadonlyMap<string, string>>(() => new Map())
-
   /** 全視窗 overlay 的 Graph／Timeline（design D12）。null＝沒開。 */
   const [viz, setViz] = useState<VizKind | null>(null)
 
   const sessions = useSessions()
+  const panel = usePanelCoordinate()
 
   // **「駕駛」那半：focusedFolder。** header 的 name/path、session 分頁與 terminal 一律以它為準
   // —— 側欄指向另一個 repo 時，這一半完全不受影響（`side-panel-source`）。
@@ -51,13 +50,15 @@ export function MainStage({ folder, folders }: MainStageProps): React.JSX.Elemen
   const folderSessions = focusedFolder ? sessions.forFolder(focusedFolder.id) : []
   const focusedId = focusedFolder ? sessions.focusedIdFor(focusedFolder.id) : null
 
-  // **「讀」那半：panelFolder。** side panel 呈現 focused session 的側欄來源；沒有 session 時
-  // 退回 focusedFolder。來源指向的 folder 已被移除時（`find` 找不到）同樣退回 focusedFolder ——
-  // 那正是 session 自己的 folder（focused session 屬於 focusedFolder），與 spec 的 fallback 一致。
-  const panelSourceId = sessions.panelSourceOf(focusedId)
+  // **「讀」那半：panelFolder。** side panel 呈現 rail 上選中之項目的側欄座標所指的 repo
+  // （`side-panel-source`）—— **與有沒有 session 無關**。座標未曾改動時（`sourceFolderId` 省略）
+  // 即為該 folder 自身；來源指向的 folder 已被移除時（`find` 找不到）同樣退回自身 —— 持久化的
+  // 座標不保證重開後仍然有效，那是 spec 明文要求的降級。
+  const coordinate = panel.coordinateOf(focusedFolder?.id ?? null)
   const panelFolder =
-    (panelSourceId ? folders.find((candidate) => candidate.id === panelSourceId) : null) ??
-    focusedFolder
+    (coordinate.sourceFolderId
+      ? folders.find((candidate) => candidate.id === coordinate.sourceFolderId)
+      : null) ?? focusedFolder
 
   // 換側欄來源（切 rail focus 或改 panelSource 皆會改變 panelFolder）就把待處理的跨身分請求丟掉
   // —— 它是**上一個側欄來源**的座標。少了這步，切到新來源時側欄會停在「顯示某個 spec」的視圖，
@@ -118,14 +119,13 @@ export function MainStage({ folder, folders }: MainStageProps): React.JSX.Elemen
     if (displayed?.status === 'dormant' && !displayed.wakeError) wake(displayed.id)
   }, [displayed?.id, displayed?.status, displayed?.wakeError, wake])
 
-  // 新 session 的初始錨定：新 session 建在 **focusedFolder**，該 folder 恰有一個 active change
-  // 時錨定它，否則留空。多個候選之間不猜 —— 猜錯的側欄比沒有側欄更糟（design D3）。
-  const { data: focusedChanges } = useChanges(focusedFolder?.hasOpenSpec ? focusedFolder.id : null)
-  const soleActiveChangeForCreate =
-    focusedChanges && focusedChanges.active.length === 1 ? focusedChanges.active[0].slug : undefined
-
   // 側欄「本 change」的衍生預設：以 **panelFolder**（側欄來源）為準 —— 側欄來源恰有一個 active
-  // change 時就是它。跨 repo 時，這與「新 session 建在 focusedFolder」是兩個不同的 folder。
+  // change 時就是它。
+  //
+  // **它是動態的，不會被固化為明確的錨定**（`openspec-panel`）：active change 變成兩個時，
+  // 這個預設就讓位給空狀態。此前「建立 session 的那一刻恰好只有一個」會把它固化進該 session，
+  // 而那個分界在座標改基為 per-folder 之後撐不住了 —— 開一個 terminal 為什麼要決定側欄看什麼？
+  // 統一為動態之後規則只有一條，也不需要「何時固化」那個沒有自明答案的額外裁決。
   const { data: panelChanges } = useChanges(panelFolder?.hasOpenSpec ? panelFolder.id : null)
   const soleActiveChangeForPanel =
     panelChanges && panelChanges.active.length === 1 ? panelChanges.active[0].slug : undefined
@@ -142,13 +142,11 @@ export function MainStage({ folder, folders }: MainStageProps): React.JSX.Elemen
     (spawnTarget: SpawnTarget) => {
       if (!focusedFolder) return
       setSessionError(null)
-      void sessions.create(focusedFolder.id, spawnTarget, soleActiveChangeForCreate).then(
-        (outcome) => {
-          if (outcome.status === 'failed') setSessionError(outcome.failure.message)
-        },
-      )
+      void sessions.create(focusedFolder.id, spawnTarget).then((outcome) => {
+        if (outcome.status === 'failed') setSessionError(outcome.failure.message)
+      })
     },
-    [focusedFolder, sessions, soleActiveChangeForCreate],
+    [focusedFolder, sessions],
   )
 
   const focusSession = useCallback(
@@ -160,32 +158,25 @@ export function MainStage({ folder, folders }: MainStageProps): React.JSX.Elemen
   )
 
   /**
-   * 側欄「本 change」看的是哪個 change。三層優先序：
+   * 側欄「本 change」看的是哪個 change。兩層優先序：
    *
-   * 1. **focused session 的錨定**（使用者在 Changes 點的那個；隸屬於 session 的側欄來源）。
-   * 2. 沒有 session 時，panelFolder 層的檢視狀態（同樣是使用者點的）。
-   * 3. **側欄來源恰有一個 active change 時，就是它。**
+   * 1. **座標中明確的錨定**（使用者在 Changes 樹、Graph／Timeline 或開 session 入口選的那個）。
+   * 2. **側欄來源恰有一個 active change 時，就是它** —— 衍生的預設值，動態解析。
    *
-   * 第 3 層是**衍生的預設值**，以 panelFolder 為準（見上 `soleActiveChangeForPanel`）。
+   * 此前這裡是**三層**：有 session 走 session 的錨定，沒有 session 走一個 per-folder 的
+   * `viewing` map。那個 map 是「per-session 回答不了沒有 session」的具體化 —— 座標改基之後
+   * 它無事可做，已刪除。
    */
-  const explicitAnchor = focusedId
-    ? sessions.anchoredChangeOf(focusedId)
-    : panelFolder
-      ? (viewing.get(panelFolder.id) ?? null)
-      : null
+  const explicitAnchor = coordinate.anchoredChange ?? null
 
   const anchoredChange = explicitAnchor ?? soleActiveChangeForPanel ?? null
 
   const anchorChange = useCallback(
     (slug: string) => {
-      if (focusedId) {
-        sessions.anchorChange(focusedId, slug)
-        return
-      }
-      if (!panelFolder) return
-      setViewing((previous) => new Map(previous).set(panelFolder.id, slug))
+      if (!focusedFolder) return
+      panel.setAnchor(focusedFolder.id, slug)
     },
-    [focusedId, panelFolder, sessions],
+    [focusedFolder, panel],
   )
 
   /**
@@ -230,39 +221,45 @@ export function MainStage({ folder, folders }: MainStageProps): React.JSX.Elemen
     (worktreeKey: string) => {
       if (!panelFolder || !anchoredChange) return
       setSessionError(null)
-      void sessions
-        .create(panelFolder.id, 'claude', anchoredChange, worktreeKey)
-        .then((outcome) => {
-          if (outcome.status === 'failed') setSessionError(outcome.failure.message)
-        })
+      // **錨定寫進 `panelFolder` 的座標，不是 focusedFolder 的。** 側欄來源即 focused folder 時
+      // 那是同一筆（該 change 本來就已經是它的錨定，否則側欄不會正在呈現它），此舉等於不變；
+      // 指向另一個 repo 時，使用者切 rail focus 過去讀到的正是 panelFolder 那一筆 —— 沒有這步，
+      // 他會落入「尚無錨定」的空狀態，續寫入口連呈現的機會都沒有。
+      //
+      // 這是本 change 唯一的**跨項目寫入**，而它是正當的：使用者的動作本身就是關於那個 repo 的
+      // （他剛在那裡開了一個 session 去做這個 change），不是一次無來由的繼承。
+      panel.setAnchor(panelFolder.id, anchoredChange)
+      void sessions.create(panelFolder.id, 'claude', { worktreeKey }).then((outcome) => {
+        if (outcome.status === 'failed') setSessionError(outcome.failure.message)
+      })
     },
-    [panelFolder, anchoredChange, sessions],
+    [panelFolder, anchoredChange, panel, sessions],
   )
 
   /**
-   * 來源指示器選了一個 folder：設定 focused session 的側欄來源。
+   * 來源指示器選了一個 folder：設定 **rail 上選中之項目**的側欄來源。
    *
-   * 只在有 focused session 時有效 —— 側欄來源是 per-session 的狀態，沒有 session 就沒地方存
-   *（此時側欄本就退回 focusedFolder，見 `side-panel-source`）。
+   * **不以「有沒有 session」為條件** —— 座標隸屬於 rail 的項目，而側欄是一個閱讀工具，不該
+   * 需要先開一個 terminal 才能選要讀什麼（`side-panel-source`）。
    */
   const changePanelSource = useCallback(
     (folderId: string) => {
-      if (!focusedId) return
-      sessions.setPanelSource(focusedId, folderId)
+      if (!focusedFolder) return
+      panel.setSource(focusedFolder.id, folderId)
     },
-    [focusedId, sessions],
+    [focusedFolder, panel],
   )
 
-  /** 側欄的工作目錄：Files 身分以哪個工作目錄為樹根。無 focused session 時為預設（folder 自身）。 */
-  const panelWorktreeKey = sessions.panelWorktreeOf(focusedId)
+  /** 側欄的工作目錄：Files 身分以哪個工作目錄為樹根。省略＝ folder 自身。 */
+  const panelWorktreeKey = coordinate.worktreeKey
 
-  /** 選擇器選了一個工作目錄。與側欄來源同理 —— 沒有 focused session 就沒地方存這個選擇。 */
+  /** 選擇器選了一個工作目錄。與側欄來源同理 —— 同樣不以 session 的存在為前提。 */
   const changePanelWorktree = useCallback(
     (worktreeKey: string | undefined) => {
-      if (!focusedId) return
-      sessions.setPanelWorktree(focusedId, worktreeKey)
+      if (!focusedFolder) return
+      panel.setWorktree(focusedFolder.id, worktreeKey)
     },
-    [focusedId, sessions],
+    [focusedFolder, panel],
   )
 
   /**
@@ -283,14 +280,17 @@ export function MainStage({ folder, folders }: MainStageProps): React.JSX.Elemen
         .sort((a, b) => (b.relPath as string).length - (a.relPath as string).length)
         .find((option) => relPath.startsWith(`${option.relPath}/`))
 
-      if (focusedId) sessions.setPanelWorktree(focusedId, owner?.key)
+      // **無條件切換，不再包在「有沒有 session」裡。** `side-panel-worktree` 的「自 OpenSpec
+      // 跳往檔案時工作目錄一併切換」是一條無條件的 SHALL，而此處原本的 `if (focusedId)` 讓它
+      // 在無 session 時完全沒有兌現 —— 零覆蓋，因為探針一律先建 session。
+      if (focusedFolder) panel.setWorktree(focusedFolder.id, owner?.key)
 
       nonce.current += 1
       setFileRequest({ target: relPath, nonce: nonce.current })
       setIdentity('files')
       expandSidePanel()
     },
-    [expandSidePanel, focusedId, panelWorktrees, sessions],
+    [expandSidePanel, focusedFolder, panel, panelWorktrees],
   )
 
   /**
@@ -408,7 +408,6 @@ export function MainStage({ folder, folders }: MainStageProps): React.JSX.Elemen
               folder={panelFolder}
               folders={folders}
               sourceOwnerId={focusedFolder?.id ?? null}
-              canSelectSource={focusedId !== null}
               onSelectSource={changePanelSource}
               anchoredChange={anchoredChange}
               onAnchor={anchorChange}

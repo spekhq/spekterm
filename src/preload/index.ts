@@ -2,6 +2,7 @@ import type { GraphData } from '@spekjs/core'
 import { type IpcRendererEvent, contextBridge, ipcRenderer } from 'electron'
 import type { DirtyEntry } from '../main/dirty-state'
 import type { FsResult, WriteResponse } from '../main/ipc/fs'
+import type { PanelCoordinates } from '../main/panel-store'
 import type { RestoredSession } from '../main/ipc/terminal'
 import type { DirEntry, FileContent } from '../main/fs-service'
 import type { TerminalPreferences } from '../main/preferences-store'
@@ -315,6 +316,25 @@ const workspaceApi = {
       return () => {
         ipcRenderer.off('workspace:terminal:exit', handler)
       }
+    },
+  },
+  /**
+   * 側欄座標（`side-panel-source`）：rail 上的每個項目各記著「我站在這裡時，側欄看什麼」。
+   *
+   * **自成一個 namespace，不掛在 `folders.*` 之下** —— 那個 namespace 是 workspace 清單的 CRUD，
+   * 而座標的鍵在設計上是一個**不透明字串**（rail 的項目集合日後可能納入 linked worktree），
+   * 掛過去會讓「鍵就是一個 folder」這個今日的巧合看起來像契約。
+   *
+   * **落盤的內容不得含任何路徑**（延續 `terminal-sessions` 與 `session-persistence` 的邊界
+   * 論證）：工作目錄以不可逆識別碼表示，而驗證在主行程的**寫入入口** —— preload 與 renderer
+   * 同屬一個行程樹，在這裡檢查等同沒有檢查。
+   */
+  panel: {
+    /** 全部座標。鍵為 rail 項目的識別碼（今日即 folder id）。 */
+    get: (): Promise<PanelCoordinates> => ipcRenderer.invoke('workspace:panel:get'),
+    /** 送出完整的一份（fire-and-forget，主行程 debounce 後落盤）。 */
+    persist: (coordinates: PanelCoordinates): void => {
+      ipcRenderer.send('workspace:panel:persist', coordinates)
     },
   },
 } as const
