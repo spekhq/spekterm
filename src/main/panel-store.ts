@@ -29,9 +29,30 @@ export interface PanelCoordinate {
 /** 鍵為 **rail 項目的識別碼**（今日恰為 folder id，見下方 `#belongsTo`）。 */
 export type PanelCoordinates = Record<string, PanelCoordinate>
 
+/**
+ * 送往 renderer 的一份完整座標。**兩個鍵空間分開回**，不攤平成一個 map —— 攤平就等於把
+ * `coordinates` 的鍵空間借給全域項目用，而那正是 design D1c 要避免的碰撞。
+ */
+export interface PanelSnapshot {
+  coordinates: PanelCoordinates
+  global?: PanelCoordinate
+}
+
 interface PersistedPanel {
   version: number
   coordinates: PanelCoordinates
+  /**
+   * 全域項目的座標（`global-session`）——**與 `coordinates` 並列，不是它的一個鍵**。
+   *
+   * **鍵空間物理隔離，碰撞於是表達不出來**（design D1c）。若把它放進 `coordinates` 並用一個
+   * 保留字串當鍵，一個識別碼恰為該保留字的 folder 就會與它共用同一組座標，且 `remove()` 會
+   * 在移除該 folder 時連帶刪掉全域座標 —— 而 **folder 識別碼不受格式約束**（`parseWorkspace`
+   * 只檢查它是字串，探針與手寫的 workspace 一向用可讀的識別碼），所以「保留字不會撞」是一個
+   * 假設，不是保證。
+   *
+   * 舊檔沒有這個欄位 ⇒ 讀成 `undefined` ⇒ 全域座標為空。**因此不需要升版本**。
+   */
+  global?: PanelCoordinate
 }
 
 function optionalString(value: unknown): string | undefined {
@@ -102,7 +123,7 @@ export function parsePanel(raw: string): PersistedPanel | null {
   }
 
   if (typeof data !== 'object' || data === null) return null
-  const { version, coordinates } = data as Record<string, unknown>
+  const { version, coordinates, global: globalRaw } = data as Record<string, unknown>
 
   if (version !== PANEL_VERSION) return null
   // **陣列要明確排除。** `typeof [] === 'object'` 且非 null，於是少了這一行，一份 `coordinates`
@@ -119,7 +140,12 @@ export function parsePanel(raw: string): PersistedPanel | null {
     if (coordinate && !isEmpty(coordinate)) parsed[key] = coordinate
   }
 
-  return { version: PANEL_VERSION, coordinates: parsed }
+  // 全域座標同樣過 `sanitizeCoordinate` —— 它與 folder 的座標是同一種東西，只是住在不同的
+  // 鍵空間裡。不合法或空的就當作沒有。
+  const globalParsed = sanitizeCoordinate(globalRaw)
+  const global = globalParsed && !isEmpty(globalParsed) ? globalParsed : undefined
+
+  return { version: PANEL_VERSION, coordinates: parsed, global }
 }
 
 /**
@@ -146,6 +172,7 @@ function quarantine(filePath: string): string | null {
 
 export class PanelStore {
   #coordinates: PanelCoordinates = {}
+  #global: PanelCoordinate | undefined
 
   constructor(private readonly filePath: string) {}
 
@@ -162,6 +189,7 @@ export class PanelStore {
         console.error(`[panel] config unreadable, starting with default coordinates: ${String(error)}`)
       }
       this.#coordinates = {}
+      this.#global = undefined
       return
     }
 
@@ -177,15 +205,16 @@ export class PanelStore {
     }
 
     this.#coordinates = parsed.coordinates
+    this.#global = parsed.global
   }
 
-  /** 當前的全部座標（複本）。 */
-  list(): PanelCoordinates {
+  /** 當前的全部座標（複本）—— folder 的那組與全域的那個分開回，鍵空間不混。 */
+  list(): PanelSnapshot {
     const copy: PanelCoordinates = {}
     for (const [key, coordinate] of Object.entries(this.#coordinates)) {
       copy[key] = { ...coordinate }
     }
-    return copy
+    return { coordinates: copy, global: this.#global ? { ...this.#global } : undefined }
   }
 
   /**
@@ -193,7 +222,9 @@ export class PanelStore {
    *
    * **每一筆都過 `sanitizeCoordinate`** —— 見該函式的說明：驗證在寫入的入口，不只在讀取時。
    */
-  replace(incoming: unknown): void {
+  replace(payload: unknown): void {
+    if (typeof payload !== 'object' || payload === null) return
+    const { coordinates: incoming, global: globalIncoming } = payload as Record<string, unknown>
     if (typeof incoming !== 'object' || incoming === null) return
 
     const next: PanelCoordinates = {}
@@ -203,7 +234,9 @@ export class PanelStore {
       if (coordinate && !isEmpty(coordinate)) next[key] = coordinate
     }
 
+    const globalNext = sanitizeCoordinate(globalIncoming)
     this.#coordinates = next
+    this.#global = globalNext && !isEmpty(globalNext) ? globalNext : undefined
     this.save()
   }
 
@@ -244,6 +277,7 @@ export class PanelStore {
     writePanelFileAtomic(this.filePath, {
       version: PANEL_VERSION,
       coordinates: this.#coordinates,
+      global: this.#global,
     })
   }
 }

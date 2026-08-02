@@ -10,6 +10,8 @@
   "rail": {
     "label": "Workspace",
     "heading": "WORKSPACE",
+    "globalName": "Global",
+    "globalTooltip": "Sessions that do not belong to any repo",
     "empty": "No folders yet",
     "addFolder": "+ Add folder",
     "pathMissing": "path unavailable",
@@ -44,6 +46,7 @@
   "stage": {
     "label": "Main stage",
     "noRepo": "No repo selected",
+    "globalHint": "Not tied to any repo",
     "noRepoHint": "No repo selected — pick one from the workspace on the left, or add a folder",
     "terminal": "Terminal",
     "expandSidePanel": "Expand side panel",
@@ -61,7 +64,10 @@
   "panelSource": {
     "change": "Change side panel source",
     "foreign": "Showing {{name}} — not the selected repo",
-    "backToOwn": "Back to the selected repo"
+    "backToOwn": "Back to the selected repo",
+    "none": "No repo selected",
+    "clear": "Clear selection",
+    "pickHint": "Pick one above to read its specs and files"
   },
   "files": {
     "label": "Files",
@@ -102,7 +108,8 @@
       "change": "Change working directory",
       "outside": "Outside this folder — cannot be browsed here",
       "unknown": "unknown"
-    }
+    },
+    "noSource": "No repo selected — Files shows a repo from your workspace"
   },
   "viewer": {
     "tooLarge": "File too large to view",
@@ -163,11 +170,13 @@
     "specOrigin": "Shown from the main worktree ({{branch}}) — other worktrees may hold a different version.",
     "continueBlocked": {
       "noSession": "Start a session in this repo to continue this change.",
+      "globalSession": "The focused session is not tied to any repo. Focus a claude session in the repo that owns this change to continue.",
       "foreignSource": "The panel is showing another repo. Switch it back to the selected repo to continue.",
       "notClaude": "The focused session is a shell. Focus a claude session to continue.",
       "notRunning": "The focused session is not running. Open it to continue.",
       "foreignWorktree": "This change lives in another working directory. The focused session is not there, so it cannot continue it."
-    }
+    },
+    "noSource": "No repo selected"
   },
   "viz": {
     "label": "Visualizations",

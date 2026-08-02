@@ -2826,6 +2826,155 @@ async function runMode(label, { port, rendererUrl }) {
         restoredRows?.includes('openspec') === false,
       JSON.stringify(restoredRows),
     )
+
+    // ── global-session：全域項目的側欄座標（來源預設未選定，可指向任一 repo，可清回未選定）
+    //
+    // **插在最後** —— 前面每一段對選中的 folder、身分與視圖都有假設（既有紀律）。
+    /*
+      **不依賴 DOM 階層**：以 aria-label 在整個 rail 內尋找 —— `> ul > li >` 那種直接子選擇器
+      只要中間多包一層就靜默回 null，而 null 展開進 CDP 是一句看不懂的 `Invalid parameters`。
+
+      **回的是完整 rect（x/y/width/height）**：這支探針的 `realClick` 自己算中心
+      （`center(rect)`），餵一個只有 x/y 的物件會讓它算出 NaN —— 同樣是那句 `Invalid parameters`。
+
+      **以下的模板字串內不得出現反引號** —— 它會提前把字串結束掉，而 `node --check` 抓不到
+      （外層恰好仍然合法），要到執行時才炸。本 change 已經踩過四次。
+    */
+    const GLOBAL_ROW_RECT = `(() => {
+      const rail = document.querySelector('aside[aria-label="${copy('rail.label')}"]')
+      if (!rail) return null
+      const row = [...rail.querySelectorAll('div[role="button"]')]
+        .find((el) => el.getAttribute('aria-label') === ${JSON.stringify(copy('rail.globalName'))})
+      if (!row) return null
+      const r = row.getBoundingClientRect()
+      return { x: r.x, y: r.y, width: r.width, height: r.height }
+    })()`
+
+    const globalRect = await pollUntil(app.client, GLOBAL_ROW_RECT, (v) => v !== null, 8000)
+    check(results, '前提：rail 上找得到全域項目', globalRect !== null, JSON.stringify(globalRect))
+    if (globalRect) await realClick(app.client, globalRect)
+    await sleep(600)
+
+    // 來源預設**未選定** —— 而 OpenSpec 身分**仍然可用**（否則這個空狀態永遠到不了）。
+    check(
+      results,
+      '全域項目的側欄來源預設為未選定',
+      (await app.client.evaluate(PANEL_SOURCE_LABEL))?.includes(copy('panelSource.none')) === true,
+      String(await app.client.evaluate(PANEL_SOURCE_LABEL)),
+    )
+    check(
+      results,
+      '來源未選定時 OpenSpec 身分仍可用（空狀態到得了）',
+      (await app.client.evaluate(
+        `(() => {
+          const tabs = [...document.querySelectorAll('[role="tablist"][aria-label="${copy('panelSwitch.label')}"] button[role="tab"]')]
+          const tab = tabs.find((t) => t.innerText.includes(${JSON.stringify(copy('panelSwitch.openSpec'))}))
+          return tab ? !tab.disabled : null
+        })()`,
+      )) === true,
+      String(await app.client.evaluate(
+        `[...document.querySelectorAll('[role="tablist"][aria-label="${copy('panelSwitch.label')}"] button[role="tab"]')].map((t) => t.innerText.trim() + ':' + t.disabled).join(' | ')`,
+      )),
+    )
+
+    // 全域項目沒有「自身 repo」—— 不提供「回到自身」捷徑（那是一顆按下去無處可去的按鈕）。
+    check(
+      results,
+      '全域項目不呈現「回到自身 repo」捷徑',
+      (await app.client.evaluate(HAS_BACK_TO_OWN)) === false,
+    )
+
+    // 選一個 repo 當來源 ⇒ 側欄呈現它。
+    //
+    // **等它出現再點** —— 直接 `evaluate` 會在來源列還沒渲染時拿到 `null`，而 `realClick(null)`
+    // 展開進 CDP 就是一句 `Invalid parameters`，看起來像探針基礎設施壞了（實測踩過）。
+    await realClick(
+      app.client,
+      await pollUntil(app.client, PANEL_SOURCE_RECT, (v) => v !== null, 6000),
+    )
+    const globalPickItem = await pollUntil(
+      app.client,
+      MENU_ITEM_RECT('repo-single'),
+      (v) => v !== null,
+      4000,
+    )
+    await realClick(app.client, globalPickItem)
+    const globalPicked = await pollUntil(
+      app.client,
+      PANEL_SOURCE_LABEL,
+      (v) => v?.includes('repo-single') === true,
+      6000,
+    )
+    check(results, '全域項目可將側欄來源指向任一 repo', globalPicked?.includes('repo-single') === true,
+      String(globalPicked))
+
+    /*
+      **座標跨 rail 項目互不干擾** —— 而這一條的鑑別力全部來自「先設成非預設值」。
+
+      舊版是在**已經把來源清回未選定之後**才切走再切回的，於是「永遠回未選定」與「與 folder
+      共用同一個鍵空間」兩種錯誤實作都會通過。這正是 CLAUDE.md 記著 `panel-coordinate-per-folder`
+      的那個形態（「三個維度都先設成非預設值才切」）。
+
+      切走的目標刻意選 **repo-many**（不是 repo-single）：它自己的來源預設為它自己，於是共用
+      鍵空間的實作會讓切回來的全域變成 repo-many —— 一眼看得出來，而不是靜默地看起來正確。
+    */
+    await pollUntil(app.client, SELECT_FOLDER('repo-many'), (v) => v === true, 6000)
+    await sleep(400)
+    await realClick(app.client, await app.client.evaluate(GLOBAL_ROW_RECT))
+    const retained = await pollUntil(
+      app.client,
+      PANEL_SOURCE_LABEL,
+      (v) => v?.includes('repo-single') === true,
+      6000,
+    )
+    check(results, '切走再切回，全域項目仍呈現它自己選定的來源（未被 folder 的座標污染）',
+      retained?.includes('repo-single') === true && retained?.includes('repo-many') !== true,
+      String(retained))
+
+    // **「清除來源」是「未選定」唯一的回頭路** —— 少了它，那兩條空狀態只在使用者從未動過
+    // 指示器時可見。
+    // **清除是來源列上的一顆按鈕，不是下拉裡的項目**（dogfood 回饋：藏在選單裡找不到）。
+    const CLEAR_RECT = `(() => {
+      const el = document.querySelector('[aria-label="${copy('panelSource.clear')}"]')
+      if (!el) return null
+      const r = el.getBoundingClientRect()
+      return { x: r.x, y: r.y, width: r.width, height: r.height }
+    })()`
+    const globalClearBtn = await pollUntil(app.client, CLEAR_RECT, (v) => v !== null, 4000)
+    check(results, '清除來源是來源列上的捷徑（與「回到自身」同形式），不是下拉裡的項目',
+      globalClearBtn !== null)
+    await realClick(app.client, globalClearBtn)
+    const globalCleared = await pollUntil(
+      app.client,
+      PANEL_SOURCE_LABEL,
+      (v) => v?.includes(copy('panelSource.none')) === true,
+      6000,
+    )
+    check(results, '全域項目可將來源清回未選定', globalCleared?.includes(copy('panelSource.none')) === true,
+      String(globalCleared))
+
+    // ── file-explorer × global-session：Files 身分在「來源未選定」時的呈現
+    //
+    // **兩條必須成對** —— 只驗「沒有檔案列」的話，一個「Files 整個壞掉、永遠空白」的實作
+    // 照樣通過。正向那條才讓它有鑑別力。
+    const TREE_ROW_COUNT = `document.querySelectorAll('[aria-label="${copy('files.label')}"] [role="treeitem"], [aria-label="${copy('files.label')}"] li[title]').length`
+
+    await app.client.evaluate(CLICK_IDENTITY('▤'))
+    await sleep(600)
+    check(results, '來源未選定時 Files 不呈現任何檔案列',
+      (await app.client.evaluate(TREE_ROW_COUNT)) === 0,
+      String(await app.client.evaluate(TREE_ROW_COUNT)))
+
+    // 正向對照：選一個 repo ⇒ 樹裡要有東西。
+    await realClick(
+      app.client,
+      await pollUntil(app.client, PANEL_SOURCE_RECT, (v) => v !== null, 6000),
+    )
+    const backPick = await pollUntil(app.client, MENU_ITEM_RECT('repo-single'), (v) => v !== null, 4000)
+    await realClick(app.client, backPick)
+    const rowsAfterPick = await pollUntil(app.client, TREE_ROW_COUNT, (v) => v > 0, 8000)
+    check(results, '選定來源後檔案樹呈現該 repo 的內容（正向對照）',
+      typeof rowsAfterPick === 'number' && rowsAfterPick > 0, String(rowsAfterPick))
   } finally {
     await app.close()
   }

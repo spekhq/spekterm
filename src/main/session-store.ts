@@ -49,7 +49,19 @@ export function isUuid(value: unknown): value is string {
  */
 export interface PersistedSession {
   id: string
-  folderId: string
+  /**
+   * 這個 session 隸屬於哪個 folder。**`null` ＝ 全域**（不隸屬任何 folder，見 `global-session`）。
+   *
+   * **落盤時全域必須是一個「明確寫出的 `null`」，而不是「欄位缺席」**（design D1b）。
+   * 兩者在 JSON 裡是分得開的（`{"folderId": null}` vs `{}`），而這個區分是承重的：
+   * `replace()` 收到的是**不受信任的輸入**，一個過期的 renderer（或一次沒清乾淨的重構）漏掉
+   * 這個欄位時，若「缺席 ⇒ 全域」，一個**隸屬於 repo 的 session 就會靜默地變成全域 session**
+   * —— 下次開 app 它出現在全域項目底下，claude 從家目錄 `--resume` 一個開在別處的對話，
+   * 依實測那會查無此對話，於是靜默自癒為全新對話：**歷史消失，而且沒有任何訊號**。
+   *
+   * 因此缺席一律視為不合法（丟棄該筆），與 `id` 不是 uuid 時同級。
+   */
+  folderId: string | null
   spawnTarget: SpawnTarget
   ordinal: number
   /** 使用者親自取的名字（＝永久接管命名權）。 */
@@ -103,12 +115,25 @@ function optionalString(value: unknown): string | undefined {
  * 一個壞掉的 session 不該讓使用者其餘所有 session 一起消失。
  */
 
+/**
+ * 歸屬的驗證：`null` ＝ 全域，非空字串 ＝ 某個 folder，**其餘（含缺席）皆不合法**。
+ *
+ * 回傳結果物件而不是 `string | null | undefined` —— 後者無法區分「合法的全域」與「不合法」，
+ * 而那正是本函式存在的全部理由（design D1b）。
+ */
+function parseFolderId(raw: unknown): { ok: true; value: string | null } | { ok: false } {
+  if (raw === null) return { ok: true, value: null }
+  if (typeof raw === 'string' && raw !== '') return { ok: true, value: raw }
+  return { ok: false }
+}
+
 export function parseSessionEntry(entry: unknown): PersistedSession | null {
   if (typeof entry !== 'object' || entry === null) return null
   const raw = entry as Record<string, unknown>
 
   if (!isUuid(raw.id)) return null
-  if (typeof raw.folderId !== 'string' || raw.folderId === '') return null
+  const folderId = parseFolderId(raw.folderId)
+  if (!folderId.ok) return null
   if (!isSpawnTarget(raw.spawnTarget)) return null
   if (typeof raw.ordinal !== 'number' || !Number.isFinite(raw.ordinal)) return null
 
@@ -122,7 +147,7 @@ export function parseSessionEntry(entry: unknown): PersistedSession | null {
 
   return {
     id: raw.id,
-    folderId: raw.folderId,
+    folderId: folderId.value,
     spawnTarget: raw.spawnTarget,
     ordinal: raw.ordinal,
     customTitle: optionalString(raw.customTitle),
@@ -278,6 +303,11 @@ export class SessionStore {
     const next: PersistedSession[] = []
     for (const entry of incoming) {
       if (!isUuid(entry.id)) continue
+      // **歸屬也要驗形狀，不能原樣接受。** 型別上它是 `string | null`，但這裡收到的是 IPC 的
+      // 另一端送來的東西 —— 型別檢查管不到執行期。缺席／空字串一律丟棄該筆，於是「缺席不是
+      // 全域」這條由結構保證，而不是靠沒有人送錯（design D1b）。
+      const folderId = parseFolderId(entry.folderId)
+      if (!folderId.ok) continue
       // 已經確定結束的 session，不因為一份過期的清單而復活（見 `#gone`）。
       if (this.#gone.has(entry.id)) continue
       const kept = previous.get(entry.id)
@@ -289,7 +319,7 @@ export class SessionStore {
       // **SHALL NOT** 由 session 持久化。白名單讓那條要求由結構保證，而不是靠沒有人犯錯。
       next.push({
         id: entry.id,
-        folderId: entry.folderId,
+        folderId: folderId.value,
         spawnTarget: entry.spawnTarget,
         ordinal: entry.ordinal,
         customTitle: entry.customTitle,

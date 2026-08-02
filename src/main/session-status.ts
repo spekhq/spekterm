@@ -1,3 +1,5 @@
+import os from 'node:os'
+import path from 'node:path'
 import type { WebContents } from 'electron'
 import {
   type AgentStatus,
@@ -26,6 +28,23 @@ import {
 
 /** 一次 tick 的間隔。夠即時（使用者 `cd` 之後兩秒內反映），又不至於讓 `git status` 變成負擔。 */
 const TICK_MS = 2000
+
+
+/**
+ * 這個工作目錄是否就是使用者的家目錄。
+ *
+ * **家目錄一律跳過 git 工作區偵測**（design D10）：`readGitWorkingState` 是同步的外部程式呼叫
+ * （`spawnSync`），而本服務每數秒對 focused session 呼叫它一次。家目錄本身是 git repo 是常見
+ * 設定（dotfiles 工作流），於整個家目錄跑 `git status` 會遍歷它底下的一切，而 `spawnSync`
+ * 期間**主行程的訊息迴圈是停住的** —— IPC 不回應、pty 資料轉發延遲，症狀是「整個 app 每隔
+ * 幾秒卡一下」。
+ *
+ * 此前這條路徑要使用者自己 `cd` 出去才走得到；全域 session（`global-session`）之後它是預設。
+ * 而「整個家目錄的 dirty 狀態」對使用者本來就沒有意義 —— 一旦 `cd` 進真正的工作區，狀態照常。
+ */
+function isHomeDirectory(cwd: string): boolean {
+  return path.resolve(cwd) === path.resolve(os.homedir())
+}
 
 export interface SessionStatusSnapshot {
   sessionId: string
@@ -77,7 +96,7 @@ export class SessionStatusService {
     if (sessionId === null || this.target.isDestroyed()) return
 
     const cwd = this.cwdOf(sessionId)
-    const git: GitWorkingState = cwd ? readGitWorkingState(cwd) : {}
+    const git: GitWorkingState = cwd && !isHomeDirectory(cwd) ? readGitWorkingState(cwd) : {}
 
     const snapshot: SessionStatusSnapshot = {
       sessionId,

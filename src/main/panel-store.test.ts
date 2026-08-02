@@ -45,6 +45,9 @@ describe('parsePanel：整份損毀 → 丟棄；單一維度損毀 → 只丟�
     assert.deepEqual(parsePanel(raw), {
       version: 1,
       coordinates: { 'f-a': { sourceFolderId: 'f-b', worktreeKey: 'deadbeef', anchoredChange: 'x' } },
+      // 舊檔沒有 `global` 欄位 ⇒ 讀成 undefined（全域座標為空）。這是向後相容的擴充，
+      // 因此**不需要升版本**（design D1c）。
+      global: undefined,
     })
   })
 
@@ -91,14 +94,14 @@ describe('parsePanel：整份損毀 → 丟棄；單一維度損毀 → 只丟�
 describe('PanelStore.load：損毀不得阻止啟動', () => {
   it('內容無法解析時以預設座標啟動，原檔改名保留', () => {
     const store = seed('{ this is not json')
-    assert.deepEqual(store.list(), {})
+    assert.deepEqual(store.list().coordinates, {})
     assert.equal(corruptFiles().length, 1)
   })
 
   it('檔案不存在時以預設座標啟動，且不建立檔案', () => {
     const store = new PanelStore(configPath)
     store.load()
-    assert.deepEqual(store.list(), {})
+    assert.deepEqual(store.list().coordinates, {})
     assert.equal(fs.existsSync(configPath), false)
   })
 })
@@ -107,9 +110,9 @@ describe('PanelStore.replace：驗證發生在寫入的入口', () => {
   it('合法座標寫入後可讀回，且帶版本欄位', () => {
     const store = new PanelStore(configPath)
     store.load()
-    store.replace({ 'f-a': { sourceFolderId: 'f-b', anchoredChange: 'my-change' } })
+    store.replace({ coordinates: { 'f-a': { sourceFolderId: 'f-b', anchoredChange: 'my-change' } } })
 
-    assert.deepEqual(store.list(), { 'f-a': { sourceFolderId: 'f-b', anchoredChange: 'my-change' } })
+    assert.deepEqual(store.list().coordinates, { 'f-a': { sourceFolderId: 'f-b', anchoredChange: 'my-change' } })
     assert.equal(readConfig().version, PANEL_VERSION)
   })
 
@@ -126,30 +129,32 @@ describe('PanelStore.replace：驗證發生在寫入的入口', () => {
     const store = new PanelStore(configPath)
     store.load()
     store.replace({
-      'f-a': { sourceFolderId: 'f-b', worktreeKey: '../../../etc/passwd', anchoredChange: 'x' },
+      coordinates: {
+        'f-a': { sourceFolderId: 'f-b', worktreeKey: '../../../etc/passwd', anchoredChange: 'x' },
+      },
     })
 
     assert.equal(rawFile().includes('etc/passwd'), false, '路徑不得出現在磁碟上')
     assert.equal(rawFile().includes('..'), false)
-    assert.deepEqual(store.list(), { 'f-a': { sourceFolderId: 'f-b', anchoredChange: 'x' } })
+    assert.deepEqual(store.list().coordinates, { 'f-a': { sourceFolderId: 'f-b', anchoredChange: 'x' } })
   })
 
   it('空座標與空字串鍵不佔位', () => {
     const store = new PanelStore(configPath)
     store.load()
-    store.replace({ 'f-a': {}, '': { sourceFolderId: 'f-b' }, 'f-c': { sourceFolderId: 'f-d' } })
+    store.replace({ coordinates: { 'f-a': {}, '': { sourceFolderId: 'f-b' }, 'f-c': { sourceFolderId: 'f-d' } } })
 
-    assert.deepEqual(store.list(), { 'f-c': { sourceFolderId: 'f-d' } })
+    assert.deepEqual(store.list().coordinates, { 'f-c': { sourceFolderId: 'f-d' } })
   })
 
   it('非物件的 payload 靜默忽略，不清空既有座標', () => {
     const store = new PanelStore(configPath)
     store.load()
-    store.replace({ 'f-a': { sourceFolderId: 'f-b' } })
+    store.replace({ coordinates: { 'f-a': { sourceFolderId: 'f-b' } } })
     store.replace(null)
     store.replace('nonsense')
 
-    assert.deepEqual(store.list(), { 'f-a': { sourceFolderId: 'f-b' } })
+    assert.deepEqual(store.list().coordinates, { 'f-a': { sourceFolderId: 'f-b' } })
   })
 })
 
@@ -157,10 +162,10 @@ describe('PanelStore.remove：以「屬於該 folder 的全部鍵」表達', () 
   it('folder 被移除後其座標消失，其他 folder 不受影響', () => {
     const store = new PanelStore(configPath)
     store.load()
-    store.replace({ 'f-a': { sourceFolderId: 'f-b' }, 'f-b': { anchoredChange: 'x' } })
+    store.replace({ coordinates: { 'f-a': { sourceFolderId: 'f-b' }, 'f-b': { anchoredChange: 'x' } } })
     store.remove('f-a')
 
-    assert.deepEqual(store.list(), { 'f-b': { anchoredChange: 'x' } })
+    assert.deepEqual(store.list().coordinates, { 'f-b': { anchoredChange: 'x' } })
   })
 
   /**
@@ -172,19 +177,21 @@ describe('PanelStore.remove：以「屬於該 folder 的全部鍵」表達', () 
     const store = new PanelStore(configPath)
     store.load()
     store.replace({
-      'f-a': { anchoredChange: 'x' },
-      'f-a:deadbeef': { anchoredChange: 'y' },
-      'f-ab': { anchoredChange: 'z' },
+      coordinates: {
+        'f-a': { anchoredChange: 'x' },
+        'f-a:deadbeef': { anchoredChange: 'y' },
+        'f-ab': { anchoredChange: 'z' },
+      },
     })
     store.remove('f-a')
 
-    assert.deepEqual(store.list(), { 'f-ab': { anchoredChange: 'z' } })
+    assert.deepEqual(store.list().coordinates, { 'f-ab': { anchoredChange: 'z' } })
   })
 
   it('未知的 folder 靜默返回，且不改寫檔案', () => {
     const store = new PanelStore(configPath)
     store.load()
-    store.replace({ 'f-a': { sourceFolderId: 'f-b' } })
+    store.replace({ coordinates: { 'f-a': { sourceFolderId: 'f-b' } } })
     const before = rawFile()
     store.remove('f-nope')
 
@@ -201,7 +208,7 @@ describe('PanelStore：載入時不主動修剪孤兒條目', () => {
     const store = seed(
       JSON.stringify({ version: 1, coordinates: { 'f-gone': { anchoredChange: 'x' } } }),
     )
-    assert.deepEqual(store.list(), { 'f-gone': { anchoredChange: 'x' } })
+    assert.deepEqual(store.list().coordinates, { 'f-gone': { anchoredChange: 'x' } })
   })
 })
 
@@ -218,5 +225,69 @@ describe('writePanelFileAtomic：原子寫', () => {
     writePanelFileAtomic(nested, { version: PANEL_VERSION, coordinates: {} })
 
     assert.equal(fs.existsSync(nested), true)
+  })
+})
+
+describe('全域項目的座標：與 folder 的鍵空間物理隔離', () => {
+  /**
+   * **這一條測的是不變式，不是一個實例。**
+   *
+   * 前一版的設計是「在 `coordinates` 裡用一個保留字串當鍵」，並打算以一條「保留鍵不得為合法
+   * UUID 形狀」的測試釘住它。那測的是**實例**（`global` 不像 `randomUUID()` 的產物），擋不住
+   * 任何一個識別碼恰為 `global` 的 folder —— 而 `parseWorkspace` 對 folder 識別碼**不設格式**
+   * （只檢查它是字串），探針與手寫的 workspace 一向使用可讀的識別碼。
+   *
+   * 改為獨立欄位之後，碰撞**表達不出來**。對照組：把 `#global` 併回 `#coordinates`（用任何
+   * 保留字當鍵），這一條必須變紅。
+   */
+  it('folder 的識別碼恰為 global 時，兩者座標互不覆蓋', () => {
+    const store = new PanelStore(configPath)
+    store.load()
+    store.replace({
+      coordinates: { global: { anchoredChange: 'folder-change' } },
+      global: { anchoredChange: 'global-change' },
+    })
+
+    assert.deepEqual(store.list().coordinates, { global: { anchoredChange: 'folder-change' } })
+    assert.deepEqual(store.list().global, { anchoredChange: 'global-change' })
+  })
+
+  it('移除一個識別碼為 global 的 folder，不影響全域項目的座標', () => {
+    const store = new PanelStore(configPath)
+    store.load()
+    store.replace({
+      coordinates: { global: { anchoredChange: 'folder-change' } },
+      global: { sourceFolderId: 'f-a' },
+    })
+    store.remove('global')
+
+    assert.deepEqual(store.list().coordinates, {})
+    assert.deepEqual(store.list().global, { sourceFolderId: 'f-a' })
+  })
+
+  it('全域座標同樣受寫入端驗證：路徑形狀的工作目錄識別碼不進入磁碟', () => {
+    const store = new PanelStore(configPath)
+    store.load()
+    store.replace({
+      coordinates: {},
+      global: { sourceFolderId: 'f-a', worktreeKey: '../../../etc/passwd' },
+    })
+
+    assert.equal(rawFile().includes('etc/passwd'), false)
+    assert.deepEqual(store.list().global, { sourceFolderId: 'f-a' })
+  })
+
+  it('空的全域座標不佔位，且舊檔（無 global 欄位）照常載入', () => {
+    const store = new PanelStore(configPath)
+    store.load()
+    store.replace({ coordinates: { 'f-a': { anchoredChange: 'x' } }, global: {} })
+    assert.equal(store.list().global, undefined)
+    assert.equal('global' in readConfig(), false)
+
+    const reopened = seed(
+      JSON.stringify({ version: PANEL_VERSION, coordinates: { 'f-a': { anchoredChange: 'x' } } }),
+    )
+    assert.equal(reopened.list().global, undefined)
+    assert.deepEqual(reopened.list().coordinates, { 'f-a': { anchoredChange: 'x' } })
   })
 })

@@ -520,9 +520,17 @@ const RAIL_CARET_RECT = `(() => {
 
 const RAIL_SESSION_COUNT = `document.querySelectorAll('aside[aria-label="${copy('rail.label')}"] ul[aria-label^="${prefixOf('rail.folderSessions')}"] li').length`
 
-/** rail 上 folder 列的「＋」建立入口（hover 才顯示，但 opacity 不影響 rect 與點擊）。 */
+/**
+ * rail 上 **folder** 列的「＋」建立入口（hover 才顯示，但 opacity 不影響 rect 與點擊）。
+ *
+ * **必須排除全域項目那一顆。** rail 的第一列是 `global-session` 的全域項目，它也有一顆同前綴的
+ * 建立入口 —— `querySelector` 取第一個匹配，於是不排除的話這裡拿到的是**它**，而所有以為自己
+ * 在 folder 上建 session 的斷言都會靜默地建到全域項目底下（症狀是「folder 的 session 數沒變」，
+ * 看起來像建立功能壞了）。
+ */
 const RAIL_NEW_SESSION_RECT = `(() => {
-  const btn = document.querySelector('aside[aria-label="${copy('rail.label')}"] [aria-label^="${prefixOf('rail.newSessionIn')}"]')
+  const all = [...document.querySelectorAll('aside[aria-label="${copy('rail.label')}"] [aria-label^="${prefixOf('rail.newSessionIn')}"]')]
+  const btn = all.find((b) => b.getAttribute('aria-label') !== ${JSON.stringify(copy('rail.newSessionIn', { name: copy('rail.globalName') }))})
   if (!btn) return null
   const r = btn.getBoundingClientRect()
   return { x: r.x, y: r.y, width: r.width, height: r.height }
@@ -3270,6 +3278,158 @@ async function runWorktree(label, { port, rendererUrl }) {
  *   PROBE_ONLY=runRestore,runAltScreen    跑這兩段
  *   PROBE_ONLY=runWorktree                只跑「session 開在 worktree」
  */
+/**
+ * 全域 session —— 不隸屬任何 folder，位置為家目錄（`global-session`）。
+ *
+ * **走使用者的路徑**（rail 的全域列 → ＋ → 選 shell），不繞道打 IPC：那條路徑上有一整串東西
+ * （選中項目、分頁列為它服務、歸屬鍵是 `null`），繞過去就等於沒驗到它們。
+ */
+async function runGlobalSession(label, { port, rendererUrl }) {
+  console.log(`\n── ${label}（全域 session）──`)
+
+  const { repo, out } = makeFixture()
+  const profile = seedProfile([['f1', repo]])
+  const stub = makeStubClaude()
+  const marker = `spek-term-global-${process.pid}-${Date.now()}`
+
+  // rail 上那個不隸屬任何 folder 的固定項目。**以屬性比對取名，不寫字面選擇器** ——
+  // `aria-label-source` 守衛只看形式，不區分「文案」與「fixture 的資料」。
+  const GLOBAL_ROW_RECT = `(() => {
+    const rail = document.querySelector('aside[aria-label="${copy('rail.label')}"]')
+    const row = rail && [...rail.querySelectorAll('div[role="button"]')]
+      .find((el) => el.getAttribute('aria-label') === ${JSON.stringify(copy('rail.globalName'))})
+    if (!row) return null
+    const r = row.getBoundingClientRect()
+    return { x: r.x, y: r.y, width: r.width, height: r.height }
+  })()`
+
+  const GLOBAL_NEW_SESSION_RECT = `(() => {
+    const btn = document.querySelector('aside[aria-label="${copy('rail.label')}"] [aria-label="${copy('rail.newSessionIn', { name: copy('rail.globalName') })}"]')
+    if (!btn) return null
+    const r = btn.getBoundingClientRect()
+    return { x: r.x, y: r.y, width: r.width, height: r.height }
+  })()`
+
+  let app = null
+  try {
+    app = await launch({ port, profileDir: profile, rendererUrl, marker, stub })
+    await pollUntil(app.client, `!!document.querySelector('aside[aria-label="${copy('rail.label')}"]')`, (v) => v === true, 10_000)
+
+    // **不先選任何 folder** —— 全域項目不需要 workspace 裡有東西，這一段也刻意不碰 folder。
+    const plus = await pollUntil(app.client, GLOBAL_NEW_SESSION_RECT, (v) => v !== null, 8000)
+    await realClick(app.client, plus)
+    const menuItem = await pollUntil(
+      app.client,
+      MENU_ITEM_RECT(copy('sessions.spawnShell')),
+      (v) => v !== null,
+      4000,
+    )
+    await realClick(app.client, menuItem)
+
+    const pids = await waitForPtyCount(marker, 1, 12_000)
+    check(results, `${label}：於全域項目建立 session（產生一個 pty）`,
+      pids.length === 1, `pty 數 = ${pids.length}`)
+
+    // **先把焦點交給終端** —— 剛才點的是選單，`Input.insertText` 會送到那裡去。
+    await realClick(app.client, await app.client.evaluate(TERMINAL_RECT))
+
+    // **以讀檔驗 cwd，不讀終端畫面**（renderer-agnostic，且能區分回顯與執行）。
+    const cwdFile = join(stub.home, 'global-cwd.txt')
+    await typeLine(app.client, `pwd > ${cwdFile}`)
+    const recorded = await pollUntilText(
+      () => (existsSync(cwdFile) ? readFileSync(cwdFile, 'utf8').trim() : ''),
+      (v) => v.length > 0,
+      8000,
+    )
+    check(results, `${label}：全域 session 的 cwd 為家目錄`,
+      recorded === stub.home, `${recorded} vs ${stub.home}`)
+
+    // 分頁列為全域項目服務 —— 它的 session 不與任何 folder 的混列。
+    const tabs = await app.client.evaluate(TAB_LABELS)
+    check(results, `${label}：分頁列呈現全域項目的 session`,
+      Array.isArray(tabs) && tabs.length === 1, JSON.stringify(tabs))
+
+    // 切到 folder ⇒ 分頁列不再含全域 session（folder 尚無 session）。
+    await pollUntil(app.client, SELECT_FOLDER('repo-a'), (v) => v === true, 8000)
+    const folderTabs = await pollUntil(app.client, TAB_LABELS, (v) => v.length === 0, 6000)
+    check(results, `${label}：切到 folder 後分頁列不含全域 session`,
+      Array.isArray(folderTabs) && folderTabs.length === 0, JSON.stringify(folderTabs))
+
+    /*
+      ── 跨重啟：全域 session 一併重建、於**最後的目錄**重生，而冷啟動**不喚醒**它
+
+      這一段此前不存在，而 tasks 13.2 宣稱它存在（獨立稽核抓到）。它一次承載五條 scenario：
+      重建、重建於全域項目之下、shell 於家目錄之外的目錄重生、冷啟動不預設選中全域項目、
+      冷啟動不因全域項目恆存而喚醒 session。
+
+      **`out` 刻意選在每一個 workspace folder 之外** —— 全域 session 的 cwd 明文不受路徑夾制，
+      而落在某個 folder 裡的目錄證明不了這件事（夾制過的實作也會通過）。
+    */
+    await pollUntil(app.client, GLOBAL_ROW_RECT, (v) => v !== null, 6000)
+    await realClick(app.client, await app.client.evaluate(GLOBAL_ROW_RECT))
+    await pollUntil(app.client, TAB_LABELS, (v) => v.length === 1, 6000)
+    await realClick(app.client, await app.client.evaluate(TERMINAL_RECT))
+    await typeLine(app.client, `cd ${out}`)
+    const beforeFile = join(stub.home, 'global-before-restart.txt')
+    await typeLine(app.client, `pwd > ${beforeFile}`)
+    const movedTo = await pollUntilText(
+      () => (existsSync(beforeFile) ? readFileSync(beforeFile, 'utf8').trim() : ''),
+      (v) => v.length > 0,
+      8000,
+    )
+    check(results, `${label}：前提 —— 全域 shell 已 cd 到每個 folder 之外的目錄`,
+      movedTo === out, `${movedTo} vs ${out}`)
+
+    await sleep(SNAPSHOT_SETTLE_MS)
+    await app.quitGracefully()
+    // **等舊行程真的死透再開新的。** 這既是一條斷言（關閉終止其所有 pty），也是必要的間隔 ——
+    // 前一個 Electron 還占著 debugging port 時，新的那個連上去會是 `CDP WebSocket 連線失敗`，
+    // 而那個失敗是 **throw 而不是紅燈**，整支探針從那裡中斷（issue #7 的形態）。
+    check(results, `${label}：關閉應用程式終止全域 session 的 pty`,
+      await waitPtysGone(marker), `殘留 pids=${ptyPids(marker).join(',') || '無'}`)
+    app = await launch({ port, profileDir: profile, rendererUrl, marker, stub })
+    await pollUntil(app.client, `!!document.querySelector('aside[aria-label="${copy('rail.label')}"]')`, (v) => v === true, 10_000)
+
+    /*
+      **冷啟動：不選中全域項目、也不喚醒它的 session。**
+
+      少了前者，重建的 session 會**立刻被顯示**，而「顯示即喚醒」會讓開 app 就起一個 pty ——
+      那正是 `session-restore` 的「開 app 只起一個 claude」要防的事，只是換成全域項目恆存所以
+      恆有東西可喚醒。分頁列為空是「沒有選中全域項目」的憑據（它明明有一個 session）。
+    */
+    await sleep(1500)
+    const coldTabs = await app.client.evaluate(TAB_LABELS)
+    check(results, `${label}：冷啟動不預設選中全域項目（分頁列為空，儘管它有一個 session）`,
+      Array.isArray(coldTabs) && coldTabs.length === 0, JSON.stringify(coldTabs))
+    check(results, `${label}：冷啟動不因全域項目恆存而喚醒它的 session（沒有任何 pty）`,
+      ptyPids(marker).length === 0, `pty 數 = ${ptyPids(marker).length}`)
+
+    await realClick(app.client, await app.client.evaluate(GLOBAL_ROW_RECT))
+    const rebuilt = await pollUntil(app.client, TAB_LABELS, (v) => v.length === 1, 8000)
+    check(results, `${label}：關掉 app 再開，全域 session 原樣重建於全域項目之下`,
+      Array.isArray(rebuilt) && rebuilt.length === 1, JSON.stringify(rebuilt))
+
+    // 顯示它 ⇒ 喚醒 ⇒ pty 誕生於**最後已知的**目錄，不是家目錄。
+    await waitForPtyCount(marker, 1, 15_000)
+    await realClick(app.client, await app.client.evaluate(TERMINAL_RECT))
+    const afterFile = join(stub.home, 'global-after-restart.txt')
+    await typeLine(app.client, `pwd > ${afterFile}`)
+    const respawned = await pollUntilText(
+      () => (existsSync(afterFile) ? readFileSync(afterFile, 'utf8').trim() : ''),
+      (v) => v.length > 0,
+      10_000,
+    )
+    check(results, `${label}：全域 shell session 於最後的目錄重生（家目錄之外，未被夾制回去）`,
+      respawned === out, `${respawned} vs ${out}（家目錄是 ${stub.home}）`)
+  } finally {
+    if (app) await app.destroy()
+    rmSync(profile, { recursive: true, force: true })
+    rmSync(repo, { recursive: true, force: true })
+    rmSync(out, { recursive: true, force: true })
+    rmSync(stub.home, { recursive: true, force: true })
+  }
+}
+
 const SECTIONS = [
   ['runMode', runMode],
   ['runRestore', runRestore],
@@ -3279,6 +3439,7 @@ const SECTIONS = [
   ['runAgentStatus', runAgentStatus],
   ['runContinuation', runContinuation],
   ['runWorktree', runWorktree],
+  ['runGlobalSession', runGlobalSession],
 ]
 
 const ONLY = (process.env.PROBE_ONLY ?? '')

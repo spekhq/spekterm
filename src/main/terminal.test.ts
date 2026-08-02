@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
-import { tmpdir } from 'node:os'
+import os, { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, it } from 'node:test'
 import {
@@ -503,5 +503,68 @@ describe('pty 的環境', () => {
     assert.equal(env.CLAUDE_CODE_OAUTH_TOKEN, 'secret')
     assert.equal(env.ANTHROPIC_API_KEY, 'secret')
     assert.equal(env.CLAUDE_CODE_CHILD_SESSION, undefined)
+  })
+})
+
+describe('全域 session：不隸屬任何 folder，位置為家目錄', () => {
+  let service: TerminalService
+
+  afterEach(() => {
+    service?.dispose()
+  })
+
+  it('初始 cwd 為家目錄，且不需要任何 folder 存在', async () => {
+    // **workspace 完全是空的** —— 全域 session 不查表，位置是主行程的常數。
+    service = new TerminalService(lookup([]), sink())
+    const id = service.create(null, 'shell').sessionId
+    assert.equal(service.sessionCount, 1)
+
+    // `$(pwd)` 在回顯裡不會展開 —— 出現 `CWD=<家目錄>` 就一定是真的執行了。
+    service.write(id, 'echo CWD=$(pwd)\r')
+    await waitFor(() => output().includes(`CWD=${os.homedir()}`), { label: 'cwd = 家目錄' })
+  })
+
+  /**
+   * **`cwdOf` 對全域 session 不做路徑夾制**（design D3）。
+   *
+   * 既有夾制的正當性來自「session 宣稱自己屬於某個 folder」；全域 session 沒有這個宣稱 ——
+   * 家目錄是它的**起點**而非**邊界**。
+   *
+   * **對照組**：把 `cwdAllowed()` 的 `if (scope.global) return true` 拿掉（讓全域也走
+   * `withinAny`），這一條必須變紅 —— 家目錄之外的位置會被夾制掉而回 `undefined`。
+   */
+  it('cd 到家目錄之外的位置後，該位置仍被記錄（不受路徑夾制）', async () => {
+    service = new TerminalService(lookup([]), sink())
+    const id = service.create(null, 'shell').sessionId
+
+    // `repo` 是測試自建的暫存目錄，必然落在家目錄之外。
+    service.write(id, `cd ${repo}\r`)
+    service.write(id, 'echo MOVED=$(pwd)\r')
+    await waitFor(() => output().includes(`MOVED=${repo}`), { label: 'cd 已生效' })
+
+    await waitFor(() => service.cwdOf(id) === repo, {
+      label: '家目錄之外的 cwd 仍被記錄',
+    })
+  })
+
+  /**
+   * 重建路徑的降級：**目錄已不存在時退回家目錄，而不是讓重建失敗**。
+   *
+   * 全域 session 不受路徑夾制，但存在性檢查照留 —— 使用者關 app 前所在的目錄可能在這段期間
+   * 被刪掉了（`/tmp` 下的暫存目錄尤其常見）。
+   */
+  it('最後已知的工作目錄已不存在時，退回家目錄', async () => {
+    service = new TerminalService(lookup([]), sink())
+    const id = service.create(null, 'shell', { cwd: path.join(repo, 'gone-for-good') }).sessionId
+
+    service.write(id, 'echo CWD=$(pwd)\r')
+    await waitFor(() => output().includes(`CWD=${os.homedir()}`), { label: '退回家目錄' })
+  })
+
+  it('關閉後不留下 pty', async () => {
+    service = new TerminalService(lookup([]), sink())
+    const id = service.create(null, 'shell').sessionId
+    service.kill(id)
+    await waitFor(() => service.sessionCount === 0, { label: 'pty 已釋放' })
   })
 })

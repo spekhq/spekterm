@@ -5,7 +5,7 @@ import { useSessionStatus } from './useSessionStatus'
 import { usePanelCoordinate } from './panel-coordinate'
 import { useSessions } from './terminal/sessions'
 import { sessionTitle, statusTitle } from './terminal/session-badge'
-import type { SessionStatus, WorkspaceFolder } from './types'
+import { type RailSelection, type SessionStatus, type WorkspaceFolder, selectedFolderId } from './types'
 
 /**
  * 主視窗底部的狀態列 —— `docs/workspace-mockup.html` 早已定義（`.statusbar`），但從未實作。
@@ -23,26 +23,35 @@ import type { SessionStatus, WorkspaceFolder } from './types'
  */
 export function StatusBar({
   folders,
-  selectedId,
+  selection,
 }: {
   folders: WorkspaceFolder[]
-  selectedId: string | null
+  /** rail 上選中的項目。`null` ＝ 尚未選中任何項目（design D8）。 */
+  selection: RailSelection | null
 }): React.JSX.Element {
   const { t } = useTranslation()
   const sessions = useSessions()
   const panel = usePanelCoordinate()
 
-  const folder = folders.find((candidate) => candidate.id === selectedId) ?? null
-  const focusedId = folder ? sessions.focusedIdFor(folder.id) : null
+  const folder = folders.find((candidate) => candidate.id === selectedFolderId(selection)) ?? null
+  // **以 rail 項目的歸屬鍵取 session，不以 folder** —— 全域項目沒有 folder，用 folder 取會讓
+  // 它的 session 完全不存在（focused 恆為 undefined ⇒ 整條列塌成「沒有 repo」的空狀態）。
+  const itemKey: string | null = selection?.kind === 'folder' ? selection.id : null
+  const focusedId = selection ? sessions.focusedIdFor(itemKey) : null
   const focused = focusedId ? sessions.all().find((s) => s.id === focusedId) : undefined
 
   // 側欄來源 —— 指向別的 repo 時才標示（相等是常態，標它等於每次都重複同一個值）。
   // **座標的鍵是 rail 上選中的 folder，不是 focused session**（`side-panel-source`）。
-  const coordinate = panel.coordinateOf(folder?.id ?? null)
-  const panelSource =
-    coordinate.sourceFolderId && folder && coordinate.sourceFolderId !== folder.id
-      ? (folders.find((candidate) => candidate.id === coordinate.sourceFolderId) ?? null)
-      : null
+  const coordinate = panel.coordinateOf(selection)
+  //
+  // **先問這個項目有沒有自身 repo，不讓兩個缺席值互相比較。** 全域項目沒有「自身」，於是
+  // 「來源即自身」這句話對它沒有意義 —— 只要它選定了來源就一律標示；未選定時不標示任何東西。
+  const sourceIsForeign =
+    coordinate.sourceFolderId !== undefined &&
+    (folder === null || coordinate.sourceFolderId !== folder.id)
+  const panelSource = sourceIsForeign
+    ? (folders.find((candidate) => candidate.id === coordinate.sourceFolderId) ?? null)
+    : null
 
   /**
    * 錨定的 change 與其進度。解析方式與側欄一致（明確錨定 → 該 repo 恰有一個 active change）。
@@ -75,7 +84,7 @@ export function StatusBar({
   const unsaved = anchorSource ? dirtyBuffers.countFor(anchorSource) : 0
 
   const { data: specs } = useSpecs(focused && anchorSource ? anchorSource : null)
-  const sessionCount = folder ? sessions.countFor(folder.id) : 0
+  const sessionCount = selection ? sessions.countFor(itemKey) : 0
   const totalSessions = sessions.all().length
 
   return (
@@ -85,15 +94,31 @@ export function StatusBar({
       // 的實作：這條列的高度是版面契約的一部分，它自己失控就沒有解決任何問題。
       className="flex h-[26px] shrink-0 items-center gap-4 overflow-hidden border-t border-hairline bg-shell px-3 font-mono text-2xs leading-none text-ink-faint"
     >
-      {!folder || !focused ? (
-        <span className="truncate">{folder ? t('statusBar.noSession') : t('statusBar.noRepo')}</span>
+      {/*
+        **空狀態的條件是「沒有 focused session」，不是「沒有 folder」** —— 自 `global-session`
+        起這兩者不再等價：workspace 一個 folder 都沒有時，使用者仍可於全域項目擁有數個 session，
+        而那時要呈現的是該 session 的脈絡，不是一句「沒有 repo」。
+      */}
+      {!focused ? (
+        <span className="truncate">
+          {selection ? t('statusBar.noSession') : t('statusBar.noRepo')}
+        </span>
       ) : (
         <>
           {/*
             repo 與分支優先保留 —— `shrink-0` 讓右邊的欄位先被擠掉（spec：由右往左省略）。
             分支用 accent，與雛型的第一段一致。
           */}
-          <span className="shrink-0 text-ink-dim">{folder.name}</span>
+          {/*
+            全域 session 沒有所屬 repo —— 以全域身分標示取代**名稱**，SHALL NOT 呈現任何 folder
+            的名稱。**但分支不隨之消失**：它衍生自該 session 的工作目錄而非其所屬 folder，
+            `cd` 進任一 repo 之後照常呈現（那正是使用者當下最需要的欄位）。
+            它與 repo 名稱同為「我打的字會送到哪裡」的第一個依據，因此享有同等的省略優先序
+            （兩者都是 `shrink-0`）。
+          */}
+          <span className="shrink-0 text-ink-dim">
+            {folder ? folder.name : t('rail.globalName')}
+          </span>
           {branch && (
             <span className="shrink-0 text-accent">
               {live?.worktree

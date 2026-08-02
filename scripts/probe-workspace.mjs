@@ -11,12 +11,12 @@
  * 結束碼 0 表示全部 scenario 通過。
  */
 import { execFileSync, spawn } from 'node:child_process'
-import { mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { homedir, tmpdir } from 'node:os'
+import { basename, join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { check, connect, dragMouse, pollUntil, pressKey, waitForPageTarget } from './lib/cdp.mjs'
-import { copy, patternOf, suffixOf } from './lib/copy.mjs'
+import { copy, patternOf, prefixOf, suffixOf } from './lib/copy.mjs'
 import { electronExtraArgs } from './lib/display.mjs'
 
 const DEBUG_PORT = 9223
@@ -223,8 +223,21 @@ const callListDir = (folderId, relPath) => `(async () => {
 })()`
 
 /** 頂層的 repo 列（**不含 session 子列** —— 子列在 DOM 上同樣是 `li > div[role="button"]`）。 */
+/**
+ * rail 上**屬於 folder** 的那些 `<li>`。
+ *
+ * **不能用 DOM 位置索引** —— rail 的第一列是 `global-session` 的全域項目，其後還有一條分隔線
+ * `<li>`，兩者都不是 folder。以位置索引會讓每一個 rect 偏移，而拖曳測試的期望值全是相對位置，
+ * 症狀會是「落點莫名其妙差一格」而不是一條乾脆的紅燈。
+ *
+ * 識別方式與 `RAIL_ROWS` 一致：**有移除按鈕的才是 folder**（全域項目不可移除）。
+ */
+const FOLDER_LIS = `[...document.querySelectorAll('aside[aria-label="${copy('rail.label')}"] > ul > li')]
+  .filter((li) => li.querySelector('button[aria-label$="${suffixOf('rail.removeFolder')}"]'))`
+
 const FOLDER_ROW_RECT = (index) => `(() => {
-  const row = [...document.querySelectorAll('aside[aria-label="${copy('rail.label')}"] > ul > li > div[role="button"]')][${index}]
+  const li = ${FOLDER_LIS}[${index}]
+  const row = li?.querySelector(':scope > div[role="button"]')
   if (!row) return null
   const r = row.getBoundingClientRect()
   return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) }
@@ -232,7 +245,7 @@ const FOLDER_ROW_RECT = (index) => `(() => {
 
 /** 整個 repo 區塊（`<li>`，含展開的 session 子列）—— 拖曳的命中判定以它為準。 */
 const FOLDER_BLOCK_RECT = (index) => `(() => {
-  const li = [...document.querySelectorAll('aside[aria-label="${copy('rail.label')}"] > ul > li')][${index}]
+  const li = ${FOLDER_LIS}[${index}]
   if (!li) return null
   const r = li.getBoundingClientRect()
   return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2), top: Math.round(r.y), height: Math.round(r.height) }
@@ -647,6 +660,60 @@ try {
       (await app.client.evaluate(RAIL_ROWS)).map((r) => r.name).join(',') === orderBeforeClick,
     `選中=${selectedByClick} 順序=${(await app.client.evaluate(RAIL_ROWS)).map((r) => r.name).join(', ')}`)
 
+  // ── global-session：rail 上那個不隸屬任何 folder 的固定項目
+  //
+  // **它不在 `RAIL_ROWS` 裡**（那份以「有移除按鈕」識別 folder 列）—— 那正是它的鑑別點之一：
+  // 它不可移除。因此這一段以它自己的 `aria-label` 定位。
+  const GLOBAL_ROW = `document.querySelector('aside[aria-label="${copy('rail.label')}"] > ul > li > div[aria-label="${copy('rail.globalName')}"]')`
+
+  check(results, 'rail 呈現全域項目，且它是第一個項目',
+    await app.client.evaluate(`(() => {
+      const rows = [...document.querySelectorAll('aside[aria-label="${copy('rail.label')}"] > ul > li > div[role="button"]')]
+      return rows[0]?.getAttribute('aria-label') === ${JSON.stringify(copy('rail.globalName'))}
+    })()`),
+    String(await app.client.evaluate(`${GLOBAL_ROW}?.getAttribute('aria-label')`)))
+
+  // 全域項目沒有 repo 可讀 —— 它那一列不得出現分支。fixture 的三個 repo 都有分支，因此
+  // 「rail 上有分支文字」這件事本身是成立的，這條問的是**那一列**有沒有。
+  check(results, '全域項目不呈現 git 分支',
+    await app.client.evaluate(`(() => {
+      const row = ${GLOBAL_ROW}
+      if (!row) return false
+      const branches = ${JSON.stringify(['main', 'master'])}
+      return !branches.some((b) => row.innerText.includes(b))
+    })()`),
+    String(await app.client.evaluate(`${GLOBAL_ROW}?.innerText`)))
+
+  check(results, '全域項目不提供移除入口',
+    await app.client.evaluate(`(() => {
+      const li = ${GLOBAL_ROW}?.closest('li')
+      return !!li && !li.querySelector('button[aria-label$="${suffixOf('rail.removeFolder')}"]')
+    })()`))
+
+  // **「它不是被合成出來的一筆 folder」的鑑別點在磁碟上，不在畫面上。**
+  // 使用者今日的變通（把 `~` 加進 workspace）在畫面上長得很像，差別是那樣會有一筆真的 folder。
+  check(results, 'workspace 的持久化設定中沒有代表全域項目的條目',
+    await (async () => {
+      const raw = JSON.parse(readFileSync(join(profile, 'workspace.json'), 'utf8'))
+      const home = homedir()
+      return raw.folders.length === 3 && !raw.folders.some((f) => f.path === home)
+    })())
+
+  // 拖曳它：順序不變（它不是 workspace 的成員，沒有順序可言）。
+  const orderBeforeGlobalDrag = (await app.client.evaluate(RAIL_ROWS)).map((r) => r.name).join(',')
+  const globalRect = await app.client.evaluate(`(() => {
+    const r = ${GLOBAL_ROW}?.getBoundingClientRect()
+    return r ? { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) } : null
+  })()`)
+  if (globalRect) {
+    const lastBlock = await app.client.evaluate(FOLDER_BLOCK_RECT(2))
+    await dragMouse(app.client, globalRect, { x: globalRect.x, y: lastBlock.top + lastBlock.height })
+    await sleep(400)
+  }
+  check(results, '全域項目不可被拖曳排序（順序不變）',
+    (await app.client.evaluate(RAIL_ROWS)).map((r) => r.name).join(',') === orderBeforeGlobalDrag,
+    (await app.client.evaluate(RAIL_ROWS)).map((r) => r.name).join(','))
+
   // ── workspace-layout：拖曳 repo 改變 rail 的順序
   //
   // 起點是 repo-openspec 的**標題列**（拖曳的起點只掛在那裡），落點以**整個區塊**判定。
@@ -698,7 +765,8 @@ try {
 
   check(results, '展開中的 repo 連同其 session 子列一起移動',
     (await app.client.evaluate(SESSION_ROW_LABELS)).length === 2 &&
-      (await app.client.evaluate(`[...document.querySelectorAll('aside[aria-label="${copy('rail.label')}"] > ul > li')][1].querySelectorAll('ul li').length`)) === 2,
+      // **以 folder 清單索引，不以 DOM 位置** —— rail 的第一列是全域項目、其後還有分隔線。
+      (await app.client.evaluate(`${FOLDER_LIS}[1].querySelectorAll('ul li').length`)) === 2,
     'session 子列必須跟著它所屬的 repo 走')
 
   // ── 於 session 子列上拖曳，**只移動 session，repo 的順序不動**
@@ -758,6 +826,148 @@ try {
   // 一個永遠顯示同一個值的欄位不傳遞任何資訊，只佔位置。
   check(results, '狀態列不含字元編碼或版本號字樣',
     !/UTF-8/i.test(bar.text) && !/\b\d+\.\d+\.\d+\b/.test(bar.text), bar.text)
+
+  /*
+    ── status-bar × global-session：focused session 為全域 session 時的脈絡
+
+    它沒有所屬 repo，因此**以全域身分標示取代 repo 名稱**；而 session 計數必須涵蓋它
+    （以 folder 為條件計算會讓它恆為 0，而它明明有 session）。
+  */
+  const GLOBAL_PLUS_RECT = `(() => {
+    const btn = document.querySelector('[aria-label="${copy('rail.newSessionIn', { name: copy('rail.globalName') })}"]')
+    if (!btn) return null
+    const r = btn.getBoundingClientRect()
+    return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) }
+  })()`
+  const MENU_SHELL_RECT = `(() => {
+    const menu = document.querySelector('[role="menu"]')
+    if (!menu) return null
+    const item = [...menu.querySelectorAll('button[role="menuitem"]')]
+      .find((b) => b.innerText.trim() === ${JSON.stringify(copy('sessions.spawnShell'))})
+    if (!item) return null
+    const r = item.getBoundingClientRect()
+    return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) }
+  })()`
+
+  const TERMINAL_RECT = `(() => {
+    const el = document.querySelector('section[aria-label="${copy('stage.terminal')}"]')
+    if (!el) return null
+    const r = el.getBoundingClientRect()
+    if (r.width === 0 || r.height === 0) return null
+    return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) }
+  })()`
+
+  const plusRect = await pollUntil(app.client, GLOBAL_PLUS_RECT, (v) => v !== null, 6000)
+  check(results, '前提：全域項目有建立 session 的入口', plusRect !== null)
+  if (plusRect) {
+    await realPressRelease(app.client, plusRect)
+    const shellItem = await pollUntil(app.client, MENU_SHELL_RECT, (v) => v !== null, 4000)
+    if (shellItem) await realPressRelease(app.client, shellItem)
+
+    const globalBar = await pollUntil(
+      app.client,
+      STATUS_BAR,
+      (v) => v !== null && v.text.includes(copy('rail.globalName')),
+      10_000,
+    )
+    check(results, '全域 session focused 時，狀態列以全域身分標示取代 repo 名稱',
+      globalBar !== null && globalBar.text.includes(copy('rail.globalName')),
+      globalBar?.text)
+    check(results, '狀態列不呈現任何 folder 的名稱',
+      globalBar !== null && !globalBar.text.includes('repo-openspec') &&
+        !globalBar.text.includes('repo-plain'),
+      globalBar?.text)
+    // 計數以 rail 項目為基準 —— 以 folder 為條件會讓它恆為 0。
+    // **不能用 `\b1\b`** —— 狀態列的文字是連續的（`shell 1` 緊接 `1/3 sessions` 會變成
+    // `shell 11/3`），那個 word boundary 匹配不到。判準改為「此項目/總數」那一段的形狀。
+    check(results, '狀態列的 session 計數涵蓋全域項目（非零）',
+      globalBar !== null && /1\/\d+\s/.test(globalBar.text), globalBar?.text)
+
+    /*
+      全域項目的側欄來源**預設是未選定的** —— 於是那幾個依附於來源的欄位一個都不該出現。
+
+      少了這兩條，一個「把來源當成 folder 自己」的實作會在這裡標示一個使用者從未選過的 repo，
+      而前面三條斷言（全域身分、無 folder 名、計數）**全都照樣通過** —— 它們看的是別的欄位。
+    */
+    check(results, '來源未選定時，狀態列不標示側欄來源',
+      globalBar !== null && !globalBar.text.includes(prefixOf('statusBar.panelSource')),
+      globalBar?.text)
+    check(results, '來源未選定時，狀態列不呈現 spec 與 change 數',
+      globalBar !== null && !globalBar.text.includes(suffixOf('statusBar.openspecCounts')),
+      globalBar?.text)
+
+    /*
+      **`cd` 進一個 git repo 之後，分支照常呈現。**
+
+      全域 session 的 cwd 恆為家目錄，而產品**在 cwd 恰為家目錄時跳過 git 偵測**（dotfiles-as-git-repo
+      是常見設定，於整個家目錄跑 `spawnSync` 會週期性阻塞主行程）。這一條驗的是那道跳過**只是跳過**，
+      不是把偵測整個關掉 —— 少了它，「乾脆永遠不偵測」的實作與正確的實作在自動化上完全相同。
+
+      判準是**當下真正的分支**（`git rev-parse` 現場問），不是寫死的 `master`：前面的段落會切 branch。
+    */
+    const terminal = await pollUntil(app.client, TERMINAL_RECT, (v) => v !== null, 8000)
+    check(results, '前提：全域 session 的終端在畫面上', terminal !== null)
+    if (terminal) {
+      await realPressRelease(app.client, terminal)
+      await sleep(200)
+      await app.client.send('Input.insertText', { text: `cd ${fixture.withOpenSpec}` })
+      // Enter 必須是一次真的按鍵事件 —— 併進 insertText 的 `\r` 抵達得了 pty，但 shell
+      // **從未執行那一行**（xterm 的換行是在 keydown 上判讀的）。
+      const enter = { key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 }
+      await app.client.send('Input.dispatchKeyEvent', { type: 'keyDown', ...enter, text: '\r' })
+      await app.client.send('Input.dispatchKeyEvent', { type: 'keyUp', ...enter })
+
+      /*
+        **前置條件要自己建立：這個 fixture 此刻是 detached HEAD**（上一段的驗收把它切過去了），
+        而 `readGitWorkingState` 對 detached **刻意回 `undefined`**（`# branch.head (detached)`）——
+        於是狀態列本來就不會有分支，紅燈會被誤讀成「偵測沒有恢復」。
+
+        **這與 rail 不同源**：rail 的 `branch-service` 在 detached 時呈現短 sha，狀態列的這一條
+        不是。兩個判準各自正確，但**不可互相假設** —— 第一版就是照抄 rail 那條的作法而紅的。
+
+        判準仍然現場問，不寫死：`-b master` 是 fixture 建的，但那是另一段的細節。
+      */
+      git(fixture.withOpenSpec, ['checkout', '-q', 'master'])
+      const branchNow = git(fixture.withOpenSpec, ['rev-parse', '--abbrev-ref', 'HEAD'])
+      // 狀態輪詢是 2 秒一次，`cd` 之後要等它下一輪。
+      const afterCd = await pollUntil(
+        app.client,
+        STATUS_BAR,
+        (v) => v !== null && v.text.includes(branchNow),
+        15_000,
+      )
+      check(results, '全域 session cd 進 git repo 後，狀態列呈現該處的分支',
+        afterCd !== null && afterCd.text.includes(branchNow),
+        `分支=${branchNow} 狀態列=${afterCd?.text}`)
+      check(results, 'cd 之後仍以全域身分標示（沒有變成某個 folder）',
+        afterCd !== null && afterCd.text.includes(copy('rail.globalName')), afterCd?.text)
+    }
+
+    // **把狀態還原** —— 後面的斷言假設 focused 的是 repo-openspec（既有紀律：插入的段落
+    // 要自行還原它改動的狀態，否則下一段會以「那一段壞了」的樣貌失敗）。
+    /*
+      **不寫成字面的 aria-label 選擇器** —— `aria-label-source` 守衛（正確地）只看形式，
+      不區分「文案」與「fixture 的資料」。以屬性比對取代字面選擇器。
+
+      **說明寫在模板字串外面**：字串內不得出現反引號，它會提前把字串結束掉，而
+      `node --check` 有時抓不到（外層恰好仍合法），要到執行時才炸。
+    */
+    const openspecRow = await pollUntil(
+      app.client,
+      `(() => {
+        const rail = document.querySelector('aside[aria-label="${copy('rail.label')}"]')
+        const row = rail && [...rail.querySelectorAll('div[role="button"]')]
+          .find((el) => el.getAttribute('aria-label') === 'repo-openspec')
+        if (!row) return null
+        const r = row.getBoundingClientRect()
+        return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) }
+      })()`,
+      (v) => v !== null,
+      6000,
+    )
+    if (openspecRow) await realPressRelease(app.client, openspecRow)
+    await pollUntil(app.client, STATUS_BAR, (v) => v?.text.includes('repo-openspec') === true, 8000)
+  }
 
   // 側欄收合不得影響它 —— 它不隸屬於任何一欄。
   await app.client.evaluate(
@@ -935,6 +1145,19 @@ try {
   check(results, '原檔改名保留而非刪除', kept.length === 1, kept[0] ?? '(無)')
   await app.close()
   app = null
+
+  // ── 捲動的驗收**不在這支探針**（見 `openspec/changes/global-session/tasks.md` 13.4）
+  //
+  // 這裡曾經有一整段：seed 30 個 folder 讓 rail 溢出、送 `Ctrl+↓`、量選中項目是否落在容器內。
+  // **fixture 是好的**（實測 scrollHeight 1258 > clientHeight 680），但**快捷鍵在這支探針的
+  // 環境裡始終沒有抵達 handler** —— 診斷斷言顯示按 20 次之後 `aria-current` 仍在第一列，
+  // 而 `scrollTop` 卻變成了 578：那個捲動是 `Ctrl+↓` **未被 preventDefault 時瀏覽器的原生
+  // 捲動**，不是產品的 `scrollIntoView`。
+  //
+  // **留著那段等於留一盞測不到自己宣稱在測的東西的綠燈**（「往回捲到 scrollTop 0」在原生捲動
+  // 下照樣通過），因此整段移除。正確的載體是 `probe:keyboard` —— 那裡的鍵盤驅動已被 134 條
+  // 斷言證明有效 —— 搭配 `Emulation.setDeviceMetricsOverride` 壓矮 viewport，讓既有的 3-repo
+  // fixture 就溢出。
 
   exitCode = results.every(Boolean) ? 0 : 1
 } catch (error) {

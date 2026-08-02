@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import { TerminalError } from './terminal'
-import { pickWorktree } from './worktree-pick'
+import { pickCreateWorktree, pickWorktree } from './worktree-pick'
 
 /**
  * 工作目錄識別碼 → 這次 spawn 的 cwd。
@@ -100,5 +100,66 @@ describe('pickWorktree', () => {
       assert.equal(picked.cwd, undefined)
       assert.deepEqual(picked.worktreeRoots, [])
     })
+  })
+})
+
+/**
+ * `terminal.create` 的解析 —— **含全域 session 那條分支**。
+ *
+ * 這一段存在的理由是它此前**一行都沒有被測到**：那條分支住在 `ipc/terminal.ts` 的 handler
+ * 裡，而該模組於載入時就 `import { ipcMain } from 'electron'`，node:test 進不去。稽核指出
+ * 「把 `strict: true` 改成 `false` 不會有任何紅燈」，於是解析被抽成具名函式搬到這裡。
+ *
+ * 全域 session 不隸屬任何 repo ⇒ 工作目錄集合為**空**。「帶識別碼即拒絕」因此不是一條新的
+ * 特例，而是既有的「查無對應即拒絕」在空集合上的自然結果 —— 而**列舉不被呼叫**正是這個
+ * 論證在行為上的憑據（單看「拒絕了」分不出是短路還是列舉後沒命中）。
+ */
+describe('pickCreateWorktree', () => {
+  const WORKTREES = [
+    { key: 'aaaaaaaa', path: '/repo' },
+    { key: 'bbbbbbbb', path: '/repo/.claude/worktrees/wt-a' },
+  ]
+
+  /** 記錄有沒有被呼叫 —— 「短路」與「列舉後沒命中」的差別只看得到這個。 */
+  function enumerator(): {
+    of: (folderId: string) => Promise<typeof WORKTREES>
+    calls: () => string[]
+  } {
+    const calls: string[] = []
+    return {
+      of: async (folderId) => {
+        calls.push(folderId)
+        return WORKTREES
+      },
+      calls: () => calls,
+    }
+  }
+
+  it('全域 session 帶著工作目錄識別碼時被拒（型別互斥擋不到 IPC 的另一端）', async () => {
+    const enumerate = enumerator()
+
+    await assert.rejects(
+      () => pickCreateWorktree(enumerate.of, null, 'aaaaaaaa'),
+      (error: unknown) => error instanceof TerminalError && error.code === 'UNKNOWN_WORKTREE',
+    )
+    // 那個識別碼在 `WORKTREES` 裡是**命中的** —— 它之所以被拒，只因為全域的集合是空的。
+    assert.deepEqual(enumerate.calls(), [], '全域不得列舉任何 repo 的工作目錄')
+  })
+
+  it('全域 session 未帶識別碼時通過，且合法根集合為空', async () => {
+    const enumerate = enumerator()
+    const picked = await pickCreateWorktree(enumerate.of, null, undefined)
+
+    assert.equal(picked.cwd, undefined)
+    assert.deepEqual(picked.worktreeRoots, [])
+    assert.deepEqual(enumerate.calls(), [])
+  })
+
+  it('隸屬 folder 的 session 照常以該 folder 的列舉解析', async () => {
+    const enumerate = enumerator()
+    const picked = await pickCreateWorktree(enumerate.of, 'folder-1', 'bbbbbbbb')
+
+    assert.equal(picked.cwd, '/repo/.claude/worktrees/wt-a')
+    assert.deepEqual(enumerate.calls(), ['folder-1'])
   })
 })

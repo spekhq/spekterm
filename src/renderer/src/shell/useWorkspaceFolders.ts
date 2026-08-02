@@ -1,10 +1,15 @@
 import { useCallback, useEffect, useState } from 'react'
-import type { WorkspaceFolder } from './types'
+import type { RailSelection, WorkspaceFolder } from './types'
 
 export interface WorkspaceFoldersState {
   folders: WorkspaceFolder[]
-  selectedId: string | null
-  select: (id: string) => void
+  /**
+   * rail 上選中的項目。**`null` ＝ 尚未選中任何項目**，與「選中全域項目」互斥可辨
+   * （design D8）—— 冷啟動時它是 `null`，而那正是 `session-persistence`「至多啟動一個
+   * session」所倚賴的前提。
+   */
+  selection: RailSelection | null
+  select: (selection: RailSelection) => void
   addFolder: () => Promise<void>
   removeFolder: (id: string) => Promise<void>
   /**
@@ -19,7 +24,7 @@ export interface WorkspaceFoldersState {
 
 export function useWorkspaceFolders(): WorkspaceFoldersState {
   const [folders, setFolders] = useState<WorkspaceFolder[]>([])
-  const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [selection, setSelection] = useState<RailSelection | null>(null)
 
   useEffect(() => {
     // **先訂閱、再列清單。** 兩者之間的窗口裡發生的分支變動會兩頭落空：清單沒看到它，推送也
@@ -37,7 +42,11 @@ export function useWorkspaceFolders(): WorkspaceFoldersState {
 
   const removeFolder = useCallback(async (id: string) => {
     setFolders(await window.workspace.folders.remove(id))
-    setSelectedId((current) => (current === id ? null : current))
+    // 被移除的正是選中的那個 folder 時才清空選取。選中全域項目時不受影響 —— 它不是 workspace
+    // 的成員，移除任何 folder 都動不到它。
+    setSelection((current) =>
+      current?.kind === 'folder' && current.id === id ? null : current,
+    )
   }, [])
 
   const reorderFolders = useCallback(async (id: string, toIndex: number) => {
@@ -66,5 +75,5 @@ export function useWorkspaceFolders(): WorkspaceFoldersState {
     setFolders(await window.workspace.folders.reorder(id, toIndex))
   }, [])
 
-  return { folders, selectedId, select: setSelectedId, addFolder, removeFolder, reorderFolders }
+  return { folders, selection, select: setSelection, addFolder, removeFolder, reorderFolders }
 }

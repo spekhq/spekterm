@@ -36,3 +36,25 @@ export function pickWorktree(
   if (strict) throw new TerminalError('UNKNOWN_WORKTREE', t('terminalError.unknownWorktree'))
   return { worktreeRoots }
 }
+
+/**
+ * 建立 session 時的工作目錄解析 —— **含全域 session 那條分支**。
+ *
+ * 全域 session 不隸屬任何 repo，它的工作目錄集合因此是**空的**。於是「帶著識別碼來就拒絕」
+ * 不是一條新的特例，而是上面那條「查無對應即拒絕」在空集合上的自然結果 —— 也因此**列舉
+ * 根本不會被呼叫**（那是這裡與「先列舉再比對」在行為上唯一看得出來的差別）。
+ *
+ * 型別上 `folderId: null` 與 `worktreeKey` 是互斥的，但**型別互斥擋不到這裡**：IPC 的另一端
+ * 是不受信任的輸入。這一層與那一層各自獨立。
+ *
+ * 抽成具名函式而不寫在 handler 裡，是為了讓它**測得到** —— `ipc/terminal.ts` 於模組載入時
+ * 就 `import { ipcMain } from 'electron'`，node:test 進不去。
+ */
+export async function pickCreateWorktree(
+  worktreesOf: (folderId: string) => Promise<readonly WorktreeChoice[]>,
+  folderId: string | null,
+  worktreeKey: string | undefined,
+): Promise<{ cwd?: string; worktreeRoots: string[] }> {
+  const worktrees = folderId === null ? [] : await worktreesOf(folderId)
+  return pickWorktree(worktrees, worktreeKey, { strict: true })
+}

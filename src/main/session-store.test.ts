@@ -306,3 +306,77 @@ describe('SessionStore：已結束的 session 不得被復活', () => {
     assert.equal(persisted.worktreeKey, undefined, 'session 自己的工作目錄不受牽連')
   })
 })
+
+describe('session 的歸屬：全域以明確標記表示，缺席不是全域', () => {
+  /**
+   * **這是 design D1b 的守衛，而它守的是一個安全性質而非美學。**
+   *
+   * 若「欄位缺席 ⇒ 全域」，一次過期的 renderer（或一次沒清乾淨的重構）漏掉這個欄位，就會讓一個
+   * **隸屬於 repo 的 session 靜默變成全域 session**：下次開 app 它出現在全域項目底下，claude
+   * 從家目錄 `--resume` 一個開在別處的對話 —— 依實測那會查無此對話，於是靜默自癒為全新對話。
+   * 歷史沒了，而且沒有任何訊號。
+   */
+  it('folderId 為 null ⇒ 全域 session', () => {
+    const parsed = parseSessions(
+      JSON.stringify({
+        version: 1,
+        sessions: [{ id: UUID_A, folderId: null, spawnTarget: 'claude', ordinal: 1 }],
+      }),
+    )
+    assert.equal(parsed?.length, 1)
+    assert.equal(parsed?.[0].folderId, null)
+  })
+
+  it('folderId 缺席或為空字串 ⇒ 丟棄該筆（不得被當成全域）', () => {
+    const parsed = parseSessions(
+      JSON.stringify({
+        version: 1,
+        sessions: [
+          { id: UUID_A, spawnTarget: 'claude', ordinal: 1 },
+          { id: UUID_B, folderId: '', spawnTarget: 'shell', ordinal: 2 },
+          { id: UUID_C, folderId: null, spawnTarget: 'shell', ordinal: 3 },
+        ],
+      }),
+    )
+    assert.deepEqual(
+      parsed?.map((session) => session.id),
+      [UUID_C],
+      '只有明確寫出 null 的那一筆是合法的全域 session',
+    )
+  })
+
+  it('replace 也驗形狀：缺席的歸屬不落盤', () => {
+    const kept = store()
+    kept.replace([
+      { id: UUID_A, folderId: null, spawnTarget: 'claude', ordinal: 1 },
+      // 型別上不可能，但 IPC 的另一端是不受信任的輸入 —— 驗證必須在執行期。
+      { id: UUID_B, spawnTarget: 'shell', ordinal: 2 } as unknown as RendererSession,
+    ])
+
+    assert.deepEqual(
+      kept.list().map((session) => session.id),
+      [UUID_A],
+    )
+    assert.equal(kept.list()[0].folderId, null)
+  })
+
+  it('全域 session 的重建事實與 folder session 一樣完整', () => {
+    const kept = store()
+    kept.replace([
+      {
+        id: UUID_A,
+        folderId: null,
+        spawnTarget: 'claude',
+        ordinal: 3,
+        customTitle: 'scratch',
+        title: 'ignored-while-named',
+      },
+    ])
+
+    const reopened = store()
+    const [session] = reopened.list()
+    assert.equal(session.folderId, null)
+    assert.equal(session.ordinal, 3)
+    assert.equal(session.customTitle, 'scratch')
+  })
+})

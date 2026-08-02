@@ -5,7 +5,7 @@ import type { RendererSession, SessionStore } from '../session-store'
 import { type SpawnTarget, TerminalError, TerminalService } from '../terminal'
 import type { FolderLookup } from '../workspace-store'
 import { worktreesFor } from './openspec'
-import { pickWorktree } from '../worktree-pick'
+import { pickCreateWorktree, pickWorktree } from '../worktree-pick'
 import type { FsResult } from './fs'
 
 export const TERMINAL_CHANNELS = {
@@ -154,26 +154,7 @@ function refreshCwd(service: TerminalService, sessions: SessionStore): void {
 }
 
 /**
- * 工作目錄識別碼 → 這次 spawn 要用的 cwd，以及 cwd 夾制的合法根集合。
- *
- * **查無對應即拒絕，不退回 folder 根**（`terminal-sessions` 明文）：靜默退回會讓一個錯誤的
- * 識別碼把 session 開在別的地方，而使用者以為它開在他選的工作目錄裡。這是**誠實性**要求 ——
- * 退回 folder 根其實逸出不了任何邊界（那是舊邊界之內），但它會說謊。
- *
- * 未指定識別碼時 `cwd` 為 `undefined`（＝ folder 根），但**合法根集合照樣供應** —— 重建的
- * shell 其 cwd 可能落在某個 worktree 裡，夾制要認得它。
- */
-async function resolveWorktree(
-  store: FolderLookup,
-  contents: WebContents,
-  folderId: string,
-  worktreeKey?: string,
-): Promise<{ cwd?: string; worktreeRoots: string[] }> {
-  return pickWorktree(await worktreesFor(store, contents, folderId), worktreeKey, { strict: true })
-}
-
-/**
- * 重建路徑的解析 —— **與 `resolveWorktree` 的差別是「查無對應」的處置，那是刻意的**。
+ * 重建路徑的解析 —— **與 `pickCreateWorktree` 的差別是「查無對應」的處置，那是刻意的**。
  *
  * 建立時查無對應要拒絕（使用者剛選了一個工作目錄，開錯地方是說謊）；**重建時查無對應是正常的**
  * ——那個 worktree 可能在應用程式沒開的時候被移除了。此時退回 folder 根且不使重建失敗
@@ -183,10 +164,13 @@ async function resolveWorktree(
 async function resolveWorktreeForRebuild(
   store: FolderLookup,
   contents: WebContents,
-  folderId: string,
+  folderId: string | null,
   worktreeKey?: string,
 ): Promise<{ cwd?: string; worktreeRoots: string[] }> {
-  return pickWorktree(await worktreesFor(store, contents, folderId), worktreeKey, { strict: false })
+  // 全域 session 不隸屬任何 repo —— 沒有工作目錄可列舉。`strict: false`（重建路徑）於是回
+  // `{ worktreeRoots: [] }`，`create` 接著以家目錄為初始 cwd。
+  const worktrees = folderId === null ? [] : await worktreesFor(store, contents, folderId)
+  return pickWorktree(worktrees, worktreeKey, { strict: false })
 }
 
 /** 把待落盤的東西立刻寫下去。關視窗與 reload 都必須先走這裡，否則最後一次改動就飛了。 */
@@ -212,12 +196,20 @@ export function registerTerminalHandlers(
 
   ipcMain.handle(
     TERMINAL_CHANNELS.create,
-    (event, folderId: string, target: SpawnTarget, worktreeKey?: string) =>
+    (event, folderId: string | null, target: SpawnTarget, worktreeKey?: string) =>
     toResult(async () => {
       // **識別碼 → 路徑的解析在這裡完成，不在 `TerminalService` 裡**：列舉住在 OpenSpec 資料層，
       // 而 terminal 服務不該認識它。`worktreesFor` 走的是**與側欄同一個實例與同一組參數** ——
       // 繞過它直接呼叫 core 會因 `includeJj` 預設不同而讓可達的位置集合大於使用者看得到的那組。
-      const { cwd, worktreeRoots } = await resolveWorktree(store, event.sender, folderId, worktreeKey)
+      //
+      // **全域 session 的工作目錄集合是空的**（它不隸屬任何 repo）—— 於是「帶識別碼即拒絕」
+      // 不是一條新的特例，而是既有的「查無對應即拒絕、不退回預設位置」在空集合上的自然結果。
+      // 型別互斥擋不到這裡：IPC 的另一端是不受信任的輸入。
+      const { cwd, worktreeRoots } = await pickCreateWorktree(
+        (id) => worktreesFor(store, event.sender, id),
+        folderId,
+        worktreeKey,
+      )
       const result = serviceFor(store, sessions, preferences, event.sender).create(folderId, target, {
         cwd,
         worktreeRoots,
@@ -270,8 +262,13 @@ export function registerTerminalHandlers(
 
   ipcMain.handle(TERMINAL_CHANNELS.restore, (event): RestoredSession[] => {
     // folder 已被移出 workspace → 它的 session 不再有歸屬，從持久化移除（design D11）。
+    //
+    // **全域 session 不適用**：它本來就不隸屬任何 folder，移除任何 repo 都動不到它。少了這道
+    // 判斷，`known.has(null)` 恆為 false ⇒ 每一次 restore 都會把全部的全域 session 清光，
+    // 而那正是這個 change 要交付的東西。
     const known = new Set(store.list().map((folder) => folder.id))
     for (const session of sessions.list()) {
+      if (session.folderId === null) continue
       if (!known.has(session.folderId)) sessions.remove(session.id)
     }
 

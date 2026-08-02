@@ -193,7 +193,10 @@ const SELECT_FOLDER = (name) => `(() => {
 const SELECTED_FOLDER = `(() => {
   const row = [...document.querySelectorAll('aside[aria-label="${copy('rail.label')}"] li > div[role="button"]')]
     .find((r) => r.getAttribute('aria-current') === 'true' || r.dataset.selected === 'true')
-  if (row) return row.innerText.split('\\n')[0].trim()
+  // **以 aria-label 取名稱，不以 innerText 的第一行** —— 該列展開時，第一行是那顆 ▾ 展開鈕。
+  // 這條退路此前從未被走到（產品沒有 aria-current），global-session 加上它之後才第一次生效。
+  // （此處不得使用反引號 —— 這一段住在模板字串裡。這是本 change 第三次踩到它。）
+  if (row) return row.getAttribute('aria-label') ?? row.innerText.split('\\n')[0].trim()
   // 退路：主舞台的 repo header 就是當前 repo
   const header = document.querySelector('main[aria-label="${copy('stage.label')}"] header')
   return header ? header.innerText.split('\\n')[0].trim() : null
@@ -303,8 +306,30 @@ const EDITOR_TEXTAREA_FOCUSED = `(() => {
  * 名稱取自 `title`（＝folder 的絕對路徑）的 basename，不取 `innerText` —— 後者的第一行是展開
  * 鈕的 `▾`，不是名稱。
  */
+/**
+ * rail 上 **folder** 的順序。
+ *
+ * **排除全域項目**（`global-session`）—— 它恆為第一列，但它不是 workspace 的成員，也沒有路徑
+ * 可供 basename 取用（它的 `title` 是一句說明）。少了這道過濾，這份清單的第一項會變成那句
+ * 說明的整串文字，而每一條順序斷言都會以「順序錯了」的樣貌失敗。
+ */
 const RAIL_ORDER = `[...document.querySelectorAll('aside[aria-label="${copy('rail.label')}"] > ul > li > div[role="button"]')]
+  .filter((row) => row.getAttribute('aria-label') !== ${JSON.stringify(copy('rail.globalName'))})
   .map((row) => (row.getAttribute('title') ?? '').split('/').pop())`
+
+/** rail 上**全部**項目的 aria-label（含全域項目）—— 導航序以它為準。 */
+const RAIL_ITEMS = `[...document.querySelectorAll('aside[aria-label="${copy('rail.label')}"] > ul > li > div[role="button"]')]
+  .map((row) => row.getAttribute('aria-label'))`
+
+/** 當前選中的 rail 項目（以 aria-label 表示）。 */
+const SELECTED_ITEM = `(() => {
+  const rows = [...document.querySelectorAll('aside[aria-label="${copy('rail.label')}"] > ul > li > div[role="button"]')]
+  // **以 aria-current 判斷，不以 class** —— 未選中的列帶著 hover:bg-hover/60，而那個字串
+  // 也包含 bg-hover：以 class 判斷會恆回第一列，讓期望值為第一列的斷言變成假綠。
+  // （此處不得使用反引號 —— 這整段住在一個模板字串裡，反引號會提前把它結束掉。）
+  const hit = rows.find((row) => row.getAttribute('aria-current') === 'true')
+  return hit ? hit.getAttribute('aria-label') : null
+})()`
 
 /** rail 上某個 repo 的 session 子列順序 —— 它必須與分頁列一致（兩個視圖共用同一順序）。 */
 const RAIL_SESSIONS = (folderName) => `(() => {
@@ -574,11 +599,34 @@ async function runMode(label, { port, rendererUrl }) {
     const prevRepo = await pollUntil(app.client, SELECTED_FOLDER, (v) => v?.includes('repo-a'), 4000)
     check(results, `${label}：Ctrl+↑ 切回上一個 repo`, prevRepo?.includes('repo-a'), String(prevRepo))
 
+    /*
+      **這條斷言隨規格更新過。**
+
+      此前它是「於首端往上會循環到最後一個 repo」—— 那在 rail 的項目集合恰等於 folder 清單時
+      成立。`global-session` 之後，rail 的第一個項目是那個不隸屬任何 folder 的全域項目，於是
+      自第一個 folder 往上抵達的是**它**，再往上才循環到最後一個 repo。
+
+      兩步都驗：少了第一步，「循環」與「跳過全域項目」在結果上分不開。
+    */
+    await pressKey(app.client, 'ArrowUp', ['ctrl'])
+    const atGlobalFromFirst = await pollUntil(
+      app.client,
+      SELECTED_ITEM,
+      (v) => v === copy('rail.globalName'),
+      4000,
+    )
+    check(
+      results,
+      `${label}：自第一個 folder 往上抵達全域項目`,
+      atGlobalFromFirst === copy('rail.globalName'),
+      String(atGlobalFromFirst),
+    )
+
     await pressKey(app.client, 'ArrowUp', ['ctrl'])
     const wrappedRepo = await pollUntil(app.client, SELECTED_FOLDER, (v) => v?.includes('repo-c'), 4000)
     check(
       results,
-      `${label}：於首端往上會循環到最後一個 repo`,
+      `${label}：自全域項目往上會循環到最後一個 repo`,
       wrappedRepo?.includes('repo-c'),
       String(wrappedRepo),
     )
@@ -1350,6 +1398,358 @@ async function checkReordering(label, { port, rendererUrl }) {
           JSON.stringify(tabsBeforeEditor),
       JSON.stringify(await app.client.evaluate(RAIL_ORDER)),
     )
+
+    // ── global-session：rail 的項目序涵蓋那個不隸屬任何 folder 的固定項目
+    //
+    // **插在 runMode 的最後、finally 之前** —— 前面每一段對 session 與選中狀態都有假設，
+    // 而這一段會改變選中的項目（既有紀律：新段落放最後，且用相對數字）。
+    const GLOBAL = copy('rail.globalName')
+
+    // 上一段把焦點留在編輯器裡，而排序快捷鍵在那裡刻意讓路 —— 點一下 rail 把焦點移出去。
+    await app.client.evaluate(SELECT_FOLDER('repo-a'))
+    await sleep(300)
+
+    const items = await app.client.evaluate(RAIL_ITEMS)
+    check(results, `${label}：全域項目是 rail 的第一個項目`,
+      items[0] === GLOBAL && items.length === 4, JSON.stringify(items))
+
+    // 選中第一個 folder，往上一格 ⇒ 抵達全域項目。
+    await app.client.evaluate(SELECT_FOLDER('repo-a'))
+    await sleep(300)
+    await pressKey(app.client, 'ArrowUp', ['ctrl'])
+    const atGlobal = await pollUntil(app.client, SELECTED_ITEM, (v) => v === GLOBAL, 4000)
+    check(results, `${label}：自第一個 folder 按 Ctrl+↑ 抵達全域項目`,
+      atGlobal === GLOBAL, String(atGlobal))
+
+    // 於全域項目按 Ctrl+T ⇒ spawn 選單開啟（四顆 session 快捷鍵之一，作用域必須涵蓋它）。
+    await pressKey(app.client, 't', ['ctrl'])
+    const menuOpen = await pollUntil(app.client, MENU_STATE, (v) => v !== null, 4000)
+    check(results, `${label}：於全域項目按 Ctrl+T 開啟 spawn 選單`,
+      menuOpen !== null && menuOpen.items.length >= 2, JSON.stringify(menuOpen))
+    await pressKey(app.client, 'Escape')
+    await sleep(200)
+
+    // Shift+↑↓ 對它無操作 —— 它不是 workspace 的成員，沒有順序可言。
+    const orderBeforeGlobalMove = await app.client.evaluate(RAIL_ORDER)
+    await pressKey(app.client, 'ArrowDown', ['shift'])
+    await sleep(400)
+    check(results, `${label}：選中全域項目時 Shift+↓ 無操作`,
+      JSON.stringify(await app.client.evaluate(RAIL_ORDER)) === JSON.stringify(orderBeforeGlobalMove) &&
+        (await app.client.evaluate(SELECTED_ITEM)) === GLOBAL,
+      JSON.stringify(await app.client.evaluate(RAIL_ORDER)))
+
+    // 自最後一個 folder 往下 ⇒ 循環回全域項目。
+    await app.client.evaluate(SELECT_FOLDER('repo-c'))
+    await sleep(300)
+    await pressKey(app.client, 'ArrowDown', ['ctrl'])
+    const wrapped = await pollUntil(app.client, SELECTED_ITEM, (v) => v === GLOBAL, 4000)
+    check(results, `${label}：自最後一個 folder 按 Ctrl+↓ 循環回全域項目`,
+      wrapped === GLOBAL, String(wrapped))
+
+    /*
+      **四顆 session 快捷鍵在全域項目上都要真的能用，而驗它們需要全域項目真的有 session。**
+
+      此前這一段按完 `Ctrl+T` 就 `Escape`，於是全域項目在整支探針裡 session 數**恆為 0** ——
+      「於全域項目內切換 session」那條 scenario 因此不可能被驗到，而對照表卻宣稱它有載體
+      （獨立稽核抓到的假載體）。這裡改為真的建兩個 login shell，再依序驗切換、排序、關閉。
+
+      **用相對數字**，且排在全域段落的最後（既有紀律）。
+    */
+    const globalTabsBefore = (await app.client.evaluate(TABS)).length
+    for (let i = 0; i < 2; i += 1) {
+      await pressKey(app.client, 't', ['ctrl'])
+      await sleep(500)
+      await pressKey(app.client, 'ArrowDown')
+      await pressKey(app.client, 'Enter')
+      await sleep(1500)
+    }
+    const globalTabs = await pollUntil(
+      app.client, TABS, (v) => v.length === globalTabsBefore + 2, 15_000)
+    check(results, `${label}：於全域項目建立兩個 session（後三條的前提）`,
+      globalTabs.length === globalTabsBefore + 2,
+      JSON.stringify(globalTabs.map((tab) => tab.label)))
+
+    // 剛建好時 focused 是最後一個 ⇒ Ctrl+Tab 循環回第一個（於是下一條的 Shift+→ 有得移動）。
+    const globalFocusedBefore = await app.client.evaluate(FOCUSED_TAB)
+    await pressKey(app.client, 'Tab', ['ctrl'])
+    const globalFocusedAfter = await pollUntil(
+      app.client, FOCUSED_TAB, (v) => v !== globalFocusedBefore, 4000)
+    check(results, `${label}：於全域項目內以 Ctrl+Tab 切換 session`,
+      globalFocusedAfter !== null && globalFocusedAfter !== globalFocusedBefore,
+      `${globalFocusedBefore} → ${globalFocusedAfter}`)
+
+    const globalOrderBefore = (await app.client.evaluate(TABS)).map((tab) => tab.label)
+    await pressKey(app.client, 'ArrowRight', ['shift'])
+    const globalOrderAfter = await pollUntil(
+      app.client,
+      TABS,
+      (v) => JSON.stringify(v.map((tab) => tab.label)) !== JSON.stringify(globalOrderBefore),
+      4000,
+    )
+    check(results, `${label}：於全域項目內以 Shift+→ 調整 session 順序`,
+      globalOrderAfter !== null &&
+        JSON.stringify(globalOrderAfter.map((tab) => tab.label)) !== JSON.stringify(globalOrderBefore) &&
+        globalOrderAfter.length === globalOrderBefore.length,
+      `${JSON.stringify(globalOrderBefore)} → ${JSON.stringify(globalOrderAfter?.map((tab) => tab.label))}`)
+
+    await pressKey(app.client, 'w', ['ctrl', 'shift'])
+    const globalAfterClose = await pollUntil(
+      app.client, TABS, (v) => v.length === globalTabsBefore + 1, 8000)
+    check(results, `${label}：於全域項目內以 Ctrl+Shift+W 關閉當前 session`,
+      globalAfterClose !== null && globalAfterClose.length === globalTabsBefore + 1,
+      JSON.stringify(globalAfterClose?.map((tab) => tab.label)))
+
+    /*
+      **folder 的排序索引以 folder 清單為基準，不以 rail 的列位置。**
+
+      以列位置計算的失效是兩個方向都錯，而且**三個以上 folder 才看得出來**：兩個時夾制會把
+      越界的目標拉回末端，結果與正確實作相同（既有的 off-by-one 就是這樣躲過每一輪驗收的）。
+    */
+    await app.client.evaluate(SELECT_FOLDER('repo-a'))
+    await sleep(300)
+    const beforeDown = await app.client.evaluate(RAIL_ORDER)
+    await pressKey(app.client, 'ArrowDown', ['shift'])
+    const afterDown = await pollUntil(app.client, RAIL_ORDER, (v) => v[0] !== beforeDown[0], 4000)
+    check(results, `${label}：第一個 folder 按 Shift+↓ 恰好移動一格`,
+      JSON.stringify(afterDown) === JSON.stringify([beforeDown[1], beforeDown[0], beforeDown[2]]),
+      `${JSON.stringify(beforeDown)} → ${JSON.stringify(afterDown)}`)
+
+    // 第二個 folder 往上一格 —— 以列位置計算時它會算出等於自己的目標而**靜默無操作**。
+    const beforeUp = await app.client.evaluate(RAIL_ORDER)
+    await pressKey(app.client, 'ArrowUp', ['shift'])
+    const afterUp = await pollUntil(app.client, RAIL_ORDER, (v) => v[0] !== beforeUp[0], 4000)
+    check(results, `${label}：第二個 folder 按 Shift+↑ 恰好移動一格（不靜默無操作）`,
+      JSON.stringify(afterUp) === JSON.stringify([beforeUp[1], beforeUp[0], beforeUp[2]]),
+      `${JSON.stringify(beforeUp)} → ${JSON.stringify(afterUp)}`)
+
+    // ── global-session：鍵盤導航時目標捲入可視範圍（第九次 dogfooding 的第二個回饋）
+    //
+    // **載體選在這裡而不是 `probe:workspace`**：那支探針送不進 `Ctrl+↓`（實測 `aria-current`
+    // 不動而 `scrollTop` 卻變了 —— 那是**未被 preventDefault 時瀏覽器的原生捲動**，不是產品的
+    // `scrollIntoView`）。這支的鍵盤驅動則已由前面上百條斷言證明有效。
+    //
+    // **rail 溢出以壓矮 viewport 達成**，不以「多塞十幾個 folder」—— 後者要改 fixture，而
+    // fixture 是全域的，前面每一條絕對斷言都會跟著壞。
+    await app.client.send('Emulation.setDeviceMetricsOverride', {
+      width: 1280,
+      height: 300,
+      deviceScaleFactor: 0,
+      mobile: false,
+    })
+    await sleep(600)
+
+    const RAIL_SCROLLER = `(() => {
+      const ul = document.querySelector('aside[aria-label="${copy('rail.label')}"] > ul')
+      if (!ul) return null
+      return { scrollHeight: ul.scrollHeight, clientHeight: ul.clientHeight, scrollTop: Math.round(ul.scrollTop) }
+    })()`
+
+    /** 選中的那一列是否**完整**落在捲動容器內 —— 這是本要求的不變式。 */
+    const SELECTED_FULLY_VISIBLE = `(() => {
+      const ul = document.querySelector('aside[aria-label="${copy('rail.label')}"] > ul')
+      const rows = [...document.querySelectorAll('aside[aria-label="${copy('rail.label')}"] > ul > li > div[role="button"]')]
+      const row = rows.find((r) => r.getAttribute('aria-current') === 'true')
+      if (!ul || !row) return null
+      const a = ul.getBoundingClientRect()
+      const b = row.getBoundingClientRect()
+      return {
+        label: row.getAttribute('aria-label'),
+        visible: b.top >= a.top - 0.5 && b.bottom <= a.bottom + 0.5,
+        scrollTop: Math.round(ul.scrollTop),
+      }
+    })()`
+
+    const scroller = await pollUntil(app.client, RAIL_SCROLLER, (v) => v !== null, 8000)
+    check(results, `${label}：壓矮 viewport 後 rail 確實溢出（否則整段沒有鑑別力）`,
+      scroller !== null && scroller.scrollHeight > scroller.clientHeight + 10,
+      JSON.stringify(scroller))
+
+    // 走到最後一個 repo —— 在這個高度下它必然落在初始視野之外。
+    await app.client.evaluate(SELECT_FOLDER('repo-a'))
+    await sleep(300)
+    await pressKey(app.client, 'ArrowDown', ['ctrl'])
+    await sleep(200)
+    await pressKey(app.client, 'ArrowDown', ['ctrl'])
+    await sleep(600)
+
+    const scrolled = await app.client.evaluate(SELECTED_FULLY_VISIBLE)
+    check(results, `${label}：前提 —— Ctrl+↓ 確實把選中的項目帶離了初始視野`,
+      scrolled !== null && scrolled.scrollTop > 0, JSON.stringify(scrolled))
+    check(results, `${label}：Ctrl+↓ 切換後，選中的項目完整落在 rail 的可視範圍內`,
+      scrolled !== null && scrolled.visible === true, JSON.stringify(scrolled))
+
+    // 往回走同樣要捲。**先把容器強制捲到底才有鑑別力** —— 少了這一步，對照組（拿掉
+    // `scrollIntoView`）的 `scrollTop` 恆為 0，於是頂端附近的項目本來就完整可見，那條斷言
+    // 兩種實作都會過（獨立稽核抓到的 m9）。強制捲動是直接指派 `scrollTop`，不送滑鼠事件 ——
+    // 於是它不會誤觸下面那條「以滑鼠操作時不捲」的例外。
+    const FORCE_RAIL_BOTTOM = `(() => {
+      const ul = document.querySelector('aside[aria-label="${copy('rail.label')}"] > ul')
+      if (!ul) return null
+      ul.scrollTop = ul.scrollHeight
+      return Math.round(ul.scrollTop)
+    })()`
+
+    const forcedBottom = await app.client.evaluate(FORCE_RAIL_BOTTOM)
+    check(results, `${label}：前提 —— rail 捲得到底（往回捲那條的鑑別力來自這裡）`,
+      typeof forcedBottom === 'number' && forcedBottom > 0, JSON.stringify(forcedBottom))
+
+    await pressKey(app.client, 'ArrowUp', ['ctrl'])
+    await sleep(200)
+    await pressKey(app.client, 'ArrowUp', ['ctrl'])
+    await sleep(600)
+    const back = await app.client.evaluate(SELECTED_FULLY_VISIBLE)
+    check(results, `${label}：Ctrl+↑ 往回切換後，選中的項目仍完整落在可視範圍內`,
+      back !== null && back.visible === true, JSON.stringify(back))
+    check(results, `${label}：Ctrl+↑ 往回切換確實把容器捲了回去（對照組：無 scrollIntoView 時停在底部）`,
+      back !== null && back.scrollTop < forcedBottom,
+      `forced=${forcedBottom} → ${JSON.stringify(back)}`)
+
+    // ── 例外：以滑鼠直接點擊時**不**捲動
+    //
+    // `block: 'nearest'` 只保證「**完全**可見就不捲」，部分可見的它會捲最小的量把它補齊 ——
+    // 於是點下緣那半截的列時，那一列會在游標底下跳走，下一次點擊得重新瞄準。這一段先把容器
+    // 造一個半截的列，再送**真滑鼠事件**點它（合成事件驅動不了這條路徑）。
+    //
+    // **不能只是「捲到底再找找看」**（實測：那樣找到的是 `null`）—— 捲到底時被裁掉的是
+    // session **子列**，而標題列（`div[role="button"]`，也就是選取的單位）恰好整排都完整可見。
+    // 因此改為**主動算**：把捲動位置設到讓某一列剛好被視窗邊緣切一半，先試上緣、再試下緣。
+    // 直接指派 `scrollTop` 不送滑鼠事件，於是它自己不會誤觸這條例外。
+    const CUT_A_RAIL_ROW = `(() => {
+      const ul = document.querySelector('aside[aria-label="${copy('rail.label')}"] > ul')
+      if (!ul) return null
+      const rows = [...document.querySelectorAll('aside[aria-label="${copy('rail.label')}"] > ul > li > div[role="button"]')]
+      const max = ul.scrollHeight - ul.clientHeight
+      for (const row of rows) {
+        if (row.getAttribute('aria-current') === 'true') continue
+        const height = row.getBoundingClientRect().height
+        const contentTop =
+          row.getBoundingClientRect().top - ul.getBoundingClientRect().top + ul.scrollTop
+        for (const want of [contentTop + height / 2, contentTop + height / 2 - ul.clientHeight]) {
+          const target = Math.round(want)
+          if (target < 0 || target > max) continue
+          ul.scrollTop = target
+          const a = ul.getBoundingClientRect()
+          const b = row.getBoundingClientRect()
+          const top = Math.max(a.top, b.top)
+          const bottom = Math.min(a.bottom, b.bottom)
+          const cut = b.top < a.top - 0.5 || b.bottom > a.bottom + 0.5
+          if (bottom - top >= 8 && cut) {
+            return {
+              label: row.getAttribute('aria-label'),
+              x: Math.round(b.left + b.width * 0.35),
+              y: Math.round((top + bottom) / 2),
+              scrollTop: Math.round(ul.scrollTop),
+            }
+          }
+        }
+      }
+      return null
+    })()`
+
+    const partial = await app.client.evaluate(CUT_A_RAIL_ROW)
+    check(results, `${label}：前提 —— 造得出一個「部分可見且未選中」的 rail 列`,
+      partial !== null, JSON.stringify(partial))
+
+    if (partial) {
+      await realMouse(app.client, partial.x, partial.y, 'left')
+      await sleep(700)
+      const afterClick = await app.client.evaluate(SELECTED_FULLY_VISIBLE)
+      check(results, `${label}：前提 —— 那一下點擊確實選中了它（否則下一條沒有意義）`,
+        afterClick !== null && afterClick.label === partial.label,
+        `${JSON.stringify(partial.label)} → ${JSON.stringify(afterClick)}`)
+      check(results, `${label}：以滑鼠選取部分可見的項目時 rail 不捲動（它不在游標底下跳走）`,
+        afterClick !== null && afterClick.scrollTop === partial.scrollTop,
+        `scrollTop ${partial.scrollTop} → ${afterClick && afterClick.scrollTop}`)
+    }
+
+    await app.client.send('Emulation.clearDeviceMetricsOverride', {})
+    await sleep(300)
+
+    // ── 分頁列的橫向捲動 —— 第二條 dogfood 回饋的**另一半**，此前零自動化覆蓋
+    //
+    // 同一顆 `Ctrl+Tab` 要捲兩個容器：rail（縱向，上面那幾條）與分頁列（橫向，這裡）。
+    // **壓窄 viewport 讓分頁列溢出**，不去多開 session —— 後者要動 fixture，而 fixture 是
+    // 全域的，前面每一條絕對斷言都會跟著壞。
+    await app.client.send('Emulation.setDeviceMetricsOverride', {
+      width: 640,
+      height: 700,
+      deviceScaleFactor: 0,
+      mobile: false,
+    })
+    await sleep(600)
+    await app.client.evaluate(SELECT_FOLDER('repo-a'))
+    await sleep(400)
+
+    const TAB_SCROLLER = `(() => {
+      const el = document.querySelector('[role="tablist"][aria-label="${copy('sessions.tabs')}"]')
+      if (!el) return null
+      const tabs = [...el.querySelectorAll('[role="tab"]')]
+      const index = tabs.findIndex((t) => t.getAttribute('aria-selected') === 'true')
+      const a = el.getBoundingClientRect()
+      const b = index === -1 ? null : tabs[index].getBoundingClientRect()
+      return {
+        count: tabs.length,
+        index,
+        scrollWidth: Math.round(el.scrollWidth),
+        clientWidth: Math.round(el.clientWidth),
+        overflows: el.scrollWidth > el.clientWidth + 4,
+        scrollLeft: Math.round(el.scrollLeft),
+        visible: b === null ? null : b.left >= a.left - 0.5 && b.right <= a.right + 0.5,
+      }
+    })()`
+
+    const FORCE_TABS_LEFT = `(() => {
+      const el = document.querySelector('[role="tablist"][aria-label="${copy('sessions.tabs')}"]')
+      if (!el) return null
+      el.scrollLeft = 0
+      return Math.round(el.scrollLeft)
+    })()`
+
+    // **壓窄視窗未必就夠**（實測 640px 下 3 個分頁仍塞得下）—— 不夠就補幾個 session。
+    // 補的路徑走**鍵盤**（`Ctrl+T` → ↓ → Enter）而不是點「+」：窄視窗下那顆按鈕可能已被推出
+    // 畫面，而鍵盤路徑與寬度無關。這一段排在 runMode 的最末，多出來的 session 不污染任何人。
+    let tabs = await pollUntil(app.client, TAB_SCROLLER, (v) => v !== null, 8000)
+    for (let i = 0; i < 4 && tabs !== null && !tabs.overflows; i += 1) {
+      await pressKey(app.client, 't', ['ctrl'])
+      await sleep(500)
+      await pressKey(app.client, 'ArrowDown')
+      await pressKey(app.client, 'Enter')
+      await sleep(1500)
+      tabs = await app.client.evaluate(TAB_SCROLLER)
+    }
+
+    check(results, `${label}：前提 —— 分頁列確實溢出（否則整段沒有鑑別力）`,
+      tabs !== null && tabs.overflows === true && tabs.count >= 2,
+      JSON.stringify(tabs))
+
+    if (tabs && tabs.overflows && tabs.count >= 2) {
+      // 先走到第一個分頁 —— 於是「捲到最左」是一個確定的狀態，而不是碰運氣。
+      for (let i = 0; i < tabs.count && tabs.index !== 0; i += 1) {
+        await pressKey(app.client, 'Tab', ['ctrl'])
+        await sleep(250)
+        tabs = await app.client.evaluate(TAB_SCROLLER)
+      }
+      check(results, `${label}：前提 —— Ctrl+Tab 走得到第一個分頁`,
+        tabs !== null && tabs.index === 0, JSON.stringify(tabs))
+
+      // 強制捲回最左：於是**最後一個**分頁必然落在視野之外（溢出的定義就是這件事）。
+      await app.client.evaluate(FORCE_TABS_LEFT)
+      await sleep(300)
+
+      // 往前循環一格 ＝ 跳到最後一個分頁。位置序可循環（`keyboard-navigation`）。
+      await pressKey(app.client, 'Tab', ['ctrl', 'shift'])
+      await sleep(700)
+      const wrapped = await app.client.evaluate(TAB_SCROLLER)
+      check(results, `${label}：前提 —— Ctrl+Shift+Tab 自第一個分頁循環到最後一個`,
+        wrapped !== null && wrapped.index === wrapped.count - 1, JSON.stringify(wrapped))
+      check(results, `${label}：切換至視野外的 session 時，分頁列橫向捲動使該分頁完整可見`,
+        wrapped !== null && wrapped.visible === true, JSON.stringify(wrapped))
+      check(results, `${label}：分頁列確實橫向捲動了（對照組：無 scrollIntoView 時 scrollLeft 停在 0）`,
+        wrapped !== null && wrapped.scrollLeft > 0, JSON.stringify(wrapped))
+    }
+
+    await app.client.send('Emulation.clearDeviceMetricsOverride', {})
+    await sleep(300)
   } finally {
     await app.destroy()
   }

@@ -1,10 +1,11 @@
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { ContextMenu, type MenuItem } from '../files/dialogs'
 import type { SpawnTarget } from '../types'
 import { SessionNameDialog } from './SessionNameDialog'
 import { StatusDot, sessionLabel, sessionTitle, statusTitle } from './session-badge'
 import type { SessionState } from './sessions'
 import { useDragReorder } from '../useDragReorder'
+import { useScrollIntoView } from '../useScrollIntoView'
 import { useSpawnMenu } from './useSpawnMenu'
 import { useTranslation } from 'react-i18next'
 
@@ -39,12 +40,31 @@ export function SessionTabs({
   const [menu, setMenu] = useState<{ x: number; y: number; session: SessionState } | null>(null)
   const [renaming, setRenaming] = useState<SessionState | null>(null)
   const tabRefs = useRef(new Map<number, HTMLDivElement>())
+  const tabScroll = useScrollIntoView()
 
   const rectOf = useCallback((index: number) => {
     return tabRefs.current.get(index)?.getBoundingClientRect() ?? null
   }, [])
 
   const reorder = useDragReorder(sessions.length, 'horizontal', rectOf, onReorder)
+
+  /**
+   * focused session 改變時，把它的分頁捲進**橫向**可視範圍。
+   *
+   * 分頁列是 `overflow-x-auto` —— session 開多了，`Ctrl+Tab` 會切到一個看不見的分頁上，而
+   * 畫面上什麼都不會變（使用者只會判定快捷鍵壞了）。`inline: 'nearest'` 是橫向的那一半，
+   * 少了它這個 effect 對橫向捲動完全無效。
+   *
+   * `nearest` 只讓「**完全**可見就不捲」成立；以滑鼠點一個**半截**的分頁時它仍會捲，於是
+   * 那個分頁在游標底下跳走。該例外由 `useScrollIntoView` 承擔（`guard` 掛在分頁列上）——
+   * 而在 rail 點一列 session 時**仍會捲**，那是另一個容器。
+   */
+  useEffect(() => {
+    if (!focusedId) return
+    const index = sessions.findIndex((session) => session.id === focusedId)
+    if (index === -1) return
+    tabScroll.scrollIntoView(tabRefs.current.get(index), { block: 'nearest', inline: 'nearest' })
+  }, [focusedId, sessions, tabScroll])
 
   const items: MenuItem[] = menu
     ? [
@@ -85,7 +105,7 @@ export function SessionTabs({
   }
 
   return (
-    <div className="flex items-stretch border-b border-hairline bg-panel">
+    <div className="flex items-stretch border-b border-hairline bg-panel" {...tabScroll.guard}>
       {/*
         `tablist` 不佔 flex-1 —— 否則它會把建立入口一路推到分頁列的另一端，開第二個分頁之後
         滑鼠得橫越整條列才點得到。剩餘空間交給後面的 spacer 吸收。

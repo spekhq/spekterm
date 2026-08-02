@@ -1,5 +1,5 @@
 import { type WebContents, ipcMain } from 'electron'
-import type { PanelCoordinates, PanelStore } from '../panel-store'
+import type { PanelSnapshot, PanelStore } from '../panel-store'
 
 export const PANEL_CHANNELS = {
   get: 'workspace:panel:get',
@@ -58,7 +58,7 @@ function hookLifecycle(store: PanelStore, sender: WebContents): void {
 }
 
 export function registerPanelHandlers(store: PanelStore): void {
-  ipcMain.handle(PANEL_CHANNELS.get, (event): PanelCoordinates => {
+  ipcMain.handle(PANEL_CHANNELS.get, (event): PanelSnapshot => {
     hookLifecycle(store, event.sender)
     return store.list()
   })

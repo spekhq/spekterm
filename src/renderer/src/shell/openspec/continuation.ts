@@ -27,6 +27,14 @@ export type ContinuationBlock =
   /** 當前 repo 沒有任何 session（沒有對象可以發話）。 */
   | 'noSession'
   /**
+   * focused session 是一個**全域 session**（不隸屬任何 folder，見 `global-session`）。
+   *
+   * 它沒有「自身所屬的 folder」，因此「側欄來源等於 session 自身的 folder」這個條件對它
+   * **恆不成立** —— 這是一個獨立的原因，不是 `foreignSource` 的一種：後者的說明是「把側欄
+   * 切回選中的 repo 就好了」，而那對全域 session 是一句做不到的建議（它切回哪裡都一樣）。
+   */
+  | 'globalSession'
+  /**
    * 側欄來源指向另一個 repo。**這是正確性要求，不是語意潔癖**：agent 的工作目錄是它自己的
    * repo，把另一個 repo 的 change 識別碼送進去會查無此 change；而兩個 repo 恰有同名 change 時，
    * 它會在**錯的 repo** 動手。
@@ -47,3 +55,34 @@ export type ContinuationBlock =
    * 要問的是「來源與 session 所屬的 folder 是不是同一個工作目錄」，即 `worktree.isFolderRoot`。
    */
   | 'foreignWorktree'
+
+/**
+ * 續寫入口不可用的原因 —— **純函式，因為它必須被測試守住**。
+ *
+ * 這段判定此前寫在 `MainStage` 的 JSX 裡（一條三元鏈），於是它唯一的守衛是人的注意力。而
+ * design D2 自陳「條件 1 是本 change 最危險的坑」：它比較的兩端**都可能缺席**，而樸素寫法的
+ * 失效方向取決於今天恰好用了 `?.` 還是 `??` —— 誤停用只是少一顆按鈕，誤啟用會讓 agent 在
+ * 家目錄建出一個空的 change。一個會在下一次無關重構中翻面的判定，不能只靠手動確認過一次。
+ *
+ * 條件的順序就是回報原因的優先序：先看有沒有對象，再看它是不是對的對象。
+ */
+export function continuationBlockOf(input: {
+  /** focused 且正被顯示的 session。`undefined` ＝ 當前項目沒有 session。 */
+  displayed?: {
+    /** `null` ＝ 全域 session（不隸屬任何 folder）。 */
+    folderId: string | null
+    spawnTarget: 'claude' | 'shell'
+    status: 'dormant' | 'running' | 'exited'
+  }
+  /** 側欄來源 repo 的識別碼。`undefined` ＝ 尚未選定。 */
+  panelFolderId?: string
+}): ContinuationBlock | null {
+  const { displayed, panelFolderId } = input
+  if (!displayed) return 'noSession'
+  // **先問是不是全域，不讓兩個缺席值互相比較**（design D2）。
+  if (displayed.folderId === null) return 'globalSession'
+  if (panelFolderId !== displayed.folderId) return 'foreignSource'
+  if (displayed.spawnTarget !== 'claude') return 'notClaude'
+  if (displayed.status !== 'running') return 'notRunning'
+  return null
+}

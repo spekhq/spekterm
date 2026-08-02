@@ -9,15 +9,14 @@ import { DirtyBuffersProvider } from './files/dirty-buffers'
 import { OpenSpecProvider } from './openspec/data'
 import { PanelCoordinateProvider } from './panel-coordinate'
 import { SessionsProvider } from './terminal/sessions'
+import { folderSelection } from './types'
 import { useWorkspaceFolders } from './useWorkspaceFolders'
 
 const SEPARATOR_CLASS = 'w-[3px] cursor-col-resize bg-hairline transition-colors hover:bg-accent'
 
 export function AppShell(): React.JSX.Element {
-  const { folders, selectedId, select, addFolder, removeFolder, reorderFolders } =
+  const { folders, selection, select, addFolder, removeFolder, reorderFolders } =
     useWorkspaceFolders()
-  const selected = folders.find((folder) => folder.id === selectedId) ?? null
-
   // Provider 在此 —— 未存的變更必須活過切換 folder（FilesPanel 以 folder.id 為 key 掛載）。
   // SessionsProvider 同理，且要同時涵蓋 rail 與主舞台：rail 呈現所有 folder 的 session，
   // 主舞台掛載它們的終端（design D9）。
@@ -41,8 +40,9 @@ export function AppShell(): React.JSX.Element {
             */}
             <KeyboardNavigation
               folders={folders}
-              selectedId={selectedId}
-              onSelectFolder={select}
+              selection={selection}
+              onSelectGlobal={() => select({ kind: 'global' })}
+              onSelectFolder={(id) => select(folderSelection(id))}
               onReorderFolder={(id, toIndex) => void reorderFolders(id, toIndex)}
             />
 
@@ -69,8 +69,9 @@ export function AppShell(): React.JSX.Element {
               <Panel defaultSize="260px" minSize="180px" className="min-w-0">
                 <WorkspaceRail
                   folders={folders}
-                  selectedId={selectedId}
-                  onSelect={select}
+                  selection={selection}
+                  onSelect={(id) => select(folderSelection(id))}
+                  onSelectGlobal={() => select({ kind: 'global' })}
                   onAdd={() => void addFolder()}
                   onRemove={(id) => void removeFolder(id)}
                   onReorder={(id, toIndex) => void reorderFolders(id, toIndex)}
@@ -80,11 +81,11 @@ export function AppShell(): React.JSX.Element {
               <Separator className={SEPARATOR_CLASS} />
 
               <Panel minSize="360px">
-                <MainStage folder={selected} folders={folders} />
+                <MainStage selection={selection} folders={folders} />
               </Panel>
             </Group>
 
-            <StatusBar folders={folders} selectedId={selectedId} />
+            <StatusBar folders={folders} selection={selection} />
             </div>
           </OpenSpecProvider>
           </PanelCoordinateProvider>

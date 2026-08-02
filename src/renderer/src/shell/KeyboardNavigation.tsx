@@ -1,11 +1,14 @@
 import { useEffect } from 'react'
 import { t } from '@shared/i18n'
 import { useSessions } from './terminal/sessions'
-import type { WorkspaceFolder } from './types'
+import { type RailSelection, type WorkspaceFolder, selectedFolderId } from './types'
 
 interface KeyboardNavigationProps {
   folders: WorkspaceFolder[]
-  selectedId: string | null
+  /** rail 上選中的項目。`null` ＝ 尚未選中任何項目（design D8）。 */
+  selection: RailSelection | null
+  /** 選中那個不隸屬任何 folder 的全域項目（`global-session`）。 */
+  onSelectGlobal: () => void
   onSelectFolder: (id: string) => void
   /** 把某個 folder 移到第 `toIndex` 個位置。**以 id 指定，不以位置**（design D5）。 */
   onReorderFolder: (id: string, toIndex: number) => void
@@ -87,11 +90,19 @@ function editableTextHasFocus(): boolean {
  */
 export function KeyboardNavigation({
   folders,
-  selectedId,
+  selection,
+  onSelectGlobal,
   onSelectFolder,
   onReorderFolder,
 }: KeyboardNavigationProps): null {
   const sessions = useSessions()
+  /**
+   * session 的歸屬鍵：folder 識別碼，或 `null`（全域項目）。
+   *
+   * **`selection` 才是「有沒有選中」的判準，不是這個值** —— 它對「未選中」與「選中全域項目」
+   * 都是 `null`。以它當 gate 會讓四顆 session 快捷鍵在全域項目上**全部靜默失效**。
+   */
+  const itemKey = selectedFolderId(selection)
 
   useEffect(() => {
     /**
@@ -114,26 +125,36 @@ export function KeyboardNavigation({
       // 文字選取優先 —— 這一顆鍵在編輯器與輸入框裡有它自己的、更根本的意義。
       if (editableTextHasFocus()) return false
 
-      if (!selectedId) return true
+      if (!selection) return true
 
       if (isUp || isDown) {
-        const index = folders.findIndex((folder) => folder.id === selectedId)
+        // **全域項目不可排序** —— 它不是 workspace 的成員，沒有順序可言（`global-session`）。
+        // 不與第一個 folder 交換、也不做一次隨後自行復原的位移：兩者都會讓使用者看見一個
+        // 假的移動。
+        if (selection.kind !== 'folder') return true
+
+        // **索引以 folder 清單為基準，不以 rail 的列位置** —— rail 比它多了全域項目那一列。
+        // 以列位置計算的失效是兩個方向都錯：`Shift+↑` 會讓第二個 folder 算出等於它自己的目標
+        // 而靜默無操作，`Shift+↓` 會讓第一個 folder 多跳一格。而 workspace 只有兩個 folder
+        // 時**兩者都看不出來**（夾制會把越界的目標拉回末端，結果與正確實作相同）。
+        const index = folders.findIndex((folder) => folder.id === selection.id)
         if (index === -1) return true
 
         const toIndex = index + (isDown ? 1 : -1)
         if (toIndex < 0 || toIndex >= folders.length) return true
-        onReorderFolder(selectedId, toIndex)
+        onReorderFolder(selection.id, toIndex)
         return true
       }
 
-      const list = sessions.forFolder(selectedId)
-      const focusedId = sessions.focusedIdFor(selectedId)
+      // `Shift+←→` 排 session —— 作用域涵蓋全域項目（它也有自己的分頁列）。
+      const list = sessions.forFolder(itemKey)
+      const focusedId = sessions.focusedIdFor(itemKey)
       const index = list.findIndex((session) => session.id === focusedId)
       if (index === -1) return true
 
       const toIndex = index + (isRight ? 1 : -1)
       if (toIndex < 0 || toIndex >= list.length) return true
-      sessions.reorder(selectedId, index, toIndex)
+      sessions.reorder(itemKey, index, toIndex)
       return true
     }
 
@@ -192,34 +213,51 @@ export function KeyboardNavigation({
       if (isCloseSession) {
         // 關閉當前 focused 的 session。沒有選中的 repo 或該 repo 沒有 session 時為無操作。
         // 走既有的 `close` 路徑（Phase 4 的生命週期，不留孤兒 pty）—— 與點分頁的 ✕ 無異。
-        if (!selectedId) return
-        const focusedId = sessions.focusedIdFor(selectedId)
+        if (!selection) return
+        const focusedId = sessions.focusedIdFor(itemKey)
         if (focusedId) sessions.close(focusedId)
         return
       }
 
       if (isTab) {
-        if (!selectedId) return
-        const list = sessions.forFolder(selectedId)
-        const focusedId = sessions.focusedIdFor(selectedId)
+        // 作用域為**當前選中的 rail 項目**（涵蓋全域項目）—— 切換不跨越項目。
+        if (!selection) return
+        const list = sessions.forFolder(itemKey)
+        const focusedId = sessions.focusedIdFor(itemKey)
         const index = list.findIndex((session) => session.id === focusedId)
         if (index === -1) return
 
         const next = cycle(list, index, event.shiftKey ? -1 : 1)
-        if (next) sessions.focus(selectedId, next.id)
+        if (next) sessions.focus(itemKey, next.id)
         return
       }
 
-      const index = folders.findIndex((folder) => folder.id === selectedId)
-      if (index === -1) return
+      /*
+        `Ctrl+↑↓`：在 **rail 的項目序**上循環 —— 全域項目恆為第 0 個，其後才是各 folder
+        （`global-session`）。於是自最後一個 folder 往下會回到全域項目，自第一個 folder 往上
+        會抵達它。
 
-      const next = cycle(folders, index, isDown ? 1 : -1)
-      if (next) onSelectFolder(next.id)
+        **尚未選中任何項目時選中第一個**，而不是無操作 —— 冷啟動刻意不預設選中任何項目
+        （design D12），若這裡也不作用，使用者就必須先動一次滑鼠才能開始用鍵盤。
+      */
+      if (!selection) {
+        onSelectGlobal()
+        return
+      }
+
+      const railCount = folders.length + 1
+      const railIndex =
+        selection.kind === 'global' ? 0 : folders.findIndex((f) => f.id === selection.id) + 1
+      if (railIndex === 0 && selection.kind === 'folder') return
+
+      const nextIndex = (railIndex + (isDown ? 1 : -1) + railCount) % railCount
+      if (nextIndex === 0) onSelectGlobal()
+      else onSelectFolder(folders[nextIndex - 1].id)
     }
 
     window.addEventListener('keydown', onKeyDown, true)
     return () => window.removeEventListener('keydown', onKeyDown, true)
-  }, [folders, selectedId, onSelectFolder, onReorderFolder, sessions])
+  }, [folders, selection, itemKey, onSelectGlobal, onSelectFolder, onReorderFolder, sessions])
 
   return null
 }

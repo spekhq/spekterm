@@ -2,7 +2,7 @@ import type { GraphData } from '@spekjs/core'
 import { type IpcRendererEvent, contextBridge, ipcRenderer } from 'electron'
 import type { DirtyEntry } from '../main/dirty-state'
 import type { FsResult, WriteResponse } from '../main/ipc/fs'
-import type { PanelCoordinates } from '../main/panel-store'
+import type { PanelSnapshot } from '../main/panel-store'
 import type { RestoredSession } from '../main/ipc/terminal'
 import type { DirEntry, FileContent } from '../main/fs-service'
 import type { TerminalPreferences } from '../main/preferences-store'
@@ -245,7 +245,8 @@ const workspaceApi = {
      * 主行程只對查表命中的值解析出路徑，查無對應即拒絕（`terminal-sessions`）。
      */
     create: (
-      folderId: string,
+      /** `null` ＝ 全域 session（不隸屬任何 folder）。renderer 不因此獲得任何路徑詞彙。 */
+      folderId: string | null,
       spawnTarget: SpawnTarget,
       worktreeKey?: string,
     ): Promise<FsResult<{ sessionId: string }>> =>
@@ -330,11 +331,14 @@ const workspaceApi = {
    * 同屬一個行程樹，在這裡檢查等同沒有檢查。
    */
   panel: {
-    /** 全部座標。鍵為 rail 項目的識別碼（今日即 folder id）。 */
-    get: (): Promise<PanelCoordinates> => ipcRenderer.invoke('workspace:panel:get'),
+    /**
+     * 全部座標。`coordinates` 的鍵為 folder 識別碼；全域項目的座標在 `global`，**與它並列**
+     * 而不是它的一個鍵 —— folder 識別碼不受格式約束，共用鍵空間會碰撞（design D1c）。
+     */
+    get: (): Promise<PanelSnapshot> => ipcRenderer.invoke('workspace:panel:get'),
     /** 送出完整的一份（fire-and-forget，主行程 debounce 後落盤）。 */
-    persist: (coordinates: PanelCoordinates): void => {
-      ipcRenderer.send('workspace:panel:persist', coordinates)
+    persist: (snapshot: PanelSnapshot): void => {
+      ipcRenderer.send('workspace:panel:persist', snapshot)
     },
   },
 } as const

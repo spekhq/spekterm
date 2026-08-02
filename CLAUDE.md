@@ -257,6 +257,125 @@ NOT 持久化」，後者有一條「錨定的 change 一併回來」的 scenari
 issue #8 的既有偶發，單獨重跑確認）。詳見下文「側欄座標」——那裡記著五個實測踩雷，其中三個是
 **我自己造成、且分別由不同一道防線抓到的**。
 
+`global-session`（**不屬於任何 Phase**）是**第九次 dogfooding 的回饋**——「我需要一個全域的 claude
+code 或 login session，因為有時候 context 不一定跟任何一個 repo 有關係」。此前 session 的模型是
+「repo → session」：`create()` 只收 `folderId` 並查表拒絕未註冊的 folder，rail 是 folder 的清單而
+session 是它的子列 —— 於是**要開一個終端，必須先有一個 repo**。
+
+**它與「把 `~` 加進 workspace」的差別是全部的重點**：那個變通確實開得出 session，但會把 `fs.*`
+白名單與 Files 檔案樹**對整個家目錄開放**；而全域 session 只改變 pty 的**初始工作目錄**，
+而 `terminal-sessions` 早已明文「此邊界只約束初始工作目錄」。**`filesystem-access` 因此一條未改** ——
+家目錄不是任何 folder，renderer 一個位元組都讀不到它。
+
+交付：rail 頂端一個**不隸屬任何 folder** 的固定項目（不可移除、不可拖曳排序、無分支）、它的
+session 分頁列與 focus 記憶、cwd 恆為家目錄（**依 spawn 目標分工**：shell 記最後位置且**不受路徑
+夾制**，claude 回到建立時的位置）、per-item 的側欄座標（預設**未選定**，可指向任一 repo）、狀態列
+的全域身分、以及**併收的第二個回饋** —— 鍵盤導航的捲動（此前 renderer **一個 `scrollIntoView` 都
+沒有**，rail 超出視窗時 `Ctrl+↑↓` 切過去了卻看不到）。
+
+> **design 的三個承重前提，實作時發現全部是錯的 —— 這是本 change 最有價值的產出。**
+>
+> 1. **「用 `null` 表示全域，讓編譯器把每個消費點標紅」—— 只對一半成立。** 實測（repo 自己的 tsc，
+>    `--strict`）：`string | null` 與 `string | undefined` 的 **`===` 比較合法且不報錯**，只有傳參與
+>    Map 鍵會紅。而歸屬的消費點**絕大多數是比較** —— `MainStage` 的 active 判準
+>    （`session.folderId === focusedFolder?.id`）若不改，全域 session 的終端**永遠不是 active**，
+>    依「休眠的 session 於首次被顯示時才啟動 pty」，那等於**休眠的全域 session 永遠不會被喚醒**，
+>    而畫面上只是一片空白。**於是 `dormant` 那條教訓一個字都不能打折：加列舉值時把 `===` 全部
+>    grep 一遍。** 21 處命中裡，`sessions.tsx` 的 5 處**恰好都是對的**（`null === null` 正是
+>    「兩個都是全域」的正確語意），真正要改的只有 `MainStage` 兩處。
+> 2. **「落盤用『欄位缺席』表示全域，比照既有慣例」—— 類比不成立。** 省略 worktree key 的降級目標
+>    是同一個 folder 的根（安全、可見）；省略 `folderId` 改變的是**歸屬**。一次過期的 renderer 漏掉
+>    該欄位，就會讓一個隸屬於 repo 的 session **靜默變成全域 session** ⇒ claude 從家目錄 resume 一個
+>    開在別處的對話 ⇒ 查無 ⇒ 靜默自癒為全新對話：**歷史沒了，且沒有任何訊號**。改為**明確寫出的
+>    `null`**，缺席一律視為不合法（丟棄該筆）。
+> 3. **「folder 識別碼恆為 UUID，所以保留鍵不會撞」—— codebase 的註解早就寫著相反的事。**
+>    `panel-store.ts` 自陳「`sourceFolderId` **不對格式設限**（探針與手動設定的 workspace 會用可讀
+>    的識別碼）」，`parseWorkspace` 也只檢查它是字串。原本提議的測試（「保留鍵不得為合法 UUID 形狀」）
+>    **測的是一個實例，不是不變式**。改為**獨立欄位**（`panel.json` 的 `global` 與 `coordinates` 並列）
+>    —— 碰撞於是**表達不出來**，而不是「被一條測試擋住」。
+>
+> **一般形式：一個「由測試釘住的格式假設」不如一個「使不變式無法被違反的結構」。**
+
+**`null === null` 的誤啟用是本 change 最危險的一條，而它的方向不確定才是真正的問題。** 全域 session
+沒有所屬 folder（`null`），而全域項目的側欄來源**預設也是缺席** —— 樸素的
+`panelSource === session.folderId` 會讓**續寫入口亮起來**，然後把 change 識別碼送進一個站在家目錄的
+agent，它會在**家目錄**建出一個同名的空 change。而現行程式碼恰好是 `panelFolder?.id !== …`，於是
+實際方向反而是誤停用。**一個取決於「今天恰好用 `?.` 還是 `??`」的安全判定，本身就不可接受**，不論
+它今天倒向哪一邊。判定因此抽成純函式 `continuationBlockOf()` 並由**對照組**守住（拿掉那一行，3 條
+測試變紅 —— 其中「兩者同為缺席時仍停用」證明了誤啟用是真的）。
+
+**三個實作時才發現的坑**（皆已修）：**OpenSpec 身分對全域項目恆為停用**（`panelFolder?.hasOpenSpec
+?? false`）⇒ 身分被強制退回 Files，而 Files 在同一狀態下也是空的 ⇒ 新寫的空狀態**永遠到不了**；
+**`keyboard-navigation` 有四條**以「當前選中的 repo」為作用域、且各帶一句「沒有選中的 repo 時 SHALL
+為無操作」的 requirement（**行為條款而非措辭**，照字面全域項目上四顆鍵全失效）；**家目錄的 git
+狀態偵測是 `spawnSync` 且每 2 秒一次** —— dotfiles-as-git-repo 是常見設定，於整個家目錄跑它會
+**週期性阻塞主行程**，因此 cwd 恰為家目錄時跳過。
+
+> **在 probe 的模板字串裡寫註解，反引號會把字串提前結束 —— 這個 change 咬了我五次。**
+>
+> CLAUDE.md 早就記著它（`ui-copy-i18n` 那次），我還是連續踩：三次在 `probe:keyboard`／
+> `probe:openspec`、兩次在 `probe:workspace`。**而 `node --check` 只抓到其中三次** —— 另外兩次
+> 外層恰好仍是合法的 JS，要到執行時才炸成 `SyntaxError: Unexpected identifier` 或一句看不懂的
+> `Invalid parameters`。
+>
+> **可靠的做法不是「記得別用反引號」，是把說明寫在模板字串外面**（那裡想用什麼都行），字串內
+> 只留程式碼。同一條也適用於 `*/`（區塊註解的結束）。
+
+> **一個 Tailwind class 名稱是另一個的子字串 —— 於是「選中的是哪一列」的判準恆回第一列。**
+>
+> 我一度以 `className.includes('bg-hover')` 判斷 rail 上選中的項目。**未選中的列帶著
+> `hover:bg-hover/60`，而那個字串也包含 `bg-hover`** ⇒ 判準恆回第一列。以它為期望值的三條
+> 斷言（期望值恰好就是第一列的「全域項目」）因此**不論實作對錯都通過**。
+>
+> 正解是讓產品標示選中狀態（`aria-current`）—— 那首先是無障礙的正確標記，順帶給探針一個精確
+> 的判準。**而加上它立刻炸出另一件事**：`probe:keyboard` 既有的 `SELECTED_FOLDER` 有一條
+> 「`aria-current` → 否則讀主舞台 header」的退路，**產品此前沒有 `aria-current`，於是那條退路
+> 一直走的是 header**；加上之後它第一次走進前半段，而前半段讀的是 `innerText` 的第一行 ——
+> 該列展開時那是一顆 `▾` 展開鈕。**替一個從未被滿足的條件補上滿足它的東西，會喚醒一段從未
+> 執行過的程式碼。**
+
+> **獨立稽核（`/opsx:verify`）擋下了第一次封存，而它抓到的是「對照表宣稱了四條不存在的載體」
+> —— 這是這個 repo 第四次踩「補一條 scenario 與覆蓋一條 scenario 是兩個動作」。**
+>
+> 四條都不是實作錯誤：`terminal.test.ts` 裡沒有那條「拒絕為全域 session 指定工作目錄識別碼」
+> 的測試（行為住在 `ipc/terminal.ts` 的 handler 裡，而該模組於載入時就 `import { ipcMain } from
+> 'electron'` —— **node:test 進不去，把 `strict: true` 改成 `false` 不會有任何紅燈**）；
+> `probe:workspace` 沒有冷啟動斷言；`probe:openspec` 沒有續寫入口的斷言；而
+> `probe:keyboard` 的全域段落**按完 `Ctrl+T` 就 `Escape`**，於是全域項目在整支探針裡 session 數
+> 恆為 0 —— 「於全域項目內切換 session」不可能被驗到。
+>
+> **四條全都躲過了** `openspec validate --strict`（scenario 存在且格式合法）、delta 與主 spec 的
+> header 稽核（那支腳本不看驗收），以及探針全綠（沒有人在看那條）。**「記得要小心」顯然不是機制**
+> —— 能結構性擋住它的是：稽核腳本對**每一條新增的 scenario** 要求一個驗收指認（哪支探針、哪條
+> 斷言、或明寫「不覆蓋，理由是…」）。
+>
+> **修法不是改標籤，是把載體做出來**：解析抽成 `worktree-pick.ts` 的 `pickCreateWorktree`
+> （於是測得到，且斷言**列舉未被呼叫** —— 那是「空集合短路」與「列舉後沒命中」唯一的差別）；
+> `runGlobalSession` 補上整段重啟；`probe:keyboard` 的全域段落真的建兩個 session。
+
+`npm test` 392/392、`probe:keyboard` 170/170、`probe:workspace` 91/91、`probe:openspec` 410/410、
+`probe:files` 102/102、`probe:shell` 19/19、`probe:terminal` 241/242。
+「持久化檔案損毀」那條**既有的偶發**仍在（單獨連跑為 1 紅 1 綠，與 `panel-coordinate-per-folder`
+封存時同型，issue #8）。
+
+**捲動的驗收載體是 `probe:keyboard`，不是 `probe:workspace`。** 後者送不進 `Ctrl+↓`（診斷顯示
+`aria-current` 不動而 `scrollTop` 卻變了 —— 那是**未被 preventDefault 時瀏覽器的原生捲動**，不是
+產品的 `scrollIntoView`），該段因此**整段移除而非留著**：留著就是一盞假綠燈（「捲回 scrollTop 0」
+在原生捲動下照樣通過）。改用 `Emulation.setDeviceMetricsOverride` 壓矮 viewport 讓既有的 3-repo
+fixture 就溢出，實測 `scrollHeight 318 > clientHeight 180`；**對照組**（拿掉 `scrollIntoView`）
+使 4 條變紅。
+
+**而「分頁列的橫向捲動」一度零覆蓋 —— 那是同一條回饋的另一半。** 刪掉 `SessionTabs.tsx` 的
+`scrollIntoView`，`probe:keyboard` 照樣全綠。補法：壓窄視窗讓分頁列溢出，**不夠就以鍵盤補
+session**（`Ctrl+T` → ↓ → Enter，與視窗寬度無關；窄視窗下那顆「+」可能已被推出畫面）；
+判準是「走到第一個分頁 → 強制 `scrollLeft = 0` → `Ctrl+Shift+Tab` 循環到最後一個」，
+於是「最後一個必然在視野外」是**溢出的定義**保證的，不是碰運氣。
+
+**滑鼠的例外，半截的列要「算」出來，不能「捲到底再找找看」。** 捲到底時被裁掉的是 session
+**子列**，而選取的單位是**標題列**，整排恰好都完整可見 —— 第一版因此恆回 `null`。改為主動
+把 `scrollTop` 設到讓某一列剛好被邊緣切一半（先試上緣、再試下緣）。對照組（拿掉例外判定）
+使該條變紅：`scrollTop 20 → 0`。
+
 尚未開始：打包（Phase 6）、handoff（Phase 7+）。**session 常駐**（讓 pty 活過 app 的生命）已排入
 路線圖但**刻意不做** —— 見 `docs/PRD.md` §11 的「session 常駐」，那裡記著 tmux 與自寫 daemon 的取捨。
 
@@ -371,6 +490,20 @@ leader，再 `process.kill(-pid)` 殺整組。**另外，面板留有未存變�
 > **而「兩個判準對不上時，不要挑好聽的那個」**：第三次是 `--numstat` 說 5 個刪除、`grep '^-'`
 > 說 0 個。那個矛盾就是顏色碼還在的證據 —— 若當時採信 grep，就會宣稱「spec 同步沒有刪掉任何
 > 東西」而放行。
+
+> **原始碼裡一個字面的 NUL 位元組，會讓 `git diff` 與 `grep` 對整個檔案瞎掉 —— 而 `grep` 是
+> 回空 + exit 1，連「binary file」都不說。** 修過一次（`cc3014c`，`data.tsx` 的 cache key
+> 分隔符），但**同型的還有兩個檔案沒被發現**：`side-panel/SidePanel.tsx` 與
+> `files/dirty-buffers.tsx`（`global-session` 的獨立稽核抓到，已一併改為 ` `）。
+>
+> **它的代價不只是難讀 diff**：`global-session` 的 design 倚賴「把 `folderId ===` grep 一遍」
+> 來清查每一個歸屬比較點（那是 `dormant` 那條教訓的應用），而 `dirty-buffers.tsx` 的 5 處命中
+> **結構性地不在結果裡**。結論碰巧不變（那五處都是檔案定址），但**清查技術有一個沒人發現的
+> 盲點**。分隔符選 NUL 是對的（它不可能出現在 `folderId` 或路徑裡），錯的只是把它寫成字面的
+> 位元組而不是 escape 序列 —— 語意完全等價。
+>
+> 查法：`python3 -c "print(open(f,'rb').read().count(b'\x00'))"`（**不能用 grep 查 grep 看不到
+> 的東西**）。三道原始碼守衛不受影響 —— 它們走 `readFileSync` + AST／regex，不經 grep。
 
 **驗互動時用真事件，不要用 `dispatchEvent(new MouseEvent(...))`。** 合成事件不等於真實
 輸入：它不走完整的 pointer/mouse/contextmenu 序列，也不觸發 React 19 對 trusted discrete
@@ -752,6 +885,16 @@ org 名**不是**凍結身分的一部分 —— repo 改名與 transfer 皆自�
   per-folder 的模型順帶回答了 #5 自陳未解的那個問題（**rail 選中 worktree ＝ 設定工作目錄維度，
   不是 repo 維度** ⇒ OpenSpec 維持聚合、Files 以該 worktree 為根）。詳見下文「側欄座標」。
 
+- **全域 session** — `global-session`（**不屬於任何 Phase**）：第九次 dogfooding 的回饋。新能力
+  `global-session`（rail 頂端一個不隸屬任何 workspace folder 的固定項目，cwd 恆為家目錄；不可移除、
+  不可排序、無分支；**冷啟動不預設選中它** —— 否則會立刻喚醒一個 session，破壞「開 app 只起一個
+  claude」）；10 份 delta，其中 `keyboard-navigation` 有**四條**以「當前選中的 repo」為作用域的
+  requirement 要放寬（`Ctrl+Tab`／`Ctrl+T`／`Ctrl+Shift+W`／`Shift+←→`），`workspace-layout` 的
+  **OpenSpec 身分停用條件**收窄為「來源已選定且不含 `openspec/`」。**`filesystem-access` 一條未改** ——
+  那是這個 change 與「把 `~` 加進 workspace」的全部差別。併收第二個回饋：**鍵盤導航的捲動**
+  （renderer 此前一個 `scrollIntoView` 都沒有）。詳見上文那三個「承重前提全是錯的」與 `null === null`
+  的誤啟用。
+
 - Phase 6 打包與發佈，Phase 7+ 建立護城河（handoff）。**session 常駐**已排入路線圖但刻意不做
   （PRD §11）。
 
@@ -923,17 +1066,40 @@ provider 驗證：它為 `language: '*'` 註冊，呼叫 worker 端的 `$compute
 
 | | |
 |---|---|
-| `Ctrl+Tab` / `Ctrl+Shift+Tab` | 當前 repo 內的下／上一個 session（**分頁位置序**，可循環） |
-| `Ctrl+↓` / `Ctrl+↑` | rail 上的下／上一個 repo（可循環） |
+| `Ctrl+Tab` / `Ctrl+Shift+Tab` | 當前 **rail 項目**內的下／上一個 session（**分頁位置序**，可循環） |
+| `Ctrl+↓` / `Ctrl+↑` | rail 上的下／上一個**項目**（可循環，**涵蓋全域項目**；尚未選中時選第一個） |
 | `Ctrl+T` | 開啟建立 session 的入口（spawn 選單，可全鍵盤操作） |
-| `Ctrl+Shift+W` | 關閉當前 focused 的 session（沒有選中的 repo 或該 repo 無 session 時無操作） |
-| `Shift+↓` / `Shift+↑` | 把**選中的 repo** 在 rail 上往下／往上移動一格（**不循環**） |
+| `Ctrl+Shift+W` | 關閉當前 focused 的 session（沒有選中的項目或該項目無 session 時無操作） |
+| `Shift+↓` / `Shift+↑` | 把**選中的 repo** 在 rail 上往下／往上移動一格（**不循環**；選中全域項目時無操作） |
 | `Shift+→` / `Shift+←` | 把 **focused session** 在分頁列上往右／往左移動一格（**不循環**） |
 | `Ctrl+Shift+C` / `Ctrl+Shift+V` | 終端的複製貼上（macOS 用 `Cmd`） |
 | `Cmd/Ctrl+S` | 存檔 |
 | `Esc` | 關閉 overlay／對話框／選單 |
 
 **`docs/workspace-mockup.html` 對快捷鍵沉默** —— 這組綁定由該 change 定義，不是偏離雛型。
+
+> **四顆 session 快捷鍵的作用域是「rail 上選中的項目」，不是「選中的 repo」**（`global-session` 起）。
+> 那四條 requirement 各帶一句「沒有選中的 repo 時 SHALL 為無操作」—— **那是行為條款而不是措辭**，
+> 照字面實作會讓全域項目上 `Ctrl+Tab`／`Ctrl+T`／`Ctrl+Shift+W`／`Shift+←→` **全部失效**，而
+> 型別檢查對此完全無感（gate 寫成 `if (!selectedFolderId) return` 一樣編譯得過）。
+>
+> **另外：選取或焦點改變時，目標會被捲進可視範圍**（rail 縱向 + 分頁列橫向）。此前 renderer
+> **一個 `scrollIntoView` 都沒有** —— rail 超出視窗時按 `Ctrl+↑↓`，切過去了卻看不到，使用者
+> 會直接判定快捷鍵壞了。
+>
+> **而「`block: 'nearest'` 順便讓滑鼠點選不觸發捲動」是錯的（獨立稽核抓到，這裡曾經寫著它）。**
+> `nearest` 只保證「**完全**可見就不捲」—— 部分可見的元素它會捲最小的量把它補齊。於是 rail 已
+> 捲動時點下緣那半截的列，**那一列會在游標底下跳走**，使用者下一次點擊得重新瞄準。滑鼠的例外
+> 是一條真的要寫的路徑（`useScrollIntoView`），不是一個免費的副產品。
+>
+> **它的判定是「最後一次輸入來自哪裡」，不是「消費一次旗標」。** 直覺寫法（pointerdown 設旗標、
+> effect 讀完即清）會被一次**沒有造成狀態改變**的點擊留下殘值（點已選中的那一列、點捲軸、點空白
+> 處都不觸發 effect），而下一次可能就是 `Ctrl+↓` —— 症狀是「第一次沒捲、第二次才捲」。任何一顆
+> 按鍵都把它翻回鍵盤，旗標於是不會過夜。
+>
+> **作用域是單一容器，不是整個 renderer。** 全域的「最後一次輸入」會壞掉一條真實路徑：在 rail
+> 點一列 session 之後，**分頁列仍應**把對應的分頁捲進視野 —— 使用者操作的是另一個容器，那個
+> 分頁他還沒看到。因此 rail、rail 的每一塊、分頁列**各持有一份**。
 
 **選單必須能全鍵盤操作，這不是加分項而是前提。** `Ctrl+T` 跳出的是選單（spawn 目標要選），而原本的
 `ContextMenu` 只處理 `Esc` —— **用快捷鍵叫出一個只能用滑鼠點的選單，等於沒做這個快捷鍵**。因此它加上了

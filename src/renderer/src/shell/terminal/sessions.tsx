@@ -12,7 +12,19 @@ export type SessionStatus = 'dormant' | 'running' | 'exited'
 
 export interface SessionState {
   id: string
-  folderId: string
+  /**
+   * 這個 session 隸屬於哪個 workspace folder。**`null` ＝ 全域**（不隸屬任何 folder，
+   * 見 `global-session`）。
+   *
+   * **刻意不用保留字串表示全域**（design D1）：那樣型別仍是 `string`，於是
+   * `folders.find((f) => f.id === folderId)` 會靜默回 `undefined`、`forFolder(id)` 靜默回
+   * 空陣列 —— 型別檢查一條都不會攔。
+   *
+   * **但 `null` 只讓編譯器攔下「傳參」與「Map 鍵」那一半**：`string | null` 與
+   * `string | undefined` 的 `===` 比較**合法且不報錯**（實測），而歸屬的消費點絕大多數是比較。
+   * 每一處以識別碼相等判定歸屬的地方都必須人工列舉（design D1a）。
+   */
+  folderId: string | null
   spawnTarget: SpawnTarget
   status: SessionStatus
   exitCode?: number
@@ -69,11 +81,11 @@ export interface SessionsApi {
    * 卸載的歷史）。掛載以此為準，顯示才以當前 folder 為準（design D7）。
    */
   all(): SessionState[]
-  forFolder(folderId: string): SessionState[]
-  countFor(folderId: string): number
+  forFolder(folderId: string | null): SessionState[]
+  countFor(folderId: string | null): number
   /** 該 folder 當前聚焦的 session。未明確指定時退回它的第一個。 */
-  focusedIdFor(folderId: string): string | null
-  focus(folderId: string, sessionId: string): void
+  focusedIdFor(folderId: string | null): string | null
+  focus(folderId: string | null, sessionId: string): void
   /**
    * `worktreeKey` 指定它開在哪個工作目錄（不可逆識別碼，**不是路徑**）。省略＝ folder 根。
    *
@@ -84,7 +96,7 @@ export interface SessionsApi {
    * 沒反應的按鈕。把同型相鄰消掉，比記得改每一個呼叫點可靠。
    */
   create(
-    folderId: string,
+    folderId: string | null,
     spawnTarget: SpawnTarget,
     options?: { worktreeKey?: string },
   ): Promise<CreateOutcome>
@@ -108,7 +120,7 @@ export interface SessionsApi {
   /** 使用者親自命名（＝永久接管命名權）。空字串＝交還命名權，回到跟隨 pty。 */
   rename(sessionId: string, name: string): void
   /** 重排同一個 folder 之內的 session 順序。索引是該 folder 之內的序位。 */
-  reorder(folderId: string, fromIndex: number, toIndex: number): void
+  reorder(folderId: string | null, fromIndex: number, toIndex: number): void
   /**
    * 把一段文字送進某個 session 的 pty，**並把焦點交還該 session 的終端**。
    * 換行不自動附加 —— 要不要送出由呼叫端決定（本 change 的續寫入口是要的）。
@@ -158,7 +170,9 @@ const SessionsContext = createContext<SessionsApi | null>(null)
  */
 export function SessionsProvider({ children }: { children: React.ReactNode }): React.JSX.Element {
   const [sessions, setSessions] = useState<SessionState[]>([])
-  const [focused, setFocused] = useState<ReadonlyMap<string, string>>(() => new Map())
+  // 鍵是 session 的歸屬（`null` ＝ 全域）。Map 對 `null` 鍵完全合法，於是全域項目的 focus
+  // 記憶不需要第二套資料結構。
+  const [focused, setFocused] = useState<ReadonlyMap<string | null, string>>(() => new Map())
 
   // 回呼需要當下的清單，但不該因清單變動而重新產生。
   const sessionsRef = useRef(sessions)
@@ -175,7 +189,7 @@ export function SessionsProvider({ children }: { children: React.ReactNode }): R
    * session 數 + 1」，關掉一個之後新開的會拿到已用過的序號（實測：關掉 shell 1 後開的
    * claude 標成 `claude 2`，與現存的 `shell 2` 撞號）。
    */
-  const nextOrdinal = useRef(new Map<string, number>())
+  const nextOrdinal = useRef(new Map<string | null, number>())
 
   /**
    * **這個訂閱必須早於任何一次 `create`。**

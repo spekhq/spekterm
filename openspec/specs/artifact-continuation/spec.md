@@ -76,6 +76,15 @@ Enter），SHALL NOT 僅填入而等待使用者再次確認。
 會錯誤地停用一個會成功的入口；後者在 session 開在該 folder 的某個 worktree 時會做出相同的誤判
 （`terminal-sessions` 起 session 的工作目錄不再恆等於其 folder 的根目錄）。
 
+**focused session 為全域 session 時，條件 1 SHALL 判定為不成立。** 全域 session 沒有自身所屬的
+folder（見 `global-session`），因此無論側欄來源為何，該條件都無法成立。
+
+**此判定 SHALL 先確認該 session 是否為全域 session，SHALL NOT 由兩個缺席值的相等比較得出。**
+全域 session 所屬的 folder 為缺席值，而全域項目的側欄來源**預設也是**缺席值 —— 樸素的相等比較會
+使兩者「相等」而讓入口**亮起來**，隨後把 change 識別碼送進一個站在家目錄的 agent，它會在家目錄
+建出一個同名的空 change。**這個誤判的方向是啟用而非停用**，其後果不是少一個可用的按鈕，而是
+agent 在錯的地方動手，且使用者以為它在對的地方。
+
 當 focused session 不符條件、但同一個 repo 另有符合條件的 session 時，入口 SHALL 維持停用，
 SHALL NOT 改送給那個 session —— 對一個使用者沒有在看的終端發話，比停用更糟。
 
@@ -121,6 +130,19 @@ SHALL NOT 改送給那個 session —— 對一個使用者沒有在看的終端
 - **WHEN** 一個 folder 本身是該 repo 的 linked worktree，錨定的 change 存在於該 worktree，
   focused session 為其中正在執行的 claude session
 - **THEN** 續寫入口可用 —— 該 change 並非位於主工作目錄，但 session 的工作目錄正是它的所在
+
+#### Scenario: focused session 為全域 session 時停用
+
+- **WHEN** focused session 為一個正在執行的**全域** claude session，而側欄來源指向某個 repo
+  且錨定了它的一個 change
+- **THEN** 續寫入口呈現為停用狀態
+- **AND** 呈現其不可用的原因
+- **AND** 不送出任何指示
+
+#### Scenario: 全域 session 且來源亦未選定時仍然停用
+
+- **WHEN** focused session 為一個正在執行的**全域** claude session，且該全域項目的側欄來源尚未選定
+- **THEN** 續寫入口呈現為停用狀態 —— SHALL NOT 因 session 所屬 folder 與側欄來源同為缺席值而啟用
 
 #### Scenario: 條件全部成立時可用
 

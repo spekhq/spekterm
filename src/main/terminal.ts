@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import fs from 'node:fs'
+import os from 'node:os'
 import { type IPty, spawn } from 'node-pty'
 import { type AgentStatusInjection, clearAgentStatus, prepareInjection } from './agent-status'
 import { isWithin } from './fs-boundary'
@@ -180,6 +181,14 @@ export interface SpawnResult {
 
 interface Session {
   pty: IPty
+  /**
+   * 這個 session 不隸屬於任何 workspace folder（見 `global-session`）。
+   *
+   * 它的 `folderPath` 是家目錄 —— 那是**起點**，不是**邊界**：兩道 cwd 夾制對它一律放行
+   * （只保留存在性檢查）。既有夾制的正當性來自「session 宣稱自己屬於某個 folder」，而它沒有
+   * 這個宣稱；夾制在這裡唯一的效果會是「使用者 `cd` 到別處之後重開 app 莫名跳回家目錄」。
+   */
+  global: boolean
   folderPath: string
   /**
    * 這顆 pty 誕生時的工作目錄。
@@ -234,6 +243,22 @@ function readPtyCwd(pid: number): string | undefined {
 function withinAny(folderPath: string, worktreeRoots: readonly string[], cwd: string): boolean {
   if (isWithin(folderPath, cwd)) return true
   return worktreeRoots.some((root) => isWithin(root, cwd))
+}
+
+/**
+ * `cwd` 是否落在該 session 的合法範圍之內 —— **兩道夾制唯一的判定入口**。
+ *
+ * 全域 session 沒有路徑邊界可夾（見 `Session.global`），一律放行；其餘沿用 `withinAny`。
+ * 把 global 的分支收在這裡，是為了讓「兩道必須用同一個判定」這件事由結構保證：
+ * 只放寬其中一道等於沒放寬 —— 記錄側若仍夾制，越界的位置**從一開始就不會被寫進
+ * `sessions.json`**，重建側收到 `undefined` 而一切看起來正常（靜默失效）。
+ */
+function cwdAllowed(
+  scope: { global: boolean; folderPath: string; worktreeRoots: readonly string[] },
+  cwd: string,
+): boolean {
+  if (scope.global) return true
+  return withinAny(scope.folderPath, scope.worktreeRoots, cwd)
 }
 
 /**
@@ -292,12 +317,12 @@ export class TerminalService {
    * 邊界內。renderer 呼叫得到的 IPC 從來沒有 cwd 這個參數（session-persistence 的
    * 「持久化不得把路徑詞彙交給 renderer」）。
    */
-  create(folderId: string, target: SpawnTarget, options: SpawnOptions = {}): SpawnResult {
-    const folder = this.store.list().find((candidate) => candidate.id === folderId)
-    if (!folder) throw new TerminalError('UNKNOWN_FOLDER', t('terminalError.unknownFolder', { folderId }))
-    if (folder.status !== 'ok') {
-      throw new TerminalError('FOLDER_UNAVAILABLE', t('terminalError.folderUnavailable', { path: folder.path }))
-    }
+  create(folderId: string | null, target: SpawnTarget, options: SpawnOptions = {}): SpawnResult {
+    // **全域 session：位置是主行程的常數，renderer 什麼都選不了**（`global-session`）。
+    // 於是可達的初始工作目錄集合恰好擴大一個元素，而它不由任何 renderer 送來的字串決定 ——
+    // 這條路徑上沒有新的路徑詞彙、沒有新的識別碼空間、沒有新的查表。
+    const global = folderId === null
+    const folderPath = global ? os.homedir() : this.#folderPathOf(folderId)
 
     const sessionId = options.sessionId ?? randomUUID()
 
@@ -317,15 +342,26 @@ export class TerminalService {
           : { id: randomUUID(), mode: 'new' }
 
     const worktreeRoots = options.worktreeRoots ?? []
-    this.#spawn(sessionId, folder.path, target, conversation, {
-      cwd: this.#initialCwd(folder.path, options.cwd, worktreeRoots),
+    this.#spawn(sessionId, folderPath, target, conversation, {
+      cwd: this.#initialCwd({ global, folderPath, worktreeRoots }, options.cwd),
       worktreeRoots,
       cols: INITIAL_COLS,
       rows: INITIAL_ROWS,
       healed: false,
+      global,
     })
 
     return { sessionId, conversationId: conversation?.id }
+  }
+
+  /** 查表解析 folder 的路徑；查無或路徑失效即拒絕（**不退回任何預設位置**）。 */
+  #folderPathOf(folderId: string): string {
+    const folder = this.store.list().find((candidate) => candidate.id === folderId)
+    if (!folder) throw new TerminalError('UNKNOWN_FOLDER', t('terminalError.unknownFolder', { folderId }))
+    if (folder.status !== 'ok') {
+      throw new TerminalError('FOLDER_UNAVAILABLE', t('terminalError.folderUnavailable', { path: folder.path }))
+    }
+    return folder.path
   }
 
   /**
@@ -338,13 +374,18 @@ export class TerminalService {
    * （`terminal-sessions` 明文），而這裡對「路徑消失」是退回根目錄 —— 同一個問題，
    * 兩條路徑的正確行為相反。
    */
-  #initialCwd(folderPath: string, cwd: string | undefined, worktreeRoots: readonly string[] = []): string {
-    if (!cwd) return folderPath
-    if (!withinAny(folderPath, worktreeRoots, cwd)) return folderPath
+  #initialCwd(
+    scope: { global: boolean; folderPath: string; worktreeRoots: readonly string[] },
+    cwd: string | undefined,
+  ): string {
+    const fallback = scope.folderPath
+    if (!cwd) return fallback
+    // 全域 session 於此一律放行（見 `cwdAllowed`）—— 只剩下面那道存在性檢查。
+    if (!cwdAllowed(scope, cwd)) return fallback
     try {
-      if (!fs.statSync(cwd).isDirectory()) return folderPath
+      if (!fs.statSync(cwd).isDirectory()) return fallback
     } catch {
-      return folderPath
+      return fallback
     }
     return cwd
   }
@@ -354,9 +395,16 @@ export class TerminalService {
     folderPath: string,
     target: SpawnTarget,
     conversation: ClaudeConversation | undefined,
-    options: { cwd: string; cols: number; rows: number; healed: boolean; worktreeRoots?: readonly string[] },
+    options: {
+      cwd: string
+      cols: number
+      rows: number
+      healed: boolean
+      global: boolean
+      worktreeRoots?: readonly string[]
+    },
   ): void {
-    const { cwd, cols, rows, healed } = options
+    const { cwd, cols, rows, healed, global } = options
     // 注入只對 claude 目標有意義（statusLine 是它的概念）。
     const injection =
       target === 'claude' ? prepareInjection(sessionId, this.agentStatusEnabled()) : null
@@ -383,6 +431,7 @@ export class TerminalService {
 
     this.#sessions.set(sessionId, {
       pty,
+      global,
       folderPath,
       cwd,
       worktreeRoots: options.worktreeRoots ?? [],
@@ -445,6 +494,10 @@ export class TerminalService {
         cols: session.pty.cols,
         rows: session.pty.rows,
         healed: true,
+        // **歸屬也要繼承。** 少了它，自癒出來的全域 session 會被當成隸屬於某個 folder，
+        // 於是它的 cwd 從此受路徑夾制 —— 而自癒對 renderer 完全不可見，沒有任何訊號。
+        // 這一行與上面的 `cwd`／`cols`／`rows` 是同一種疏漏，那三個都是漏掉後才補的。
+        global: session.global,
       })
     } catch {
       // 連新的 pty 都配置不出來 —— 讓原本的失敗照常呈現。
@@ -472,7 +525,17 @@ export class TerminalService {
     const session = this.#sessions.get(sessionId)
     if (!session || session.target !== 'shell') return undefined
     const cwd = readPtyCwd(session.pty.pid)
-    return cwd && withinAny(session.folderPath, session.worktreeRoots, cwd) ? cwd : undefined
+    if (!cwd || !cwdAllowed(session, cwd)) return undefined
+    // 全域 session 不受路徑夾制，但仍須通過存在性檢查 —— 重建側的 `#initialCwd` 也會再驗一次，
+    // 這裡先擋是為了不把一個已消失的目錄寫進 `sessions.json`。
+    if (session.global) {
+      try {
+        if (!fs.statSync(cwd).isDirectory()) return undefined
+      } catch {
+        return undefined
+      }
+    }
+    return cwd
   }
 
   /** renderer → pty。未知或已結束的 session 靜默忽略（renderer 可能有時序落差）。 */

@@ -16,7 +16,9 @@ export type WorkspaceFolder = Awaited<ReturnType<Window['workspace']['folders'][
  *
  * 與其他 DTO 同樣**自 preload 推導** —— 主行程日後在座標上加維度，會自己流穿到這裡。
  */
-export type PanelCoordinates = Awaited<ReturnType<Window['workspace']['panel']['get']>>
+export type PanelSnapshot = Awaited<ReturnType<Window['workspace']['panel']['get']>>
+
+export type PanelCoordinates = PanelSnapshot['coordinates']
 
 export type PanelCoordinate = PanelCoordinates[string]
 
@@ -38,6 +40,29 @@ export type WatchEvent = WatchBatch['events'][number]
 
 /** side panel 的兩個同層互斥身分。 */
 export type PanelIdentity = 'openspec' | 'files'
+
+/**
+ * rail 上「選中哪個項目」—— workspace 的某個 folder，或那個不隸屬任何 folder 的全域項目
+ * （`global-session`）。`null` 表示**尚未選中任何項目**。
+ *
+ * **這是唯一刻意不沿用「`null` ＝ 全域」的地方**（design D8）：session 的歸屬以
+ * `folderId: string | null` 表示，但在 rail 的選中狀態上，`null` 早已被「沒有選中」佔用。
+ * 兩者若共用同一個缺席值，每一處以「有沒有選中」為條件的行為（快捷鍵的無操作條件、狀態列的
+ * 空狀態）都會把使用者**明確選中**的全域項目誤判為「他還沒選」。
+ *
+ * 而 sentinel 字串在這裡同樣不可接受 —— 它會靜默流進每一個 `folders.find()`。
+ */
+export type RailSelection = { kind: 'global' } | { kind: 'folder'; id: string }
+
+/** 便利建構子：`select(folderSelection(id))` 讀起來比字面物件清楚。 */
+export function folderSelection(id: string): RailSelection {
+  return { kind: 'folder', id }
+}
+
+/** 選中的若是 folder 就取其識別碼，否則為 `null`（未選中，或選中的是全域項目）。 */
+export function selectedFolderId(selection: RailSelection | null): string | null {
+  return selection?.kind === 'folder' ? selection.id : null
+}
 
 type WorkspaceOpenSpec = Window['workspace']['openspec']
 

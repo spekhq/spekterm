@@ -1,7 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Group, Panel, Separator, usePanelRef } from 'react-resizable-panels'
-import { type ContinuationBlock, continuationCommand } from './openspec/continuation'
+import {
+  type ContinuationBlock,
+  continuationBlockOf,
+  continuationCommand,
+} from './openspec/continuation'
 import { useChanges, useWorktrees } from './openspec/data'
 import { VizOverlay, type VizKind } from './openspec/VizOverlay'
 import type { FileRequest, OpenSpecRequest, OpenSpecTarget } from './openspec/nav'
@@ -11,19 +15,29 @@ import { SidePanel } from './side-panel/SidePanel'
 import { SessionTabs } from './terminal/SessionTabs'
 import { TerminalView } from './terminal/TerminalView'
 import { useSessions } from './terminal/sessions'
-import type { PanelIdentity, SpawnTarget, WorkspaceFolder, WorktreeOption } from './types'
+import { folderSelection } from './types'
+import type {
+  PanelIdentity,
+  RailSelection,
+  SpawnTarget,
+  WorkspaceFolder,
+  WorktreeOption,
+} from './types'
 
 /** 穩定的空陣列 —— 每次渲染新造一個會讓下游的依賴比較失效。 */
 const EMPTY_WORKTREES: WorktreeOption[] = []
 
 interface MainStageProps {
-  /** rail 的 focused folder —— 「駕駛」那半（header、session 分頁、terminal）。 */
-  folder: WorkspaceFolder | null
+  /**
+   * rail 上選中的項目 —— 「駕駛」那半（header、session 分頁、terminal）以它為準。
+   * `null` ＝ 尚未選中任何項目（與「選中全域項目」互斥可辨，design D8）。
+   */
+  selection: RailSelection | null
   /** workspace 的所有 folder —— 來源指示器的下拉清單。 */
   folders: WorkspaceFolder[]
 }
 
-export function MainStage({ folder, folders }: MainStageProps): React.JSX.Element {
+export function MainStage({ selection, folders }: MainStageProps): React.JSX.Element {
   const { t } = useTranslation()
   const sidePanelRef = usePanelRef()
   const [collapsed, setCollapsed] = useState(false)
@@ -44,17 +58,25 @@ export function MainStage({ folder, folders }: MainStageProps): React.JSX.Elemen
   const sessions = useSessions()
   const panel = usePanelCoordinate()
 
-  // **「駕駛」那半：focusedFolder。** header 的 name/path、session 分頁與 terminal 一律以它為準
+  // **「駕駛」那半：當前選中的 rail 項目。** header、session 分頁與 terminal 一律以它為準
   // —— 側欄指向另一個 repo 時，這一半完全不受影響（`side-panel-source`）。
-  const focusedFolder = folder
-  const folderSessions = focusedFolder ? sessions.forFolder(focusedFolder.id) : []
-  const focusedId = focusedFolder ? sessions.focusedIdFor(focusedFolder.id) : null
+  //
+  // 選中的可能是**全域項目**（不隸屬任何 folder，`global-session`），因此這裡有兩個變數而不是
+  // 一個：`itemKey` 是 session 的歸屬鍵（`null` ＝ 全域），`focusedFolder` 只有選中 folder 時
+  // 才有值 —— header 的名稱與路徑要用它。
+  const focusedFolder =
+    selection?.kind === 'folder'
+      ? (folders.find((candidate) => candidate.id === selection.id) ?? null)
+      : null
+  const itemKey: string | null = selection?.kind === 'folder' ? selection.id : null
+  const folderSessions = selection ? sessions.forFolder(itemKey) : []
+  const focusedId = selection ? sessions.focusedIdFor(itemKey) : null
 
   // **「讀」那半：panelFolder。** side panel 呈現 rail 上選中之項目的側欄座標所指的 repo
   // （`side-panel-source`）—— **與有沒有 session 無關**。座標未曾改動時（`sourceFolderId` 省略）
   // 即為該 folder 自身；來源指向的 folder 已被移除時（`find` 找不到）同樣退回自身 —— 持久化的
   // 座標不保證重開後仍然有效，那是 spec 明文要求的降級。
-  const coordinate = panel.coordinateOf(focusedFolder?.id ?? null)
+  const coordinate = panel.coordinateOf(selection)
   const panelFolder =
     (coordinate.sourceFolderId
       ? folders.find((candidate) => candidate.id === coordinate.sourceFolderId)
@@ -71,7 +93,15 @@ export function MainStage({ folder, folders }: MainStageProps): React.JSX.Elemen
     setOpenSpecRequest(null)
   }
 
-  const openSpecEnabled = panelFolder?.hasOpenSpec ?? false
+  /*
+    **來源未選定時 OpenSpec 身分可用**（design D11）。此前這裡是 `panelFolder?.hasOpenSpec ?? false`
+    —— 全域項目沒有 panelFolder ⇒ 恆為 false ⇒ 身分被停用並強制退回 Files，而 Files 在同一個
+    狀態下也是空的，於是側欄整塊沒有任何入口，使用者無從得知「選一個 repo 就有了」。
+
+    停用的條件因此收窄為「**來源已選定，且**該 repo 不含 `openspec/`」—— 那是該 repo 的性質；
+    而「還沒選」是一個尚未作出的選擇，它要呈現的正是引導使用者去選的空狀態。
+  */
+  const openSpecEnabled = panelFolder ? panelFolder.hasOpenSpec : true
   // 側欄來源若沒有 openspec/，OpenSpec 身分不可用 —— 由衍生值退回 Files，
   // 而不是用一個 effect 去改狀態（那會多渲染一次，且順序難以推理）。
   const activeIdentity: PanelIdentity =
@@ -138,23 +168,25 @@ export function MainStage({ folder, folders }: MainStageProps): React.JSX.Elemen
   const { data: panelWorktreeData } = useWorktrees(panelFolder?.id ?? null)
   const panelWorktrees = panelWorktreeData ?? EMPTY_WORKTREES
 
+  // **gate 在 `selection`，不在 `focusedFolder`。** 後者對全域項目是 `null`，於是這顆按鈕會
+  // 靜默地什麼都不做 —— 沒有錯誤、沒有訊息。編譯器對此完全無感（兩者都是合法的 falsy 判斷）。
   const createSession = useCallback(
     (spawnTarget: SpawnTarget) => {
-      if (!focusedFolder) return
+      if (!selection) return
       setSessionError(null)
-      void sessions.create(focusedFolder.id, spawnTarget).then((outcome) => {
+      void sessions.create(itemKey, spawnTarget).then((outcome) => {
         if (outcome.status === 'failed') setSessionError(outcome.failure.message)
       })
     },
-    [focusedFolder, sessions],
+    [selection, itemKey, sessions],
   )
 
   const focusSession = useCallback(
     (sessionId: string) => {
-      if (!focusedFolder) return
-      sessions.focus(focusedFolder.id, sessionId)
+      if (!selection) return
+      sessions.focus(itemKey, sessionId)
     },
-    [focusedFolder, sessions],
+    [selection, itemKey, sessions],
   )
 
   /**
@@ -173,10 +205,10 @@ export function MainStage({ folder, folders }: MainStageProps): React.JSX.Elemen
 
   const anchorChange = useCallback(
     (slug: string) => {
-      if (!focusedFolder) return
-      panel.setAnchor(focusedFolder.id, slug)
+      if (!selection) return
+      panel.setAnchor(selection, slug)
     },
-    [focusedFolder, panel],
+    [selection, panel],
   )
 
   /**
@@ -184,16 +216,10 @@ export function MainStage({ folder, folders }: MainStageProps): React.JSX.Elemen
    *
    * 條件的順序就是回報原因的優先序：先看有沒有對象，再看它是不是對的對象。
    */
-  const continuationBlock: ContinuationBlock | null =
-    !displayed || !focusedFolder
-      ? 'noSession'
-      : panelFolder?.id !== displayed.folderId
-        ? 'foreignSource'
-        : displayed.spawnTarget !== 'claude'
-          ? 'notClaude'
-          : displayed.status !== 'running'
-            ? 'notRunning'
-            : null
+  const continuationBlock: ContinuationBlock | null = continuationBlockOf({
+    displayed,
+    panelFolderId: panelFolder?.id,
+  })
 
   /**
    * 把續寫指示送進 focused session 的 pty 並執行（`sendInput` 一併把焦點交還終端）。
@@ -228,7 +254,7 @@ export function MainStage({ folder, folders }: MainStageProps): React.JSX.Elemen
       //
       // 這是本 change 唯一的**跨項目寫入**，而它是正當的：使用者的動作本身就是關於那個 repo 的
       // （他剛在那裡開了一個 session 去做這個 change），不是一次無來由的繼承。
-      panel.setAnchor(panelFolder.id, anchoredChange)
+      panel.setAnchor(folderSelection(panelFolder.id), anchoredChange)
       void sessions.create(panelFolder.id, 'claude', { worktreeKey }).then((outcome) => {
         if (outcome.status === 'failed') setSessionError(outcome.failure.message)
       })
@@ -243,11 +269,11 @@ export function MainStage({ folder, folders }: MainStageProps): React.JSX.Elemen
    * 需要先開一個 terminal 才能選要讀什麼（`side-panel-source`）。
    */
   const changePanelSource = useCallback(
-    (folderId: string) => {
-      if (!focusedFolder) return
-      panel.setSource(focusedFolder.id, folderId)
+    (folderId: string | null) => {
+      if (!selection) return
+      panel.setSource(selection, folderId)
     },
-    [focusedFolder, panel],
+    [selection, panel],
   )
 
   /** 側欄的工作目錄：Files 身分以哪個工作目錄為樹根。省略＝ folder 自身。 */
@@ -256,10 +282,10 @@ export function MainStage({ folder, folders }: MainStageProps): React.JSX.Elemen
   /** 選擇器選了一個工作目錄。與側欄來源同理 —— 同樣不以 session 的存在為前提。 */
   const changePanelWorktree = useCallback(
     (worktreeKey: string | undefined) => {
-      if (!focusedFolder) return
-      panel.setWorktree(focusedFolder.id, worktreeKey)
+      if (!selection) return
+      panel.setWorktree(selection, worktreeKey)
     },
-    [focusedFolder, panel],
+    [selection, panel],
   )
 
   /**
@@ -283,14 +309,14 @@ export function MainStage({ folder, folders }: MainStageProps): React.JSX.Elemen
       // **無條件切換，不再包在「有沒有 session」裡。** `side-panel-worktree` 的「自 OpenSpec
       // 跳往檔案時工作目錄一併切換」是一條無條件的 SHALL，而此處原本的 `if (focusedId)` 讓它
       // 在無 session 時完全沒有兌現 —— 零覆蓋，因為探針一律先建 session。
-      if (focusedFolder) panel.setWorktree(focusedFolder.id, owner?.key)
+      if (selection) panel.setWorktree(selection, owner?.key)
 
       nonce.current += 1
       setFileRequest({ target: relPath, nonce: nonce.current })
       setIdentity('files')
       expandSidePanel()
     },
-    [expandSidePanel, focusedFolder, panel, panelWorktrees],
+    [expandSidePanel, selection, panel, panelWorktrees],
   )
 
   /**
@@ -313,11 +339,17 @@ export function MainStage({ folder, folders }: MainStageProps): React.JSX.Elemen
   return (
     <main aria-label={t('stage.label')} className="flex h-full flex-col bg-stage">
       <header className="flex items-center gap-3 border-b border-hairline px-4 py-2 text-base">
-        <span className={focusedFolder ? 'text-ink' : 'text-ink-faint'}>
-          {focusedFolder ? focusedFolder.name : t('stage.noRepo')}
+        {/*
+          全域項目沒有名稱與路徑可呈現 —— 但它**已經被選中了**，因此不得沿用「尚未選擇 repo」
+          那句（那在叫使用者去做一件他剛做完的事）。
+        */}
+        <span className={selection ? 'text-ink' : 'text-ink-faint'}>
+          {focusedFolder ? focusedFolder.name : selection ? t('rail.globalName') : t('stage.noRepo')}
         </span>
-        {focusedFolder && (
+        {focusedFolder ? (
           <span className="truncate text-sm text-ink-faint">{focusedFolder.path}</span>
+        ) : (
+          selection && <span className="truncate text-sm text-ink-faint">{t('stage.globalHint')}</span>
         )}
 
         <span className="flex-1" />
@@ -340,8 +372,8 @@ export function MainStage({ folder, folders }: MainStageProps): React.JSX.Elemen
         </button>
       </header>
 
-      {/* 分頁列只屬於當前選中的 repo（mockup 的 .session-tabs）。 */}
-      {focusedFolder && (
+      {/* 分頁列只屬於當前選中的 rail 項目（mockup 的 .session-tabs）—— 全域項目也有它自己的。 */}
+      {selection && (
         <SessionTabs
           sessions={folderSessions}
           focusedId={focusedId}
@@ -349,9 +381,7 @@ export function MainStage({ folder, folders }: MainStageProps): React.JSX.Elemen
           onClose={sessions.close}
           onCreate={createSession}
           onRename={sessions.rename}
-          onReorder={(fromIndex, toIndex) =>
-            sessions.reorder(focusedFolder.id, fromIndex, toIndex)
-          }
+          onReorder={(fromIndex, toIndex) => sessions.reorder(itemKey, fromIndex, toIndex)}
           error={sessionError}
         />
       )}
@@ -379,13 +409,22 @@ export function MainStage({ folder, folders }: MainStageProps): React.JSX.Elemen
                   spawnTarget={session.spawnTarget}
                   status={session.status}
                   wakeError={session.wakeError}
-                  active={session.folderId === focusedFolder?.id && session.id === focusedId}
+                  /*
+                    **以歸屬鍵比較，不是 `session.folderId === focusedFolder?.id`。** 後者對全域
+                    session 是 `null === undefined` ⇒ 恆為 false ⇒ 它的終端永遠不是 active，
+                    而依「休眠的 session 於首次被顯示時才啟動 pty」，那等於**休眠的全域 session
+                    永遠不會被喚醒** —— 畫面上只是一片空白，沒有任何錯誤。編譯器攔不到這一行
+                    （`string | null` 與 `string | undefined` 的 `===` 合法），是 grep 找到的。
+                  */
+                  active={
+                    selection !== null && session.folderId === itemKey && session.id === focusedId
+                  }
                 />
               ))}
 
             {!focusedId && (
               <div className="flex h-full items-center justify-center text-sm text-ink-faint">
-                {focusedFolder ? t('stage.noSession') : t('stage.noRepo')}
+                {selection ? t('stage.noSession') : t('stage.noRepo')}
               </div>
             )}
           </section>
@@ -408,6 +447,7 @@ export function MainStage({ folder, folders }: MainStageProps): React.JSX.Elemen
               folder={panelFolder}
               folders={folders}
               sourceOwnerId={focusedFolder?.id ?? null}
+              itemSelected={selection !== null}
               onSelectSource={changePanelSource}
               anchoredChange={anchoredChange}
               onAnchor={anchorChange}
