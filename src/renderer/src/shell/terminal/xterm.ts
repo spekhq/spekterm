@@ -1,9 +1,11 @@
 import { FitAddon } from '@xterm/addon-fit'
 import { SerializeAddon } from '@xterm/addon-serialize'
+import { UnicodeGraphemesAddon } from '@xterm/addon-unicode-graphemes'
 import { WebglAddon } from '@xterm/addon-webgl'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import { Terminal } from '@xterm/xterm'
 import '@xterm/xterm/css/xterm.css'
+import { pickUnicodeVersion } from './unicode-width'
 
 /**
  * xterm 的唯一 wrapper 模組 —— 比照編輯器的約束（`workspace-app-shell` 的「編輯器透過
@@ -232,6 +234,16 @@ export function createXterm(options: XtermOptions): XtermHandle {
     // 換行由 pty 內的程式自理，不要 xterm 代為轉換。
     convertEol: false,
     scrollback: 5000,
+    // **硬性前提，不是加強**：unicode 版本切換是 xterm 的 proposed API，未開啟時
+    // `loadAddon(new UnicodeGraphemesAddon())` **當場拋錯**（實測；它的 `activate()` 內就碰
+    // `terminal.unicode`），不是延後到讀取時才失敗。於是沒有「載入了但沒生效」的中間狀態 ——
+    // 失效方向是吵的，這對我們有利。
+    //
+    // 代價：這個選項是一刀切的，開了之後 xterm 的**所有** proposed API 都可存取，而 proposed
+    // API 依 xterm 的政策可在 minor 版本間改變。緩解有三層（design D2）：xterm 版本本來就釘死；
+    // 接觸面收斂在本 wrapper 一處（renderer 其餘模組拿不到 `Terminal` 實例）；升級 xterm 時
+    // 「寬度判定仍生效」已納入驗收，該 API 改變的話驗收會紅。
+    allowProposedApi: true,
     theme: { ...THEME },
     // OSC 8 escape-sequence 超連結由 xterm 核心的 OscLinkProvider 處理，走 `Terminal.linkHandler`
     // —— 與 WebLinksAddon（純文字 URL）是**兩套**機制。未設 linkHandler 會落入 xterm 內建預設：
@@ -242,6 +254,13 @@ export function createXterm(options: XtermOptions): XtermHandle {
       activate: (_event, uri) => openLink(uri),
     },
   })
+
+  // **字元寬度的判定，必須在任何內容寫入之前就位。** buffer 的 cell 佔用是在寫入的當下決定的，
+  // 事後更換判定**不會**重排既有內容 —— 而 `replay()` 會把上次的畫面快照寫回終端。順序錯了的
+  // 後果是「歷史是歪的、新輸出是對的」（design D5）。因此這一段排在所有 addon 之前，而整個
+  // `createXterm()` 又早於 `open()` 與任何 live 串流。
+  term.loadAddon(new UnicodeGraphemesAddon())
+  term.unicode.activeVersion = pickUnicodeVersion(term.unicode.versions)
 
   const fitAddon = new FitAddon()
   term.loadAddon(fitAddon)

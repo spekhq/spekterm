@@ -494,7 +494,7 @@ leader，再 `process.kill(-pid)` 殺整組。**另外，面板留有未存變�
 > **原始碼裡一個字面的 NUL 位元組，會讓 `git diff` 與 `grep` 對整個檔案瞎掉 —— 而 `grep` 是
 > 回空 + exit 1，連「binary file」都不說。** 修過一次（`cc3014c`，`data.tsx` 的 cache key
 > 分隔符），但**同型的還有兩個檔案沒被發現**：`side-panel/SidePanel.tsx` 與
-> `files/dirty-buffers.tsx`（`global-session` 的獨立稽核抓到，已一併改為 ` `）。
+> `files/dirty-buffers.tsx`（`global-session` 的獨立稽核抓到，已一併改為 `\x00`）。
 >
 > **它的代價不只是難讀 diff**：`global-session` 的 design 倚賴「把 `folderId ===` grep 一遍」
 > 來清查每一個歸屬比較點（那是 `dormant` 那條教訓的應用），而 `dirty-buffers.tsx` 的 5 處命中
@@ -625,7 +625,8 @@ repo 自己的 change 承載（OpenSpec change 是 repo-local 的）。
 
 Electron 43.1.0（釘死）+ electron-vite、TypeScript、React 19 + Tailwind CSS v4、
 node-pty 1.2.0-beta.14（釘死）、Monaco Editor、chokidar 5、react-markdown + remark-gfm、
-@xterm/xterm 6 + addon-fit / addon-web-links（terminal UI）、electron-builder（打包，Phase 6）。
+@xterm/xterm 6 + addon-fit / addon-web-links / addon-unicode-graphemes（terminal UI —— 最後一個
+提供 grapheme cluster 層的字元寬度判定，見下文「終端的字元寬度」）、electron-builder（打包，Phase 6）。
 
 完整技術選型與理由見 `docs/PRD.md` §8.3。幾個容易踩的點：
 
@@ -894,6 +895,15 @@ org 名**不是**凍結身分的一部分 —— repo 改名與 transfer 皆自�
   那是這個 change 與「把 `~` 加進 workspace」的全部差別。併收第二個回饋：**鍵盤導航的捲動**
   （renderer 此前一個 `scrollIntoView` 都沒有）。詳見上文那三個「承重前提全是錯的」與 `null === null`
   的誤啟用。
+
+- **終端的字元寬度** — `terminal-unicode-width`（**不屬於任何 Phase**）：第十次 dogfooding 的回饋
+  （「claude 輸出的表格捲動時破版，右邊框線跑位」）。根因與捲動、GPU、行高**都無關**：xterm 內建的
+  寬度表是 **Unicode 6**，而 agent 依現代 wcwidth 排版 —— 每個 emoji 都讓那一行少一格。
+  `terminal-sessions` 新增一條字元寬度要求（判定單位為 **grapheme cluster** 而非 code point），
+  實作為載入 `@xterm/addon-unicode-graphemes` 並開啟 `allowProposedApi`（**硬性前提**，未開時
+  `loadAddon` 當場拋錯）。**不新增設定開關**（字元寬度是確定性的，沒有 GPU 那種「取得了但驅動畫錯」
+  的失效模式）。詳見下文「終端的字元寬度」——那裡記著這個 change 最貴的一課：**量測 harness 的
+  `webPreferences` 必須比照產品**。
 
 - Phase 6 打包與發佈，Phase 7+ 建立護城河（handoff）。**session 常駐**已排入路線圖但刻意不做
   （PRD §11）。
@@ -2243,6 +2253,87 @@ require**（已驗證：`out/main/index.js` 裡是 `import i18next from "i18next
 隨 `session-title-authority` 移除（現在是**永久接管、靜默忽略**）。文案與行為不符，而且它承諾的是
 一個不存在的功能。英文版改為誠實的敘述：「While a name is set, titles announced by the pty are
 ignored. Clear the name to follow them again.」**全面改寫文案時會撞見這種東西 —— 它們是資產。**
+
+## 終端的字元寬度（`terminal-unicode-width`）
+
+**xterm 內建的字元寬度表是 Unicode 6，而 agent 依現代 wcwidth 排版 —— 每個 emoji 都讓那一行少
+一格。** 這條缺陷自 Phase 4 終端誕生起就在，而先前兩次針對「表格破版」的調查
+（`terminal-rendering-and-preferences` 收行高、`terminal-gpu-renderer` 上 webgl）都沒碰到它 ——
+**它們修的是「一個 cell 內怎麼畫」，這條是「一個字元佔幾個 cell」**，相鄰但不同層。
+
+修法是載入 `@xterm/addon-unicode-graphemes` 並開啟 `allowProposedApi`。**判定單位必須是 grapheme
+cluster，不能是 code point**（實測 claude 的排版，判準為它為每個符號保留的格數）：
+
+| | claude 排版 | 內建 v6 | `addon-unicode11` | `addon-unicode-graphemes` |
+|---|---|---|---|---|
+| `✅` U+2705 | 2 | 1 ✗ | 2 ✓ | 2 ✓ |
+| 星形平面 CJK 擴充 B/C/D | 2 | 2 ✓ | 2 ✓ | 2 ✓ |
+| `⚠️` U+26A0+FE0F | 2 | 1 ✗ | **1 ✗** | 2 ✓ |
+| `👨‍👩‍👧` ZWJ 序列 | 2 | 3 ✗ | **6 ✗** | 2 ✓ |
+| `👍🏽` 膚色修飾 | 2 | 2 ✓（碰巧） | **4 ✗** | 2 ✓ |
+
+`U+26A0` 本身是 ambiguous —— 單看它，任何版本的寬度表都回 1；它成為兩格是因為後隨的 VS16。
+ZWJ 與膚色修飾同理：**多個 code point 合起來算一個字，而查表式的實作沒有地方可以表達這件事**。
+於是「先用比較小的 `unicode11`，之後再換」不是可行的退路。
+
+### 量測 xterm 行為的 harness，`webPreferences` 必須比照產品 —— 兩個人先後踩進同一個坑
+
+**這是本 change 代價最高的一課。** 最小重現最初開了 `nodeIntegration: true`，動機純粹是方便
+（要用 `ipcRenderer` 回報結果）。而 upstream [#6079](https://github.com/xtermjs/xterm.js/issues/6079)
+指出：該 addon 解碼 Unicode trie 時 `new DataView(data.buffer)` **漏了 `byteOffset`**，在 Node 的
+pooled `Buffer` 下 `highStart` 會讀到垃圾 —— 其典型後果正是**超過它的碼位全部落回預設值**，
+也就是整個星形平面。該 issue 明載此路徑 **"Not reachable from the browser build"**。
+
+| harness 的 `nodeIntegration` | `typeof Buffer` | 星形平面 CJK／emoji |
+|---|---|---|
+| `true`（最初的 harness） | `object` | **1 格 ✗（整片）** |
+| `false`（**產品的設定**） | `undefined` | 2 格 ✓ |
+
+獨立稽核據此得出「graphemes 把整個星形平面判成一格、選型是錯的」，而我用**同一種環境**去「獨立
+驗證」，得到同一個結果就接受了它的歸因。**兩次獨立測試若共用同一個環境假設，得到同一個錯誤結果
+並不構成佐證 —— 那只是同一個錯誤被執行了兩次。** 救回這件事的不是第三次測試，是去讀那個 issue
+的最後一段。
+
+*連帶*：任何在 **Node 環境**驗證寬度的嘗試（`@xterm/headless` 的單元測試、CI 腳本）**會**踩到它，
+且失效方式是靜默的錯誤寬度。本 repo 因此**不在 node:test 裡驗字元寬度**，一律走真實 renderer。
+
+### 案例集要涵蓋**類別**，不是實例
+
+D1 的對照表原本只有兩格（`✅` 與 `⚠️`）—— 而那兩格恰好是 graphemes 佔優的地方。擴充案例集後
+一度得出相反的結論。**即使結論碰巧正確，一張兩格的表也撐不起「嚴格較優」這個宣稱。**
+
+兩個具體的反例，都在表裡：**內建 v6 對膚色修飾「碰巧」正確**（把兩個 code point 各算一格相加
+得 2 —— 答案對、理由全錯，**只用它驗會給現況發綠燈**）；**內建 v6 對星形平面 CJK 是正確的**
+（它的缺陷限於 emoji，不是「整片沒有資料」）。這條紀律已寫進 spec 本身，不只活在這裡。
+
+### 「把內容複製出來比對文字」對這條**零鑑別力**
+
+使用者複製給我的破版內容**每一欄都對齊**，我因此宣稱「buffer 是對的，純渲染問題」—— **錯了**。
+複製與選取都是把 cell 轉回字串，一個字元少佔一格時**字元序列完全不變**，所得因而在滿足與不滿足
+本要求時完全相同。判準必須取自 cell 佔用的可觀察後果（游標前進的格數、或同排版各行的右緣）。
+**這條寫進了 spec 的規範性段落** —— 它不是這次的實作細節，是這條要求永久的驗收陷阱。
+
+### 其餘實測
+
+- **`allowProposedApi` 是硬性前提**：未開時 `loadAddon()` **當場**拋錯（它的 `activate()` 內就碰
+  `terminal.unicode`），不是延後到讀取時才失敗。於是沒有「載入了但沒生效」的中間狀態。
+- **D4 那道「版本指名不到就拋錯」的門價值有限**：xterm 自己已經守了兩道（`activeVersion` setter
+  本來就拋錯、addon 的 `activate()` 自己就設好版本）。真正會靜默失敗的是「載入成功、版本對、
+  寬度表卻答錯」—— 那只有「代表性字元集逐類別正確」的驗收擋得住。**「版本字串在不在清單裡」是
+  「寬度對不對」的代理判準，而代理會過、真的性質會敗。**
+- **效能**：同一實例重建、n=9 取中位數、scrollback 用產品值 —— 含 emoji **+4.6%**（4000 行多
+  約 1.5ms），純 ASCII −1.2%（雜訊內，provider 對 `32 ≤ cp < 127` 有 fast path）。
+  **初次量測 n=1 且跑出 −37%，唯一誠實的結論是「不具資訊量」，不是「沒有退步」。**
+- **舊快照的重播無退步**：快照逐字元攤開**完全無損**（沒有為對齊補進的空白），且重播後的呈現與
+  **新 build 直接寫入**完全一致 —— 後面那個對照是必要的，少了它任何量測差異都會被誤讀成
+  「重播殘留了舊寬度表的影響」。
+- **bundle 增加 39.3 KB**（不是 unpacked 的 618 KB —— 那含 source map 與未壓縮內容）。
+
+> **順帶修掉一個讓 `grep` 對整份 CLAUDE.md 瞎掉的字面 NUL 位元組 —— 而它就在警告這件事的那一段裡。**
+> 上文「原始碼裡一個字面的 NUL 位元組」那條寫著「已一併改為 `\x00`」，但當時**把那個 escape 寫成
+> 了真的 NUL**。於是這份文件本身命中同一個坑：`grep -c xterm CLAUDE.md` 回空、exit 1，連
+> 「binary file」都不說 —— 我因此一度以為 grep 的 pattern 有問題。**寫「不要寫字面 NUL」的時候，
+> 特別容易寫出一個字面 NUL。** 查法：`python3 -c "print(open(f,'rb').read().count(b'\x00'))"`。
 
 ## 終端裡的連結歸誰管（`panel-drive-and-shell-affordances` 的調查結論）
 

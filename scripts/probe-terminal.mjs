@@ -3430,8 +3430,182 @@ async function runGlobalSession(label, { port, rendererUrl }) {
   }
 }
 
+/**
+ * 每一行的實際寬度（px），以行首的 `UW<n>` 標記索引。
+ *
+ * **這是本檔唯一刻意依賴 DOM renderer 的觀測點**（`.xterm-rows` 只存在於 DOM renderer）。
+ * 其餘觀測管道都是 renderer-agnostic 的，這裡是例外，理由如下：
+ *
+ * - 要驗的是 **cell 的佔用**，那是 core 的 `unicodeService` 決定的資料，**兩個 renderer 讀的是
+ *   同一份 buffer** —— 在 DOM renderer 下量到就是量到，不是「只在這個 renderer 成立」。
+ *   `terminal-sessions` 的 spec 已明文本要求可由自動化驗收建立（與「畫素層級的正確性」那條相反）。
+ * - 因此段落開頭會先以**產品自己的設定路徑**關掉 GPU 加速，結束時再開回來。
+ *
+ * **不另建 harness 去量 xterm**：另建的 harness 若為了方便而放寬 `webPreferences`
+ * （例如開 `nodeIntegration` 好用 ipc 回報結果），會讓 addon 走到 Node 的 `Buffer` 分支而踩上
+ * upstream xtermjs/xterm.js#6079 的 trie 損毀 —— 星形平面會**靜默地**全部變成一格。
+ * 產品是 `nodeIntegration: false`，所以驗收必須在產品自己的 renderer 裡做（design D8）。
+ */
+const widthRowsExpr = (prefix) => `(() => {
+  const rows = [...document.querySelectorAll('.xterm-rows > div')]
+  const out = {}
+  for (const row of rows) {
+    const text = row.textContent || ''
+    const m = text.match(/^${prefix}(\\d+) /)
+    if (!m) continue
+    const spans = [...row.querySelectorAll('span')]
+    if (!spans.length) continue
+    const left = row.getBoundingClientRect().left
+    const right = spans[spans.length - 1].getBoundingClientRect().right
+    out[${JSON.stringify(prefix)} + m[1]] = right - left
+  }
+  return out
+})()`
+
+/**
+ * 代表性字元集，按**類別**組織（spec 的「涵蓋範圍」段落要求，且明文禁止以個別字元推論整體）。
+ *
+ * `期望` 欄不是規範推論，是**實測 agent 的排版**：讓 claude 畫一張框線表格、自分隔線取欄寬、
+ * 逐列數 padding 反推它為每個符號保留幾格（design D1）。
+ *
+ * 兩個容易誤導的格子，正是「不得縮減類別」的理由：
+ * - 內建 v6 對**膚色修飾**碰巧也給 2（把兩個 code point 各算一格相加）—— 只用它驗會給現況發綠燈。
+ * - 內建 v6 對**星形平面 CJK** 是正確的 —— 它的缺陷限於 emoji。
+ */
+const WIDTH_CASES = [
+  { id: 'UW1', label: 'ASCII（窄字元對照）', text: 'A', want: 1 },
+  { id: 'UW2', label: 'BMP 寬字元（CJK）', text: '一', want: 2 },
+  { id: 'UW3', label: '星形平面寬字元（CJK 擴充 B）', text: '\u{20000}', want: 2 },
+  { id: 'UW4', label: 'BMP emoji', text: '✅', want: 2 },
+  { id: 'UW5', label: '星形平面 emoji', text: '\u{1F680}', want: 2 },
+  { id: 'UW6', label: '基底＋VS16', text: '⚠️', want: 2 },
+  { id: 'UW7', label: 'ZWJ 序列', text: '\u{1F468}‍\u{1F469}‍\u{1F467}', want: 2 },
+  { id: 'UW8', label: '膚色修飾', text: '\u{1F44D}\u{1F3FD}', want: 2 },
+  { id: 'UW9', label: '半形片假名（窄字元對照）', text: 'ﾊ', want: 1 },
+]
+
+/** 量測用的檔案內容。每行 `UW<n> <字元>X`，`UW0 X` 是不含測試字元的基準行。 */
+function widthFixtureText() {
+  const lines = ['UW0 X']
+  for (const c of WIDTH_CASES) lines.push(c.id + ' ' + c.text + 'X')
+  return lines.join('\n') + '\n'
+}
+
+/**
+ * 自量到的 px 換算成 cell 數。
+ *
+ * 標定完全走**純 ASCII**（`UW0 X` 與 `UW1 AX` 差恰好一個 cell），因此不預設任何非 ASCII 字元的
+ * 寬度 —— 若改用「中文＝2 格」來標定，那個假設本身就是待驗的東西之一。
+ */
+function cellsOf(rows, id) {
+  // `UW1 AX` 比 `UW0 X` 恰好多一個 ASCII 字元 —— 兩者的差就是一個 cell 的 px。
+  const cell = rows.UW1 - rows.UW0
+  if (!(cell > 0)) return null
+  // 基準行不含測試字元，因此「該行比基準多出來的寬度」就是那個字元佔的格數。**不要再加 1**
+  // （初版加了，於是每一列都恰好多一格 —— 連 ASCII 的 `A` 都量成 2，而那顯然不可能）。
+  return Math.round((rows[id] - rows.UW0) / cell)
+}
+
+async function runUnicodeWidth(label, { port, rendererUrl }) {
+  console.log(`\n── ${label}（字元寬度與 pty 一致）──`)
+
+  const marker = `spek-width-${process.pid}-${Date.now()}`
+  const { repo } = makeFixture()
+  // `launch` 無條件用 stub 的 HOME 與 PATH（見其 env 區塊）—— 本段用的是 shell session，
+  // 不會實際叫到 claude，但仍要提供一份，否則 launch 讀不到 `stub.home`。
+  const stub = makeStubClaude()
+  // 測試內容**寫成檔案讓終端 cat**，不用 Input.insertText 打 emoji —— 後者會把「輸入路徑處不
+  // 處理得了這些字元」這個與本要求無關的變因混進來。終端收到的是純 ASCII 的一行 cat 命令。
+  writeFileSync(join(repo, 'width.txt'), widthFixtureText())
+  const profile = seedProfile([['f1', repo]])
+
+  let app = null
+  try {
+    app = await launch({ port, profileDir: profile, rendererUrl, marker, stub })
+    await pollUntil(app.client, SELECT_FOLDER('repo-a'), (value) => value === true, 10_000)
+    await openSessionViaMenu(app.client, copy('sessions.spawnShell'))
+    await waitForPtyCount(marker, 1)
+
+    // DOM renderer 才有 `.xterm-rows`（見 UNICODE_WIDTH_ROWS 的說明）。走使用者的設定路徑。
+    await setGpuViaSettings(app.client, false)
+    await typeLine(app.client, 'cat width.txt')
+
+    const rows = await pollUntilText(
+      () => app.client.evaluate(widthRowsExpr('UW')),
+      (value) => value && value.UW0 > 0 && value.UW9 > 0,
+      15_000,
+    )
+
+    const cell = rows.UW1 - rows.UW0
+    check(results, `${label}：量測基準成立（純 ASCII 標定出一個 cell 的寬度）`,
+      cell > 0, `cell=${cell}px  UW0=${rows.UW0}  UW1=${rows.UW1}`)
+
+    // ── spec：代表性字元集的 cell 佔用逐類別正確 ────────────────────────────
+    const measured = WIDTH_CASES.map((c) => ({ ...c, got: cellsOf(rows, c.id) }))
+    const wrong = measured.filter((m) => m.got !== m.want)
+    check(results, `${label}：代表性字元集的 cell 佔用逐類別符合 pty 的排版`,
+      wrong.length === 0,
+      measured.map((m) => `${m.label}=${m.got}(期望${m.want})`).join('  '))
+
+    // ── spec：多 code point 組成的 cluster 佔一個字的寬度 ────────────────────
+    //
+    // **與上一條不可合併**：`addon-unicode11` 在純 emoji 上全過，卻把 ZWJ 家庭判成 6 格、
+    // 膚色修飾判成 4 格。合併等於把選型的整個裁決從驗收中移除（design D1）。
+    const clusters = measured.filter((m) => ['UW6', 'UW7', 'UW8'].includes(m.id))
+    check(results, `${label}：多 code point 的 cluster（VS16／ZWJ／膚色修飾）各佔兩格`,
+      clusters.every((m) => m.got === 2),
+      clusters.map((m) => `${m.label}=${m.got}`).join('  '))
+
+    // ── spec：含 emoji 的行與純 ASCII 的行等寬 ──────────────────────────────
+    //
+    // 上面兩條量的是單一字元；這一條量的是**表格形式的可觀察後果** —— 那才是使用者看到的東西。
+    await typeLine(app.client, 'printf "UWT1 |%s|\\nUWT2 |%s|\\n" "AA" "✅"')
+    const tableRows = await pollUntilText(
+      () => app.client.evaluate(widthRowsExpr('UWT')),
+      (value) => value && value.UWT1 > 0 && value.UWT2 > 0,
+      15_000,
+    )
+    check(results, `${label}：含 emoji 的行與同排版的純 ASCII 行等寬`,
+      Math.abs(tableRows.UWT1 - tableRows.UWT2) < 1,
+      `ASCII 行=${tableRows.UWT1}px  emoji 行=${tableRows.UWT2}px`)
+
+    // ── spec：重播的歷史沿用同一份寬度判定 ──────────────────────────────────
+    //
+    // 關掉 app 讓畫面快照落盤，再以同一個 profile 重開 —— shell session 會被重建並重播那份
+    // 快照。**重播的內容必須與產生當下等寬**：buffer 的 cell 佔用是寫入當下決定的，若寬度判定
+    // 在 replay 之後才生效，這裡就會看到「歷史是歪的、新輸出是對的」（design D5）。
+    await app.quitGracefully()
+    await waitPtysGone(marker)
+    app = await launch({ port, profileDir: profile, rendererUrl, marker, stub })
+    await pollUntil(app.client, SELECT_FOLDER('repo-a'), (value) => value === true, 10_000)
+
+    // 重建的 session 預設休眠，要被顯示才會喚醒並重播。點它的分頁。
+    const firstTab = await pollUntil(app.client, TAB_RECT(0), (value) => value !== null, 10_000)
+    await realClick(app.client, firstTab)
+    await setGpuViaSettings(app.client, false)
+
+    const replayed = await pollUntilText(
+      () => app.client.evaluate(widthRowsExpr('UW')),
+      (value) => value && value.UW0 > 0 && value.UW9 > 0,
+      20_000,
+    )
+    const replayedWrong = WIDTH_CASES.map((c) => ({ ...c, got: cellsOf(replayed, c.id) })).filter(
+      (m) => m.got !== m.want,
+    )
+    check(results, `${label}：重播的歷史沿用同一份寬度判定`,
+      replayedWrong.length === 0,
+      replayedWrong.map((m) => `${m.label}=${m.got}(期望${m.want})`).join('  ') || '全部相符')
+
+    // 還原狀態，否則其後的段落會在「GPU 已關閉」的前提下跑（既有紀律）。
+    await setGpuViaSettings(app.client, true)
+  } finally {
+    if (app) await app.destroy()
+  }
+}
+
 const SECTIONS = [
   ['runMode', runMode],
+  ['runUnicodeWidth', runUnicodeWidth],
   ['runRestore', runRestore],
   ['runHealAndCrash', runHealAndCrash],
   ['runAltScreen', runAltScreen],
