@@ -148,10 +148,6 @@ core 發佈為 **`@spekjs/core`**（本 repo 宣告 `^1.3.0`），UI 套件為 *
 3. **實測 optional 欄位何時被填，不要從語意推論** —— 這個 repo 兩次栽在這裡：假設 `source` 不在
    （結果在，含絕對路徑）、假設 `worktrees` 是空的（結果不是）。
 
-> **驗證 npm scope 是否可發佈時不要用 `npm publish --dry-run`** —— 它只做本地打包，不向 registry
-> 驗證權限（對你無權的 scope 也會「成功」）。用 `npm org ls <scope>` 與
-> `npm access list packages @<scope>`，且都要拿已知存在／不存在的名稱當對照組。
-
 **依賴一律宣告 npm 版本，不要把 `file:` / `link:` / `portal:` 寫進版控** —— 那會讓 CI 與
 `electron-builder` 看到與開發者機器不同的依賴。本機要同步改 core 時用 `npm link` 覆寫。
 
@@ -211,18 +207,9 @@ addon-unicode-graphemes、i18next、electron-builder（Phase 6）。
 > 這個**已凍結**的 appId 就變成在宣告別人的命名空間，且事後**無法以改 appId 化解**。
 > **因此續約不是行政瑣事，是承重的。**
 
-### GitHub 位置：org 是 `spekhq`（**不凍結**，與上表無關）
-
-本 repo 位於 **`spekhq/spekterm`**。org 名不是凍結身分的一部分 —— repo 改名與 transfer 皆自動
-redirect，隨時可做。
-
-- **`spekjs` 這個 GitHub org 開不出來**（被一個閒置 User 帳號佔著，GitHub 不因閒置釋出名字）。
-- **npm scope 仍是 `@spekjs`，不要「順手對齊」成 `@spekhq`。** GitHub org 名與 npm scope 不一致是
-  常態（`@tailwindcss/*` 的源碼在 `tailwindlabs/tailwindcss`）。
-- **開源的 `spek` 也在 `spekhq/spek`。** 兩件事 GitHub **不 redirect**：**GitHub Action 的 `uses:`
-  參照**（刻意的安全設計）與 **GitHub Pages**。
-- **`kewang/spek` 這個名字此後不可再被佔用** —— 已發佈版本的 npm metadata 永遠指向舊位置且無法
-  修正，`action.yml` 的歷史 tag 也靠 redirect 解析。重建同名 repo 會同時炸掉兩者。
+**GitHub 位置（`spekhq/spekterm`）不是凍結身分的一部分** —— repo 改名與 transfer 皆自動 redirect。
+但 **npm scope 仍是 `@spekjs`，不要「順手對齊」成 `@spekhq`**：GitHub org 名與 npm scope 不一致是
+常態（`@tailwindcss/*` 的源碼在 `tailwindlabs/tailwindcss`）。
 
 ## Workflow
 
@@ -234,23 +221,8 @@ redirect，隨時可做。
   「本 change 不做，已轉為 issue #N」再打勾。**一個帶著未打勾方框的已封存 change，等於宣稱自己
   完成了卻沒有**，而那些缺口從此不在任何工作清單上。「已知的缺口」與「被追蹤的缺口」是兩件事。
 
-### Phase 與 change 的對應
-
-開發路線圖見 `docs/PRD.md` §11。**只有這九個 change 對應到 Phase**，其餘一律不隸屬任何 Phase ——
-那個區別對讀這份文件的人沒有意義，不必去維護一份清單。每個 change 的完整論證見
-`openspec/changes/archive/<date>-<slug>/`，目錄名本身就是索引。
-
-| Phase | change | 交付 |
-|---|---|---|
-| 0 | `workspace-foundation-spike` | Electron 骨架 + 高風險相依的技術驗證 + core 的跨 repo 分發 |
-| 1 | `multi-folder-workspace-shell` | folder 清單持久化、活動列 + rail + 三欄版面、受邊界約束的 `listDir` |
-| 2 | `file-explorer-readonly-view` | 側欄身分切換、檔案樹（lazy load + chokidar）、唯讀檢視、導航防護 |
-| 3 | `file-editing-and-crud` | 編輯、完整 CRUD、dirty buffer、mtime 樂觀鎖、寫入路徑的邊界 |
-| 4 | `terminal-agent-sessions` | node-pty 多 session、IPC 雙向串流、xterm + fit、spawn 目標可選、不留孤兒 |
-| 4 | `session-titles-and-controls` | pty 宣告的 OSC 標題 |
-| 4 | `terminal-clipboard` | 複製貼上 |
-| 4 | `session-rename-and-reorder` | 命名權與拖曳排序 |
-| 5 | `openspec-side-panel` | per-folder OpenSpec 資料層、`openspec.*` IPC、兩個視圖、交叉導覽、Graph／Timeline overlay |
+開發路線圖見 `docs/PRD.md` §11。每個 change 的完整論證見
+`openspec/changes/archive/<date>-<slug>/`，**目錄名本身就是索引** —— 不必在這裡維護一份清單。
 
 ## Conventions
 
@@ -704,31 +676,20 @@ xterm 內建的寬度表是 **Unicode 6**，而 agent 依現代 wcwidth 排版 �
 
 ## OpenSpec 側欄與 `@spekjs`
 
-### PRD §9.2 的「原封不動重用 spek 頁面」—— 對頁面是錯的，對視覺化元件是對的
+### 重用的判準是「它綁死了版面嗎」
 
-- **對「頁面」是錯的。** 側欄是為 320–620px 窄欄設計的緊湊 UI；spek 的頁面是為全寬瀏覽器設計的
-  （自帶 `Layout` + `Sidebar`）。**不是同一個東西。** 而且它在 spek 根本沒有對應物 —— spek web 的
-  sidebar 只是五個扁平的 nav link，真正的兩棵樹在 **VSCode extension** 的 tree provider，那才是為
-  窄側欄設計的、才是該抄的對象。
-- **對「視覺化元件」是對的。** `GraphView`（d3 力導向圖）與 Timeline（Gantt）**不是頁面** ——
-  它們吃資料、吐 SVG，對宿主零認知。這兩個抽進了 `@spekjs/ui`，與 spek web 共用同一份程式碼。
-  > **我一度自刻了一個二分圖取代 force graph，被判定為「四不像」。** 教訓不是「早該抽套件」，
-  > 而是：**幾百行的 d3 模擬與時間軸刻度規則，重刻一次只會得到一個更差的版本，而且從此兩邊分叉。**
-  > 判斷「該不該重用」要問的是「**它綁死了版面嗎**」，不是「它在 spek 長什麼樣」。
-- **`@spekjs/ui` 不含 `ApiAdapter`。** 我們的 `IpcAdapter` 每個 method 第一個參數都是 `folderId`
-  （同時開著多個 repo），簽名與 spek 的不相容。但 **`openspec.*` IPC 照 `ApiAdapter` 形狀設計這個
-  決定仍然回本了**：接上套件時換的是 UI，不是接縫。
+完整論證見 `docs/PRD.md` §9.2（該節已依 Phase 5 的實作結論改寫）。一句話：**側欄自刻**（spek 的
+頁面是為全寬瀏覽器設計的，不是同一個東西），**`SpecGraph` / `ChangeTimeline` 抽進 `@spekjs/ui`**
+（它們吃資料、吐 SVG，對宿主零認知）。判斷「該不該重用」要問的是「**它綁死了版面嗎**」，不是
+「它在 spek 長什麼樣」—— 我一度自刻了一個二分圖取代 force graph，被判定為「四不像」。
 
-### 跨宿主元件的三條鐵律
+日常會踩到的兩條：
 
-1. **純呈現層** —— 沒有 router（導航是回呼）、沒有 adapter（資料由 props 進）、沒有 theme context。
-2. **顏色是明確的契約**，套件**擁有自己的變數名**（`--spek-*`）。**它絕不可讀宿主的 token** ——
-   spek web 叫 `--color-text-primary`，我們叫 `--color-ink`，名字對不上，圖會**畫得出來但完全沒有
-   顏色**。換膚＝覆寫那 8 個變數。
-3. **React 必須是 peer 依賴** —— 兩份 React 實例會讓 hooks 直接爆炸。
-
-**d3 把顏色寫進 SVG 屬性**（命令式），不能用 `var()` —— 宿主換膚時圖必須重畫。套件**不去偵測**主題
-（監看 `data-theme` 是在猜宿主的實作），由宿主換一個 `themeKey` 明說「該重畫了」。
+- **套件擁有自己的顏色變數名（`--spek-*`），絕不讀宿主的 token。** spek web 叫
+  `--color-text-primary`，我們叫 `--color-ink` —— 名字對不上時圖會**畫得出來但完全沒有顏色**。
+  換膚＝覆寫那 8 個變數。**React 必須是 peer 依賴**（兩份實例會讓 hooks 直接爆炸）。
+- **d3 把顏色寫進 SVG 屬性**（命令式），不能用 `var()` —— 宿主換膚時圖必須重畫。套件**不去偵測**
+  主題（監看 `data-theme` 是在猜宿主的實作），由宿主換一個 `themeKey` 明說「該重畫了」。
 
 ### Graph ≠ Timeline
 
@@ -888,8 +849,8 @@ xterm 內建的寬度表是 **Unicode 6**，而 agent 依現代 wcwidth 排版 �
   呈現一個來源；若 OpenSpec 聚合而 Files 只能選一個，兩個身分的來源語意會分裂。
 - **`watcher.on('error', () => {})` 使「watcher 建不起來」與「檔案沒變」無法區分**（`openspec-service.ts`）。
   `inotify` 的 `max_user_instances` 是 **per-user 的 128**，app 每監看一個 folder／工作目錄／檔案樹
-  就吃一個。**workspace 加夠多 repo 之後，側欄可能安靜地停止更新，而且沒有任何跡象。** 已開為獨立
-  議題（要不要降級 polling、要不要呈現給使用者，各自需要論證）。
+  就吃一個。**workspace 加夠多 repo 之後，側欄可能安靜地停止更新，而且沒有任何跡象。**
+  已開為 **issue #9**（要不要降級 polling、要不要呈現給使用者，各自需要論證）。
 
 ### 與 agent 的狀態橋接（`claude-status-bridge`）
 
@@ -988,7 +949,7 @@ session 的 pty。
 ### **`aria-label` 同時是選擇器** —— 這是本 repo 的結構性事實
 
 驗收不得為此在產品 UI 上掛 `data-*`（既有紀律），於是 probe 只能靠 `role` 與 `aria-label` 定位元素
-（**6 支 probe 共 97 處**），而 `Ctrl+T` 的實作也靠 `querySelector` 找到既有的建立入口。
+（**6 支 probe、數百處**），而 `Ctrl+T` 的實作也靠 `querySelector` 找到既有的建立入口。
 **兩者都從字典取字串**（`scripts/lib/copy.mjs` 的 `copy()` / `label()`；`KeyboardNavigation.tsx` 用
 `t(...)`）。文案與選擇器一旦分離為兩份字面值，就會在某一次改文案時失去同步 —— **而失去同步的徵狀是
 「選不到元素」，不是「斷言失敗」**；`Ctrl+T` 更是連紅燈都不會有。
@@ -1246,9 +1207,10 @@ viewport 內。**
 
 ### 一支永遠紅的探針等於沒有探針
 
-`probe:shell` 的「fs 介面只暴露已定義邊界要求的能力」自 **Phase 3 起就是紅的** —— 它還在斷言
+`probe:shell` 的「fs 介面只暴露已定義邊界要求的能力」曾自 **Phase 3 起紅了很久** —— 它還在斷言
 「不得有 `writeFile`」，而 Phase 3 正是加入寫入能力的那個 change。**探針的斷言會隨規格過期**：
-加能力到 preload 白名單時，記得那裡有一道守衛在等著。
+加能力到 preload 白名單時，記得那裡有一道守衛在等著（那份白名單本身是刻意的 —— 每加一個名字，
+都得先有一條 requirement 定義它的邊界）。
 
 > **同一件事後來又發生了一次，且是 `test:e2e` 的第一次跑抓到的。** 某個 change 往 preload 加了三個
 > method，**沒動 `probe-shell.mjs`，而它從頭到尾沒跑過 `probe:shell`** —— 於是白名單守衛帶著兩條
@@ -1289,21 +1251,16 @@ pty 已存在」「切換前終端裡確實有已知內容」「檔案到底寫�
 
 > **flaky 的驗證要連跑，不能只跑一輪。** 第一輪 9/9 全綠時我已經準備收工了。
 
-**目前有一條已知未解的偶發**：`probe:terminal` 的「持久化檔案損毀」（**issue #8**，單獨連跑為
-1 紅 1 綠）。撞到它時先單獨重跑確認，不要當成自己剛改壞的。**而它記在這裡就是為了不再被重新
-調查一次** —— 一條沒有被追蹤的已知紅燈，下一個人只能從頭查起。
+**已知未解的偶發有三條，撞到時先單獨重跑確認，不要當成自己剛改壞的**：`probe:terminal` 的
+「持久化檔案損毀」（**#8**，單獨連跑為 1 紅 1 綠）、`probe:terminal` 一次拖曳失手就整支中斷
+（**#6**）、`test:all` 於 app relaunch 時 CDP WebSocket 連線失敗（**#7**）。**它們記在這裡就是為了
+不再被重新調查一次** —— 一條沒有被追蹤的已知紅燈，下一個人只能從頭查起。
 
-### 診斷要往下走一層，不要在最貴的那一層重試
-
-`panel-coordinate-per-folder` 的一條驗收紅了四輪。`runMode` 的 `try` 區塊裡早就有一個同名的
-`const derived`，它**遮蔽**了函式頂端解構出來的 fixture 路徑，於是 `join(derived, …)` 變成相對路徑，
-檔案被寫進了 **repo 的工作目錄**。
-
-**我連續提出三個假設，每一個都言之成理且有旁證**（chokidar 初次掃描的窗口、新目錄看不見、inotify
-instance 耗盡 —— 本機 `max_user_instances` 真的只有 128 且已用掉 97）。三輪探針（約 30 分鐘）全花在
-懷疑產品，**而答案在探針行程裡一行 `existsSync` 就有**。
-
-**「把中間狀態變成獨立斷言」這條我用在了下游，卻沒有回頭套用到最上游的前置條件。**
+**而診斷要往下走一層，不要在最貴的那一層重試。** `panel-coordinate-per-folder` 的一條驗收紅了
+四輪，我連續提出三個言之成理又有旁證的假設（chokidar 的初次掃描窗口、新目錄看不見、inotify
+instance 耗盡），三輪探針約 30 分鐘全花在懷疑產品 —— 而真因是探針自己 `runMode` 裡一個同名的
+`const derived` **遮蔽**了 fixture 路徑，檔案被寫進了 repo 的工作目錄，**答案在探針行程裡一行
+`existsSync` 就有**。**「把中間狀態變成獨立斷言」這條要回頭套用到最上游的前置條件。**
 
 ### 有些東西驗收工具本身量不到 —— 換工具，不要換斷言
 
@@ -1506,8 +1463,8 @@ probe 的。**要看 exit code。**
   了四條不存在的載體）。**它們全都躲過了** `openspec validate --strict`（scenario 存在且格式合法）、
   delta 與主 spec 的 header 稽核（那支腳本不看驗收），以及探針全綠（沒有人在看那條）。
   **而後兩次是在寫下前兩條教訓之後犯的 —— 所以「記得要小心」顯然不是機制。**
-  **能結構性擋住它的做法**：稽核腳本對**每一條新增的 scenario** 要求一個驗收指認（哪支探針、哪條
-  斷言、或明寫「不覆蓋，理由是…」）。而修法**不是改標籤，是把載體做出來**。
+  **能結構性擋住它的做法**（已開為 **issue #12**）：稽核腳本對**每一條新增的 scenario** 要求一個
+  驗收指認（哪支探針、哪條斷言、或明寫「不覆蓋，理由是…」）。而修法**不是改標籤，是把載體做出來**。
 - **加一個列舉值時，把所有 `===` 比較 grep 一遍。** TypeScript 一條都不會攔（既有判斷全是
   `x === 'a' ? A : B` 這種二分寫法，多一個值只是靜默落進 `else`）。踩過兩次：`dormant`（休眠的
   session 全亮紅燈說「已結束」、快照被重複追加分隔線）、`folderId: null`（全域 session 的終端
@@ -1521,8 +1478,8 @@ probe 的。**要看 exit code。**
   的註解早就寫著識別碼「不對格式設限」），改為**獨立欄位**之後碰撞**表達不出來**；`files-in-worktree`
   的 `self` / `others` **互斥分割**取代事後去重；`panel-coordinate-per-folder` 的落盤改為**逐欄位
   白名單**（`SessionStore.replace()` 原本是 `{...entry, …}` 原樣展開，於是「移除一個欄位」不等於
-  「它不會再被寫進磁碟」）。
-- **「不接受某個東西」要由結構保證，不是由「沒有人再送它」保證。**
+  「它不會再被寫進磁碟」）。**一般形式：「不接受某個東西」要由結構保證，不是由「沒有人再送它」
+  保證。**
 - **一個可預測答案的高頻問題不該被問。** 兩次：pty 標題的確認對話框、側欄的「跟隨/釘住」toggle。
   **優先序的裁決本身就已經是那個問題的答案**，不需要在 UI 上再問第二次。
 - **core 的 optional 欄位要實測它何時被填，不要從語意推論。** 兩次方向相反：假設 `source` 不在
