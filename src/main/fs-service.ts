@@ -10,7 +10,9 @@ import {
   stat,
 } from 'node:fs/promises'
 import path from 'node:path'
+import { EnumerationError, enumerateFiles } from './file-enumeration'
 import {
+  isWithin,
   openExistingForWrite,
   resolveExistingWithin,
   resolveNewWithin,
@@ -63,6 +65,8 @@ export type FsServiceCode =
   | 'INVALID_NAME'
   /** 不得刪除或改名 workspace folder 自身。 */
   | 'PROTECTED_ROOT'
+  /** 遞迴列舉失敗（逾時、輸出過大）。**絕不以空清單代之** —— 兩者在呼叫端無法區分。 */
+  | 'ENUMERATION_FAILED'
 
 export class FsServiceError extends Error {
   constructor(
@@ -140,6 +144,52 @@ export async function listDir(
   return described
     .filter((entry): entry is DirEntry => entry !== null)
     .sort((a, b) => a.name.localeCompare(b.name))
+}
+
+/**
+ * 遞迴列出某個目錄之下可供選擇的檔案。
+ *
+ * **回傳 folder-relative 路徑，不是相對於 `relPath`**（design D10）。直覺的 API 語意是後者，
+ * 而那會製造一道「每個呼叫端都要記得做」的換算 —— 清單的用途就是把項目交給其他 `fs.*` 操作，
+ * 而它們一律吃 folder-relative。漏掉換算的症狀是**打開另一個同名的檔案**，沒有任何錯誤。
+ *
+ * 主行程本來就持有 folder 根、也本來就要對每一筆做邊界判定，在這裡一併輸出是零成本的。
+ *
+ * 列舉來源（git 或保守遞迴）的輸出**不被信任為位於邊界之內** —— 邊界保證的來源是我們自己的
+ * 判定，不是來源程式的性質。
+ */
+export async function listFiles(
+  store: FolderLookup,
+  folderId: string,
+  relPath: string,
+): Promise<string[]> {
+  const folder = requireFolder(store, folderId)
+  const { realPath: target, realRoot } = await resolveExistingWithin(folder.path, relPath)
+
+  const stats = await stat(target)
+  if (!stats.isDirectory()) {
+    throw new FsServiceError('NOT_A_DIRECTORY', t('fsError.notADirectory', { path: relPath }))
+  }
+
+  let entries: string[]
+  try {
+    entries = await enumerateFiles(target)
+  } catch (error) {
+    if (error instanceof EnumerationError) {
+      throw new FsServiceError('ENUMERATION_FAILED', t('fsError.enumerationFailed', { path: relPath }))
+    }
+    throw error
+  }
+
+  const within: string[] = []
+  for (const entry of entries) {
+    const absolute = path.join(target, entry)
+    if (!isWithin(realRoot, absolute)) continue
+    within.push(toPosixRelPath(path.relative(realRoot, absolute)))
+  }
+
+  // 兩條列舉路徑的順序不同（git 已排序、readdir 未必），在此收斂以免呼叫端看到不穩定的順序。
+  return within.sort((a, b) => a.localeCompare(b))
 }
 
 /** 前 8000 bytes（或整個檔案，取其小者）內出現 NUL 即視為二進位 —— 與 git 的判準相同。 */

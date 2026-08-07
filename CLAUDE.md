@@ -905,6 +905,15 @@ org 名**不是**凍結身分的一部分 —— repo 改名與 transfer 皆自�
   的失效模式）。詳見下文「終端的字元寬度」——那裡記著這個 change 最貴的一課：**量測 harness 的
   `webPreferences` 必須比照產品**。
 
+- **側欄的檔案快速開啟** — `side-panel-quick-open`（**不屬於任何 Phase**）：第十一次 dogfooding
+  的回饋（「我在 vscode 習慣按 `Ctrl+P` 找檔案開啟，但現在沒辦法」）。新能力 **`quick-open`**
+  （側欄持有焦點時 `Ctrl+P` 開啟模糊搜尋入口，範圍為當前側欄座標所指的工作目錄，選中後走既有的
+  `openFileFromOpenSpec` 開在 Files 檢視）；`filesystem-access` **一條 ADDED 三條 requirement ＋
+  一條 MODIFIED**（`listFiles` 的邊界／排除規則／不阻塞主行程，以及白名單那條**逐一列舉 method
+  名稱**的 scenario）；`keyboard-navigation` 兩條 MODIFIED（寫明第三組快捷鍵落在哪一邊）。
+  **終端持有焦點時讓路給 pty** —— 實測 `claude` 以 `Ctrl+P` 顯示 previous history，而 agent 是
+  這個 app 的主場。詳見下文「quick open」—— 那裡記著六個**會靜默失敗**的實測踩雷。
+
 - Phase 6 打包與發佈，Phase 7+ 建立護城河（handoff）。**session 常駐**已排入路線圖但刻意不做
   （PRD §11）。
 
@@ -1082,6 +1091,7 @@ provider 驗證：它為 `language: '*'` 註冊，呼叫 worker 端的 `$compute
 | `Ctrl+Shift+W` | 關閉當前 focused 的 session（沒有選中的項目或該項目無 session 時無操作） |
 | `Shift+↓` / `Shift+↑` | 把**選中的 repo** 在 rail 上往下／往上移動一格（**不循環**；選中全域項目時無操作） |
 | `Shift+→` / `Shift+←` | 把 **focused session** 在分頁列上往右／往左移動一格（**不循環**） |
+| `Ctrl+P` | **側欄持有焦點時**開啟檔案的快速搜尋入口（`quick-open`）。**終端持有焦點時讓路給 pty** |
 | `Ctrl+Shift+C` / `Ctrl+Shift+V` | 終端的複製貼上（macOS 用 `Cmd`） |
 | `Cmd/Ctrl+S` | 存檔 |
 | `Esc` | 關閉 overlay／對話框／選單 |
@@ -2334,6 +2344,84 @@ D1 的對照表原本只有兩格（`✅` 與 `⚠️`）—— 而那兩格恰�
 > 了真的 NUL**。於是這份文件本身命中同一個坑：`grep -c xterm CLAUDE.md` 回空、exit 1，連
 > 「binary file」都不說 —— 我因此一度以為 grep 的 pattern 有問題。**寫「不要寫字面 NUL」的時候，
 > 特別容易寫出一個字面 NUL。** 查法：`python3 -c "print(open(f,'rb').read().count(b'\x00'))"`。
+
+## quick open（`side-panel-quick-open`）
+
+側欄持有焦點時 `Ctrl+P` 開啟檔案的模糊搜尋入口。**終端持有焦點時讓路給 pty** —— 實測 `claude`
+以它顯示 previous history（zsh `up-line-or-history`、bash `previous-history`），而 agent 是這個
+app 的主場。使用者在知情下裁決**只做焦點判定版**，不做無條件生效的第二顆鍵（退路 `Ctrl+Shift+P`
+成本為零、隨時可加）。
+
+### 讓路不需要實作 —— 它是焦點模型的推論
+
+「焦點在側欄之內」**就是**「按鍵事件行經側欄容器」，那是 DOM 事件傳播的定義：觸發點掛在側欄的
+**capture 階段**（React 的 `onKeyDownCapture` 在 root container 的原生 capture 階段派發，早於
+Monaco 掛在自己節點上的 listener —— 既有的 `Ctrl+S` 正是因為註冊在 bubble 階段才被迫搬進編輯器
+內部）。而終端與側欄是兩塊**並列的 Panel、互不為祖先**，xterm 的按鍵又來自它自己的隱形 textarea
+—— 事件根本不會行經側欄。**不需要任何「如果焦點在終端就不處理」的判斷。**
+
+### 對話框的抑制必須 **document-wide**，而不是「側欄之內」
+
+兩種情形各自把一半的範圍變成必要，少了任一半都會漏：
+
+| | 位置 | 為什麼觸發條件會成立 |
+|---|---|---|
+| files 的命名／刪除對話框、右鍵選單 | **側欄的 DOM 子樹之內**（沒有 portal） | 焦點在對話框的輸入框裡，而它就在側欄裡 |
+| Graph／Timeline 的全視窗 overlay | portal 到 `document.body` | 它**不移動焦點**，而開啟它的按鈕在側欄裡 |
+
+判準與作用域皆比照 `KeyboardNavigation.tsx`（`document.querySelector('[role="dialog"], [role="menu"]')`）
+—— 兩者若不一致，會在「什麼算是在等待裁決」上分歧，而那種分歧不會有紅燈。
+
+### 六個會靜默失敗的實測踩雷
+
+- **`fs.readdirSync` 與 `fs/promises.readdir` 對同一個 `{ recursive: true }` 行為不同。** 前者
+  **會**走進 symlink 目錄（列出 `escape-link/secret.txt`、讓 `sub/a.txt` 出現兩次），後者**不會**。
+  第一版的對照組用了 promises 版，於是**天真實作與正確實作的結果完全相同**、對照組沒有變紅 ——
+  我差點據此認為「邊界會從 symlink 漏掉」是個假警報。換成 sync 版之後，越界檔名如期洩漏、3 條
+  測試變紅。**結論仍是手寫遞迴**（只在 `dirent.isDirectory()` 為真時下鑽），但理由更強：一個在
+  兩個同語意 API 之間不一致、且未見於文件的行為，不該拿來當邊界防護的依據。
+- **git 的錯誤訊息會被在地化。** 這台機器的 git 講繁體中文（「致命錯誤: 不是一個 git 版本庫」），
+  於是 `/not a git repository/i` 匹配不到 ⇒ **每一個非 git 目錄都被判成「列舉失敗」**（第一版 5 條
+  單元測試全紅）。修法是 spawn 時設 **`LC_ALL=C`**。這與既有的「比對 git 輸出一律加 `--no-color`」
+  是同一族，旋鈕從顏色換成語言。
+- **`git ls-files` 預設 `core.quotePath=true`** —— 非 ASCII 檔名會被 C-quote 並包上雙引號
+  （`"docs2/\346\270\254\350\251\246…"`）。失效方式是清單裡那一筆看起來像亂碼、選了之後讀檔回
+  「找不到」。用 **`-z`**（順帶解決檔名含換行；`-c core.quotePath=false` 只解決前者）。
+- **`git ls-files` 在被 `.gitignore` 涵蓋的目錄裡 exit 0 且無輸出** —— 在 exit code 上與「成功」
+  無法區分。使用者既然正在那裡工作，把它呈現為空是錯的，因此「成功但為空」也退回保守列舉。
+- **「不阻塞主行程」不能用「同步 API 未被呼叫」當判準。** ESM 的具名匯入（`import { execFileSync }`）
+  不經屬性查找，`mock.method` 攔不到它 —— 那條斷言在同步實作下照樣是綠的。改為驗**性質**：
+  `enumerateFiles()` 之後讓出一個完整的 event loop tick，斷言它**還沒完成**（同步的 spawn 會在函式
+  回傳前就把整件事做完）。對照組確認：換成 `execFileSync` 該條必定變紅。
+- **`<Panel collapsible collapsedSize={0}>` 收合時子樹仍然掛載。** design 一度寫「側欄收合時焦點
+  不可能在容器裡」，那是**假的**（收合只是把尺寸設為 0）。真正的理由是行為上無害（開檔路徑本來
+  就會 `expandSidePanel()`）。**留著這條紀錄，是因為原本那個論證看起來很有說服力。**
+
+### 焦點歸還是承重的，而它的退路曾經是一個 no-op
+
+本能力的觸發條件就是焦點的位置 —— overlay 關閉後若焦點落在 `<body>`，下一次 `Ctrl+P` **靜默
+失效**，使用者看到的是「這顆鍵時好時壞」。因此開啟前記住 `document.activeElement`、關閉時還原，
+該元素若已離開 DOM（`isConnected` 為 false）則退回側欄容器。
+
+**而「退回側欄容器」原本行不通**：那是一個沒有 `tabIndex` 的 `<section>`，`.focus()` 對它是
+**no-op**。已補 `tabIndex={-1}`（可程式聚焦、不進 Tab 序）。**而「開啟檔案」正是那個記住的元素
+必然消失的路徑**（檔案樹被 `FileViewer` 換掉）—— 退路在最常走的那條路上才會被用到。
+驗收因此**連開兩次**（開 → 關 → 再開、開檔 → 再開）：只驗一次的話，焦點沒還回去也會通過。
+
+### 模糊比對：貪婪掃描會把查詢的開頭浪費在目錄名上
+
+`score` 對 `src/score.ts` —— 貪婪比對讓 `s` 與 `c` 被 `src` 吃掉，只剩 `ore` 落在檔名裡，分數
+低到排在一個人工的 `s-c-o-r-e.ts` 之後（實測 17.4 vs 34.4）。修法是**先只在檔名上比對**，命中就
+加一個大的 bonus —— 那同時實現了「檔名命中優先」這條 requirement（本能力唯一的主要情境是「使用者
+知道檔名」）。另外**連續命中的權重必須大於詞邊界獎勵**，否則「每個字元都落在 `-` 之後」的散落
+命中會勝過連續命中。
+
+### 對照組跑到一半還原原始碼，dev 模式會驗到還原後的版本
+
+「無條件攔截」的對照組實測：**build 模式兩條如期變紅，dev 模式卻是綠的**。原因是我在 build 跑完、
+dev 的 renderer dev server 啟動**之前**還原了原始碼 —— **build 模式用的是編譯進 `out/` 的產物，
+dev 模式是 vite 即時讀原始碼**。兩者讀程式碼的時機不同，於是同一支探針的兩個模式驗到了兩個版本。
+**對照組要嘛跑完再還原，要嘛只採信 build 模式那一半。**
 
 ## 終端裡的連結歸誰管（`panel-drive-and-shell-affordances` 的調查結論）
 

@@ -37,6 +37,9 @@ const workspaceApi = {
   fs: {
     listDir: (folderId: string, relPath: string): Promise<FsResult<DirEntry[]>> =>
       ipcRenderer.invoke('workspace:fs:listDir', folderId, relPath),
+    /** 遞迴列舉。回傳 **folder-relative** 路徑，可直接餵給其他 `fs.*` 操作。 */
+    listFiles: (folderId: string, relPath: string): Promise<FsResult<string[]>> =>
+      ipcRenderer.invoke('workspace:fs:listFiles', folderId, relPath),
     readFile: (folderId: string, relPath: string): Promise<FsResult<FileContent>> =>
       ipcRenderer.invoke('workspace:fs:readFile', folderId, relPath),
     /** `baseMtimeMs` 省略即為明確要求覆寫，主行程會略過衝突比對。 */

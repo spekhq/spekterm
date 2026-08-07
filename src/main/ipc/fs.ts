@@ -6,6 +6,7 @@ import {
   createFile,
   deleteEntry,
   listDir,
+  listFiles,
   readFile,
   rename,
   writeFile,
@@ -15,6 +16,7 @@ import type { FolderLookup } from '../workspace-store'
 
 export const FS_CHANNELS = {
   listDir: 'workspace:fs:listDir',
+  listFiles: 'workspace:fs:listFiles',
   readFile: 'workspace:fs:readFile',
   writeFile: 'workspace:fs:writeFile',
   createFile: 'workspace:fs:createFile',
@@ -109,6 +111,10 @@ export function releaseFolderWatchers(folderId: string): void {
 export function registerFsHandlers(store: FolderLookup): void {
   ipcMain.handle(FS_CHANNELS.listDir, (_event, folderId: string, relPath: string) =>
     toResult(() => listDir(store, folderId, relPath)),
+  )
+
+  ipcMain.handle(FS_CHANNELS.listFiles, (_event, folderId: string, relPath: string) =>
+    toResult(() => listFiles(store, folderId, relPath)),
   )
 
   ipcMain.handle(FS_CHANNELS.readFile, (_event, folderId: string, relPath: string) =>

@@ -210,7 +210,8 @@
     "nameSeparator": "Name must not contain a path separator: {{name}}",
     "nameForbidden": "Name contains a forbidden character: {{name}}",
     "nameTrailing": "Name must not end with a space or a period: {{name}}",
-    "nameReserved": "Name is a reserved device name: {{name}}"
+    "nameReserved": "Name is a reserved device name: {{name}}",
+    "enumerationFailed": "Could not list the files in: {{path}}"
   },
   "terminalError": {
     "unknownFolder": "Unknown folder: {{folderId}}",
@@ -283,5 +284,12 @@
     "cost": "${{usd}}",
     "fiveHour": "5h {{percent}}%",
     "sevenDay": "7d {{percent}}%"
+  },
+  "quickOpen": {
+    "label": "Quick open",
+    "placeholder": "Search files by name",
+    "results": "Matching files",
+    "noMatch": "No matching files",
+    "failed": "Could not list the files in this working directory"
   }
 }

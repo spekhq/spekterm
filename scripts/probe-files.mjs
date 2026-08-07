@@ -343,6 +343,45 @@ const CLICK_MENU_ITEM = (label) => `(() => {
   return true
 })()`
 
+/** quick open 的狀態。`null` ＝ 未開啟。 */
+const QUICK_OPEN = `(() => {
+  const dialog = document.querySelector('[role="dialog"][aria-label="${copy('quickOpen.label')}"]')
+  if (!dialog) return null
+  const input = dialog.querySelector('input')
+  const options = [...dialog.querySelectorAll('[role="option"]')]
+  return {
+    query: input ? input.value : null,
+    count: options.length,
+    titles: options.map((o) => o.getAttribute('title')),
+    message: dialog.querySelector('p') ? dialog.querySelector('p').innerText.trim() : null,
+  }
+})()`
+
+/** 聚焦檔案樹的第一列（側欄之內一個真實可聚焦的元素）。 */
+const FOCUS_FILE_TREE = `(() => {
+  const row = document.querySelector('section[aria-label="${copy('files.label')}"] [role="treeitem"]')
+  if (!row) return false
+  row.focus()
+  return document.activeElement === row
+})()`
+
+/** 命名／確認對話框是否開啟。 */
+const NAME_DIALOG_PRESENT = `Boolean(document.querySelector('section[aria-label="${copy('files.label')}"] input'))`
+
+async function pressCtrlP(client) {
+  const key = { key: 'p', code: 'KeyP', windowsVirtualKeyCode: 80, nativeVirtualKeyCode: 80, modifiers: 2 }
+  await client.send('Input.dispatchKeyEvent', { type: 'rawKeyDown', ...key })
+  await client.send('Input.dispatchKeyEvent', { type: 'keyUp', ...key })
+  await sleep(300)
+}
+
+async function pressEsc(client) {
+  const key = { key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27, nativeVirtualKeyCode: 27 }
+  await client.send('Input.dispatchKeyEvent', { type: 'rawKeyDown', ...key })
+  await client.send('Input.dispatchKeyEvent', { type: 'keyUp', ...key })
+  await sleep(300)
+}
+
 /** 對話框輸入名稱並確定。 */
 const SUBMIT_NAME_DIALOG = (name) => `(() => {
   const input = document.querySelector('[role="dialog"] input, section[aria-label="${copy('files.label')}"] input')
@@ -1006,6 +1045,74 @@ async function probeBuild(fixture, profile) {
     unlinkSync(join(fixture.repo, 'sample.ts'))
     const deletedText = await pollUntil(app.client, PANEL_TEXT, (text) => (text ?? '').includes(copy('viewer.deleted')))
     check(results, '檢視中的檔案被外部刪除時明確標示', deletedText.includes(copy('viewer.deleted')))
+
+    // ── quick open ─────────────────────────────────────────────────────────
+    //
+    // **命名對話框那條不是理論邊角**：它渲染於側欄的 DOM 子樹之內（不是移到文件頂層），
+    // 於是「按鍵行經側欄容器」這個觸發條件在使用者正打字命名時**恰好成立**。
+    console.log('\nquick open')
+
+    await app.client.evaluate(`document.querySelector('section[aria-label="${copy('files.label')}"] header button')?.click()`)
+    await pollUntil(app.client, ROW_PATHS, (paths) => paths.length > 0)
+
+    check(results, 'quick open 前置 —— 檔案樹取得焦點',
+      (await pollUntil(app.client, FOCUS_FILE_TREE, (v) => v === true, 8000)) === true)
+
+    await pressCtrlP(app.client)
+    const listed = await pollUntil(app.client, QUICK_OPEN, (v) => v !== null && v.count > 0, 8000)
+    check(results, '檔案樹持有焦點時 Ctrl+P 開啟入口並列出檔案', listed !== null && listed.count > 0,
+      JSON.stringify(listed && listed.titles))
+
+    check(results, '清單只含檔案，不含目錄',
+      listed !== null && listed.titles.every((t) => t !== 'sub' && t !== 'sub/deep'),
+      JSON.stringify(listed && listed.titles))
+
+    // 保守列舉（fixture 非 git）**不得跟隨越界 symlink**：`escape-link` 指向 workspace 之外，
+    // 而邊界的包含判定是**字面**比較 —— `escape-link/secret.txt` 必定通過它。擋得住的只有
+    // 「不下鑽 symlink」。這條在 probe 層比在單元測試層更真實：走的是產品完整的那條路。
+    check(results, '清單不含經越界 symlink 才到得了的檔案',
+      listed !== null && listed.titles.every((t) => !t.includes('secret.txt')),
+      JSON.stringify(listed && listed.titles))
+
+    await app.client.send('Input.insertText', { text: 'while-open' })
+    const beforeCreate = await pollUntil(app.client, QUICK_OPEN,
+      (v) => v !== null && v.query === 'while-open', 8000)
+    check(results, '無相符項目時呈現說明而非無說明的空白',
+      beforeCreate !== null && beforeCreate.count === 0 && beforeCreate.message !== null,
+      JSON.stringify(beforeCreate))
+
+    writeFileSync(join(fixture.repo, 'while-open.txt'), 'x')
+    await sleep(1500)
+    const afterCreate = await app.client.evaluate(QUICK_OPEN)
+    check(results, '開啟期間新建的檔案不出現於當次清單（清單為靜態）',
+      afterCreate !== null && afterCreate.count === 0, JSON.stringify(afterCreate))
+
+    await pressEsc(app.client)
+    await sleep(300)
+    await app.client.evaluate(FOCUS_FILE_TREE)
+    await pressCtrlP(app.client)
+    await pollUntil(app.client, QUICK_OPEN, (v) => v !== null, 8000)
+    await app.client.send('Input.insertText', { text: 'while-open' })
+    const afterReopen = await pollUntil(app.client, QUICK_OPEN,
+      (v) => v !== null && v.query === 'while-open', 8000)
+    check(results, '關閉再開啟後該檔案出現（每次重取，不快取）',
+      afterReopen !== null && afterReopen.count === 1, JSON.stringify(afterReopen))
+    await pressEsc(app.client)
+    await sleep(300)
+
+    const plusForDialog = await coordsOf(app.client, PLUS_BTN)
+    await realMouse(app.client, plusForDialog.x, plusForDialog.y, 'left')
+    await pollUntil(app.client, `document.querySelectorAll('[role="menuitem"]').length`, (n) => n > 0)
+    await app.client.evaluate(CLICK_MENU_ITEM(copy('files.newFile')))
+    check(results, 'quick open 前置 —— 命名對話框開啟',
+      (await pollUntil(app.client, NAME_DIALOG_PRESENT, (v) => v === true, 6000)) === true)
+
+    await pressCtrlP(app.client)
+    check(results, '命名對話框開啟時 Ctrl+P 為無操作且對話框維持開啟',
+      (await app.client.evaluate(QUICK_OPEN)) === null &&
+        (await app.client.evaluate(NAME_DIALOG_PRESENT)) === true)
+    await pressEsc(app.client)
+    await sleep(400)
   } finally {
     await app.close()
   }

@@ -6,10 +6,12 @@ import {
   continuationBlockOf,
   continuationCommand,
 } from './openspec/continuation'
+import { ROOT_PATH } from './files/paths'
 import { useChanges, useWorktrees } from './openspec/data'
 import { VizOverlay, type VizKind } from './openspec/VizOverlay'
 import type { FileRequest, OpenSpecRequest, OpenSpecTarget } from './openspec/nav'
 import { usePanelCoordinate } from './panel-coordinate'
+import { QuickOpen } from './quick-open/QuickOpen'
 import { PanelSwitch } from './side-panel/PanelSwitch'
 import { SidePanel } from './side-panel/SidePanel'
 import { SessionTabs } from './terminal/SessionTabs'
@@ -54,6 +56,15 @@ export function MainStage({ selection, folders }: MainStageProps): React.JSX.Ele
 
   /** 全視窗 overlay 的 Graph／Timeline（design D12）。null＝沒開。 */
   const [viz, setViz] = useState<VizKind | null>(null)
+  const [quickOpen, setQuickOpen] = useState(false)
+  /**
+   * 側欄容器 —— quick open 關閉時焦點的退路。
+   *
+   * 它帶 `tabIndex={-1}`：一個沒有 tabIndex 的 `<section>` 對 `.focus()` 是 **no-op**，於是焦點
+   * 會掉到 `<body>`，下一次 `Ctrl+P` 靜默失效。而「開啟檔案」正是記住的元素必然消失的那條路
+   * （檔案樹被檢視器換掉），退路在最常走的路上才會被用到。
+   */
+  const sidePanelSectionRef = useRef<HTMLElement>(null)
 
   const sessions = useSessions()
   const panel = usePanelCoordinate()
@@ -279,6 +290,18 @@ export function MainStage({ selection, folders }: MainStageProps): React.JSX.Ele
   /** 側欄的工作目錄：Files 身分以哪個工作目錄為樹根。省略＝ folder 自身。 */
   const panelWorktreeKey = coordinate.worktreeKey
 
+  /**
+   * 樹根前綴的解析 —— **上提至此**（design D1c）。
+   *
+   * 它原本住在 `SidePanel` 裡只於 Files 身分渲染的那個元件中，而 quick open 在 OpenSpec 身分
+   * 之下也要能用。留在原處的話，這裡就得**再解析一次**，那正好違反「搜尋範圍與檔案樹的根
+   * SHALL NOT 各自解析」。
+   */
+  const panelRootPrefix =
+    panelWorktrees.find((option) => option.key === panelWorktreeKey)?.relPath ?? ROOT_PATH
+  /** 選了工作目錄、而清單尚未抵達 —— 此時還不知道前綴。 */
+  const panelRootPending = panelWorktreeKey !== undefined && panelWorktreeData === null
+
   /** 選擇器選了一個工作目錄。與側欄來源同理 —— 同樣不以 session 的存在為前提。 */
   const changePanelWorktree = useCallback(
     (worktreeKey: string | undefined) => {
@@ -286,6 +309,41 @@ export function MainStage({ selection, folders }: MainStageProps): React.JSX.Ele
       panel.setWorktree(selection, worktreeKey)
     },
     [selection, panel],
+  )
+
+  /**
+   * quick open 的觸發 —— 掛在側欄容器的 **capture 階段**。
+   *
+   * 「焦點在側欄之內」**就是**「按鍵事件行經這個容器」，那是 DOM 事件傳播的定義：不需要
+   * `closest()`、不需要比對 `document.activeElement`（它與事件來源在焦點轉移的瞬間可能不一致）。
+   *
+   * **capture 而非 bubble**：Monaco 會攔下按鍵並停止傳播 —— 既有的存檔快捷鍵正是因此被迫註冊在
+   * 編輯器內部。React 的 `onKeyDownCapture` 在 root container 的原生 capture 階段派發，早於任何
+   * 掛在子節點上的 listener。
+   *
+   * **終端持有焦點時什麼都不必做**：xterm 的按鍵來自它自己的隱形 textarea，而終端與側欄是兩塊
+   * 並列的 Panel、互不為祖先 —— 事件根本不會行經這裡。讓路是焦點模型的推論，不是一段程式碼。
+   */
+  const onSidePanelKeyDown = useCallback(
+    (event: React.KeyboardEvent): void => {
+      if (!event.ctrlKey || event.shiftKey || event.altKey || event.metaKey) return
+      if (event.key.toLowerCase() !== 'p') return
+
+      // 有東西在等使用者裁決 —— **判準與作用域都與 `KeyboardNavigation` 相同（document-wide）**。
+      // 收窄為「側欄之內」會漏掉全視窗 overlay：它 portal 到 body 卻**不移動焦點**，而開啟它的
+      // 按鈕就在側欄裡，於是觸發條件恰好成立、入口會在 overlay 底下開起來。
+      // 不 preventDefault —— 按鍵照常抵達那個對話框或選單。
+      if (document.querySelector('[role="dialog"], [role="menu"]')) return
+
+      // 沒有可搜的工作目錄。**判準是「有沒有可搜的工作目錄」，不是「rail 選了什麼」** ——
+      // 全域項目只要把側欄來源指向某個 repo，入口就該正常運作。
+      if (!panelFolder) return
+
+      event.preventDefault()
+      event.stopPropagation()
+      setQuickOpen(true)
+    },
+    [panelFolder],
   )
 
   /**
@@ -441,7 +499,14 @@ export function MainStage({ selection, folders }: MainStageProps): React.JSX.Ele
           onResize={syncCollapsed}
         >
           {/* 視覺分界由 Separator 提供；此處若再加 border-l，收合後會殘留一條 1px 的線 */}
-          <section aria-label={t('openspec.sidePanel')} className="h-full overflow-hidden bg-panel">
+          <section
+            ref={sidePanelSectionRef}
+            // 可程式聚焦、不進 Tab 序 —— quick open 關閉時焦點的退路（見 sidePanelSectionRef）。
+            tabIndex={-1}
+            aria-label={t('openspec.sidePanel')}
+            className="h-full overflow-hidden bg-panel outline-none"
+            onKeyDownCapture={onSidePanelKeyDown}
+          >
             <SidePanel
               identity={activeIdentity}
               folder={panelFolder}
@@ -455,6 +520,9 @@ export function MainStage({ selection, folders }: MainStageProps): React.JSX.Ele
               sessionWorktreeKey={displayed?.worktreeKey}
               panelWorktreeKey={panelWorktreeKey}
               onSelectWorktree={changePanelWorktree}
+              worktrees={panelWorktrees}
+              rootPrefix={panelRootPrefix}
+              rootPending={panelRootPending}
               onContinue={continueArtifacts}
               onOpenSessionHere={openSessionInChangeWorktree}
               onOpenFile={openFileFromOpenSpec}
@@ -466,6 +534,19 @@ export function MainStage({ selection, folders }: MainStageProps): React.JSX.Ele
           </section>
         </Panel>
       </Group>
+
+      {quickOpen && panelFolder && (
+        <QuickOpen
+          folderId={panelFolder.id}
+          rootPrefix={panelRootPrefix}
+          fallbackFocus={sidePanelSectionRef}
+          onOpen={(relPath) => {
+            setQuickOpen(false)
+            openFileFromOpenSpec(relPath)
+          }}
+          onClose={() => setQuickOpen(false)}
+        />
+      )}
 
       {viz && panelFolder && (
         <VizOverlay

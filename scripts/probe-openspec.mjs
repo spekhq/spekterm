@@ -506,6 +506,49 @@ const CHANGE_TREE_ROWS = (group) => `[...document.querySelectorAll('section[aria
 
 const SPEC_CONTENT = `document.querySelector('section[aria-label="${copy('openspec.label')}"]')?.innerText ?? ''`
 
+// ── quick open（Ctrl+P）────────────────────────────────────────────────────
+
+/**
+ * quick open 的狀態。`null` ＝ 未開啟。
+ *
+ * `titles` 是**完整的 folder-relative 路徑**（權威值），`shown` 是呈現的文字（已剝掉工作目錄
+ * 前綴）。兩者要分開驗 —— 「呈現剝前綴而權威不剝」是 `side-panel-worktree` 立下的紀律，
+ * 只驗一邊的話「兩邊都剝」與「兩邊都不剝」各有一種會漏掉。
+ */
+const QUICK_OPEN = `(() => {
+  const dialog = document.querySelector('[role="dialog"][aria-label="${copy('quickOpen.label')}"]')
+  if (!dialog) return null
+  const input = dialog.querySelector('input')
+  const options = [...dialog.querySelectorAll('[role="option"]')]
+  return {
+    query: input ? input.value : null,
+    count: options.length,
+    titles: options.map((o) => o.getAttribute('title')),
+    shown: options.map((o) => o.innerText.replace(/\\s+/g, ' ').trim()),
+  }
+})()`
+
+/**
+ * 聚焦側欄容器本身。
+ *
+ * 它帶 `tabIndex={-1}` —— 沒有它，`.focus()` 對一個 `<section>` 是 no-op，這個 helper 會回
+ * false（於是它同時是那條的驗收）。OpenSpec 身分之下側欄沒有 treeitem 可聚焦，只能用它。
+ */
+const FOCUS_SIDE_PANEL = `(() => {
+  const el = document.querySelector('section[aria-label="${copy('openspec.sidePanel')}"]')
+  if (!el) return false
+  el.focus()
+  return document.activeElement === el
+})()`
+
+async function pressCtrlP(client) {
+  const key = { key: 'p', code: 'KeyP', windowsVirtualKeyCode: 80, nativeVirtualKeyCode: 80, modifiers: 2 }
+  await client.send('Input.dispatchKeyEvent', { type: 'rawKeyDown', ...key })
+  await client.send('Input.dispatchKeyEvent', { type: 'keyUp', ...key })
+  await sleep(300)
+}
+
+
 // ── Graph / Timeline 的全視窗 overlay ──────────────────────────────────────
 
 const CLICK_OPEN_VIZ = (kind) => `(() => {
@@ -1100,6 +1143,99 @@ async function anchorChange(client, slug) {
 }
 
 // ── 主流程 ──────────────────────────────────────────────────────────────────
+
+/**
+ * quick open 的**搜尋範圍**驗收 —— 它取自側欄座標（來源 repo ＋ 工作目錄）。
+ *
+ * 這一段承載三條最容易靜默失敗的性質：
+ *
+ * 1. **座標系**：呈現剝掉工作目錄前綴，而項目持有的權威值是完整的 folder-relative 路徑。
+ *    只驗一邊的話，「兩邊都剝」與「兩邊都不剝」各有一種會漏掉 —— 而前者的症狀是**打開另一個
+ *    同名的檔案**（fixture 的 `openspec/specs/auth/spec.md` 在主工作目錄與 wt-inside 各有一份）。
+ * 2. **巢狀 worktree 不進清單**：`.claude/worktrees/` 在 repo 之內，天真的遞迴會讓同一個檔案
+ *    出現兩次。
+ * 3. **全視窗 overlay 開啟時入口不生效**：它 portal 到 body 卻不移動焦點，開啟它的按鈕在側欄
+ *    裡，於是觸發條件恰好成立。
+ */
+async function runQuickOpenScope(app) {
+  console.log('\nquick open：搜尋範圍與座標系')
+
+  check(results, 'quick open 前置 —— 選中 repo-worktree',
+    (await pollUntil(app.client, SELECT_FOLDER('repo-worktree'), (ok) => ok === true, 15_000)) === true)
+  await sleep(800)
+  await app.client.evaluate(CLICK_IDENTITY('▤'))
+  await sleep(600)
+  await resetWorktreeToSelf(app.client)
+  await sleep(400)
+
+  const treeFocused = await pollUntil(app.client, FOCUS_SIDE_PANEL, (v) => v === true, 8000)
+  check(results, '側欄容器可程式聚焦（tabIndex=-1；沒有它，焦點歸還的退路是 no-op）',
+    treeFocused === true)
+
+  await pressCtrlP(app.client)
+  await app.client.send('Input.insertText', { text: 'auth' })
+  const atMain = await pollUntil(app.client, QUICK_OPEN, (v) => v !== null && v.query === 'auth', 8000)
+  check(results, '主工作目錄為根時，清單不含任何位於巢狀 worktree 之下的檔案',
+    atMain !== null && atMain.titles.every((t) => !t.startsWith('.claude/worktrees/')),
+    JSON.stringify(atMain && atMain.titles))
+  check(results, '主工作目錄的 spec 檔案恰好出現一次',
+    atMain !== null && atMain.titles.filter((t) => t === 'openspec/specs/auth/spec.md').length === 1,
+    JSON.stringify(atMain && atMain.titles))
+
+  await pressEscape(app.client)
+  await sleep(300)
+
+  check(results, 'quick open 前置 —— 切換工作目錄至 wt-inside',
+    (await app.client.evaluate(CLICK_WORKTREE_PICKER)) === true &&
+      (await app.client.evaluate(CLICK_WORKTREE_ITEM('feat-inside'))) === true)
+  await pollUntil(app.client, WORKTREE_PICKER, (v) => v?.includes('feat-inside') === true, 8000)
+  await sleep(600)
+
+  await app.client.evaluate(FOCUS_SIDE_PANEL)
+  await pressCtrlP(app.client)
+  await app.client.send('Input.insertText', { text: 'auth' })
+  const atWorktree = await pollUntil(app.client, QUICK_OPEN,
+    (v) => v !== null && v.query === 'auth' && v.count > 0, 8000)
+  check(results, '切換工作目錄後搜尋範圍隨之改變（結果全部來自該 worktree）',
+    atWorktree !== null &&
+      atWorktree.titles.every((t) => t.startsWith('.claude/worktrees/wt-inside/')),
+    JSON.stringify(atWorktree && atWorktree.titles))
+  check(results, '呈現的路徑剝去工作目錄前綴，而權威值保留它',
+    atWorktree !== null && atWorktree.shown.every((t) => !t.includes('.claude')),
+    JSON.stringify(atWorktree && atWorktree.shown))
+
+  await pressEscape(app.client)
+  await sleep(300)
+
+  await app.client.evaluate(CLICK_IDENTITY('◈'))
+  await sleep(800)
+  check(results, 'quick open 前置 —— 開啟 Graph overlay',
+    (await app.client.evaluate(CLICK_OPEN_VIZ('Graph'))) === true)
+  const overlayUp = await pollUntil(app.client, OVERLAY, (v) => v !== null, 8000)
+  check(results, 'quick open 前置 —— overlay 確實開啟', overlayUp !== null)
+
+  await app.client.evaluate(FOCUS_SIDE_PANEL)
+  await pressCtrlP(app.client)
+  check(results, '全視窗 overlay 開啟時 Ctrl+P 為無操作',
+    (await app.client.evaluate(QUICK_OPEN)) === null &&
+      (await app.client.evaluate(OVERLAY)) !== null)
+
+  await app.client.evaluate(CLICK_VIZ_CLOSE)
+  await pollUntil(app.client, OVERLAY, (v) => v === null, 8000)
+  await sleep(400)
+
+  await app.client.evaluate(FOCUS_SIDE_PANEL)
+  await pressCtrlP(app.client)
+  await app.client.send('Input.insertText', { text: 'proposal' })
+  const fromOpenSpec = await pollUntil(app.client, QUICK_OPEN,
+    (v) => v !== null && v.query === 'proposal' && v.count > 0, 8000)
+  check(results, 'OpenSpec 身分之下入口同樣可用', fromOpenSpec !== null,
+    JSON.stringify(fromOpenSpec && fromOpenSpec.titles))
+
+  await pressEscape(app.client)
+  await sleep(300)
+  await resetWorktreeToSelf(app.client)
+}
 
 async function runMode(label, { port, rendererUrl }) {
   console.log(`\n── ${label} ──`)
@@ -2965,6 +3101,14 @@ async function runMode(label, { port, rendererUrl }) {
       (await app.client.evaluate(TREE_ROW_COUNT)) === 0,
       String(await app.client.evaluate(TREE_ROW_COUNT)))
 
+    // quick open 的無操作判準是「有沒有可搜的工作目錄」，**不是「rail 選了什麼」** ——
+    // 此刻 rail 選中的正是全域項目，而它的來源未選定。照「rail 選了什麼」寫的實作在這裡
+    // 會**錯誤地開啟**入口，然後對著一個不存在的來源去列舉。
+    await app.client.evaluate(FOCUS_SIDE_PANEL)
+    await pressCtrlP(app.client)
+    check(results, '側欄來源未選定時 Ctrl+P 為無操作',
+      (await app.client.evaluate(QUICK_OPEN)) === null)
+
     // 正向對照：選一個 repo ⇒ 樹裡要有東西。
     await realClick(
       app.client,
@@ -2975,6 +3119,19 @@ async function runMode(label, { port, rendererUrl }) {
     const rowsAfterPick = await pollUntil(app.client, TREE_ROW_COUNT, (v) => v > 0, 8000)
     check(results, '選定來源後檔案樹呈現該 repo 的內容（正向對照）',
       typeof rowsAfterPick === 'number' && rowsAfterPick > 0, String(rowsAfterPick))
+
+    // 全域項目**不隸屬任何 folder**，但它的側欄來源已指向一個 repo ⇒ 入口必須正常運作。
+    // 這是上一條的正向對照：少了它，一個「永遠無操作」的實作也會通過。
+    await app.client.evaluate(FOCUS_SIDE_PANEL)
+    await pressCtrlP(app.client)
+    const globalQuickOpen = await pollUntil(app.client, QUICK_OPEN, (v) => v !== null, 8000)
+    check(results, '全域項目的側欄來源指向某個 repo 時，Ctrl+P 正常運作且結果來自該 repo',
+      globalQuickOpen !== null && globalQuickOpen.count > 0,
+      JSON.stringify(globalQuickOpen && globalQuickOpen.titles))
+    await pressEscape(app.client)
+    await sleep(300)
+
+    await runQuickOpenScope(app)
   } finally {
     await app.close()
   }

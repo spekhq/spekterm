@@ -122,6 +122,12 @@ scenario），於是最省事的實作會在 `MainStage` 用手上的 `panelWork
 - **輸出仍須過邊界檢查**。git 回的是相對於工作目錄的路徑，理論上不會越界；但「理論上不會」不是
   邊界保證的來源。列舉的結果與 `listDir` 走**同一道** `isWithin` 判定 —— 該檢查是純字面比較，
   成本可忽略。
+- **`LC_ALL=C` 是必要的，這是實作時才發現的。** 我們靠 stderr 區分「不在版控之下」與真正的
+  失敗，而 **git 的錯誤訊息會被在地化** —— 這台機器上它是「致命錯誤: 不是一個 git 版本庫」，
+  於是 `/not a git repository/i` 匹配不到，**每一個非 git 目錄都會被判定為「列舉失敗」**（實測：
+  第一版的 5 條單元測試因此全紅）。這與既有的「比對 git 輸出一律加 `--no-color`」是同一族的坑，
+  只是旋鈕從顏色換成語言。
+
 - **退回路徑不得跟隨 symlink 進入目錄 —— 而這一條只有退回路徑需要。** `isWithin` 是**字面**比較，
   `escape-link/secret.txt` 這種路徑必定放行；`fs.readdirSync(dir, { recursive: true })` 會走進
   symlink 目錄，於是邊界外的檔名會從這道側門進入 renderer（與 chokidar `followSymlinks` 預設為
@@ -130,6 +136,20 @@ scenario），於是最省事的實作會在 `MainStage` 用手上的 `panelWork
   **`git ls-files` 不遞迴 symlink**（實測只列出該連結本身），因此主路徑不受影響。
   > `probe:files` 的 fixture **就有** `escape-link → outside/secret.txt`，而它正是唯一會走到
   > 退回路徑的探針（非 git 目錄）—— 這個缺陷會在那裡真的發生。
+  >
+  > **而這個側門的邊界比想像中窄，是對照組逼出來的實測：`fs.readdirSync` 與
+  > `fs/promises.readdir` 對同一個 `{ recursive: true }` 行為不同。**
+  >
+  > | 同一棵樹（含指向邊界外的 symlink 目錄） | 走進 symlink？ |
+  > |---|---|
+  > | `fs.readdirSync(dir, { recursive: true })` | **會** —— 列出 `escape-link/secret.txt` |
+  > | `await fs.promises.readdir(dir, { recursive: true })` | **不會** |
+  >
+  > 第一版的對照組用了 promises 版，於是**天真實作與正確實作的結果完全相同**，對照組沒有變紅
+  > —— 我差點據此認為 C3 是個假警報。換成 sync 版之後，越界檔名如期洩漏、3 條測試變紅。
+  >
+  > **結論不變（仍然手寫遞迴），但理由更強**：一個在兩個同語意 API 之間不一致、且未見於文件的
+  > 行為，不該被當成邊界防護的依據 —— 今天恰好安全的那一版，明天可能被誰改成另一版。
 
 ### D3：清單於**開啟時取得一次**，不隨 watcher 更新、不快取
 

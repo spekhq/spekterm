@@ -1,13 +1,12 @@
 import { useTranslation } from 'react-i18next'
 import { t } from '@shared/i18n'
 import { FilesPanel } from '../files/FilesPanel'
-import { ROOT_PATH } from '../files/paths'
+import type { RootPrefix } from '../files/paths'
 import { OpenSpecPanel } from '../openspec/OpenSpecPanel'
 import type { ContinuationBlock } from '../openspec/continuation'
-import { useWorktrees } from '../openspec/data'
 import type { VizKind } from '../openspec/VizOverlay'
 import type { FileRequest, OpenSpecRequest, OpenSpecTarget } from '../openspec/nav'
-import type { PanelIdentity, WorkspaceFolder } from '../types'
+import type { PanelIdentity, WorkspaceFolder, WorktreeOption } from '../types'
 import { PanelSourceBar } from './PanelSourceBar'
 
 interface SidePanelProps {
@@ -49,6 +48,12 @@ interface SidePanelProps {
   panelWorktreeKey?: string
   /** 使用者經 Files 的選擇器切換工作目錄。 */
   onSelectWorktree: (worktreeKey: string | undefined) => void
+  /** 側欄來源的工作目錄清單（由上游供應 —— 見下方 `FilesPanelForFolder` 的註解）。 */
+  worktrees: WorktreeOption[]
+  /** 已解析的樹根前綴。 */
+  rootPrefix: RootPrefix
+  /** 選了工作目錄、而清單尚未抵達 —— 此時還不知道前綴，先不要建樹。 */
+  rootPending: boolean
   /** 於當前 change 的來源工作目錄開一個 session。 */
   onOpenSessionHere: (worktreeKey: string) => void
   /** 請 agent 續寫下一個 artifact。 */
@@ -84,20 +89,20 @@ function FilesPanelForFolder({
   onViewInOpenSpec,
   worktreeKey,
   onSelectWorktree,
+  worktrees,
+  rootPrefix,
+  rootPending,
 }: {
   folder: WorkspaceFolder
   request: FileRequest | null
   onViewInOpenSpec: ((target: OpenSpecTarget) => void) | null
   worktreeKey?: string
   onSelectWorktree: (worktreeKey: string | undefined) => void
+  worktrees: WorktreeOption[]
+  rootPrefix: RootPrefix
+  rootPending: boolean
 }): React.JSX.Element {
-  const worktrees = useWorktrees(folder.id)
-  const options = worktrees.data ?? []
-  const rootPrefix = options.find((option) => option.key === worktreeKey)?.relPath ?? ROOT_PATH
-
-  // 選定了某個工作目錄、而清單尚未抵達 —— 此時還不知道它的前綴。先不要建樹（否則會建一棵
-  // folder 根的樹再換掉）。**預設情形（未選定）不受影響**：它立即以 folder 根渲染，零往返。
-  if (worktreeKey !== undefined && worktrees.data === null) {
+  if (rootPending) {
     return (
       <section
         aria-label={t('files.label')}
@@ -116,7 +121,7 @@ function FilesPanelForFolder({
       request={request}
       onViewInOpenSpec={onViewInOpenSpec}
       rootPrefix={rootPrefix}
-      worktrees={options}
+      worktrees={worktrees}
       worktreeKey={worktreeKey}
       onSelectWorktree={onSelectWorktree}
     />
@@ -142,6 +147,9 @@ export function SidePanel({
   sessionWorktreeKey,
   panelWorktreeKey,
   onSelectWorktree,
+  worktrees,
+  rootPrefix,
+  rootPending,
   onContinue,
   onOpenSessionHere,
   onOpenFile,
@@ -186,6 +194,9 @@ export function SidePanel({
         onViewInOpenSpec={folder.hasOpenSpec ? onViewInOpenSpec : null}
         worktreeKey={panelWorktreeKey}
         onSelectWorktree={onSelectWorktree}
+        worktrees={worktrees}
+        rootPrefix={rootPrefix}
+        rootPending={rootPending}
       />
     ) : (
       <OpenSpecPanel

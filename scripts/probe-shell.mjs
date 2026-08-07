@@ -64,6 +64,8 @@ const PROBE_EXPRESSION = `(async () => {
       (key) =>
         ![
           'listDir',
+          // 遞迴列舉（quick-open）。邊界要求見 filesystem-access 的 listFiles 三條 requirement。
+          'listFiles',
           'readFile',
           'watch',
           'unwatch',

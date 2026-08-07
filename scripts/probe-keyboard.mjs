@@ -297,6 +297,53 @@ const EDITOR_TEXTAREA_FOCUSED = `(() => {
 })()`
 
 /**
+ * quick open 的狀態。`null` ＝ 入口未開啟。
+ *
+ * `titles` 是每一列的 `title` 屬性 —— 那是**完整的 folder-relative 路徑**（權威值）；
+ * `shown` 是呈現的文字 —— 它剝掉了工作目錄前綴。兩者要分開看，因為「呈現剝前綴而權威不剝」
+ * 正是 `side-panel-worktree` 立下的紀律，只驗一邊的話兩種錯誤實作都會通過。
+ */
+const QUICK_OPEN = `(() => {
+  const dialog = document.querySelector('[role="dialog"][aria-label="${copy('quickOpen.label')}"]')
+  if (!dialog) return null
+  const input = dialog.querySelector('input')
+  const options = [...dialog.querySelectorAll('[role="option"]')]
+  return {
+    query: input ? input.value : null,
+    inputFocused: document.activeElement === input,
+    count: options.length,
+    selected: options.findIndex((o) => o.getAttribute('aria-selected') === 'true'),
+    titles: options.map((o) => o.getAttribute('title')),
+    shown: options.map((o) => o.innerText.replace(/\\s+/g, ' ').trim()),
+  }
+})()`
+
+/** 聚焦檔案樹的第一列 —— 那是側欄之內一個真實可聚焦的元素（它帶 tabIndex）。 */
+const FOCUS_FILE_TREE = `(() => {
+  const row = document.querySelector('section[aria-label="${copy('files.label')}"] [role="treeitem"]')
+  if (!row) return false
+  row.focus()
+  return document.activeElement === row
+})()`
+
+/**
+ * 當前在檔案檢視器中開啟的檔案（麵包屑文字）。`null` ＝ 仍在檔案樹。
+ *
+ * **判準是「檔案樹還在不在」，不是「麵包屑有沒有文字」** —— 麵包屑在兩種狀態下都存在，
+ * 以它的文字判定會讓「未開啟任何檔案」恆為假（實測：那條斷言因此紅了，而產品是對的）。
+ * 檔案樹與檢視器是互斥渲染的，那才是兩種狀態真正的差別。
+ */
+const OPENED_FILE = `(() => {
+  const panel = document.querySelector('section[aria-label="${copy('files.label')}"]')
+  if (!panel) return null
+  if (panel.querySelector('[role="treeitem"]')) return null
+  const nav = panel.querySelector('nav')
+  if (!nav) return null
+  const text = nav.innerText.replace(/\\s+/g, ' ').trim()
+  return text === '' ? null : text
+})()`
+
+/**
  * rail 上 repo 的呈現順序。
  *
  * **選擇器必須限定為頂層的 `<li>`** —— session 子列在 DOM 上同樣是 `li > div[role="button"]`
@@ -393,6 +440,7 @@ const KEYS = {
   ArrowRight: { key: 'ArrowRight', code: 'ArrowRight', vk: 39 },
   t: { key: 't', code: 'KeyT', vk: 84 },
   w: { key: 'w', code: 'KeyW', vk: 87 },
+  p: { key: 'p', code: 'KeyP', vk: 80 },
   Enter: { key: 'Enter', code: 'Enter', vk: 13 },
   Escape: { key: 'Escape', code: 'Escape', vk: 27 },
 }
@@ -446,6 +494,111 @@ async function createSession(client) {
 }
 
 // ── 主流程 ──────────────────────────────────────────────────────────────────
+
+/**
+ * quick open（`Ctrl+P`）的驗收。
+ *
+ * 觸發條件是「按鍵事件行經側欄容器」＝「焦點在側欄之內」。因此每一條斷言之前都要先確定
+ * 焦點落在哪裡 —— 那不是前置作業，那就是待測的性質本身。
+ *
+ * **插在 runMode 的最後**：本段會建立檔案、開啟檔案、切換身分，前面每一條既有斷言都在它之前
+ * 跑完（既有紀律：新段落插在既有段落之後，內部用相對數字）。
+ */
+async function runQuickOpen(label, app, repos) {
+  const [, repoAPath] = repos[0]
+  mkdirSync(join(repoAPath, 'src'), { recursive: true })
+  mkdirSync(join(repoAPath, 'docs'), { recursive: true })
+  writeFileSync(join(repoAPath, 'src', 'alpha.ts'), 'x')
+  writeFileSync(join(repoAPath, 'src', 'beta.ts'), 'x')
+  writeFileSync(join(repoAPath, 'docs', 'alpha-notes.md'), 'x')
+
+  check(results, `${label}：quick open 前置 —— 選中 repo-a`,
+    (await app.client.evaluate(SELECT_FOLDER('repo-a'))) === true)
+  await sleep(400)
+  check(results, `${label}：quick open 前置 —— 切至 Files 身分`,
+    (await app.client.evaluate(IDENTITY_FILES)) === true)
+  await sleep(800)
+
+  const treeFocused = await pollUntil(app.client, FOCUS_FILE_TREE, (v) => v === true, 8000)
+  check(results, `${label}：quick open 前置 —— 檔案樹取得焦點`, treeFocused === true)
+
+  await pressKey(app.client, 'p', ['ctrl'])
+  const opened = await pollUntil(app.client, QUICK_OPEN, (v) => v !== null, 8000)
+  check(results, `${label}：檔案樹持有焦點時 Ctrl+P 開啟 quick open`,
+    opened !== null && opened.inputFocused === true, JSON.stringify(opened))
+
+  await app.client.send('Input.insertText', { text: 'alpha' })
+  const filtered = await pollUntil(app.client, QUICK_OPEN,
+    (v) => v !== null && v.query === 'alpha' && v.count > 0, 8000)
+  check(results, `${label}：輸入片段即時篩選出相符的檔案`,
+    filtered !== null && filtered.count === 2, JSON.stringify(filtered))
+  check(results, `${label}：檔名命中排在路徑中段命中之前`,
+    filtered !== null && filtered.titles[0] === 'src/alpha.ts', JSON.stringify(filtered && filtered.titles))
+
+  await pressKey(app.client, 'ArrowDown')
+  const moved = await app.client.evaluate(QUICK_OPEN)
+  check(results, `${label}：↓ 移動選取`, moved !== null && moved.selected === 1, JSON.stringify(moved))
+
+  await pressKey(app.client, 'p', ['ctrl'])
+  await sleep(400)
+  const reentered = await app.client.evaluate(QUICK_OPEN)
+  check(results, `${label}：開啟期間再按 Ctrl+P 不重新開啟、不清空查詢`,
+    reentered !== null && reentered.query === 'alpha' && reentered.selected === 1,
+    JSON.stringify(reentered))
+
+  await pressKey(app.client, 'Escape')
+  await sleep(400)
+  check(results, `${label}：Esc 關閉入口且未開啟任何檔案`,
+    (await app.client.evaluate(QUICK_OPEN)) === null &&
+      (await app.client.evaluate(OPENED_FILE)) === null)
+
+  await pressKey(app.client, 'p', ['ctrl'])
+  const reopened = await pollUntil(app.client, QUICK_OPEN, (v) => v !== null, 8000)
+  check(results, `${label}：關閉後可再次以同一顆快捷鍵開啟（焦點已歸還側欄）`,
+    reopened !== null, JSON.stringify(reopened))
+
+  await app.client.send('Input.insertText', { text: 'beta' })
+  await pollUntil(app.client, QUICK_OPEN, (v) => v !== null && v.count === 1, 8000)
+  await pressKey(app.client, 'Enter')
+  const viewing = await pollUntil(app.client, OPENED_FILE, (v) => v !== null && v.includes('beta.ts'), 8000)
+  check(results, `${label}：Enter 於側欄的 Files 檢視開啟選取的檔案`,
+    viewing !== null, JSON.stringify(viewing))
+  check(results, `${label}：開啟後入口已關閉`, (await app.client.evaluate(QUICK_OPEN)) === null)
+
+  await pressKey(app.client, 'p', ['ctrl'])
+  const afterOpen = await pollUntil(app.client, QUICK_OPEN, (v) => v !== null, 8000)
+  check(results, `${label}：開啟檔案後可再次以同一顆快捷鍵開啟（記住的元素已消失，焦點退回側欄容器）`,
+    afterOpen !== null, JSON.stringify(afterOpen))
+  await pressKey(app.client, 'Escape')
+  await sleep(300)
+
+  // ── 終端持有焦點時讓路給 pty
+  //
+  // **兩條斷言缺一不可。** 只驗「入口沒開」的話，一個「攔下按鍵但不開入口」的錯誤實作照樣
+  // 通過；只驗「按鍵抵達 pty」的話，一個「兩件事都做」的實作也會通過。
+  //
+  // 載體是 `cat -A`（不是 `cat -v`）—— 既有紀律。`Ctrl+P` ＝ `0x10`，`-v` 會把它印成 `^P`。
+  await createSession(app.client)
+  const term = await pollUntil(app.client, TERMINAL_RECT, (v) => v !== null, 10_000)
+  await sleep(2000)
+  await realClick(app.client, term)
+  await sleep(200)
+
+  const keyLog = join(ptyOutDir, 'quickopen-keys.txt')
+  await typeLine(app.client, `cat -A > ${keyLog}`)
+  await sleep(1200)
+
+  await pressKey(app.client, 'p', ['ctrl'])
+  await sleep(500)
+  check(results, `${label}：終端持有焦點時 Ctrl+P 不開啟 quick open`,
+    (await app.client.evaluate(QUICK_OPEN)) === null)
+
+  // tty 處於 canonical mode，沒有換行那些位元組不會離開行緩衝 —— 補一顆 Enter 才會落檔。
+  await pressEnter(app.client)
+  const ptyText = await waitForPtyFile('quickopen-keys.txt', (v) => v.includes('^P'), 8000)
+  check(results, `${label}：Ctrl+P 照常抵達 pty（讓路，而非攔下不用）`,
+    ptyText.includes('^P'), JSON.stringify(ptyText))
+}
 
 async function runMode(label, { port, rendererUrl }) {
   console.log(`\n── ${label} ──`)
@@ -1750,6 +1903,8 @@ async function checkReordering(label, { port, rendererUrl }) {
 
     await app.client.send('Emulation.clearDeviceMetricsOverride', {})
     await sleep(300)
+
+    await runQuickOpen(label, app, repos)
   } finally {
     await app.destroy()
   }

@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict'
+import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, it } from 'node:test'
+import { enumerateFiles } from './file-enumeration'
 import { FsBoundaryError } from './fs-boundary'
 import {
   BINARY_SNIFF_BYTES,
@@ -12,6 +14,7 @@ import {
   createFile,
   deleteEntry,
   listDir,
+  listFiles,
   readFile,
   rename,
   validateName,
@@ -524,5 +527,190 @@ describe('rename', () => {
 
   it('拒絕改名 folder 根目錄自身', async () => {
     await rejectsWithCode(rename(okFolder(), 'f1', '.', 'newname'), 'PROTECTED_ROOT')
+  })
+})
+
+// ── listFiles ───────────────────────────────────────────────────────────────
+//
+// 這一組的每一條「排除」與「不跟隨」都有對照組（把實作退回天真的版本必須變紅）——
+// 少了它們，這些防線只是註解。對照組的執行紀錄見 change 的 tasks.md。
+
+/** 在指定目錄跑 git，並關掉會污染輸出比對的顏色與使用者設定。 */
+function git(cwd: string, args: string[]): void {
+  execFileSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', '-c', 'color.ui=false', ...args], {
+    cwd,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  })
+}
+
+describe('listFiles 的座標系與種類', () => {
+  it('回傳 folder-relative 路徑，且可直接餵給 readFile', async () => {
+    const files = await listFiles(okFolder(), 'f1', 'sub')
+
+    // **不是** 'nested.txt'（相對於目標目錄）—— 見 design D10。
+    assert.deepEqual(files, ['sub/nested.txt'])
+
+    const content = await readFile(okFolder(), 'f1', files[0])
+    assert.equal(content.text, 'x')
+  })
+
+  it('遞迴涵蓋各層，且清單不含目錄', async () => {
+    fs.mkdirSync(path.join(repo, 'sub', 'deep', 'deeper'), { recursive: true })
+    fs.writeFileSync(path.join(repo, 'sub', 'deep', 'deeper', 'bottom.txt'), 'x')
+
+    const files = await listFiles(okFolder(), 'f1', '.')
+
+    assert.ok(files.includes('sub/deep/deeper/bottom.txt'))
+    // 'sub'、'sub/deep' 是目錄，不得出現。
+    assert.ok(!files.some((f) => f === 'sub' || f === 'sub/deep'))
+  })
+})
+
+describe('listFiles 與符號連結', () => {
+  it('不跟隨指向 folder 之外的 symlink 目錄', async () => {
+    const outside = path.join(base, 'outside')
+    fs.mkdirSync(outside, { recursive: true })
+    fs.writeFileSync(path.join(outside, 'secret.txt'), 'x')
+    fs.symlinkSync(outside, path.join(repo, 'escape-link'))
+
+    const files = await listFiles(okFolder(), 'f1', '.')
+
+    // 邊界的包含判定是**字面**比較 —— 'escape-link/secret.txt' 必定通過它。
+    // 唯一擋得住的是「不下鑽 symlink」。
+    assert.ok(!files.some((f) => f.includes('secret.txt')), JSON.stringify(files))
+  })
+
+  it('folder 之內的 symlink 目錄不使同一檔案重複出現', async () => {
+    fs.symlinkSync(path.join(repo, 'sub'), path.join(repo, 'sub-link'))
+
+    const files = await listFiles(okFolder(), 'f1', '.')
+
+    assert.equal(files.filter((f) => f.endsWith('nested.txt')).length, 1, JSON.stringify(files))
+  })
+})
+
+describe('listFiles 的邊界', () => {
+  it('拒絕絕對路徑', async () => {
+    await assert.rejects(listFiles(okFolder(), 'f1', '/etc'), FsBoundaryError)
+  })
+
+  it('拒絕以 .. 逃逸', async () => {
+    await assert.rejects(listFiles(okFolder(), 'f1', '../outside'), FsBoundaryError)
+  })
+
+  it('拒絕經 symlink 逃逸的目標', async () => {
+    const outside = path.join(base, 'outside')
+    fs.mkdirSync(outside, { recursive: true })
+    fs.symlinkSync(outside, path.join(repo, 'escape-link'))
+
+    await assert.rejects(listFiles(okFolder(), 'f1', 'escape-link'), FsBoundaryError)
+  })
+
+  it('拒絕未註冊的 folderId', async () => {
+    await rejectsWithCode(listFiles(okFolder(), 'nope', '.'), 'UNKNOWN_FOLDER')
+  })
+
+  it('目標是檔案時回報錯誤', async () => {
+    await rejectsWithCode(listFiles(okFolder(), 'f1', 'a-file.txt'), 'NOT_A_DIRECTORY')
+  })
+
+  it('目標不存在時回報錯誤而非空清單', async () => {
+    await assert.rejects(listFiles(okFolder(), 'f1', 'no-such-dir'), FsBoundaryError)
+  })
+})
+
+describe('listFiles 與非 ASCII 檔名', () => {
+  it('以原始檔名回傳，且讀得到內容', async () => {
+    // git 預設 core.quotePath=true 會把它 C-quote 成 "\346\270\254..." —— 對照組：
+    // 拿掉 `-z`，這條必須變紅。
+    const name = '測試筆記.md'
+    fs.writeFileSync(path.join(repo, name), 'hello')
+    git(repo, ['init', '-q', '-b', 'main'])
+    git(repo, ['add', '-A'])
+    git(repo, ['commit', '-qm', 'init'])
+
+    const files = await listFiles(okFolder(), 'f1', '.')
+
+    assert.ok(files.includes(name), JSON.stringify(files))
+    const content = await readFile(okFolder(), 'f1', name)
+    assert.equal(content.text, 'hello')
+  })
+})
+
+describe('listFiles 的排除規則', () => {
+  it('排除位於自身之內的其他 git 工作目錄', async () => {
+    git(repo, ['init', '-q', '-b', 'main'])
+    git(repo, ['add', '-A'])
+    git(repo, ['commit', '-qm', 'init'])
+    // 使用者的標準工作流：worktree 開在 repo 內部。
+    git(repo, ['worktree', 'add', '-q', '-b', 'feat', '.claude/worktrees/wt'])
+
+    const files = await listFiles(okFolder(), 'f1', '.')
+
+    assert.ok(
+      !files.some((f) => f.startsWith('.claude/worktrees/')),
+      JSON.stringify(files.filter((f) => f.startsWith('.claude'))),
+    )
+    // 而主工作目錄那一份仍在 —— 否則「排除」可能只是整個列舉壞了。
+    assert.ok(files.includes('a-file.txt'), JSON.stringify(files))
+  })
+
+  it('排除版控忽略的內容', async () => {
+    fs.mkdirSync(path.join(repo, 'built'), { recursive: true })
+    fs.writeFileSync(path.join(repo, 'built', 'bundle.js'), 'x')
+    fs.writeFileSync(path.join(repo, '.gitignore'), 'built/\n')
+    git(repo, ['init', '-q', '-b', 'main'])
+
+    const files = await listFiles(okFolder(), 'f1', '.')
+
+    assert.ok(!files.some((f) => f.startsWith('built/')), JSON.stringify(files))
+  })
+})
+
+describe('listFiles 的保守列舉（目標不在版控之下）', () => {
+  it('非 git 目錄仍回傳清單，且不含 node_modules', async () => {
+    fs.mkdirSync(path.join(repo, 'node_modules', 'pkg'), { recursive: true })
+    fs.writeFileSync(path.join(repo, 'node_modules', 'pkg', 'index.js'), 'x')
+
+    const files = await listFiles(okFolder(), 'f1', '.')
+
+    assert.ok(files.includes('a-file.txt'), JSON.stringify(files))
+    assert.ok(!files.some((f) => f.startsWith('node_modules/')), JSON.stringify(files))
+  })
+
+  it('目標整個被版控忽略時仍回傳其下的檔案', async () => {
+    // git 對此 exit 0 且無輸出 —— 在 exit code 上與「成功」無法區分，只能以「成功但為空」判定。
+    fs.mkdirSync(path.join(repo, 'out'), { recursive: true })
+    fs.writeFileSync(path.join(repo, 'out', 'made.js'), 'x')
+    fs.writeFileSync(path.join(repo, '.gitignore'), 'out/\n')
+    git(repo, ['init', '-q', '-b', 'main'])
+
+    const files = await listFiles(okFolder(), 'f1', 'out')
+
+    assert.deepEqual(files, ['out/made.js'])
+  })
+})
+
+describe('listFiles 不阻塞主行程', () => {
+  it('列舉期間事件迴圈仍在運行', async () => {
+    git(repo, ['init', '-q', '-b', 'main'])
+
+    // **不以「某個同步 API 未被呼叫」代之** —— ESM 具名匯入不經屬性查找，攔截攔不到它，
+    // 那條斷言在同步實作下照樣是綠的。改為直接觀察待驗的性質本身。
+    //
+    // 判準是「一個完整的 event loop tick 之後，列舉還沒完成」：同步的 spawn 會在函式回傳
+    // 之前就把整件事做完，非同步的至少要跨數個 tick（建立行程、等它結束、讀它的輸出）。
+    // **不可改成「await 之後檢查一個 0ms timer 有沒有跑」** —— 那在兩種實作下都會通過。
+    let done = false
+    const pending = enumerateFiles(repo).then((files) => {
+      done = true
+      return files
+    })
+
+    await new Promise((resolve) => setImmediate(resolve))
+    assert.equal(done, false, '列舉在一個 event loop tick 內就完成了 —— 它是同步的')
+
+    const files = await pending
+    assert.ok(files.length > 0, '列舉本身要有結果，否則上面那條可能只是它整個壞了')
   })
 })
