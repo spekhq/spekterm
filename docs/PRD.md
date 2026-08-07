@@ -504,6 +504,14 @@ spekterm
 
 ### Phase 6 — 打包、設定與發佈
 - electron-builder 產出三平台安裝檔。
+  **Linux（AppImage）已由 `linux-appimage-packaging` 交付** —— `npm run dist:linux`，
+  產物與 repo 工作副本脫鉤，並由 `npm run probe:package` 驗收（啟動真正的 AppImage：
+  載入 renderer、production CSP、pty 建得起來且指令真的被執行）。
+  同一個 change 也讓**開發模式的 userData 與產物分家**（`dev` script 的 `XDG_CONFIG_HOME`，
+  主行程零改動）。
+  **macOS 與 Windows 未動**，且各自帶著未解的前置問題：macOS 的應用程式 menu 是系統層的、
+  `Menu.setApplicationMenu(null)` 未實測；Windows 的檔案邊界在 `O_NOFOLLOW` 缺席下退為
+  `lstat` 二次確認，從未實測。
 - 沿用 spek 深色主題（#0a0c0f / amber #f59e0b）、圖示、原生選單。
 - 持久化 layout（panel 尺寸）與最近工作區。
   **session 的持久化已由 `session-restore` 落地**（不屬於任何 Phase）—— session 清單、

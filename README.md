@@ -16,7 +16,9 @@ core 邏輯與視覺化元件重用開源的
 **Phase 5（`openspec-side-panel`）已封存。** 主舞台能駕駛 agent、側欄能看懂 OpenSpec，
 而且兩者已經對上 —— 這正是這個 app 相對於「開四個終端機分頁」的增量價值。
 
-尚未開始：**打包與發佈（Phase 6）**、**handoff（Phase 7+，護城河）**。
+**Linux 產物已可打包**（AppImage —— 見下方「打包與安裝」）。Phase 6 的其餘項目
+（macOS／Windows 產物、自動更新、程式碼簽章、主題與原生選單）與 **handoff（Phase 7+，護城河）**
+尚未開始。
 
 ### 已經可以用的
 
@@ -80,12 +82,13 @@ core 邏輯與視覺化元件重用開源的
 
 ```bash
 npm install
-npm run dev             # 開發模式
+npm run dev             # 開發模式（userData 走 ~/.config/spekterm-dev —— 見下方「打包與安裝」）
 npm run build           # 建置至 out/
+npm run dist:linux      # 打包成 AppImage 至 release/
 npm run typecheck       # 型別檢查
 npm run lint
 npm test                # 單元測試（fs 邊界、workspace store、watcher、pty 管理器、OpenSpec 供應層、
-                        #   舊產品名不得殘留…）
+                        #   舊產品名不得殘留、打包設定不得靜默退化…）
 ```
 
 驗收一律走**探針**：以 CDP 連進真正執行中的 app 驗收，**不在產品程式碼裡塞測試分支**，
@@ -102,7 +105,46 @@ npm run probe:native    # 主行程載入 node-pty 並 spawn 真 pty
 npm run probe:core      # 主行程掃描 OpenSpec，且不開 TCP 埠
 npm run probe:identity  # productName / appId / userData 路徑 / 視窗標題
 npm run measure:bundle  # renderer bundle 體積報告（依編輯器核心／worker／語言歸因）
+
+npm run probe:package   # 打包產物本身（會先跑一次完整打包 —— 屬於「換版前跑一次」的層級，
+                        #   刻意不併進 test:e2e）
 ```
+
+## 打包與安裝
+
+```bash
+npm run dist:linux      # → release/Spekterm-<version>.AppImage
+chmod +x release/Spekterm-*.AppImage
+./release/Spekterm-0.1.0.AppImage
+```
+
+產物是**單一可執行檔**，與 repo 工作副本完全脫鉤 —— 裝好之後不隨任何一次編輯而變動，直到你
+明確重新打包。換版就是覆蓋那一個檔案。
+
+**開發模式與產物的設定分家。** 產物用 `~/.config/Spekterm`（也就是你原本的設定，原封接手），
+`npm run dev` 走 `~/.config/spekterm-dev` —— 兩者同時開著時才不會互相覆蓋 session 清單。
+這是靠 `dev` script 裡的 `XDG_CONFIG_HOME` 達成的，**主行程沒有任何對應的程式碼**；探針各自
+用暫存 profile，不受影響。
+
+> **只在 Linux 生效。** `XDG_CONFIG_HOME` 是 freedesktop 的慣例，macOS 與 Windows 上 Electron
+> 不看它 —— 跨平台開發啟動時，這條隔離會**靜默失效**。
+
+### 幾個前提（失敗訊息不會指向真正的原因）
+
+- **執行 AppImage 需要 `libfuse2`。** Ubuntu 22.04 起預設不再安裝它，而缺少時的錯誤指向動態
+  連結器（`dlopen(): error loading libfuse.so.2`），讀起來像「這個 app 壞了」。
+  逃生口是不經 fuse 執行：
+
+  ```bash
+  ./Spekterm-0.1.0.AppImage --appimage-extract-and-run
+  ```
+
+- **首次打包需要網路** —— Electron 的官方 binary 會被下載到 `~/.cache/electron`（約 100 MB）。
+  之後從快取取用。
+
+- **AppImage 不會自動出現在應用程式選單。** 需要的話手寫一份 `.desktop` 放進
+  `~/.local/share/applications/`（指向 AppImage 的絕對路徑），或裝 AppImageLauncher。
+  這是本機環境設定，刻意不納入打包流程。
 
 ## 與 `spek` 的關係
 

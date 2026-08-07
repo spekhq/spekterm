@@ -33,7 +33,8 @@ OpenSpec 結構的側欄，讓使用者不必另外開 IDE 就能一邊駕駛 ag
   座標（來源 repo／工作目錄／錨定的 change）是 **per-folder** 的，落盤於 `panel.json`。
 - **鍵盤** —— 見下文「快捷鍵」。
 
-**尚未開始**：打包與發佈（Phase 6）、handoff（Phase 7+）。
+**Linux 打包已可用**（`npm run dist:linux` → AppImage）。**尚未開始**：macOS／Windows 產物、
+自動更新與簽章（Phase 6 其餘）、handoff（Phase 7+）。
 **session 常駐**（讓 pty 活過 app 的生命）已排入路線圖但**刻意不做** —— 見 `docs/PRD.md` §11 的
 tmux 與自寫 daemon 取捨。**不要把「重建」誤當成「常駐」**：關掉 app，pty 一定會死（master fd
 必須有人持有），跑到一半的 build 或 dev server 救不回來。
@@ -61,7 +62,13 @@ tmux 與自寫 daemon 取捨。**不要把「重建」誤當成「常駐」**：
 
 ```bash
 npm run dev             # electron-vite dev（開發模式）
+                        #   **userData 走 `~/.config/spekterm-dev`，與打包產物分家** —— 靠 script 裡的
+                        #   `XDG_CONFIG_HOME`，主行程一行都沒改。少了它，dev 與使用者正在用的 AppImage
+                        #   會共用 `~/.config/Spekterm`，兩邊各自落盤 session 清單、後寫的贏（分頁消失，
+                        #   而它的 pty 還活著）。**只在 Linux 生效** —— macOS／Windows 上 Electron 不看
+                        #   這個變數，屆時隔離會靜默失效。
 npm run build           # 建置至 out/
+npm run dist:linux      # 打包成 AppImage 至 release/（首次需要網路下載 Electron binary）
 npm run typecheck       # tsc：main / preload（node）+ renderer（web）
 npm run lint            # eslint（**這個 repo 沒有 prettier** —— 別順手跑 npx prettier，
                         #   它會用預設值把無分號／單引號改成分號／雙引號）
@@ -105,6 +112,16 @@ npm run probe:identity  # app-identity（productName／appId／userData 路徑�
 
 PROBE_ONLY=runMode:build npm run probe:terminal   # 只跑一個段落（迭代用；不設就跑全部）
 PROBE_DISPLAY=physical npm run probe:terminal     # 逃生口：畫在實體螢幕上
+```
+
+**`probe:package` 自成第三個成本層級 —— 它不在上面那九支裡，也刻意不併進 `test:e2e`。**
+它會先跑一次**完整打包**再啟動**真正的 AppImage**（其餘九支驗的都是 `electron .` 載入 `out/`，
+那不是被出貨的東西）。層級是「**換版前跑一次**」。
+
+```bash
+npm run probe:package   # 打包 → 啟動 AppImage → 產物可執行／脫離 repo／載入 renderer／
+                        #   production CSP／pty 建得起來且指令真的被執行
+PROBE_PACKAGE_APPIMAGE=<path> node scripts/run-probe.mjs package   # 重用既有產物（迭代用）
 ```
 
 ### 探針跑在虛擬螢幕上 —— 而那限定了驗收的效力

@@ -26,7 +26,7 @@
  * 結束碼 0 表示全部 scenario 通過。
  */
 import { execFileSync, spawn } from 'node:child_process'
-import { readFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { fileURLToPath } from 'node:url'
@@ -62,6 +62,53 @@ function readUserDataFromProcessGroup(pgid) {
   return null
 }
 
+/**
+ * 啟動一次真正的 `electron .`，回報它的 `document.title` 與**解析出來的** userData 路徑。
+ *
+ * 抽成函式是為了能啟動第二次 —— 見下方 `XDG_CONFIG_HOME` 那一段。
+ */
+async function launchAndObserve({ port, extraEnv = {} }) {
+  const electron = spawn(
+    process.platform === 'win32' ? 'electron.cmd' : 'electron',
+    [`--remote-debugging-port=${port}`, ...electronExtraArgs(), '.'],
+    {
+      cwd: repoRoot,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: { ...process.env, ...extraEnv },
+      detached: process.platform !== 'win32',
+      shell: process.platform === 'win32',
+    },
+  )
+
+  let stderr = ''
+  electron.stderr.on('data', (chunk) => (stderr += chunk))
+
+  try {
+    const target = await waitForPageTarget(port, STARTUP_TIMEOUT_MS)
+    const client = await connect(target)
+    // CDP target 一就緒就讀會拿到空字串 —— 那時文件還沒解析到 <title>。等它非空。
+    const title = await pollUntil(client, 'document.title', (value) => Boolean(value))
+    client.close()
+
+    // 子行程要等 renderer 起來才齊；CDP target 已就緒即代表 renderer 存在。
+    await sleep(500)
+    return { title, userData: readUserDataFromProcessGroup(electron.pid) }
+  } catch (error) {
+    // electron 起不來時，它自己的 stderr 是唯一說得出原因的東西 —— 別讓它跟著函式一起消失。
+    if (stderr.trim()) console.error(`electron stderr:\n${stderr.trim().slice(0, 800)}`)
+    throw error
+  } finally {
+    // 殺整個 process group：對 wrapper 送訊號殺不到它 spawn 的真行程
+    //（會變孤兒、佔著 debugging port）。
+    try {
+      if (process.platform === 'win32') electron.kill('SIGTERM')
+      else process.kill(-electron.pid, 'SIGKILL')
+    } catch {
+      // 行程已自行結束
+    }
+  }
+}
+
 const results = []
 
 // 產品身分的靜態宣告 —— 這幾個值是 Phase 6 打包的輸入，且發佈後即凍結。
@@ -81,61 +128,70 @@ const appIdSegments = (pkg.build?.appId ?? '').split('.').filter(Boolean)
 check(results, 'appId 為合法的反向域名形狀（至少三段）', appIdSegments.length >= 3,
   `${appIdSegments.length} 段`)
 
-const electron = spawn(
-  process.platform === 'win32' ? 'electron.cmd' : 'electron',
-  [`--remote-debugging-port=${DEBUG_PORT}`, ...electronExtraArgs(), '.'],
-  {
-    cwd: repoRoot,
-    stdio: ['ignore', 'pipe', 'pipe'],
-    env: process.env,
-    detached: process.platform !== 'win32',
-    shell: process.platform === 'win32',
-  },
-)
-
-let stderr = ''
-electron.stderr.on('data', (chunk) => (stderr += chunk))
-
 let exitCode = 1
+let xdgHome = null
 
 try {
-  const target = await waitForPageTarget(DEBUG_PORT, STARTUP_TIMEOUT_MS)
-  const client = await connect(target)
-
-  // CDP target 一就緒就讀會拿到空字串 —— 那時文件還沒解析到 <title>。等它非空。
-  const title = await pollUntil(client, 'document.title', (value) => Boolean(value))
-  client.close()
+  const observed = await launchAndObserve({ port: DEBUG_PORT })
 
   // 視窗標題跟隨品牌書寫（全小寫），與 productName 的 `Spekterm` 不同源 —— 兩者不需一致。
-  check(results, 'renderer 的 document.title 為產品名', title === EXPECTED_TITLE, `title="${title}"`)
+  check(results, 'renderer 的 document.title 為產品名',
+    observed.title === EXPECTED_TITLE, `title="${observed.title}"`)
 
-  // 子行程要等 renderer 起來才齊；CDP target 已就緒即代表 renderer 存在。
-  await sleep(500)
-  const userData = readUserDataFromProcessGroup(electron.pid)
-
-  if (!userData) {
+  if (!observed.userData) {
     check(results, 'userData 落在產品名的目錄下', false,
       '讀不到任何子行程的 --user-data-dir（行程樹提早結束？）')
   } else {
     // Electron 的 app.getName() 優先讀 productName、缺才退回 name —— productName 因此不只是
     // 顯示名稱，它同時決定使用者設定的落點。
     check(results, 'userData 落在產品名的目錄下',
-      basename(userData) === EXPECTED_PRODUCT_NAME, userData)
+      basename(observed.userData) === EXPECTED_PRODUCT_NAME, observed.userData)
     check(results, 'userData 路徑不含舊名（@spek / workspace）',
-      !userData.includes('@spek') && !userData.includes('workspace'), userData)
+      !observed.userData.includes('@spek') && !observed.userData.includes('workspace'),
+      observed.userData)
+  }
+
+  /**
+   * ## `XDG_CONFIG_HOME` 確實改變 userData 的解析結果
+   *
+   * **這一段驗的是 Electron 的行為，不是我們自己的程式碼** —— 而那正是它存在的理由。
+   *
+   * `desktop-packaging` 讓開發模式與打包產物的設定分家，作法是把 `XDG_CONFIG_HOME` 烤進
+   * `npm run dev`（**不改主行程一行**，見該 change 的 design D8）。整條隔離因此**完全建立在
+   * 「Electron 遵守這個環境變數」之上**。
+   *
+   * Electron 升版若改掉它，隔離會**靜默消失**：`dev` script 照常執行、畫面一切正常，設定卻
+   * 又寫回 `~/.config/Spekterm`，開始與使用者正在用的那份互相覆蓋。沒有任何東西會紅 ——
+   * 除了這一條。
+   */
+  xdgHome = mkdtempSync('/tmp/spekterm-identity-xdg-')
+  const moved = await launchAndObserve({
+    port: DEBUG_PORT + 1,
+    extraEnv: { XDG_CONFIG_HOME: xdgHome },
+  })
+
+  if (!moved.userData) {
+    check(results, 'XDG_CONFIG_HOME 改變 userData 的解析結果', false,
+      '讀不到任何子行程的 --user-data-dir（行程樹提早結束？）')
+  } else {
+    check(results, 'XDG_CONFIG_HOME 改變 userData 的解析結果',
+      moved.userData.startsWith(`${xdgHome}/`) && moved.userData !== observed.userData,
+      `${moved.userData}（原本 ${observed.userData}）`)
+    // 產品名那一層仍然跟隨 productName —— 換的是父目錄，不是 app 的身分。
+    check(results, '移動後的 userData 仍以產品名為最後一段',
+      basename(moved.userData) === EXPECTED_PRODUCT_NAME, moved.userData)
   }
 
   exitCode = results.every(Boolean) ? 0 : 1
 } catch (error) {
   console.error(`probe 失敗：${error.message}`)
-  if (stderr.trim()) console.error(`electron stderr:\n${stderr.trim().slice(0, 800)}`)
 } finally {
-  // 殺整個 process group：對 wrapper 送訊號殺不到它 spawn 的真行程（會變孤兒、佔著 debugging port）。
-  try {
-    if (process.platform === 'win32') electron.kill('SIGTERM')
-    else process.kill(-electron.pid, 'SIGKILL')
-  } catch {
-    // 行程已自行結束
+  if (xdgHome) {
+    try {
+      rmSync(xdgHome, { recursive: true, force: true })
+    } catch {
+      // 暫存目錄留著也無妨
+    }
   }
 }
 

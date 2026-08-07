@@ -77,6 +77,13 @@ function createWindow(dirty: DirtyStateStore): BrowserWindow {
 /**
  * 開發模式的掃描目標。預設掃描 repo 自身 —— 它就是一個含 `openspec/` 的 repo。
  * `SPEKTERM_SCAN_PATH` 可指向任意 repo，供實測其他專案。
+ *
+ * **這個預設值只在未打包時成立，而擋住它的是呼叫端的 `app.isPackaged` 判斷** ——
+ * 打包後 `app.getAppPath()` 指向 asar 內部。今天安全，只因為它不會被呼叫。
+ *
+ * > 若日後把掃描摘要改成無條件輸出（或把這個函式挪作他用），打包版會去掃 asar 內部的
+ * > `openspec/` 並回傳一堆零 —— 而**那看起來像「使用者的 repo 沒有 openspec」**，
+ * > 不像一個路徑解析的錯。
  */
 function resolveScanTarget(): string {
   return process.env.SPEKTERM_SCAN_PATH ?? app.getAppPath()
