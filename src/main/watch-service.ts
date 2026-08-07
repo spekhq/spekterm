@@ -1,8 +1,8 @@
 import path from 'node:path'
-import { pollingInterval, shouldUsePolling, withAuthoritativeChokidarEnv } from '@spekjs/core'
-import { type FSWatcher, watch as chokidarWatch } from 'chokidar'
+import type { FSWatcher } from 'chokidar'
 import { isWithin, resolveWithinRoot } from './fs-boundary'
 import { FsServiceError, toPosixRelPath } from './fs-service'
+import { createWatcher } from './watcher'
 import type { FolderLookup } from './workspace-store'
 
 export type WatchEventType = 'add' | 'change' | 'unlink' | 'addDir' | 'unlinkDir'
@@ -230,25 +230,18 @@ export class WatchService {
   }
 
   #createFolderWatcher(folderId: string, root: string, key: string, target: string): FolderWatcher {
-    const usePolling = shouldUsePolling(root)
-    const interval = pollingInterval()
-
-    // callback 必須同步（見 core 的 withAuthoritativeChokidarEnv）：env 的對齊只在
-    // set → chokidar 建構 → restore 這段同步窗口內有效。
-    const watcher = withAuthoritativeChokidarEnv(usePolling, interval, () =>
-      chokidarWatch(target, {
-        depth: 0,
-        // chokidar 的預設是 true。沿用預設的話，folder 內一個指向 /etc 的 symlink
-        // 被展開時，watcher 會跟著走出去，把邊界外的檔名經事件推給 renderer ——
-        // listDir 守住的邊界，會從這道側門漏掉。
-        followSymlinks: false,
-        ignoreInitial: true,
-        // 事件必須帶著 mtime 抵達，否則無從分辨「agent 改的」與「我們自己存的」。
-        alwaysStat: true,
-        usePolling,
-        interval,
-      }),
-    )
+    // `pollingRoot` 與 `label` 都用 folder 根，而不是 `target` —— **這個 watcher 服務 N 個動態
+    // 增減的子目標**（見下方的 `watcher.add()` / `unwatch()`）：那些子目標都在 folder 之內，
+    // 用根判定 polling 是正確的；而 chokidar 的錯誤事件不指出是哪一個目標失敗，印 `target`
+    // 只會識別到「碰巧第一個被訂閱的目錄」。
+    const watcher = createWatcher({
+      target,
+      pollingRoot: root,
+      label: root,
+      depth: 0,
+      // 事件必須帶著 mtime 抵達，否則無從分辨「agent 改的」與「我們自己存的」。
+      alwaysStat: true,
+    })
 
     const folder: FolderWatcher = {
       watcher,
@@ -264,10 +257,6 @@ export class WatchService {
         this.#enqueue(folderId, type, absPath, stats?.mtimeMs ?? null)
       })
     }
-    watcher.on('error', (error) => {
-      console.error(`[watch] ${root}: ${String(error)}`)
-    })
-
     return folder
   }
 

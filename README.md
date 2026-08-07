@@ -146,6 +146,27 @@ chmod +x release/Spekterm-*.AppImage
   `~/.local/share/applications/`（指向 AppImage 的絕對路徑），或裝 AppImageLauncher。
   這是本機環境設定，刻意不納入打包流程。
 
+- **`fs.inotify.max_user_watches` 過低的機器上，側欄與檔案樹會停止更新。** 每個被監看的目錄各佔
+  一個 watch descriptor，而 app 監看的是每個 folder 與每個工作目錄的 `openspec/`（遞迴，
+  `changes/archive/` 通常佔絕大多數）、工作目錄清單、`.git/HEAD`，以及 Files 身分**每一個已展開
+  的目錄**。實測單一主行程佔用約 7700 個。
+
+  ```bash
+  cat /proc/sys/fs/inotify/max_user_watches   # 現代發行版預設 524288，夠用
+                                              # 若是 8192（舊發行版與部分容器的預設）就會撞到
+  ```
+
+  撞到時的錯誤是 `ENOSPC`，會出現在主行程的 stderr（`[watch] <path>: … ENOSPC …`）——
+  **自桌面選單啟動的話沒有人看得到它**，症狀只是畫面安靜地不再更新。提高上限：
+
+  ```bash
+  echo 'fs.inotify.max_user_watches=524288' | sudo tee /etc/sysctl.d/60-inotify.conf
+  sudo sysctl --system
+  ```
+
+  注意**與 `max_user_instances`（預設 128）無關** —— libuv 對整個 event loop 只開一個 instance，
+  主行程實測只佔 3 個。那個上限離耗盡很遠。
+
 ## 與 `spek` 的關係
 
 開源的 [`spek`](https://github.com/spekhq/spek)（MIT）是 OpenSpec 的內容檢視器。

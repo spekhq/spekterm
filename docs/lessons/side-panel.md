@@ -177,10 +177,18 @@
   > 而那是把設計綁在 claude 的內部檔案佈局上。
 - **「側欄選一個 repo 而非聚合多個」的決定性理由**：Files 的檔案樹是單一 repo 的階層，本就一次只能
   呈現一個來源；若 OpenSpec 聚合而 Files 只能選一個，兩個身分的來源語意會分裂。
-- **`watcher.on('error', () => {})` 使「watcher 建不起來」與「檔案沒變」無法區分**（`openspec-service.ts`）。
-  `inotify` 的 `max_user_instances` 是 **per-user 的 128**，app 每監看一個 folder／工作目錄／檔案樹
-  就吃一個。**workspace 加夠多 repo 之後，側欄可能安靜地停止更新，而且沒有任何跡象。**
-  已開為 **issue #9**（要不要降級 polling、要不要呈現給使用者，各自需要論證）。
+- **watcher 的錯誤一律經 `src/main/watcher.ts` 回報，不要在呼叫端另建 watcher。** 那個模組是
+  chokidar 的唯一入口（eslint + `scripts/watcher-source.test.mjs` 兩道守衛），錯誤處理與
+  `followSymlinks` 都在裡面。此前三個站點各自建構，於是演化出三種姿態 —— 其中
+  `openspec-service` 的 `on('error', () => {})` 使「watcher 建不起來」與「檔案沒變」無法區分，
+  而 `branch-service` 根本沒掛 handler（Node 對沒有 listener 的 `'error'` 直接 throw ⇒ 主行程
+  掛掉 ⇒ 所有 pty 陪葬）。
+  > **這裡原本寫著一個錯誤的根因，留作教訓**：舊版說「`inotify` 的 `max_user_instances` 是
+  > per-user 的 128，app 每監看一處就吃一個，加夠多 repo 側欄就會安靜地停止更新」。**實測是
+  > 錯的** —— libuv 對整個 event loop 只開**一個** instance（主行程實測佔 3 個），每個路徑是
+  > 一個 **watch descriptor**，上限是 `max_user_watches`（524288，主行程實測佔 7675）。
+  > 真正會撞到的機器是 `max_user_watches` 仍為 8192 預設的那些，見 README 的疑難排解。
+  > **一個看起來相關、又容易量到的數字（97/128），不等於規格真正在乎的那個。**
 
 ## 與 agent 的狀態橋接（`claude-status-bridge`）
 

@@ -1,7 +1,7 @@
 import path from 'node:path'
-import { pollingInterval, shouldUsePolling, withAuthoritativeChokidarEnv } from '@spekjs/core'
-import { type FSWatcher, watch as chokidarWatch } from 'chokidar'
+import type { FSWatcher } from 'chokidar'
 import { headPath } from './git-branch'
+import { createWatcher } from './watcher'
 import type { FolderLookup, WorkspaceFolder } from './workspace-store'
 
 /**
@@ -38,25 +38,6 @@ interface FolderWatchers {
   head: FSWatcher | null
   /** 目前 head watcher 盯著的絕對路徑 —— 用來判斷 `.git` 換形式後要不要重建。 */
   headTarget: string | null
-}
-
-function createWatcher(target: string, root: string, depth: number | undefined): FSWatcher {
-  const usePolling = shouldUsePolling(root)
-  const interval = pollingInterval()
-
-  // callback 必須同步（見 core 的 withAuthoritativeChokidarEnv）：env 的對齊只在
-  // set → chokidar 建構 → restore 這段同步窗口內有效。
-  return withAuthoritativeChokidarEnv(usePolling, interval, () =>
-    chokidarWatch(target, {
-      depth,
-      // 與 fs watcher 同一條約束：folder 內一個指向邊界外的 symlink 被展開時，watcher 會
-      // 跟著走出去。
-      followSymlinks: false,
-      ignoreInitial: true,
-      usePolling,
-      interval,
-    }),
-  )
 }
 
 /**
@@ -98,7 +79,12 @@ export class BranchService {
 
   #watchFolder(folder: WorkspaceFolder): void {
     // 第一層：folder 根目錄，depth 0 —— 只關心 `.git` 這個直屬項目的出現與消失。
-    const root = createWatcher(folder.path, folder.path, 0)
+    const root = createWatcher({
+      target: folder.path,
+      pollingRoot: folder.path,
+      label: folder.path,
+      depth: 0,
+    })
     root.on('all', (_event, changed) => {
       if (path.basename(changed) !== GIT_ENTRY) return // agent 在頂層寫檔的噪音
       const current = this.#folders.get(folder.id)
@@ -130,7 +116,11 @@ export class BranchService {
     // 第二層：HEAD 檔案本身。git 以 rename 換掉它，chokidar 撐得住（見檔頭）。
     // worktree 的 HEAD 在 gitdir 底下，那**可能在 folder 邊界之外** —— 這是主行程自己的
     // 檔案存取，推給 renderer 的仍然只有分支字串。
-    const head = createWatcher(target, folder.path, undefined)
+    //
+    // **`pollingRoot` 傳 folder 根而非 `target`，是刻意保留的現況，不是這裡的判斷** ——
+    // gitdir 可能落在別的掛載點上，以 folder 根判定 polling 看起來是既有的 bug。它需要一個
+    // 跨掛載點的 worktree 才驗得到，與本模組的錯誤回報無關，已開為 issue #16。
+    const head = createWatcher({ target, pollingRoot: folder.path, label: target })
     head.on('all', () => this.#notify())
     watchers.head = head
   }

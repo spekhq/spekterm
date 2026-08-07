@@ -52,6 +52,29 @@ export default tseslint.config(
     },
   },
 
+  // 檔案監看套件只能經由建立入口取用（watcher-error-reporting 的 requirement）。
+  // 少了這道約束，每個站點會各自決定要不要掛錯誤處理 —— 而缺席的那個會讓主行程收到未捕捉例外。
+  // 型別匯入放行：它取不到任何可以建立監看者的東西。
+  {
+    files: ['src/main/**/*.ts'],
+    ignores: ['src/main/watcher.ts'],
+    rules: {
+      '@typescript-eslint/no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            {
+              group: ['chokidar', 'chokidar/**'],
+              allowTypeImports: true,
+              message:
+                '檔案監看者一律經由 src/main/watcher.ts 建立 —— 錯誤處理與 followSymlinks 都在那裡，不由呼叫端決定。',
+            },
+          ],
+        },
+      ],
+    },
+  },
+
   // 驗收腳本：Node 環境的純 JS，不做型別檢查
   {
     files: ['scripts/**/*.mjs'],

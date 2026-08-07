@@ -367,6 +367,19 @@ workspace 之外的位置。邊界檢查一律在**主行程**執行；preload �
   > 驗收前必須確認的項目）。
 - **原地寫入，不做「暫存檔 + 改名」。** 後者會把 folder 內的 symlink 取代成普通檔案、斷開 hard
   link，並讓一次存檔在 watcher 上呈現為「刪除後新增」（已實測）。
+- **watcher 一律經 `src/main/watcher.ts` 建立** —— 它是 chokidar 的唯一入口，`followSymlinks: false`
+  與錯誤回報都在裡面，**不由呼叫端決定**。兩道守衛：eslint 擋靜態 import（型別放行）、
+  `scripts/watcher-source.test.mjs` 擋動態 import、擋入口 re-export chokidar 的**值**、擋
+  `followSymlinks` 出現在別處。三個站點曾各自建構，於是演化出三種錯誤姿態，其中
+  `branch-service` 根本沒掛 handler —— Node 對沒有 listener 的 `'error'` 直接 throw，
+  **主行程一死所有 pty 陪葬**。
+  - **建立入口的 `target` 與 `pollingRoot` 是兩個參數，不要合併。** `shouldUsePolling(p)` 判定的是
+    **`p` 所在掛載點**的檔案系統，而三處餵給它的路徑本來就不同（`watch-service` 傳 folder 根 ——
+    它一個 watcher 服務 N 個子目標；`openspec-service` 傳 target）。合併會讓「worktree 在網路
+    檔案系統」靜默退回 native watch，而**那種失效連錯誤 handler 都救不到**（`fs.watch` 只是永遠
+    不觸發，沒有錯誤可 emit）。
+  - **`label` 同理不能一律用 `target`**：一個 watcher 服務多個目標時，chokidar 的錯誤事件不指出
+    是哪一個失敗。
 - **watcher 受同一道邊界約束**：`followSymlinks: false`（它**預設是 `true`** —— folder 內一個指向
   `/etc` 的 symlink 被展開時，watcher 會走出去，把邊界外的檔名經事件推給 renderer），且事件的絕對
   路徑轉成 `(folderId, relPath)` 之前必須**再過一次 `isWithin`**。**且 app 自身的寫入不得回推為

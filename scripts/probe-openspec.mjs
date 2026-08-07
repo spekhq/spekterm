@@ -1370,11 +1370,19 @@ async function runMode(label, { port, rendererUrl }) {
 
     // ── 衍生預設是動態的（openspec-panel）──────────────────────────────────
     //
-    // **這一段刻意排在探針的最前段。** app 每監看一個 folder／工作目錄／檔案樹就佔用一個
-    // inotify instance，而那個上限是 **per-user 的 128**（不是 per-process）—— 跑到後段時，
-    // 一個新註冊的 watcher 可能根本建不起來，而 `openspec-service` 的 `watcher.on('error')`
-    // 是靜默的：於是「watcher 建不起來」與「檔案沒變」在外部看起來一模一樣（實測：把這一段
-    // 放在後段時，連改一個**既有**檔案都不會觸發更新）。
+    // **這一段刻意排在探針的最前段** —— 而那個決定目前**沒有已知的解釋**，請勿當作可以隨手
+    // 挪動的排版偏好。
+    //
+    // 現象是實測的：**把這一段放在後段時，連改一個既有檔案都不會觸發更新。**
+    // 原本的歸因是「app 每監看一處就吃一個 inotify instance，上限 per-user 128，跑到後段時
+    // 新的 watcher 建不起來」—— **那個歸因已被推翻**：libuv 對整個 event loop 只開一個
+    // instance（主行程實測 3 個），每個路徑是一個 watch descriptor（上限 524288，實測佔
+    // 7675）。而 `openspec-service` 的靜默 handler 也已經修掉（見 `src/main/watcher.ts`），
+    // 所以那條「錯誤被吞掉所以看不出來」的路徑不復存在。
+    //
+    // 也就是說：**現象仍在，解釋沒了。** 移動這一段之前請先重現它並找出真正的原因 ——
+    // `docs/lessons/probes.md` 記著這支探針曾有一輪四次誤診，真因是探針自己的變數遮蔽，
+    // 而 inotify 耗盡正是當時三個錯誤假設之一。這裡可能是同一族的東西。
     //
     // 「側欄來源恰有一個 active change 時就呈現它」是一個**衍生的預設值**，它隨 active change
     // 的數量重新解析，**不會於任何時刻被系統自行固化成明確的錨定**。於是第二個 active change

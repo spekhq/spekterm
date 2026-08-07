@@ -9,18 +9,16 @@ import {
   type TaskStats,
   type WorktreeInfo,
   buildGraphDataAggregated,
-  pollingInterval,
   readChange,
   readSpec,
   readSpecAtChange,
   scanOpenSpecAggregated,
-  shouldUsePolling,
-  withAuthoritativeChokidarEnv,
 } from '@spekjs/core'
 import { changeNodeSlug } from '@spekjs/core/graph-node-id'
-import { type FSWatcher, watch as chokidarWatch } from 'chokidar'
+import type { FSWatcher } from 'chokidar'
 import { isWithin } from './fs-boundary'
 import { resolveCommonDir } from './git-branch'
+import { createWatcher } from './watcher'
 import type { FolderLookup } from './workspace-store'
 
 export type OpenSpecErrorCode = 'UNKNOWN_FOLDER' | 'NOT_FOUND' | 'READ_FAILED'
@@ -839,32 +837,27 @@ export class OpenSpecService {
     }
   }
 
-  /** 建一個監看者，其事件一律收斂為「該 folder 的結構已變更」。 */
+  /**
+   * 建一個監看者，其事件一律收斂為「該 folder 的結構已變更」。
+   *
+   * **邊界約束（不跟隨 symlink）與錯誤回報都在 `createWatcher` 裡**，不由這裡決定。
+   * 這與「監看位於邊界外的工作目錄」不衝突：那些路徑是版控系統列舉出來的已知位置，而該約束防的
+   * 是由 repo 內容決定的、不受信任的展開；且推給 renderer 的只有一個 folderId，沒有任何路徑會
+   * 流出去。
+   */
   #watch(
     folderId: string,
     target: string,
     options?: { depth?: number; events?: string[] },
   ): FSWatcher {
-    const usePolling = shouldUsePolling(target)
-    const interval = pollingInterval()
-
-    // callback 必須同步（見 core 的 withAuthoritativeChokidarEnv）：env 的對齊只在
-    // set → chokidar 建構 → restore 這段同步窗口內有效。
-    const watcher = withAuthoritativeChokidarEnv(usePolling, interval, () =>
-      chokidarWatch(target, {
-        // chokidar 的預設是 true。folder 內一個指向邊界外的 symlink 被展開時，watcher 會
-        // 跟著走出去 —— listDir 守住的邊界會從這道側門漏掉（Phase 2 的實測）。
-        //
-        // **這與「監看位於邊界外的工作目錄」不衝突**：那些路徑是版控系統列舉出來的已知位置，
-        // 而這道約束防的是由 repo 內容決定的、不受信任的展開。且推給 renderer 的只有一個
-        // folderId，沒有任何路徑會流出去。
-        followSymlinks: false,
-        ignoreInitial: true,
-        usePolling,
-        interval,
-        ...(options?.depth === undefined ? {} : { depth: options.depth }),
-      }),
-    )
+    // 這裡是一個 watcher 對一個目標，所以 polling 判定與識別標籤都用 `target` 本身
+    // （同一個 folder 底下有多個：`openspec/`、工作目錄清單、每個工作目錄的 `openspec/`）。
+    const watcher = createWatcher({
+      target,
+      pollingRoot: target,
+      label: target,
+      ...(options?.depth === undefined ? {} : { depth: options.depth }),
+    })
 
     const events = options?.events
     watcher.on('all', (event) => {
@@ -872,8 +865,6 @@ export class OpenSpecService {
       this.#onChange(folderId)
     })
 
-    // watcher 的錯誤（例如 openspec/ 不存在）不該讓主行程掛掉：掃描結果本來就會是空的。
-    watcher.on('error', () => {})
     return watcher
   }
 
