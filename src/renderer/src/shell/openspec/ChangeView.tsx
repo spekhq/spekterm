@@ -359,15 +359,30 @@ function TaskList({ tasks }: { tasks: ParsedTasks }): React.JSX.Element {
             最亮的前景色 —— 「還沒做的事」才是要讀的東西。
           */}
           <ul className="flex flex-col gap-1">
-            {section.tasks.map((task) => (
+            {section.tasks.map((task, index) => (
               <li
-                key={task.text}
+                /*
+                  key 用 section + 位置，不用 `task.text` —— core 1.4.0 起 text 會把作者寫的續行
+                  一併折進來，於是它又長又易變（改一個字就換 key，整個項目重建）。位置在這裡是
+                  穩定的：清單來自單一檔案的一次解析，不會就地重排。
+                */
+                key={`${section.title}:${index}`}
                 className={`flex gap-2 text-base ${
                   task.completed ? 'text-ink-faint line-through' : 'text-ink'
                 }`}
               >
                 <TaskMark completed={task.completed} />
-                <span className="min-w-0">{task.text}</span>
+                {/*
+                  **文字是 markdown，而且必須走 `MarkdownView`。**
+
+                  `task.text` 與 proposal／design 那些 `.md` 同源 —— 使用者 repo 裡的不受信任內容。
+                  那個元件的安全性來自一組**沒有被加上／覆寫的預設值**（原始 HTML 降級為純文字、
+                  URL 經 `defaultUrlTransform` 過濾、連結交給主行程），而第二個 `react-markdown`
+                  呼叫點就是第二個必須永遠記得維持它們的地方 —— **漏掉不會有任何紅燈**。
+                */}
+                <div className="min-w-0">
+                  <MarkdownView text={task.text} dense />
+                </div>
               </li>
             ))}
           </ul>

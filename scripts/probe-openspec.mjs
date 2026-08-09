@@ -81,9 +81,18 @@ const DELTA = `## ADDED Requirements
 `
 
 /** 1/3 完成。探針稍後會把 1.2 勾掉，斷言進度自己變成 2/3。 */
+/**
+ * task 的文字是 **markdown，而且可能有多行** —— core 1.4.0 起會把作者寫在項目底下的續行
+ * 一併折進 `TaskItem.text`。1.1 因此刻意寫成「第一行 + 子項 + 含行內標記的續行」，用來驗
+ * 那三條呈現條款；其餘維持單行，讓「多行」與「單行」在同一份 fixture 裡都被走到。
+ *
+ * **1.1 同時是已完成的那一條** —— 刪除線要涵蓋渲染出來的子元素，而那只有在多行項目上才驗得到。
+ */
 const TASKS = `## 1. 後端
 
 - [x] 1.1 建立 endpoint
+  - 子項：先確認 schema
+  回傳格式見 \`docs/api.md\`，**務必**保持相容
 - [ ] 1.2 接上 provider
 
 ## 2. 前端
@@ -443,10 +452,20 @@ const PROGRESS = `(() => {
 
 const TASK_SECTIONS = `[...document.querySelectorAll('section[aria-label="${copy('openspec.tasks')}"] h4')].map((h) => h.innerText.trim())`
 
-/** 已完成的項目要與未完成者在視覺上可區分 —— 看 computed style，不看 class。 */
-const TASK_ITEMS = `[...document.querySelectorAll('section[aria-label="${copy('openspec.tasks')}"] li')].map((li) => ({
+/**
+ * 已完成的項目要與未完成者在視覺上可區分 —— 看 computed style，不看 class。
+ *
+ * **選擇器必須是直接子代鏈（`section > div > ul > li`），不能是後代 `li`。** task 的文字是
+ * markdown，作者寫在項目底下的子項會被渲染成**巢狀 `<li>`** —— 後代選擇器會把它們一起選中，
+ * 於是「有幾條 task」這種斷言會多算。失效的樣子是一個數字對不上，看起來像 flaky，而不像
+ * 選擇器選錯了層。
+ */
+const TASK_ITEMS = `[...document.querySelectorAll('section[aria-label="${copy('openspec.tasks')}"] > div > ul > li')].map((li) => ({
   text: li.innerText.replace(/\\s+/g, ' ').trim(),
   struck: getComputedStyle(li).textDecorationLine.includes('line-through'),
+  nestedItems: li.querySelectorAll('li').length,
+  codeMarks: [...li.querySelectorAll('code')].map((c) => c.innerText),
+  strongMarks: [...li.querySelectorAll('strong')].map((s) => s.innerText),
 }))`
 
 const DELTA_BADGES = `[...document.querySelectorAll('section[aria-label="${copy('openspec.specDeltas')}"] span')]
@@ -1494,6 +1513,33 @@ async function runMode(label, { port, rendererUrl }) {
       '已完成與未完成的 task 可區分',
       items.length === 3 && done.length === 1 && done[0].text.includes('建立 endpoint'),
       `${done.length}/${items.length} 有刪除線`,
+    )
+
+    // ── task 文字是 markdown（core 1.4.0 起 text 會帶著作者寫的續行）─────────
+    //
+    // fixture 的 1.1 是「第一行 + 子項 + 含行內標記的續行」。三條斷言分別對應 spec 的三條
+    // scenario；把它們退回 `<span>{task.text}</span>` 時，前兩條必須變紅（對照組已驗）。
+    const multiline = items.find((i) => i.text.includes('建立 endpoint'))
+    check(
+      results,
+      'task 的子項渲染為清單項目，不與第一行黏成一段',
+      (multiline?.nestedItems ?? 0) >= 1,
+      `巢狀項目數 ${multiline?.nestedItems}`,
+    )
+    check(
+      results,
+      'task 文字中的行內標記被渲染（而非顯示原始字元）',
+      multiline?.codeMarks.includes('docs/api.md') === true &&
+        multiline?.strongMarks.includes('務必') === true &&
+        !multiline.text.includes('`') &&
+        !multiline.text.includes('**'),
+      `code=${JSON.stringify(multiline?.codeMarks)} strong=${JSON.stringify(multiline?.strongMarks)}`,
+    )
+    check(
+      results,
+      '多行且已完成的 task，刪除線涵蓋整段',
+      multiline?.struck === true && (multiline?.nestedItems ?? 0) >= 1,
+      `struck=${multiline?.struck} 巢狀=${multiline?.nestedItems}`,
     )
 
     // proposal 一度整個被漏掉（雛型的「本 change」只畫了 tasks 與 spec deltas）。

@@ -48,6 +48,20 @@
 - **`schemaOrder` 的 CLI 快取 key 是 `repoRoot::schema`，不跨 worktree。** 影響比直覺小：它發生在
   `readChange`（開啟某個 change），**不在掃描路徑上**。**不在本 app 疊一層自己的快取** —— spek 用
   同一份 core，要改該在 upstream 改。
+- **`TaskItem.text` 是 markdown，而且可能有多行**（core **1.4.0** 起把作者寫在項目底下的續行折了
+  進來，各減去 `- ` 的 CommonMark content offset）。實測本 repo 自己的 `tasks.md`：**40 條裡 29 條
+  是多行**。當純文字畫（`<span>{task.text}</span>`）的話 HTML 會把換行摺成一個空格，子項與縮排一起
+  消失 —— 側欄那塊主要閱讀內容會糊成一團。
+  - **它必須走 `MarkdownView`（`dense`），不可以在 `TaskList` 自己起一個 `react-markdown`。**
+    `task.text` 與 proposal／design 同源，是使用者 repo 裡的**不受信任內容**，而那個元件的安全性是
+    「一組沒有被加上／覆寫的預設值」（`rehype-raw`、`urlTransform`、連結交給主行程）——
+    **第二個呼叫點就是第二個必須永遠記得維持它們的地方，而漏掉不會有任何紅燈**。
+  - **不要改成保留每一個換行（`whitespace-pre-wrap`）**：續行的斷行位置是原始檔案的排版寬度，不是
+    內容的語意。逐字保留它，會在 620px 的側欄裡產生一堆與內容無關的短行。哪些換行有意義由 markdown
+    的規則決定 —— 那正是 core 做那個 dedent 的目的。
+  - **probe 取 task 的選擇器必須是直接子代鏈**（`section[aria-label="Tasks"] > div > ul > li`）。
+    子項渲染出來也是 `<li>`，後代選擇器會把它們一起選中 —— 失效的樣子是「有幾條 task」對不上，
+    看起來像 flaky，不像選錯層。
 
 ## worktree 聚合
 

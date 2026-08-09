@@ -31,6 +31,16 @@ function bddTone(text: string): string | null {
 
 interface MarkdownViewProps {
   text: string
+  /**
+   * 緊湊模式：供**嵌在其他清單裡的一小段 markdown** 使用（tasks 分頁的項目文字）。
+   *
+   * 去掉容器的內距與顏色，讓呼叫端決定 —— task 的完成／未完成配色掛在它自己的 `<li>` 上，
+   * 這裡若再設一次 `text-ink-dim` 會把它蓋掉。段落間距的收斂在 `.markdown-dense`。
+   *
+   * **這是 prop 而不是第二個元件，理由與安全性有關**：本元件的防護是「一組沒有被加上／覆寫的
+   * 東西」（見下），複製一個元件就是複製一份必須永遠記得維持的預設值。
+   */
+  dense?: boolean
 }
 
 /**
@@ -47,9 +57,13 @@ interface MarkdownViewProps {
  * 少了這道，一個 markdown 連結就能把 renderer 帶去遠端頁面 —— 而 preload 會跟著注入，
  * 那個頁面將取得完整的 `window.workspace.fs`。
  */
-export function MarkdownView({ text }: MarkdownViewProps): React.JSX.Element {
+export function MarkdownView({ text, dense = false }: MarkdownViewProps): React.JSX.Element {
   return (
-    <div className="markdown px-1 py-1 text-base leading-relaxed text-ink-dim">
+    <div
+      className={
+        dense ? 'markdown markdown-dense' : 'markdown px-1 py-1 text-base leading-relaxed text-ink-dim'
+      }
+    >
       <Markdown
         remarkPlugins={[remarkGfm]}
         components={{

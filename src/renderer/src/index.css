@@ -169,6 +169,25 @@ body[data-dragging='true'] * {
   margin-top: 0;
 }
 
+/*
+ * 緊湊變體 —— 嵌在其他清單裡的一小段 markdown（tasks 分頁的項目文字）。
+ *
+ * 上下都不留外距：這段文字的節奏由**外面那個清單**決定（tasks 的 `<li>` 之間有自己的
+ * `gap`），這裡再加一次會讓每一條 task 憑空多出空隙。段落之間仍需要一點呼吸，但遠小於
+ * 一份完整文件的 0.6em。
+ */
+.markdown-dense > *:first-child {
+  margin-top: 0;
+}
+.markdown-dense > *:last-child {
+  margin-bottom: 0;
+}
+.markdown-dense p,
+.markdown-dense ul,
+.markdown-dense ol {
+  margin: 0.25em 0;
+}
+
 .markdown h1,
 .markdown h2,
 .markdown h3,
