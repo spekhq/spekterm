@@ -9,8 +9,8 @@
  * 探針本身**不需要知道**自己畫在哪個螢幕上：`DISPLAY` 由 `xvfb-run` 設定並被子行程繼承。
  * 它們唯一要問的是 `electronExtraArgs()`（軟體 GL 的旗標），因為那必須進 electron 的 argv。
  */
-import { spawn } from 'node:child_process'
-import { existsSync } from 'node:fs'
+import { spawn, spawnSync } from 'node:child_process'
+import { existsSync, statSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import { withDisplay, useVirtualDisplay } from './lib/display.mjs'
@@ -28,6 +28,43 @@ if (!existsSync(join(root, script))) {
   console.error(`找不到探針：${script}`)
   process.exit(2)
 }
+
+/**
+ * 建置：預設做，兩種情況不做。
+ *
+ * **兩個旋鈕刻意分開，不共用一個環境變數**：
+ *
+ * - `PROBE_SKIP_BUILD=1` 是**給人用的逃生口** —— 只改探針腳本時，每次多付一次建置是純浪費。
+ *   它生效時必須**吵**：跳過建置卻改了產品程式碼，驗到的是舊產物，那是一盞假綠。
+ * - `SPEKTERM_PROBE_BUILT` 是 `run-probes.mjs` 用的**內部參數** —— 它自己建置一次之後才對每一支
+ *   探針各 spawn 一次本檔案。少了它，完整驗收一輪會建置九次。它不印警告，因為那一輪**確實建過**。
+ *
+ * 合成一個旋鈕的話，完整驗收就會走上「跳過建置」那條路，而那條路的語意是「你自己負責產物是新的」
+ * —— 完整驗收不該有那種責任。
+ */
+const NO_BUILD = new Set([
+  'native', // 驗的是 node-pty 能不能被主行程載入，不碰 out/
+  'package', // 由 `npm run dist:linux` 產生真正的 AppImage，不是 `npm run build`
+])
+
+function buildIfNeeded() {
+  if (NO_BUILD.has(name)) return
+  if (process.env.SPEKTERM_PROBE_BUILT === '1') return
+
+  if (process.env.PROBE_SKIP_BUILD === '1') {
+    const candidates = [join(root, 'out', 'main', 'index.js'), join(root, 'out', 'renderer', 'index.html')]
+    const stamps = candidates.filter((p) => existsSync(p)).map((p) => statSync(p).mtime)
+    const newest = stamps.length > 0 ? new Date(Math.max(...stamps.map((d) => d.getTime()))) : null
+    console.warn(`[probe:${name}] PROBE_SKIP_BUILD=1 —— 本輪未重新建置，驗到的是既有產物`)
+    console.warn(`[probe:${name}] out/ 最後建置於：${newest ? newest.toISOString() : '(找不到產物)'}`)
+    return
+  }
+
+  const built = spawnSync('npm', ['run', 'build'], { cwd: root, stdio: 'inherit' })
+  if (built.status !== 0) process.exit(built.status ?? 1)
+}
+
+buildIfNeeded()
 
 // `probe:native` 自己就是一個 Electron 主行程（它 require node-pty，必須在 Electron 裡跑），
 // 不像其餘八支那樣「以 node 執行、再由它 spawn electron」。

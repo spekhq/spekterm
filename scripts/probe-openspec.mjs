@@ -33,6 +33,7 @@ import { setTimeout as sleep } from 'node:timers/promises'
 import { check, connect, pollUntil, waitForPageTarget } from './lib/cdp.mjs'
 import { copy, prefixOf, suffixOf } from './lib/copy.mjs'
 import { electronExtraArgs } from './lib/display.mjs'
+import { runSections } from './lib/sections.mjs'
 
 const BUILD_PORT = 9228
 const DEV_PORT = 9229
@@ -1296,7 +1297,23 @@ async function runQuickOpenScope(app) {
   await resetWorktreeToSelf(app.client)
 }
 
-async function runMode(label, { port, rendererUrl }) {
+/**
+ * ## 為什麼這五段的內文維持四格縮排
+ *
+ * 它們原本是單一 `runMode` 的 `try { … }` 內文。切分時**一個字元都沒有動** —— 連縮排都沒有 ——
+ * 於是「切分有沒有改到斷言」可以用機械方式證明（比對全部 225 個斷言呼叫的指紋），而不是靠
+ * 讀一份兩千行的 diff。`docs/lessons/probes.md`：插入新斷言的三件事都會靜默毀掉既有測試，
+ * 而切分是同一族的操作。
+ *
+ * ## 這五段共用同一個 app
+ *
+ * 全程只有一次 `launch()`，狀態是**線性累積**的 —— 因此每一段都宣告它依賴前一段。前段失敗時，
+ * 其後的段落會被標記為「未執行（前置失敗）」而不是連鎖噴出一整片指向同一個根因的紅燈。
+ *
+ * 關閉 app 的責任在 `runSections` 的 `afterMode`，**不在最後一段** —— 中途任一段 throw，
+ * 那一段就不會執行，app 會活過整個 build 模式並與 dev 模式的 app 並存。
+ */
+async function runPanelBasics(label, { port, rendererUrl }) {
   console.log(`\n── ${label} ──`)
 
   const { many, single, archivedOnly, plain, derived: derivedRepo } = makeFixture()
@@ -1315,7 +1332,7 @@ async function runMode(label, { port, rendererUrl }) {
   const app = await launch({ port, profileDir: profile, rendererUrl, stub })
   check(results, 'app 掛載', app.mounted === true)
 
-  try {
+
     // ── 預設身分、兩個視圖、衍生的預設錨定 ──────────────────────────────────
     console.log('\n預設身分與兩個視圖')
     // **必須輪詢。** `MOUNTED` 只等 rail 的 <aside> 出現 —— folder 列來自一次非同步的
@@ -1662,6 +1679,13 @@ async function runMode(label, { port, rendererUrl }) {
       JSON.stringify(updated),
     )
 
+  // **回傳的不只 app**：後段還用到前置區建立的 fixture 路徑（`single`、`worktree`）。
+  // 少了它們就是 `ReferenceError` —— eslint 的 no-undef 在切分當下就抓到了這一點，
+  // 而靜態掃描只看 `try` 內文的話會漏掉整個前置區。
+  return { app, single, worktree }
+}
+
+async function runBrowseAndOverlays(label, config, { app }) {
     // ── 瀏覽：兩棵樹 ───────────────────────────────────────────────────────
     console.log('\n瀏覽視圖：Specs / Changes 兩棵樹')
     check(results, '可切換至瀏覽視圖', (await app.client.evaluate(CLICK_VIEW(copy('openspec.tabBrowse')))) === true)
@@ -1870,7 +1894,9 @@ async function runMode(label, { port, rendererUrl }) {
       '空狀態提供前往選擇 change 的引導',
       String(emptyText).includes(copy('openspec.goToChanges')),
     )
+}
 
+async function runAnchoringAndCoordinate(label, config, { app, single }) {
     // ── 於瀏覽視圖建立錨定 ──────────────────────────────────────────────────
     console.log('\n於瀏覽視圖建立錨定')
     await app.client.evaluate(CLICK_VIEW(copy('openspec.tabBrowse')))
@@ -2344,7 +2370,9 @@ async function runMode(label, { port, rendererUrl }) {
     // 一次紅 15 條，其中兩條反而變成假綠）。
     await realClick(app.client, await stableRect(app.client, BACK_TO_OWN_RECT))
     await pollUntil(app.client, PANEL_SOURCE_LABEL, (v) => String(v).includes('repo-single'), 8000)
+}
 
+async function runWorktreeAggregation(label, config, { app, worktree }) {
     // ── worktree 聚合 ───────────────────────────────────────────────────────
     //
     // **這一段放在最後**：它切到另一個 repo 並開 overlay，會動到前面每一段所依賴的狀態。
@@ -3289,39 +3317,46 @@ async function runMode(label, { port, rendererUrl }) {
       JSON.stringify(globalQuickOpen && globalQuickOpen.titles))
     await pressEscape(app.client)
     await sleep(300)
-
-    await runQuickOpenScope(app)
-  } finally {
-    await app.close()
-  }
 }
 
-async function main() {
-  let devServer = null
+async function runQuickOpenSection(label, config, { app }) {
+  await runQuickOpenScope(app)
+}
 
+/**
+ * **依賴鏈是線性的** —— 五段共用 `runPanelBasics` 建立的那一個 app 與它累積下來的狀態
+ * （選中的 folder、開著的 artifact 分頁、側欄座標）。這與 `probe:terminal`／`probe:keyboard`
+ * 相反，那兩支的每個段落各自 `launch()`，因此無需宣告依賴。
+ */
+/** 逾時收屍 —— 五段共用同一個 app，殺掉它等於讓其後段落全部因前置失敗而標記未執行。 */
+const killStrays = () => {
   try {
-    await runMode('正式建置（electron .）', { port: BUILD_PORT, rendererUrl: null })
-
-    devServer = await startRendererDevServer()
-    await runMode('開發模式（vite dev server）', { port: DEV_PORT, rendererUrl: devServer.url })
-  } finally {
-    if (devServer) {
-      // dev server 是 group leader（detached）—— 殺整組，否則 vite 會變孤兒佔著 port。
-      try {
-        process.kill(-devServer.child.pid, 'SIGKILL')
-      } catch {
-        // 已經沒了。
-      }
-    }
-    for (const dir of temps) rmSync(dir, { recursive: true, force: true })
+    execFileSync('pkill', ['-9', '-f', 'spekterm-openspec-[p]rofile'], { stdio: 'ignore' })
+  } catch {
+    // 沒有殘留
   }
-
-  const passed = results.filter(Boolean).length
-  console.log(`\n${passed}/${results.length} 通過`)
-  process.exit(passed === results.length ? 0 : 1)
 }
 
-main().catch((error) => {
-  console.error(error)
-  process.exit(1)
+const SECTIONS = [
+  { name: 'runPanelBasics', run: runPanelBasics, onTimeout: killStrays },
+  { name: 'runBrowseAndOverlays', run: runBrowseAndOverlays, deps: ['runPanelBasics'], onTimeout: killStrays },
+  { name: 'runAnchoringAndCoordinate', run: runAnchoringAndCoordinate, deps: ['runBrowseAndOverlays'], onTimeout: killStrays },
+  { name: 'runWorktreeAggregation', run: runWorktreeAggregation, deps: ['runAnchoringAndCoordinate'], onTimeout: killStrays },
+  { name: 'runQuickOpenSection', run: runQuickOpenSection, deps: ['runWorktreeAggregation'], onTimeout: killStrays },
+]
+
+const outcome = await runSections({
+  sections: SECTIONS,
+  build: { port: BUILD_PORT, rendererUrl: null },
+  dev: { port: DEV_PORT, start: startRendererDevServer },
+  results,
+  // 關閉 app 的責任在這裡，不在最後一段 —— 中途任一段 throw，那一段就不會執行。
+  afterMode: async (_mode, context) => {
+    if (context.app) await context.app.close()
+  },
+  cleanup: () => {
+    for (const dir of temps) rmSync(dir, { recursive: true, force: true })
+  },
 })
+
+process.exit(outcome.ok ? 0 : 1)

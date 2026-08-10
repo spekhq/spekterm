@@ -98,6 +98,11 @@ SPEKTERM_SCAN_PATH=../spek npm run dev
 一次**、**清掉 `electron-vite dev` 洩漏到 shell 的環境變數**。它**不 fail fast** —— 付了十幾分鐘就該
 拿到完整的一張圖。
 
+**同一條紀律也落在探針之內**（`scripts/lib/sections.mjs`）：一個段落 throw 只讓那一段記為失敗，
+其後段落照跑；宣告了前置的段落在前置失敗時標記為「未執行」而非連鎖紅燈。**總結會標示每支是否
+完整執行 —— 不完整的那一輪，耗時不得拿來做最佳化判斷**（曾經有一輪 `probe:terminal` 的 dev 段
+只跑了 10 段中的 1 段，而那個數字被拿去推導了一份與事實相反的方案，見 `docs/lessons/probes.md`）。
+
 ```bash
 npm run probe:shell     # workspace-app-shell（視窗 + 信任模型 + preload 白名單）
 npm run probe:workspace # workspace-folders / filesystem-access / workspace-layout / repo-branch /
@@ -111,6 +116,9 @@ npm run probe:core      # spek-core-integration（主行程掃描 OpenSpec，且
 npm run probe:identity  # app-identity（productName／appId／userData 路徑／視窗標題）
 
 PROBE_ONLY=runMode:build npm run probe:terminal   # 只跑一個段落（迭代用；不設就跑全部）
+                                                  #   terminal / keyboard / openspec 三支都支援。
+                                                  #   指定的段落若宣告了前置，前置會被自動帶上。
+PROBE_SKIP_BUILD=1 npm run probe:keyboard         # 只改探針腳本時跳過建置（會印警告與產物時間）
 PROBE_DISPLAY=physical npm run probe:terminal     # 逃生口：畫在實體螢幕上
 ```
 

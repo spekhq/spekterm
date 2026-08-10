@@ -22,6 +22,7 @@ import { setTimeout as sleep } from 'node:timers/promises'
 import { check, connect, pollUntil, waitForPageTarget } from './lib/cdp.mjs'
 import { copy, prefixOf } from './lib/copy.mjs'
 import { electronExtraArgs } from './lib/display.mjs'
+import { runSections } from './lib/sections.mjs'
 
 const BUILD_PORT = 9234
 const DEV_PORT = 9235
@@ -1910,26 +1911,34 @@ async function checkReordering(label, { port, rendererUrl }) {
   }
 }
 
-async function main() {
-  let devServer = null
-
+/**
+ * 三個段落**彼此獨立** —— 每一段各自 `makeFixture()`、`seedProfile()`、`launch()` 與收屍
+ * （實際逐段確認，非假設），因此沒有一項需要宣告 `deps`。
+ *
+ * 此前這裡是六行寫死的呼叫，沒有段落機制 —— 於是任何一段 throw 就吃掉其後全部，而迭代時
+ * 想單獨重跑一段只能整支跑（實測一輪 332 秒）。
+ */
+/** 逾時收屍 —— 逾時的段落不會走到自己的 `finally`。pattern 以字元類別自我豁免。 */
+const killStrays = () => {
   try {
-    await runMode('build', { port: BUILD_PORT, rendererUrl: null })
-    await checkSingleFolder('build', { port: BUILD_PORT, rendererUrl: null })
-    await checkReordering('build', { port: BUILD_PORT, rendererUrl: null })
+    execFileSync('pkill', ['-9', '-f', 'spekterm-keyboard-[p]rofile'], { stdio: 'ignore' })
+  } catch {
+    // 沒有殘留
+  }
+}
 
-    devServer = await startRendererDevServer()
-    await runMode('dev', { port: DEV_PORT, rendererUrl: devServer.url })
-    await checkSingleFolder('dev', { port: DEV_PORT, rendererUrl: devServer.url })
-    await checkReordering('dev', { port: DEV_PORT, rendererUrl: devServer.url })
-  } finally {
-    if (devServer) {
-      try {
-        process.kill(-devServer.child.pid, 'SIGKILL')
-      } catch {
-        // 已經沒了
-      }
-    }
+const SECTIONS = [
+  { name: 'runMode', run: runMode, onTimeout: killStrays },
+  { name: 'checkSingleFolder', run: checkSingleFolder, onTimeout: killStrays },
+  { name: 'checkReordering', run: checkReordering, onTimeout: killStrays },
+]
+
+const outcome = await runSections({
+  sections: SECTIONS,
+  build: { port: BUILD_PORT, rendererUrl: null },
+  dev: { port: DEV_PORT, start: startRendererDevServer },
+  results,
+  cleanup: () => {
     for (const dir of temps) {
       try {
         execFileSync('rm', ['-rf', dir])
@@ -1937,14 +1946,7 @@ async function main() {
         // 清不掉就算了
       }
     }
-  }
-
-  const passed = results.filter(Boolean).length
-  console.log(`\n${passed}/${results.length} 通過`)
-  process.exit(passed === results.length ? 0 : 1)
-}
-
-main().catch((error) => {
-  console.error(error)
-  process.exit(1)
+  },
 })
+
+process.exit(outcome.ok ? 0 : 1)

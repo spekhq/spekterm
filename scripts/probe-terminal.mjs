@@ -27,6 +27,7 @@ import { setTimeout as sleep } from 'node:timers/promises'
 import { check, connect, dragMouse, pollUntil, pressKey, waitForPageTarget } from './lib/cdp.mjs'
 import { copy, prefixOf } from './lib/copy.mjs'
 import { electronExtraArgs } from './lib/display.mjs'
+import { runSections } from './lib/sections.mjs'
 
 const BUILD_PORT = 9226
 const DEV_PORT = 9227
@@ -3603,56 +3604,52 @@ async function runUnicodeWidth(label, { port, rendererUrl }) {
   }
 }
 
-const SECTIONS = [
-  ['runMode', runMode],
-  ['runUnicodeWidth', runUnicodeWidth],
-  ['runRestore', runRestore],
-  ['runHealAndCrash', runHealAndCrash],
-  ['runAltScreen', runAltScreen],
-  ['runDormantHint', runDormantHint],
-  ['runAgentStatus', runAgentStatus],
-  ['runContinuation', runContinuation],
-  ['runWorktree', runWorktree],
-  ['runGlobalSession', runGlobalSession],
-]
-
-const ONLY = (process.env.PROBE_ONLY ?? '')
-  .split(',')
-  .map((x) => x.trim())
-  .filter(Boolean)
-
-function wanted(name, label) {
-  if (ONLY.length === 0) return true
-  return ONLY.some((filter) => {
-    const [section, mode] = filter.split(':')
-    return section === name && (!mode || mode === label)
-  })
+/**
+ * 十個段落**彼此獨立** —— 每一段各自 `makeFixture()`、`seedProfile()`、`launch()` 與收屍，
+ * 沒有任何一段沿用前一段的狀態。因此沒有一項需要宣告 `deps`。
+ *
+ * **這是實際逐段確認的結果，不是假設**：`runWorktree` 是唯一不呼叫 `makeFixture()` 的段落
+ * （它自建 worktree fixture），其餘九段都自帶。日後若有段落開始沿用前段的 context，
+ * **必須同時補上 `deps`** —— 否則前段失敗時它會照跑，然後紅在一個與根因無關的地方。
+ */
+/**
+ * 逾時收屍：**逾時的段落不會走到自己的 `finally`**，它建立的 electron 沒有其他人會收。
+ * pattern 用字元類別自我豁免 —— `pkill -f` 比對的是整條 command line，會匹配到自己那一條
+ * （`docs/lessons/probes.md`：症狀是背景命令的輸出檔是空的、exit 1，看起來像 probe 失敗，
+ * 其實 probe 一秒都沒跑）。
+ *
+ * pty 不必另外處理：master fd 由主行程持有，主行程一死 pty 必然陪葬。
+ */
+const killStrays = () => {
+  try {
+    execFileSync('pkill', ['-9', '-f', 'spekterm-terminal-[p]rofile'], { stdio: 'ignore' })
+  } catch {
+    // 沒有殘留 —— 那正是我們要的
+  }
 }
 
-async function main() {
-  let devServer = null
-  if (ONLY.length > 0) console.log(`（PROBE_ONLY=${ONLY.join(',')} —— 只跑指定的段落，這不是完整驗收）`)
-  try {
-    for (const [name, fn] of SECTIONS) {
-      if (wanted(name, 'build')) await fn('build', { port: BUILD_PORT, rendererUrl: null })
-    }
+/** 五次冷啟動的兩段給更長的時限；dev 模式的冷啟動是 30 秒級（unbundled ESM + Monaco）。 */
+const LONG = 14 * 60 * 1000
 
-    // dev server 起得很慢 —— 沒有任何 dev 段落要跑時就不要起它。
-    if (SECTIONS.some(([name]) => wanted(name, 'dev'))) {
-      devServer = await startRendererDevServer()
-      for (const [name, fn] of SECTIONS) {
-        if (wanted(name, 'dev')) await fn('dev', { port: DEV_PORT, rendererUrl: devServer.url })
-      }
-    }
-  } finally {
-    if (devServer) {
-      try {
-        // dev server 以 detached 起成 group leader —— 殺整組，否則 vite 會變孤兒佔著 port。
-        process.kill(-devServer.child.pid, 'SIGKILL')
-      } catch {
-        // 已經結束
-      }
-    }
+const SECTIONS = [
+  { name: 'runMode', run: runMode, onTimeout: killStrays },
+  { name: 'runUnicodeWidth', run: runUnicodeWidth, onTimeout: killStrays },
+  { name: 'runRestore', run: runRestore, timeoutMs: LONG, onTimeout: killStrays },
+  { name: 'runHealAndCrash', run: runHealAndCrash, timeoutMs: LONG, onTimeout: killStrays },
+  { name: 'runAltScreen', run: runAltScreen, onTimeout: killStrays },
+  { name: 'runDormantHint', run: runDormantHint, onTimeout: killStrays },
+  { name: 'runAgentStatus', run: runAgentStatus, onTimeout: killStrays },
+  { name: 'runContinuation', run: runContinuation, onTimeout: killStrays },
+  { name: 'runWorktree', run: runWorktree, onTimeout: killStrays },
+  { name: 'runGlobalSession', run: runGlobalSession, onTimeout: killStrays },
+]
+
+const outcome = await runSections({
+  sections: SECTIONS,
+  build: { port: BUILD_PORT, rendererUrl: null },
+  dev: { port: DEV_PORT, start: startRendererDevServer },
+  results,
+  cleanup: () => {
     for (const dir of temps) {
       try {
         rmSync(dir, { recursive: true, force: true })
@@ -3660,11 +3657,7 @@ async function main() {
         // 暫存目錄清不掉不影響結論
       }
     }
-  }
+  },
+})
 
-  const passed = results.filter(Boolean).length
-  console.log(`\n${passed}/${results.length} 通過`)
-  process.exit(passed === results.length ? 0 : 1)
-}
-
-await main()
+process.exit(outcome.ok ? 0 : 1)
