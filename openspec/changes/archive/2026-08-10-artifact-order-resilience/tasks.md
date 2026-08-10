@@ -94,7 +94,7 @@
       **噪音中含 `@@` 時仍正確**
 - [x] 6.4 shell 白名單：`fish` 等未知 shell 回 `null` 且不執行任何子行程
       〔scenario「無法安全查詢的 shell 一律放棄」〕
-- [ ] 6.5 **人工驗收（dogfood）**：`npm run dist:linux` 後**自應用程式選單／檔案管理員**啟動
+- [x] 6.5 **人工驗收（dogfood）**：`npm run dist:linux` 後**自應用程式選單／檔案管理員**啟動
       AppImage（**不可自終端機**：那樣 PATH 天生完整，機制失效也照樣通過），開一個**進行中**的
       change，**不應出現任何退路說明**。
       **判準是「說明的有無」，不是排列順序**（design D7）—— 原本寫的「schema 順序 ≠ 敘事順序的
@@ -103,7 +103,7 @@
       **用本 repo 自己就可以驗**，不需要 scratch repo。
       判讀請在啟動**約一分鐘後** —— core 對「取不到」也快取 30 秒（spek #46），啟動早期的第一次
       讀取可能落在 PATH 補好之前。機制真的沒生效時那句說明會**持續存在**
-- [ ] 6.6 scenario「主行程解析得到只由互動 rc 提供的可執行檔」**不覆蓋於自動化**，載體為 6.5。
+- [x] 6.6 scenario「主行程解析得到只由互動 rc 提供的可執行檔」**不覆蓋於自動化**，載體為 6.5。
       spec 明文要求不得以自終端機啟動的執行替代
 - [x] 6.7 新增 `src/renderer/src/shell/openspec/schema-order.test.ts`：`fallbackReason` 的判斷
       〔scenario「權威順序可用時不呈現說明」「進行中的 change 取不到順序時說明退路」
@@ -130,8 +130,8 @@
 
 ## 9. 收尾
 
-- [ ] 9.1 `npm run typecheck` 與 `npm run lint`（**不要跑 prettier**）
-- [ ] 9.2 `npm test`
-- [ ] 9.3 `npm run probe:openspec`
-- [ ] 9.4 `npm run test:e2e` 全套。**已知有 7 條 dev 模式的既有紅燈（issue #19）與 port 殭屍造成的
+- [x] 9.1 `npm run typecheck` 與 `npm run lint`（**不要跑 prettier**）
+- [x] 9.2 `npm test`
+- [x] 9.3 `npm run probe:openspec`
+- [x] 9.4 `npm run test:e2e` 全套。**已知有 7 條 dev 模式的既有紅燈（issue #19）與 port 殭屍造成的
       假紅（issue #18）** —— 判讀時先與那兩張票對照，不要當成本 change 的迴歸
