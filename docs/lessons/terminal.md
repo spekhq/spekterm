@@ -14,6 +14,33 @@
 - **GUI app 常缺使用者 shell 的 PATH**（從桌面啟動不會繼承 `.zprofile`），直接 `spawn('claude')`
   會 ENOENT。兩種目標因此都經 login shell：`$SHELL -l` / `$SHELL -l -c claude`。
   **這道緩解的真正驗證點在 Phase 6 打包後從桌面啟動** —— `npm run dev` 是從終端起的，測不出來。
+  - **但那兩者的涵蓋範圍不同，而差別是承重的（實測）。** `$SHELL -l` 掛在 pty 上是**互動** login
+    shell，會 source `.zshrc` / `.bashrc`；`$SHELL -l -c <命令>` 是 login 但**非互動**，不會。
+    而 **nvm 之屬正是在互動 rc 初始化的**：
+
+    ```
+    $ zsh -l -c 'command -v openspec; command -v node'
+    /usr/bin/node          ← 系統的 v10.19.0，openspec 完全沒有輸出
+    ```
+    ```python
+    pid, fd = pty.fork(); os.execv('/bin/zsh', ['/bin/zsh', '-l'])   # 真 pty 下的 shell 目標
+    → /home/me/.nvm/versions/node/v22.22.0/bin/openspec
+    ```
+
+    所以 **shell 目標沒問題，缺口只在 claude 目標**：`claude` 目前找得到純粹因為它裝在
+    `~/.local/bin`（由 login rc 提供）。改用 `npm i -g` 裝到 nvm 底下就會踩到（issue #20）。
+- **主行程自己 spawn 的東西不受上面那道緩解保護** —— 那個機制作用於 pty。core 用來取得 schema
+  權威順序的 `openspec` 因此在打包產物裡一律 ENOENT，解法是 `src/main/user-path.ts`（啟動時以
+  **互動** shell 取一次 PATH）。兩個實測結論：
+  - **必須前置（prepend），不能附加。** `openspec` 的 shebang 是 `#!/usr/bin/env node` —— 附加在後
+    時它被解析到、卻用系統 node 執行而 `SyntaxError`，而 CLI 非零結束在 core 的 provider 眼中
+    **與「未安裝」完全無法區分**。
+  - **必須挑 shell，不能一律查詢。** `fish` 的 `$PATH` 是 list，`printf '@@%s@@' "$PATH"` 會印成
+    `@@/a@@@@/b@@…`，解析得到的是第一個目錄 —— **沒有錯誤，只是 PATH 少掉大半**。因此是白名單
+    （`sh`/`bash`/`zsh`/`ksh`），未知者放棄：沒修好的代價遠小於悄悄弄壞。
+  - **它會改變 pty 的環境** —— `ptyEnv` 整份繼承 `process.env`。那是刻意的（agent session 從此也
+    解析得到 nvm 底下的東西），但因此**套用只能發生在一個確定的時點**，不能放在某個功能的使用點：
+    否則「其他行程有沒有拿到修好的 PATH」會取決於使用者有沒有先用過那個功能。
 - **輸出的訂閱必須早於 `create`。** pty 在 `create` 回傳的那一刻就開始吐第一個 prompt，而
   `TerminalView` 要等 React 渲染完才 attach —— 中間沒有接收者的輸出會**直接消失**。
   `SessionsProvider` 因此在任何一次 create 之前就掛好唯一的 `onData`，尚未 attach 的先進 backlog。

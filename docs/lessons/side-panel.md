@@ -48,6 +48,19 @@
 - **`schemaOrder` 的 CLI 快取 key 是 `repoRoot::schema`，不跨 worktree。** 影響比直覺小：它發生在
   `readChange`（開啟某個 change），**不在掃描路徑上**。**不在本 app 疊一層自己的快取** —— spek 用
   同一份 core，要改該在 upstream 改。
+  - **那個快取連 `null` 一起存，TTL 同為 30 秒**（回報於 spek #46）。於是 app 啟動早期一次暫時性的
+    失敗（PATH 還沒補好、逾時），會讓**同一個 repo 在接下來半分鐘持續拿到 `null`** —— 而 consumer
+    分不出「查過了、確實沒有」與「查詢失敗了」。**這使「權威順序有沒有被取用」在端對端驗收中不可靠**：
+    實測同一份程式碼、同一輪 `probe:openspec`，**build 模式紅而 dev 模式綠**，差別只在各自的 app
+    啟動時序落在快取窗口的哪一邊。相關的 scenario 因此由單元測試承擔（`schema-order.test.ts`），
+    探針只驗 archived 那條 —— **core 對 archived 根本不查 CLI，不經過快取，所以它是穩定的**。
+- **artifact 的排序規則不在本 repo。** `sortArtifacts(artifacts, 'schema', schemaOrder)`
+  （`@spekjs/core/artifact-order`，node-free subpath）就是那條規則：權威順序可用照它、不可用退回
+  敘事順序、只涵蓋部分時未涵蓋者接在其後。**不要自己用 `DEFAULT_ORDER` / `defaultRank` 排** ——
+  core 1.6.0 上移該函式、1.7.0 再泛型化（spek #45，泛型讓它吃得下我們的 `ChangeArtifactView` 並
+  原樣交回、`relPath` 不消失），兩次都是本 repo 撞到後回報促成的。
+  - **每一個 archived change 都走退路** —— core 只對 active 查 CLI。側欄的重要用途正是讀
+    `archive/`，所以退路的正確性決定了那半的閱讀體驗，不是邊角。
 - **`TaskItem.text` 是 markdown，而且可能有多行**（core **1.4.0** 起把作者寫在項目底下的續行折了
   進來，各減去 `- ` 的 CommonMark content offset）。實測本 repo 自己的 `tasks.md`：**40 條裡 29 條
   是多行**。當純文字畫（`<span>{task.text}</span>`）的話 HTML 會把換行摺成一個空格，子項與縮排一起

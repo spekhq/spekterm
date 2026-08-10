@@ -1,3 +1,4 @@
+import { sortArtifacts } from '@spekjs/core/artifact-order'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { MarkdownView } from '../files/MarkdownView'
@@ -5,6 +6,7 @@ import type { ChangeArtifactView, DeltaSpecView, ParsedTasks } from '../types'
 import type { ContinuationBlock } from './continuation'
 import { useChange } from './data'
 import { parseDelta } from './delta'
+import { type FallbackReason, fallbackReason } from './schema-order'
 import {
   DeltaBadge,
   Empty,
@@ -82,7 +84,17 @@ export function ChangeView({
   if (error) return <ErrorNote message={error} />
   if (loading || !data) return <Loading />
 
-  const artifacts = orderArtifacts(data.artifacts, data.schemaOrder)
+  /*
+    排序**整條委由 core**（`sortArtifacts` 的 `schema` 模式），本 repo 不自寫規則：
+    schema 順序可用就照它、不可用就退回敘事順序、只涵蓋部分時未涵蓋者接在其後。
+
+    這正是 core 1.6.0 把該函式上移、1.7.0 再泛型化（spek #45）所要消除的重複 ——
+    泛型讓它吃得下我們自己的 `ChangeArtifactView` 並原樣交回（`relPath` 不會消失）。
+  */
+  const artifacts = sortArtifacts(data.artifacts, 'schema', data.schemaOrder)
+
+  // 順序來自敘事順序而非該 change 的 schema 時，要說出來（判斷與理由在 `schema-order.ts`）。
+  const fallback = fallbackReason(data.status, data.schemaOrder)
 
   if (artifacts.length === 0) {
     return <p className="px-4 py-3 text-sm text-ink-faint">{t('openspec.noArtifacts')}</p>
@@ -145,6 +157,8 @@ export function ChangeView({
           )
         })}
       </nav>
+
+      {fallback !== null && <FallbackNote reason={fallback} />}
 
       <div className="min-h-0 flex-1 overflow-auto px-4 py-3">
         {active && <ArtifactContent artifact={active} onOpenFile={onOpenFile} />}
@@ -259,20 +273,27 @@ function ContinuationBar({
   )
 }
 
-/** 分頁順序以 schema 宣告的為準；它拿不到時退回 core 的預設排序（mtime）。 */
-function orderArtifacts(
-  artifacts: ChangeArtifactView[],
-  schemaOrder: string[] | undefined,
-): ChangeArtifactView[] {
-  if (!schemaOrder) return artifacts
+/**
+ * 分頁順序來自敘事順序、而非該 change 的 schema 所宣告的順序時，說出來。
+ *
+ * **沒有這句話，使用者無從分辨眼前的順序是權威的還是推測的** —— 而 spec-driven 之下兩者恰好相同，
+ * 於是「看起來正確」不構成任何證據。**已封存的 change 永遠取不到權威順序**（core 只對進行中的
+ * change 查詢），所以這不是偶發狀態而是常態。
+ *
+ * **進行中的 change 那句刻意不指出單一成因** —— 取不到的可能有好幾種（`openspec` 不可解析、逾時、
+ * 非零結束、輸出裡沒有對得上的項目），而這裡手上沒有足以分辨的資訊。指定一個會是編造。
+ * 措辭沿用上游 spek web（`ChangeDetail.tsx`），兩邊講的是同一件事。
+ */
+function FallbackNote({ reason }: { reason: Exclude<FallbackReason, null> }): React.JSX.Element {
+  const { t } = useTranslation()
 
-  const rank = (id: string): number => {
-    const index = schemaOrder.indexOf(id)
-    // schema 沒提到的 artifact 排在最後，彼此維持原順序。
-    return index < 0 ? Number.POSITIVE_INFINITY : index
-  }
-
-  return [...artifacts].sort((a, b) => rank(a.id) - rank(b.id))
+  return (
+    <p className="shrink-0 border-b border-hairline px-4 py-1.5 text-2xs text-ink-faint">
+      {reason === 'archived'
+        ? t('openspec.schemaOrderArchived')
+        : t('openspec.schemaOrderUnavailable')}
+    </p>
+  )
 }
 
 function ArtifactContent({

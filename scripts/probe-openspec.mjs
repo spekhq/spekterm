@@ -17,7 +17,16 @@
  * 結束碼 0 表示全部 scenario 通過。
  */
 import { execFileSync, spawn } from 'node:child_process'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  utimesSync,
+  writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
@@ -164,9 +173,40 @@ function makeFixture() {
     '# 做完的 change\n\n## Why\n\n歷史。\n',
   )
   writeFile(
+    join(archivedOnly, 'openspec/changes/archive/2026-01-01-done-change/design.md'),
+    '# 做完的 change\n\n## Context\n\n當時的取捨。\n',
+  )
+  writeFile(
+    join(archivedOnly, 'openspec/changes/archive/2026-01-01-done-change/tasks.md'),
+    TASKS,
+  )
+  writeFile(
     join(archivedOnly, 'openspec/changes/archive/2026-01-01-done-change/specs/legacy/spec.md'),
     DELTA,
   )
+
+  /*
+    **把這個 archived change 的 mtime 明確設成敘事順序的反序**（proposal 最舊、tasks 最新）。
+
+    這是「已封存的 change 亦依敘事順序」那條斷言的鑑別力來源：core 對 archived change **一律不查**
+    schema 權威順序，於是它天然走退路 —— 而退路若沒修好，交付順序就是 mtime 由新到舊，正好與期望
+    相反。不設 mtime 的話這幾個檔案會在同一秒寫出，core 的 tiebreak 恰好就是敘事順序，
+    **對照組因此永遠不會變紅**。
+
+    `specs` 那一項**要對 `specs/<topic>/spec.md` 這個檔案下手，不是對 `specs/` 目錄** ——
+    core 的 `specsMtime()` 取的是各 delta 檔案 mtime 的最大值，對目錄設定完全無效。
+  */
+  const doneChange = join(archivedOnly, 'openspec/changes/archive/2026-01-01-done-change')
+  const base2026 = Date.UTC(2026, 0, 1) / 1000
+  for (const [rel, offsetHours] of [
+    ['proposal.md', 0],
+    ['design.md', 1],
+    ['specs/legacy/spec.md', 2],
+    ['tasks.md', 3],
+  ]) {
+    const t = base2026 + offsetHours * 3600
+    utimesSync(join(doneChange, rel), t, t)
+  }
 
   const plain = join(base, 'repo-plain')
   mkdirSync(plain, { recursive: true })
@@ -1499,6 +1539,36 @@ async function runMode(label, { port, rendererUrl }) {
       artifacts.find((a) => a.selected)?.label.toLowerCase() === 'tasks',
       artifacts.find((a) => a.selected)?.label,
     )
+    /*
+      **回歸用，不覆蓋「分頁順序依 schema」那條 scenario。**
+
+      `solo-change` 是 spec-driven，而該 schema 的權威順序**恰好等於**敘事順序 —— 於是這條斷言
+      在「權威順序被取用」與「退路頂替」兩種情況下都會通過，分不出走了哪一條。它擋得住的是
+      「順序整個壞掉」，擋不住「權威順序沒被取用」。後者的載體是人工驗收（需要一個 schema 順序
+      ≠ 敘事順序的 repo，見 tasks 6.5）。
+
+      斷言的內容也照 fixture 的實際：`solo-change` **只有三個 artifact，沒有 design**。
+      不要為了湊四個而補一個 `design.md` —— 補了它 `missingArtifacts` 會變空、續寫入口整個消失，
+      而本檔後段那兩條「focused session 為 shell 時入口停用」的斷言會靜默落空。
+    */
+    check(
+      results,
+      '分頁依敘事順序排列（回歸用；spec-driven 下與 schema 順序相同，故不覆蓋該 scenario）',
+      names.join(',') === 'proposal,specs,tasks',
+      artifacts.map((a) => a.label).join(', '),
+    )
+    /*
+      **「權威順序可用時不呈現退路說明」這條 scenario 刻意不在這裡驗** —— 它的載體是
+      `schema-order.test.ts` 的 `fallbackReason`。
+
+      理由是這裡驗不可靠，而且已實測：`schemaOrder` 由 core 以 spawn `openspec` 取得，而 core 對
+      結果（**包含 `null`**）有 30 秒 TTL 的快取 —— app 啟動早期一次暫時性的失敗，會讓同一個 repo
+      在接下來半分鐘持續拿到 `null`。同一份程式碼、同一輪執行，**build 模式紅而 dev 模式綠**，
+      差別只在各自的啟動時序落在快取窗口的哪一邊。
+
+      **一條會間歇通過的斷言比沒有斷言更糟**：它下次紅的時候，沒有人知道該不該相信它。
+      core 的快取行為已回報 upstream。
+    */
 
     const progress = await pollUntil(app.client, PROGRESS, (value) => value !== null, 8000)
     check(results, 'tasks 進度呈現完成數與總數', progress?.now === 1 && progress?.max === 3, JSON.stringify(progress))
@@ -1952,6 +2022,41 @@ async function runMode(label, { port, rendererUrl }) {
       '空狀態不影響瀏覽視圖的 Changes 樹',
       onlyArchived.length === 1 && onlyArchived[0].slug === '2026-01-01-done-change',
       onlyArchived.map((r) => r.slug).join(', '),
+    )
+
+    // ── archived change：退路的順序與說明 ───────────────────────────────────
+    //
+    // **這一段天然走退路**：core 對 archived change 一律不查 schema 權威順序（`status === "active"`
+    // 才查），所以不需要為了製造「openspec 不可用」而操弄 probe 的環境。而 fixture 的 mtime 已被
+    // 明確設成敘事順序的反序 —— 退路若沒修好，這裡拿到的就是 tasks 在最前。
+    await app.client.evaluate(ACTIVATE_TREE_ROW('2026-01-01-done-change'))
+    const archivedAnchored = await pollUntil(
+      app.client,
+      ANCHORED_SLUG,
+      (v) => v === '2026-01-01-done-change',
+      10_000,
+    )
+    check(
+      results,
+      '可錨定已封存的 change',
+      archivedAnchored === '2026-01-01-done-change',
+      String(archivedAnchored),
+    )
+
+    const archivedTabs = await pollUntil(app.client, ARTIFACT_TABS, (list) => list.length >= 4, 10_000)
+    check(
+      results,
+      '已封存的 change 依敘事順序（而非交付順序）排列分頁',
+      (archivedTabs ?? []).map((t) => t.label.toLowerCase()).join(',') === 'proposal,design,specs,tasks',
+      (archivedTabs ?? []).map((t) => t.label).join(', '),
+    )
+
+    const archivedPanel = await app.client.evaluate(PANEL_TEXT)
+    check(
+      results,
+      '已封存的 change 說明順序未被追蹤',
+      archivedPanel.includes(copy('openspec.schemaOrderArchived')),
+      archivedPanel.split('\n').find((l) => l.includes('Schema order')) ?? '(沒有任何說明)',
     )
 
     // ── 交叉導覽不丟失未存的編輯 ────────────────────────────────────────────
