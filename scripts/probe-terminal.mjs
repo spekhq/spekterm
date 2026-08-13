@@ -24,14 +24,24 @@ import {
 import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
-import { check, connect, dragMouse, pollFor, pollUntil, pressKey, waitForPageTarget } from './lib/cdp.mjs'
+import {
+  check,
+  connect,
+  dragMouse,
+  pollFor,
+  pollUntil,
+  pressKey,
+  retrySample,
+  waitForPageTarget,
+} from './lib/cdp.mjs'
 import { copy, prefixOf } from './lib/copy.mjs'
 import { MOUNTED, describeMounted } from './lib/mounted.mjs'
 import { electronExtraArgs } from './lib/display.mjs'
 import { runSections } from './lib/sections.mjs'
+import { PROBE_PORTS } from './lib/ports.mjs'
 
-const BUILD_PORT = 9226
-const DEV_PORT = 9227
+const BUILD_PORT = PROBE_PORTS.terminal.build
+const DEV_PORT = PROBE_PORTS.terminal.dev
 
 /** 探針固定用 /bin/sh：可預測、無 bash/zsh profile 的雜訊，且處處存在。 */
 const SHELL_PATH = '/bin/sh'
@@ -965,6 +975,10 @@ async function pollTerminalText(client, settled, timeoutMs = 10_000) {
   // 而空的終端沒有東西可選。但**逾時之後仍讀不到，就是真的壞了**：那時要把哨兵的錯誤丟出去，
   // 不可以默默回空字串。`tolerateErrors` 承載的正是這個語意（每次成功讀取即清掉上一個例外，
   // 只有最後一次仍失敗才拋）。
+  //
+  // **`readTerminalText` 自己現在也會重試，所以這裡是第二道。** 保留它是刻意的：移除等於把語意
+  // 押在「內層永遠會容忍」這個**沒有守衛的假設**上，而那個假設一旦被誰改掉，這裡會靜默地變回
+  // 「一次失手就中斷整支」。
   return pollFor({
     read: () => readTerminalText(client),
     settled,
@@ -975,7 +989,44 @@ async function pollTerminalText(client, settled, timeoutMs = 10_000) {
   })
 }
 
+/**
+ * 讀終端畫面上的文字 —— **失手就再試一次**。
+ *
+ * ## 為什麼重試在這裡，不在呼叫端
+ *
+ * 這個讀取在拖曳選不到時**刻意拋錯**（見 `attemptReadTerminalText` 末尾），而那道防護是對的：
+ * 把「讀不到」當成「畫面上沒有東西」，會讓否定式斷言在探針瞎掉的情況下繼續發綠燈。問題一直在
+ * 呼叫端 —— 六個站點三種姿態（一個容忍、三個裸呼叫、其餘不容忍），於是**一次偶發的失手就讓
+ * 整支探針從那裡死掉**，代價一輪十幾分鐘，而症狀看起來像被測的功能壞了（issue #6）。
+ *
+ * 收進這裡之後，六個站點一處都不必改。
+ *
+ * ## 兩件事是刻意的
+ *
+ * - **第一次嘗試不做任何重置** —— 它與此前的行為逐字相同。重置只發生在重試之前，於是這個改動
+ *   在「沒有失手」的路徑上是零影響（斷言數與行為都不動）。
+ * - **窗口取小**（外層 `pollTerminalText` 是 10 秒）。一次擷取約 0.5–1 秒，內層若也取十秒，
+ *   兩層相乘會把一次失手的代價從「多半秒」放大成「多十秒」。
+ */
 async function readTerminalText(client) {
+  let attempt = 0
+  return retrySample(
+    async () => {
+      // **重試前要把畫面收回原狀。** 失敗時右鍵選單很可能還開著，下一次嘗試的拖曳就從一個蓋著
+      // 選單的畫面開始 —— 那會讓重試**必然失敗**，而一個必然失敗的重試比不重試更糟（它把一次
+      // 乾脆的失敗換成三次一樣的失敗，還多花了時間）。
+      if (attempt++ > 0) {
+        await pressKey(client, 'Escape')
+        await pollUntil(client, MENU_IN_VIEWPORT, (value) => value === null, 1000)
+      }
+      return attemptReadTerminalText(client)
+    },
+    { timeoutMs: 3000, label: 'readTerminalText（拖曳擷取，失手即重試）' },
+  )
+}
+
+/** 一次拖曳擷取。**讀不到就拋** —— 那是哨兵，不是失誤。 */
+async function attemptReadTerminalText(client) {
   const r = await client.evaluate(SCREEN_RECT)
   // 先污染剪貼簿 —— 否則「讀到上一次的內容」會被誤當成這一次複製成功。
   await client.evaluate(CLIPBOARD_WRITE('__not-copied__'))
@@ -991,9 +1042,18 @@ async function readTerminalText(client) {
   // 診斷用：選取到底成立了沒 —— 右鍵選單的「複製」在沒有選取時是停用的。
   const centre = { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) }
   await realMouse(client, centre.x, centre.y, 'right')
-  await pollUntil(client, MENU_IN_VIEWPORT, (value) => value !== null, 4000)
+  const menu = await pollUntil(client, MENU_IN_VIEWPORT, (value) => value !== null, 4000)
   const copyDisabled = await client.evaluate(MENU_ITEM_DISABLED(copy('sessions.copy')))
   const copyRect = await client.evaluate(MENU_ITEM_RECT(copy('sessions.copy')))
+  // **這一步以前會拋 `TypeError`。** `copyRect` 為 null 時 `realClick` 會去讀 `null.x`，於是浮上來
+  // 的是一句與現場無關的型別錯誤，而不是下面那個帶診斷的哨兵 —— 重試機制會忠實地重試，然後把
+  // 那個 TypeError 原封不動拋出去。**失敗的形態變質，比失敗本身更難查。**
+  if (!copyRect) {
+    throw new Error(
+      `readTerminalText: 右鍵選單裡沒有可點的「複製」（選單開了嗎=${menu !== null}，` +
+        `disabled=${copyDisabled}）—— 不可當成「畫面上沒有東西」`,
+    )
+  }
   await realClick(client, copyRect)
   await sleep(300)
 
@@ -1012,6 +1072,10 @@ async function readTerminalText(client) {
  *
  * 讀終端內容是一連串真滑鼠動作（拖曳選取 → 右鍵 → 複製 → 讀剪貼簿），量一次就斷言等於賭
  * 「內容此刻已經在畫面上」—— 而 shell 的 prompt 與命令輸出都是非同步抵達的。
+ *
+ * **這裡刻意不傳 `tolerateErrors`。** 它的 `read` 是呼叫端給的任意函式，其中有些是
+ * `client.evaluate`（拋錯的典型原因是 CDP 斷線或 renderer 不在了）—— 容忍那一類只會把
+ * 「app 已死」變成「等滿整個窗口再說」。`readTerminalText` 那一類的容忍已經收在它自己身上。
  */
 async function pollUntilText(read, settled, timeoutMs = 10_000) {
   return pollFor({ read, settled, timeoutMs, interval: 200, label: 'pollUntilText（自訂取值）' })

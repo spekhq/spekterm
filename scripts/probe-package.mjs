@@ -59,10 +59,11 @@ import { check, connect, pollFor, pollUntil, waitForPageTarget } from './lib/cdp
 import { electronExtraArgs } from './lib/display.mjs'
 import { copy } from './lib/copy.mjs'
 import { MOUNTED_WITHOUT_VISIBILITY as MOUNTED, describeMounted } from './lib/mounted.mjs'
+import { PROBE_PORTS } from './lib/ports.mjs'
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..')
 
-const DEBUG_PORT = 9240
+const DEBUG_PORT = PROBE_PORTS.package.main
 const STARTUP_TIMEOUT_MS = 60_000
 
 /** pty 的 shell。固定寫死，才數得出它的行程（見 `ptyPids`）。 */

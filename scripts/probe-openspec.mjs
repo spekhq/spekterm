@@ -35,9 +35,10 @@ import { copy, prefixOf, suffixOf } from './lib/copy.mjs'
 import { MOUNTED, describeMounted } from './lib/mounted.mjs'
 import { electronExtraArgs } from './lib/display.mjs'
 import { runSections } from './lib/sections.mjs'
+import { PROBE_PORTS } from './lib/ports.mjs'
 
-const BUILD_PORT = 9228
-const DEV_PORT = 9229
+const BUILD_PORT = PROBE_PORTS.openspec.build
+const DEV_PORT = PROBE_PORTS.openspec.dev
 
 const results = []
 const temps = []

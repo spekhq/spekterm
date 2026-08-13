@@ -20,13 +20,15 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { check, connect, pollFor, pollUntil, waitForPageTarget } from './lib/cdp.mjs'
+import { sectionConsole } from './lib/instrument.mjs'
 import { copy, prefixOf } from './lib/copy.mjs'
 import { MOUNTED, describeMounted } from './lib/mounted.mjs'
 import { electronExtraArgs } from './lib/display.mjs'
 import { runSections } from './lib/sections.mjs'
+import { PROBE_PORTS } from './lib/ports.mjs'
 
-const BUILD_PORT = 9234
-const DEV_PORT = 9235
+const BUILD_PORT = PROBE_PORTS.keyboard.build
+const DEV_PORT = PROBE_PORTS.keyboard.dev
 
 /** 可預測、無 profile 雜訊，且處處存在。 */
 const SHELL_PATH = '/bin/sh'
@@ -607,6 +609,31 @@ async function runMode(label, { port, rendererUrl }) {
   try {
     check(results, `${label}：app 掛載`, app.mounted?.ok === true, describeMounted(app.mounted))
 
+    // ── renderer 的 console 錯誤進得了收集器
+    //
+    // **這一條驗的是驗收工具自己**，不是產品 —— 它是 `probe-execution-scope` 的一部分。放在這裡
+    // 而不是 `probe:shell`，是因為出貨的讀取路徑是「`sections.mjs` 於段落結束時印出」，而
+    // `probe-shell` 沒有段落機制；在那裡只能驗一個沒有人在用的存取器。
+    //
+    // **標記在 connect 之後發出，而那不構成假綠** —— 這一點是實測過的，不是推論：Chromium 的
+    // `Runtime` 與 `Log` 兩個 domain 都會緩衝訊息並在 `enable` 時重播（見 `lib/cdp.mjs` 的
+    // `subscribeConsole`），所以「enable 之前」與「enable 之後」走的是同一條管道。若當初推論
+    // 「enable 之後才開始收」而據此設計驗收，反而會漏掉真正重要的那半段。
+    await app.client.evaluate(`console.error('PROBE_CONSOLE_SENTINEL'); void 0`)
+    const collected = await pollFor({
+      read: () => sectionConsole(),
+      settled: (entries) => entries.some((e) => e.text.includes('PROBE_CONSOLE_SENTINEL')),
+      timeoutMs: 3000,
+      interval: 100,
+      label: 'console 收集器收到標記',
+    })
+    check(
+      results,
+      `${label}：renderer 的 console 錯誤進得了探針的收集器`,
+      collected.some((e) => e.text.includes('PROBE_CONSOLE_SENTINEL') && e.level === 'error'),
+      `本段收到 ${collected.length} 則：${JSON.stringify(collected.map((e) => e.text.slice(0, 40)))}`,
+    )
+
     // ── 還沒選中任何 repo 時，Ctrl+T 為無操作
     //
     // 這個狀態下「+ session」按鈕根本不在 DOM 裡 —— 驗的是它不會炸，也不會憑空生出一個選單。
@@ -960,11 +987,15 @@ async function runMode(label, { port, rendererUrl }) {
     await pressKey(app.client, 'Tab', ['ctrl'])
     await sleep(400)
     const stillSole = await app.client.evaluate(FOCUSED_TAB)
+    // **先求值成變數，detail 取自這一次。** 寫成 `(await evaluate(MOUNTED))?.ok === true` 塞在條件
+    // 運算式裡，掛載子條件不成立時 detail 一個字都說不出來 —— 而**這條斷言正是 issue #19 那七條
+    // 之一**，`shell 1 → shell 1` 只證明了另一個子條件成立。
+    const mountedAfterSoleTab = await app.client.evaluate(MOUNTED)
     check(
       results,
       `${label}：repo 只有一個 session 時，Ctrl+Tab 為無操作`,
-      stillSole === soleFocused && (await app.client.evaluate(MOUNTED))?.ok === true,
-      `${soleFocused} → ${stillSole}`,
+      stillSole === soleFocused && mountedAfterSoleTab?.ok === true,
+      `${soleFocused} → ${stillSole}；${describeMounted(mountedAfterSoleTab) || '掛載正常'}`,
     )
 
     // ── 最後聚焦的 session 被關掉之後，切回該 repo 落在第一個 session
@@ -1272,12 +1303,13 @@ async function checkSingleFolder(label, { port, rendererUrl }) {
     await pressKey(app.client, 'ArrowUp', ['ctrl'])
     await sleep(400)
     const after = await app.client.evaluate(SELECTED_FOLDER)
+    const mountedAfterSwitch = await app.client.evaluate(MOUNTED)
 
     check(
       results,
       `${label}：workspace 只有一個 folder 時，切換 repo 為無操作且 app 不崩潰`,
-      after === before && (await app.client.evaluate(MOUNTED))?.ok === true,
-      `${before} → ${after}`,
+      after === before && mountedAfterSwitch?.ok === true,
+      `${before} → ${after}；${describeMounted(mountedAfterSwitch) || '掛載正常'}`,
     )
 
     // ── 排序快捷鍵在**單一項目**上的邊界（spec 的 scenario，否則零覆蓋）
@@ -1287,12 +1319,13 @@ async function checkSingleFolder(label, { port, rendererUrl }) {
     await pressKey(app.client, 'ArrowDown', ['shift'])
     await pressKey(app.client, 'ArrowUp', ['shift'])
     await sleep(400)
+    const orderAfter = await app.client.evaluate(RAIL_ORDER)
+    const mountedAfterReorder = await app.client.evaluate(MOUNTED)
     check(
       results,
       `${label}：workspace 只有一個 folder 時，排序快捷鍵為無操作且 app 不崩潰`,
-      JSON.stringify(await app.client.evaluate(RAIL_ORDER)) === JSON.stringify(orderBefore) &&
-        (await app.client.evaluate(MOUNTED))?.ok === true,
-      JSON.stringify(orderBefore),
+      JSON.stringify(orderAfter) === JSON.stringify(orderBefore) && mountedAfterReorder?.ok === true,
+      `${JSON.stringify(orderBefore)}；${describeMounted(mountedAfterReorder) || '掛載正常'}`,
     )
 
     await createSession(app.client)
@@ -1301,13 +1334,14 @@ async function checkSingleFolder(label, { port, rendererUrl }) {
     await pressKey(app.client, 'ArrowLeft', ['shift'])
     await sleep(400)
     const stillSole = await app.client.evaluate(TABS)
+    const mountedAfterTabReorder = await app.client.evaluate(MOUNTED)
     check(
       results,
       `${label}：repo 只有一個 session 時，排序快捷鍵為無操作且 app 不崩潰`,
       stillSole.length === 1 &&
         stillSole[0].label === soleTab[0].label &&
-        (await app.client.evaluate(MOUNTED))?.ok === true,
-      JSON.stringify(stillSole.map((t) => t.label)),
+        mountedAfterTabReorder?.ok === true,
+      `${JSON.stringify(stillSole.map((t) => t.label))}；${describeMounted(mountedAfterTabReorder) || '掛載正常'}`,
     )
   } finally {
     await app.destroy()

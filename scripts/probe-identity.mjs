@@ -32,10 +32,14 @@ import { setTimeout as sleep } from 'node:timers/promises'
 import { fileURLToPath } from 'node:url'
 import { check, connect, pollUntil, waitForPageTarget } from './lib/cdp.mjs'
 import { electronExtraArgs } from './lib/display.mjs'
+import { PROBE_PORTS } from './lib/ports.mjs'
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..')
 
-const DEBUG_PORT = 9225
+// 這支啟動兩次，**兩個 port 各自明寫**（此前是 `DEBUG_PORT` 與 `DEBUG_PORT + 1`，而衍生出來的
+// 那一個從來不在任何一份表上 —— 它撞著 `probe-terminal` 的 build port，沒有東西看得見）。
+const DEFAULT_PORT = PROBE_PORTS.identity.default
+const XDG_HOME_PORT = PROBE_PORTS.identity.xdgHome
 const STARTUP_TIMEOUT_MS = 30_000
 
 const EXPECTED_NAME = 'spekterm'
@@ -132,7 +136,7 @@ let exitCode = 1
 let xdgHome = null
 
 try {
-  const observed = await launchAndObserve({ port: DEBUG_PORT })
+  const observed = await launchAndObserve({ port: DEFAULT_PORT })
 
   // 視窗標題跟隨品牌書寫（全小寫），與 productName 的 `Spekterm` 不同源 —— 兩者不需一致。
   check(results, 'renderer 的 document.title 為產品名',
@@ -166,7 +170,7 @@ try {
    */
   xdgHome = mkdtempSync('/tmp/spekterm-identity-xdg-')
   const moved = await launchAndObserve({
-    port: DEBUG_PORT + 1,
+    port: XDG_HOME_PORT,
     extraEnv: { XDG_CONFIG_HOME: xdgHome },
   })
 

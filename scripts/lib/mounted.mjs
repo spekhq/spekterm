@@ -23,7 +23,24 @@ const BASE = {
 }
 
 /**
- * 組出一段求值為 `{ ok, ...子條件 }` 的 expression。
+ * **只帶回、不參與判定**的現場資料。
+ *
+ * issue #19 的建議 1 要的四樣裡有兩樣在這裡（另兩樣：console error 由 `lib/cdp.mjs` 收，
+ * `did-navigate` 明確不做 —— 它是主行程的 `webContents` 事件，renderer 求值看不到，要拿到就得
+ * 在 `src/` 印出來，那違反「產品程式碼零改動」）。
+ *
+ * **它們絕不可以進 `ok`。** `readyState === 'complete'` 不是掛載的必要條件；把它加進判定會改變
+ * 那七條紅**自己的判定**，於是 #19 的對照組就毀了 —— 交付之後分不出「紅燈變了」是因為採證還是
+ * 因為判準。子節點的**數量**同理：`root` 那個子條件本來就存在，這裡加的是它被 `Boolean()` 掉的
+ * 那個數字。
+ */
+const DIAGNOSTICS = {
+  readyState: `document.readyState`,
+  rootChildren: `document.getElementById('root')?.children.length ?? 0`,
+}
+
+/**
+ * 組出一段求值為 `{ ok, ...子條件, diagnostics }` 的 expression。
  *
  * @param {object} [options]
  * @param {string[]} [options.omit] 這支探針**不要求**的子條件（要在呼叫端寫明理由）
@@ -35,9 +52,12 @@ export function mountedExpression({ omit = [], extra = {} } = {}) {
   const fields = Object.entries(parts)
     .map(([name, expression]) => `${name}: Boolean(${expression})`)
     .join(', ')
+  const diagnosticFields = Object.entries(DIAGNOSTICS)
+    .map(([name, expression]) => `${name}: (${expression})`)
+    .join(', ')
   return `(() => {
     const parts = { ${fields} }
-    return { ...parts, ok: Object.values(parts).every(Boolean) }
+    return { ...parts, ok: Object.values(parts).every(Boolean), diagnostics: { ${diagnosticFields} } }
   })()`
 }
 
@@ -64,8 +84,15 @@ export function describeMounted(value) {
     return '判定沒有回傳值（求值本身失敗 —— renderer 可能已經不在了）'
   }
   if (value.ok === true) return ''
-  const parts = Object.entries(value).filter(([name]) => name !== 'ok')
+  // **`diagnostics` 必須排除在子條件之外。** 它是一個物件（恆為 truthy），混進來會讓「哪些子條件
+  // 不成立」多出一個永遠成立的 `diagnostics=true`，而且與 `ok` 的計算對不上。
+  const parts = Object.entries(value).filter(([name]) => name !== 'ok' && name !== 'diagnostics')
   const failed = parts.filter(([, ok]) => !ok).map(([name]) => name)
   const all = parts.map(([name, ok]) => `${name}=${ok}`).join(' ')
-  return `未成立：${failed.join('、') || '(無 —— ok 與子條件不一致)'}（${all}）`
+  const diagnostics = value.diagnostics
+    ? ` ｜ ${Object.entries(value.diagnostics)
+        .map(([name, v]) => `${name}=${v}`)
+        .join(' ')}`
+    : ''
+  return `未成立：${failed.join('、') || '(無 —— ok 與子條件不一致)'}（${all}）${diagnostics}`
 }

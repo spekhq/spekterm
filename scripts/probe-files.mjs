@@ -31,9 +31,10 @@ import { check, connect, pollFor, pollUntil, waitForPageTarget } from './lib/cdp
 import { copy } from './lib/copy.mjs'
 import { MOUNTED, describeMounted } from './lib/mounted.mjs'
 import { electronExtraArgs } from './lib/display.mjs'
+import { PROBE_PORTS } from './lib/ports.mjs'
 
-const BUILD_PORT = 9224
-const DEV_PORT = 9225
+const BUILD_PORT = PROBE_PORTS.files.build
+const DEV_PORT = PROBE_PORTS.files.dev
 const MAX_FILE_BYTES = 2 * 1024 * 1024
 
 const results = []

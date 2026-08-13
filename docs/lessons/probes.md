@@ -270,10 +270,13 @@ pty 已存在」「切換前終端裡確實有已知內容」「檔案到底寫�
 
 > **flaky 的驗證要連跑，不能只跑一輪。** 第一輪 9/9 全綠時我已經準備收工了。
 
-**已知未解的偶發有三條，撞到時先單獨重跑確認，不要當成自己剛改壞的**：`probe:terminal` 的
-「持久化檔案損毀」（**#8**，單獨連跑為 1 紅 1 綠）、`probe:terminal` 一次拖曳失手就整支中斷
-（**#6**）、`test:all` 於 app relaunch 時 CDP WebSocket 連線失敗（**#7**）。**它們記在這裡就是為了
-不再被重新調查一次** —— 一條沒有被追蹤的已知紅燈，下一個人只能從頭查起。
+**已知未解的偶發有兩條，撞到時先單獨重跑確認，不要當成自己剛改壞的**：`probe:terminal` 的
+「持久化檔案損毀」（**#8**，單獨連跑為 1 紅 1 綠）、`test:all` 於 app relaunch 時 CDP WebSocket
+連線失敗（**#7**）。**它們記在這裡就是為了不再被重新調查一次** —— 一條沒有被追蹤的已知紅燈，
+下一個人只能從頭查起。
+
+> 原本還有第三條（`probe:terminal` 一次拖曳失手就整支中斷，**#6**）—— 已於
+> `probe-failure-attribution` 修掉：重試收進 `readTerminalText` 自己，六個呼叫站點都不必記得。
 
 **而診斷要往下走一層，不要在最貴的那一層重試。** `panel-coordinate-per-folder` 的一條驗收紅了
 四輪，我連續提出三個言之成理又有旁證的假設（chokidar 的初次掃描窗口、新目錄看不見、inotify
@@ -319,7 +322,7 @@ instance 耗盡），三輪探針約 30 分鐘全花在懷疑產品 —— 而�
   `ps -eo cmd | grep -c '[e]lectron/dist/electron'`。
 - **收尾殺行程時，殺 wrapper 殺不到它 spawn 的真行程。** `node_modules/.bin/electron` 是 node
   wrapper，`npx electron-vite dev` 的 vite 也是孫行程 —— 對 wrapper 送 SIGTERM，底下的真行程會變
-  孤兒，繼續佔著 debugging port（9224），讓下一輪 probe 連到殭屍而讀到空樹（實測：一連串失敗看起來
+  孤兒，繼續佔著自己那個 debugging port（配置見 `scripts/lib/ports.mjs`），讓下一輪 probe 連到殭屍而讀到空樹（實測：一連串失敗看起來
   像 regression，其實是殭屍）。**兩種收法**：electron 以獨一無二的 `--user-data-dir=<profile>` 用
   `pkill -9 -f <profile>` 連根拔除；dev server 以 `detached: true` spawn 成 group leader 再
   `process.kill(-pid)`。**另外，面板留有未存變更時關閉會觸發原生對話框，它會擋住主行程訊息迴圈使
@@ -426,15 +429,82 @@ instance 耗盡），三輪探針約 30 分鐘全花在懷疑產品 —— 而�
 **判定「確定性 vs 負載型」要換的是環境，不是改動。** 跑之前先確認：沒有殘留的 electron／
 `electron-vite dev` 孫行程／`Xvfb`／`dconf` 抓著 debugging port。
 
+## 前置條件：兩種完全不同的病，長得一模一樣
+
+`out/` 不存在（忘了建置）與 debugging port 被殘留行程抓著，**在輸出上曾經無法區分** —— 兩者都是
+每支探針各等滿 30 秒，然後回報：
+
+```
+probe 失敗：等待 CDP target 逾時（30000ms，port 9223）
+0/0 通過
+```
+
+實測一輪這樣的執行花了約 20 分鐘、一條斷言都沒驗到；追查時**先誤判成 port 佔用、查完才發現是
+產物不存在**。兩者的處置完全相反（一個重新建置、一個清行程）。
+
+`scripts/lib/preflight.mjs` 現在在啟動 app **之前**就判定，各自帶可執行的處置。三件事值得記住：
+
+- **判定與歸因分離。** 判定只用 Node 內建的 `net.connect`；找出持有者才用 `ss -tlnp`，**取不到就
+  降級為「查不出持有者」，不影響判定**。歸因需要外部程式與權限，兩者都可能不在 —— 讓一個加分項
+  決定判定的成敗，就是把穩固的檢查換成一個會在別的機器上失靈的檢查。
+- **`net.connect` 唯一的壞失效方向是「listener 在但 accept queue 滿」⇒ 一直不返回。** socket 因此
+  必須設 timeout 並在每條路徑上 `destroy()`；少了它，一個為了取代 30 秒神秘逾時的檢查會自己變成
+  無界的 hang（`pollFor` 攔不住 —— 它等的是 `read()` 返回）。
+- **檢查通過之後 port 仍可能被搶走**（TOCTOU）。這個缺口補不掉，但 `waitForPageTarget` 的逾時訊息
+  會**再查一次持有者**，那涵蓋了前置檢查結構上涵蓋不到的每一種情形。
+
+**觸發它需要走旁路。** `run-probe.mjs` 預設會建置，所以「把 `out/` 移走再跑」測不到這道檢查 ——
+它會直接重建。要驗證得用 `PROBE_SKIP_BUILD=1` 或 `SPEKTERM_PROBE_BUILT=1`，而**那兩個旁路正是
+產物可能不存在的來源**。
+
+## debugging port：一份表，加一道看得見「衍生」的守衛
+
+port 全部宣告於 `scripts/lib/ports.mjs`（**探針名 → 一組具名的 port**），`scripts/ports.test.mjs`
+守著三條判準。形狀與判準都不是隨手決定的：
+
+- **表是「一支對應一組」，因為現況就有一支用兩個。** `probe-identity` 啟動兩次，此前寫成
+  `DEBUG_PORT` 與 `DEBUG_PORT + 1`。一對一的表**放不下第二個**，於是那個 port 不會出現在表上 ——
+  守衛看不見它、前置檢查也不檢查它。**一份漏掉一半的表比沒有表更糟**：它讓人以為問題已經被結構
+  擋住了。
+- **守衛不能只找「`const *PORT* = 數字`」。** 那條規則對 `DEBUG_PORT + 1` 一個字都看不到，
+  而那正是當時撞號的來源（9226 ＝ `probe-terminal` 的 build port）。第三條判準因此是「**不得對表
+  的成員做算術**」。
+- **兩條判準是接力的。** 對照組（改動前的八支原始碼）上判準二報 12 處、判準三報 0 處 —— 當時的
+  算術是對本地常數做的，而那個常數已被判準二抓住。只有二，改寫成表的成員之後就沒人擋；只有三，
+  本地常數的世界一片綠。
+- **號碼刻意不相鄰**（9221／9231）。取 9221/9222 的話，下一個順手寫 `+1` 的人會直接撞進
+  `probe:shell`。
+- **`core` 與 `native` 不得補進表裡。** `probe-core` 的驗收內容之一就是「主行程不開任何 TCP 埠」，
+  給它一個 debugging port 會讓它**依設計失敗**。
+
+## renderer 的 console：探針此前一個字都收不到
+
+`lib/cdp.mjs` 的 `send()` 只認得帶 `id` 的回應，**事件訊息（沒有 `id`）被直接忽略**。於是 dev 模式
+那七條穩定失敗（issue #19）至今沒有任何現場證據 —— 子條件的 detail 能說出是 `rail` / `root` /
+`visible` 哪一個不成立，卻說不出**為什麼**，而 dev 與 build 唯一的結構差異（多一層開發伺服器）
+的失敗正是留在 console 而不在 DOM 上。
+
+- **捕捉窗口涵蓋 `enable` 之前 —— 這是實測，不是推論。** 直覺會認為「enable 之後才開始收」，
+  那樣的話 renderer 在 attach 之前寫的東西全部拿不到。**實測（Electron 43）推翻了它**：
+  `Runtime.consoleAPICalled` 與 `Log.entryAdded` 都會被緩衝並在 `enable` 時重播。
+  **這個性質是承重的** —— 日後升版若改掉它，症狀是「採不到早期訊息」，不是任何一條紅燈。
+- **只在該段落確實失敗時才印**（紅燈斷言、例外、或逾時），沒有訊息就完全不輸出。與窗口耗盡累計
+  同一條紀律：一個恆常出現的欄位掛在每個正常段落上，只會讓人學會不看它。
+- **「只在段落 throw 時印」是不夠的** —— #19 那七條是**斷言紅、不是例外**，只接 throw 正好採不到
+  它們。
+- **緩衝住在 `instrument.mjs`，由 `cdp.mjs` 推入。** 讀它的是 `sections.mjs`，而那個模組不該為了
+  一則訊息把 CDP 拉進來（`probe-native` 沒有 CDP 也要用 `check()`）。
+
 ## 為什麼不平行化 `run-probes.mjs`
 
 九支序列跑很誘人拿來平行化，但目前不做，理由是具體的：
 
 - **issue #17 記載的正是「連續跑多支之後負載尖峰超出等待窗口」** —— 平行只會放大它。
-- **debugging port 會撞**：`probe:identity` 用 9225／9226，而 9225 是 `probe:files` 的 dev port、
-  9226 是 `probe:terminal` 的 build port。現在靠序列執行才沒事。
+- ~~**debugging port 會撞**~~ —— **這條已經不成立**（`probe-failure-attribution`）。port 收斂到
+  `scripts/lib/ports.mjs`，`probe:identity` 的兩個號碼改為 9221／9231 且各自明寫，
+  `scripts/ports.test.mjs` 擋住重複與衍生。**但這只解決了三條理由裡的一條**，另外兩條仍然成立。
 
-先修 #17、再處理 port 分配，才談得上平行化。
+先修 #17、再處理**負載**，才談得上平行化。
 - **一支新的 CPU 密集測試會逼出既有的競態。** `copy-language.test.mjs` 用 TypeScript 解析整個
   `src/`，平行跑時把 `terminal.test.ts` 兩處 `stub.calls()` 斷言擠爆了 —— 產品在 spawn 的**當下**就
   回報了 conversationId，但 stub 是在自己的行程裡 `echo "$@" >> log`，中間隔著一次 fork/exec。

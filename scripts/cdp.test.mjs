@@ -10,8 +10,17 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { beginSection, check, noteCdp, pollFor, sectionSummary, sectionToken } from './lib/instrument.mjs'
+import {
+  beginSection,
+  check,
+  noteCdp,
+  pollFor,
+  retrySample,
+  sectionSummary,
+  sectionToken,
+} from './lib/instrument.mjs'
 import { waitForPageTarget } from './lib/cdp.mjs'
+import { runInNewContext } from 'node:vm'
 import { describeMounted, mountedExpression } from './lib/mounted.mjs'
 
 /** 收集 `console.log` 的輸出並還原 —— 這些機制的產物就是輸出本身。 */
@@ -152,6 +161,82 @@ test('呼叫端可把逾時升級為例外，而其他呼叫端不受影響', as
   )
 })
 
+// ── retrySample：偶發會失手的取樣 ───────────────────────────────────────────
+
+test('retrySample：前幾次失手之後成功，就回傳那次的值', async () => {
+  let attempts = 0
+  const { value } = await captured(() =>
+    retrySample(
+      () => {
+        attempts += 1
+        if (attempts < 3) throw new Error('拖曳沒有選到任何東西')
+        return 'GPUMARK_42'
+      },
+      { timeoutMs: 3000, interval: 5, label: '假的擷取' },
+    ),
+  )
+  assert.equal(value, 'GPUMARK_42')
+  assert.equal(attempts, 3, '前兩次的失手應該只是重試，不是中止')
+})
+
+test('retrySample：一次就成功時不重試（沒有失手的路徑上是零影響）', async () => {
+  let attempts = 0
+  const { value } = await captured(() =>
+    retrySample(
+      () => {
+        attempts += 1
+        return 'ok'
+      },
+      { timeoutMs: 3000, interval: 5, label: '假的擷取' },
+    ),
+  )
+  assert.equal(value, 'ok')
+  assert.equal(attempts, 1)
+})
+
+test('retrySample：始終失手時，拋出來的是最後那個哨兵本身', async () => {
+  // **控制組的判準是「拋出來的是哪一個錯誤」，不是「有沒有東西被拋出來」。**
+  // 這個讀取真實的失效方式之一，是在中途拋出一個與現場無關的 `TypeError`
+  //（`realClick(null)` 去讀 `null.x`）—— 那時「有東西被拋出來」照樣成立，而浮上來的訊息
+  // 完全指不到根因。**失敗的形態變質，比失敗本身更難查。**
+  const sentinel = new Error('readTerminalText: 複製沒有發生（disabled=true）—— 不可當成「畫面上沒有東西」')
+  let last = null
+  await assert.rejects(
+    () =>
+      captured(() =>
+        retrySample(
+          () => {
+            last = new Error(sentinel.message)
+            throw last
+          },
+          { timeoutMs: 40, interval: 10, label: '一直失手的擷取' },
+        ),
+      ),
+    (error) => {
+      assert.equal(error, last, '拋的必須是最後一次那個例外物件本身')
+      assert.match(error.message, /不可當成「畫面上沒有東西」/)
+      return true
+    },
+  )
+})
+
+test('對照組：retrySample 不會把失手吞成一個可以讓斷言通過的值', async () => {
+  // 這道防護的失效方向是**假綠**：回一個空字串，否定式斷言（「畫面上沒有 X」）就會通過，
+  // 而探針其實什麼都沒讀到。
+  await assert.rejects(
+    () =>
+      captured(() =>
+        retrySample(
+          () => {
+            throw new Error('讀不到')
+          },
+          { timeoutMs: 30, interval: 10, label: '一直失手' },
+        ),
+      ),
+    /讀不到/,
+  )
+})
+
 // ── 斷言的耗時與往返計數 ────────────────────────────────────────────────────
 
 test('每一條斷言都帶耗時與 CDP 往返計數（無門檻）', async () => {
@@ -256,4 +341,68 @@ test('describeMounted 是純函式，拿不到 client（結構上不可能事後
 test('mountedExpression 可省略與追加子條件', () => {
   assert.ok(!mountedExpression({ omit: ['visible'] }).includes('visibilityState'))
   assert.ok(mountedExpression({ extra: { separators: 'x === 3' } }).includes('separators'))
+})
+
+// ── MOUNTED 的診斷欄位（issue #19 的建議 1）─────────────────────────────────
+
+/** 在一個假的 `document` 上真的求值那段 expression —— 它就是會被送進 renderer 的那個字串。 */
+function evaluateMounted(expression, document) {
+  return runInNewContext(`(${expression})`, { document })
+}
+
+test('診斷欄位不參與 ok 的判定', () => {
+  // **這是這幾條裡最重要的一條。** 診斷值若進了 `ok`，那七條 dev 紅燈的判定本身就變了 ——
+  // 交付之後再也分不出「紅燈變了」是因為採證還是因為判準。
+  const value = evaluateMounted(mountedExpression(), {
+    querySelector: () => ({}),
+    getElementById: () => ({ children: { length: 3 } }),
+    visibilityState: 'visible',
+    readyState: 'loading', // ← 不是 'complete'
+  })
+  assert.equal(value.ok, true, 'readyState 不是 complete 時，ok 仍只由三個子條件決定')
+  assert.equal(value.diagnostics.readyState, 'loading', '但它要被帶回來')
+  assert.equal(value.diagnostics.rootChildren, 3, '子節點的「數量」—— 那正是 Boolean() 掉的東西')
+})
+
+test('診斷欄位在 renderer 真的沒掛載時也拿得到值', () => {
+  const value = evaluateMounted(mountedExpression(), {
+    querySelector: () => null,
+    getElementById: () => null,
+    visibilityState: 'hidden',
+    readyState: 'loading',
+  })
+  assert.equal(value.ok, false)
+  assert.equal(value.diagnostics.rootChildren, 0, '#root 不在時要回 0，不是 undefined')
+  assert.match(describeMounted(value), /rootChildren=0/)
+})
+
+test('describeMounted 把診斷值附在訊息尾端', () => {
+  const text = describeMounted({
+    rail: false,
+    root: true,
+    visible: true,
+    ok: false,
+    diagnostics: { readyState: 'loading', rootChildren: 0 },
+  })
+  assert.match(text, /未成立：rail/)
+  assert.match(text, /readyState=loading/)
+  assert.match(text, /rootChildren=0/)
+})
+
+test('describeMounted 不把 diagnostics 當成一個子條件', () => {
+  // 它是物件（恆為 truthy）—— 混進子條件會多出一個永遠成立的 `diagnostics=true`，
+  // 而且與 ok 的計算對不上。
+  const text = describeMounted({
+    rail: false,
+    ok: false,
+    diagnostics: { readyState: 'complete', rootChildren: 1 },
+  })
+  assert.doesNotMatch(text, /diagnostics=true/)
+  assert.match(text, /（rail=false）/)
+})
+
+test('對照組：沒有 diagnostics 的舊形狀仍然可讀', () => {
+  const text = describeMounted({ rail: false, root: true, visible: true, ok: false })
+  assert.match(text, /未成立：rail/)
+  assert.doesNotMatch(text, /｜/)
 })

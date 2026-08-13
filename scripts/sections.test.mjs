@@ -10,7 +10,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { setTimeout as sleep } from 'node:timers/promises'
-import { pollFor } from './lib/instrument.mjs'
+import { noteConsole, pollFor, sectionToken } from './lib/instrument.mjs'
 import { runSections } from './lib/sections.mjs'
 
 /** 攔掉段落執行器的輸出，否則測試報告會被段落狀態淹掉。 */
@@ -377,4 +377,116 @@ test('未執行的段落不附耗時', async () => {
   )
   const row = lines.find((l) => l.includes('build：b') && l.includes('未執行'))
   assert.ok(row && !/（\d+\.\d+s/.test(row), `沒跑過的段落給一個耗時數字，等於憑空捏造，實際：${row}`)
+})
+
+// ── renderer 的 console 訊息：只在該段落確實失敗時出現 ──────────────────────
+
+/** 直接推進緩衝 —— 這一層不需要真的 CDP，`cdp.mjs` 推入的就是同一個入口。 */
+function emitConsole(text, level = 'error') {
+  noteConsole({ level, source: 'console', text }, sectionToken())
+}
+
+test('段落有紅燈斷言時，輸出該段收到的 console 訊息', async () => {
+  const results = []
+  const sections = [
+    {
+      name: 'red',
+      run: async () => {
+        emitConsole('Uncaught TypeError: 這是現場')
+        results.push(false) // 一條紅燈斷言 —— 不是例外，#19 那七條就是這一種
+      },
+    },
+  ]
+  const lines = await withOnly(null, () =>
+    capture(() => runSections({ sections, build: BUILD, dev: null, results })),
+  )
+  assert.ok(
+    lines.some((l) => l.includes('這是現場')),
+    '斷言紅但段落沒 throw —— 只接例外的實作在這裡就會什麼都採不到',
+  )
+})
+
+test('段落拋出例外時，同樣輸出該段的 console 訊息', async () => {
+  const results = []
+  const sections = [
+    {
+      name: 'boom',
+      run: async () => {
+        emitConsole('Failed to fetch dynamically imported module')
+        throw new Error('段落炸了')
+      },
+    },
+  ]
+  const lines = await withOnly(null, () =>
+    capture(() => runSections({ sections, build: BUILD, dev: null, results })),
+  )
+  assert.ok(lines.some((l) => l.includes('dynamically imported module')))
+})
+
+test('對照組：段落全過時不輸出 console 欄位，即使期間有訊息', async () => {
+  const results = []
+  const sections = [
+    {
+      name: 'green',
+      run: async () => {
+        emitConsole('一則沒有人需要看的警告', 'warning')
+        results.push(true)
+      },
+    },
+  ]
+  const lines = await withOnly(null, () =>
+    capture(() => runSections({ sections, build: BUILD, dev: null, results })),
+  )
+  assert.ok(
+    !lines.some((l) => l.includes('沒有人需要看')),
+    '一個恆常出現的欄位掛在每個正常段落上，只會讓人學會不看它',
+  )
+})
+
+test('訊息歸屬於發生當下的段落 —— 前一段的殘留不計入下一段', async () => {
+  const results = []
+  let leakedToken = null
+  const sections = [
+    {
+      name: 'first',
+      run: async () => {
+        leakedToken = sectionToken() // 逾時的段落會帶著舊 token 繼續在背景跑
+        results.push(true)
+      },
+    },
+    {
+      name: 'second',
+      run: async () => {
+        noteConsole({ level: 'error', source: 'console', text: '上一段的殘留' }, leakedToken)
+        emitConsole('本段自己的訊息')
+        results.push(false)
+      },
+    },
+  ]
+  const lines = await withOnly(null, () =>
+    capture(() => runSections({ sections, build: BUILD, dev: null, results })),
+  )
+  assert.ok(lines.some((l) => l.includes('本段自己的訊息')), '本段的訊息要在')
+  assert.ok(
+    !lines.some((l) => l.includes('上一段的殘留')),
+    '逾時的段落不會被中止，它在背景產生的訊息不該記到無辜的下一段頭上',
+  )
+})
+
+test('緩衝是環形的 —— 只留最近的，不會把一段的輸出淹掉', async () => {
+  const results = []
+  const sections = [
+    {
+      name: 'noisy',
+      run: async () => {
+        for (let i = 0; i < 50; i++) emitConsole(`訊息-${i}`)
+        results.push(false)
+      },
+    },
+  ]
+  const lines = await withOnly(null, () =>
+    capture(() => runSections({ sections, build: BUILD, dev: null, results })),
+  )
+  assert.ok(lines.some((l) => l.includes('訊息-49')), '最近的要留著')
+  assert.ok(!lines.some((l) => l.includes('訊息-0')), '最舊的要被擠掉')
 })

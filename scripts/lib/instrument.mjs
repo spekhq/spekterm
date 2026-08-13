@@ -37,12 +37,42 @@ function emptyCounters() {
   return { timeouts: 0, timeoutMs: 0, cdpCalls: 0, cdpMs: 0, intervalCdpCalls: 0, intervalCdpMs: 0 }
 }
 
+/**
+ * renderer 的 console 錯誤 —— 環形緩衝，**以段落為單位**。
+ *
+ * 住在這裡而不是 `lib/cdp.mjs`，理由與這個模組存在的理由相同（見檔頭）：讀它的是
+ * `sections.mjs`，而那個模組不該為了一則訊息把 CDP 拉進來。推入的是 `cdp.mjs`，方向是對的。
+ */
+const CONSOLE_BUFFER_LIMIT = 20
+let consoleEntries = []
+
 /** 開始一個新段落：換 token、重置累計、把「上一條斷言」的時間拉到現在。 */
 export function beginSection() {
   currentToken += 1
   counters = emptyCounters()
+  consoleEntries = []
   lastCheckAt = Date.now()
   return currentToken
+}
+
+/**
+ * 記一則 renderer 的 console 訊息。
+ *
+ * `token` 是**訊息抵達當下**的段落 —— 與 CDP 往返同一條紀律：逾時的段落不會被中止，它在背景
+ * 產生的訊息不該記到下一段頭上。
+ *
+ * @param {{ level: string, text: string, source?: string }} entry
+ * @param {number} token
+ */
+export function noteConsole(entry, token) {
+  if (token !== currentToken) return
+  consoleEntries.push(entry)
+  if (consoleEntries.length > CONSOLE_BUFFER_LIMIT) consoleEntries.shift()
+}
+
+/** 本段落收到的 console 訊息（供段落總結在**有失敗時**輸出）。 */
+export function sectionConsole() {
+  return [...consoleEntries]
 }
 
 /** 目前的段落 token —— 呼叫端在**發起**非同步工作時取得，完成時帶回來。 */
@@ -160,6 +190,37 @@ export async function pollFor({
   console.log(`  ⏱ 等待窗口耗盡（${seconds(Date.now() - started)}）：${label}`)
   if (lastError) throw lastError
   return last
+}
+
+/**
+ * **偶發會失手的取樣**：試到成功為止，窗口耗盡則把最後一次的例外拋出去。
+ *
+ * ## 它與 `pollFor` 的差別是「在等什麼」
+ *
+ * `pollFor` 等的是**畫面上的狀態**變成某個樣子（`settled` 判定），讀取本身被假定為可靠。
+ * 這個入口等的是**讀取本身成功** —— 標的是那種「拒絕把讀不到當成讀到空」的取樣：它在取不到時
+ * 刻意拋錯（否則否定式斷言會在探針瞎掉的情況下繼續發綠燈），而那個拋錯在語意上就是「還沒好」。
+ *
+ * ## 為什麼要有這個包裝，而不是各呼叫端傳 `tolerateErrors`
+ *
+ * 實測的現況：同一個讀取（`readTerminalText`）有**六個呼叫站點、三種姿態** —— 一個經
+ * `pollTerminalText` 有容忍、三個是裸呼叫、其餘經 `pollUntilText` 沒有容忍。一次偶發的失手因此
+ * 讓整支探針從那裡中斷，代價是一輪十幾分鐘，而症狀指向錯的地方（看起來像被測的功能壞了）。
+ *
+ * 把容忍收進讀取自己的入口，六個站點就都不必記得。**但這是「現況全覆蓋」，不是結構保證** ——
+ * 它擋不住明天寫出的第二個哨兵式讀取。要真正結構化得先定義「哪些讀取算哨兵式」，而那個判準
+ * 寫得出來就會誤判。
+ *
+ * @param {Function} read 取樣（可為 async）。**成功即返回，不看回傳值**
+ * @param {object} options
+ * @param {number} options.timeoutMs 時限 —— **取小**。這個窗口常常套在另一個窗口之內，
+ *   兩層相乘會把一次失手的代價放大一個數量級
+ * @param {string} options.label
+ * @param {number} [options.interval]
+ */
+export async function retrySample(read, { timeoutMs, label, interval = 200 }) {
+  // `settled` 恆真：這裡不判斷值長什麼樣 —— 那是呼叫端外層那個 `pollFor` 的事。
+  return pollFor({ read, settled: () => true, timeoutMs, interval, label, tolerateErrors: true })
 }
 
 function noteTimeout(elapsedMs, token) {

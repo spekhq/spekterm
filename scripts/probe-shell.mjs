@@ -16,8 +16,9 @@ import { join } from 'node:path'
 import { check, connect, pollUntil, waitForPageTarget } from './lib/cdp.mjs'
 import { copy } from './lib/copy.mjs'
 import { electronExtraArgs } from './lib/display.mjs'
+import { PROBE_PORTS } from './lib/ports.mjs'
 
-const DEBUG_PORT = 9222
+const DEBUG_PORT = PROBE_PORTS.shell.main
 const STARTUP_TIMEOUT_MS = 30_000
 
 /** renderer 內求值：全部取自真實的 DOM 與 preload 介面，沒有專為驗收而生的鉤子。 */

@@ -19,8 +19,9 @@ import { check, connect, dragMouse, pollFor, pollUntil, pressKey, waitForPageTar
 import { copy, patternOf, prefixOf, suffixOf } from './lib/copy.mjs'
 import { describeMounted, mountedExpression } from './lib/mounted.mjs'
 import { electronExtraArgs } from './lib/display.mjs'
+import { PROBE_PORTS } from './lib/ports.mjs'
 
-const DEBUG_PORT = 9223
+const DEBUG_PORT = PROBE_PORTS.workspace.main
 const results = []
 const temps = []
 

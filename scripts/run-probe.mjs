@@ -14,6 +14,8 @@ import { existsSync, statSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import { withDisplay, useVirtualDisplay } from './lib/display.mjs'
+import { portsOf } from './lib/ports.mjs'
+import { NO_BUILD, PreflightError, ensureBuildArtifacts, ensurePortsFree } from './lib/preflight.mjs'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const name = process.argv[2]
@@ -41,12 +43,10 @@ if (!existsSync(join(root, script))) {
  *
  * 合成一個旋鈕的話，完整驗收就會走上「跳過建置」那條路，而那條路的語意是「你自己負責產物是新的」
  * —— 完整驗收不該有那種責任。
+ *
+ * 豁免名單（`NO_BUILD`）住在 `lib/preflight.mjs`，因為**產物檢查與跳過建置必須用同一份** ——
+ * 兩邊各留一份的話，症狀是「某支探針在產物不存在時依然空轉 30 秒」。
  */
-const NO_BUILD = new Set([
-  'native', // 驗的是 node-pty 能不能被主行程載入，不碰 out/
-  'package', // 由 `npm run dist:linux` 產生真正的 AppImage，不是 `npm run build`
-])
-
 function buildIfNeeded() {
   if (NO_BUILD.has(name)) return
   if (process.env.SPEKTERM_PROBE_BUILT === '1') return
@@ -65,6 +65,22 @@ function buildIfNeeded() {
 }
 
 buildIfNeeded()
+
+/**
+ * 前置條件 —— **放在建置之後**：`PROBE_SKIP_BUILD` 與 `SPEKTERM_PROBE_BUILT` 兩個旁路的語意都是
+ * 「你自己負責產物是新的」，而**那兩個旁路正是產物可能不存在的來源**。
+ *
+ * 失敗時只印訊息、不丟 stack trace（比照上面缺 `xvfb` 的處理）：前置條件不成立是**環境**問題，
+ * 一坨堆疊只會把那句可執行的指示淹掉。
+ */
+try {
+  ensureBuildArtifacts(name, { root })
+  await ensurePortsFree(portsOf(name), { name })
+} catch (error) {
+  if (!(error instanceof PreflightError)) throw error
+  console.error(error.message)
+  process.exit(1)
+}
 
 // `probe:native` 自己就是一個 Electron 主行程（它 require node-pty，必須在 Electron 裡跑），
 // 不像其餘八支那樣「以 node 執行、再由它 spawn electron」。

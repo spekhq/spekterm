@@ -132,6 +132,11 @@ npm run probe:package   # 打包 → 啟動 AppImage → 產物可執行／脫�
 PROBE_PACKAGE_APPIMAGE=<path> node scripts/run-probe.mjs package   # 重用既有產物（迭代用）
 ```
 
+**啟動前會檢查兩個前置條件**（`scripts/lib/preflight.mjs`）：建置產物在不在、該支要用的 debugging
+port 通不通 —— 任一不成立就**立刻失敗並指出處置**，不進入那 30 秒的「等待 CDP target 逾時」。
+兩者此前的失敗訊息一模一樣而處置相反，實測誤導過一次。**debugging port 一律宣告於
+`scripts/lib/ports.mjs`**（加新探針要在那裡登記，`npm test` 擋重複與衍生）。
+
 ### 探針跑在虛擬螢幕上 —— 而那限定了驗收的效力
 
 `scripts/run-probe.mjs` 把探針包進 `xvfb-run`（需 `sudo apt install xvfb`；缺了它會**明確失敗並說明

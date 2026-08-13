@@ -4,11 +4,12 @@
  * 驗收一律透過 CDP 連進執行中的 app，而不是在產品程式碼裡塞測試分支 ——
  * 要驗的正是被出貨的那份程式碼，任何為測試而加的岔路都會讓結論失效。
  */
-import { noteCdp, pollFor, sectionToken } from './instrument.mjs'
+import { noteCdp, noteConsole, pollFor, sectionToken } from './instrument.mjs'
+import { lookupHolder } from './preflight.mjs'
 
 // 斷言與等待原語的**唯一定義**在 `instrument.mjs`（它與 CDP 無關，`sections.mjs` 與
 // `probe-native` 都要用）。這裡轉出，是為了讓既有的 `from './lib/cdp.mjs'` 一字不必改。
-export { check, pollFor } from './instrument.mjs'
+export { check, pollFor, retrySample } from './instrument.mjs'
 
 export async function waitForPageTarget(port, timeoutMs = 30_000) {
   // **這個呼叫端要拋錯**：等不到 CDP target 還往下走，只會紅在一個與根因無關的地方。
@@ -28,7 +29,19 @@ export async function waitForPageTarget(port, timeoutMs = 30_000) {
     timeoutMs,
     label: `CDP target（port ${port}）`,
   })
-  if (!page) throw new Error(`等待 CDP target 逾時（${timeoutMs}ms，port ${port}）`)
+  if (!page) {
+    // **前置檢查涵蓋不到這裡，所以這裡要自己問一次。** 啟動前那道檢查有 TOCTOU 缺口：它通過之後
+    // port 才被搶走，或 app 因為完全無關的原因死掉 —— 症狀又變回這句沒有主詞的逾時。
+    // 再查一次持有者很便宜，而它涵蓋了前置檢查結構上涵蓋不到的每一種情形。
+    const holder = lookupHolder(port)
+    throw new Error(
+      `等待 CDP target 逾時（${timeoutMs}ms，port ${port}）` +
+        (holder
+          ? `\n  這個 port 上有東西在 listen：${holder}\n` +
+            '  —— app 大概沒起來，而 port 被別的行程抓著（啟動前它還是通的）。'
+          : '\n  這個 port 上沒有人在 listen —— app 沒有起來，去看它的 stderr。'),
+    )
+  }
   return page
 }
 
@@ -64,6 +77,8 @@ export async function connect(target) {
     })
   }
 
+  subscribeConsole(ws, send)
+
   return {
     send,
     async evaluate(expression) {
@@ -85,6 +100,80 @@ export async function connect(target) {
     },
     close: () => ws.close(),
   }
+}
+
+/** 只收這兩級 —— `log` / `info` / `debug` 在 dev 模式下是一片雜訊（Vite 的 HMR 訊息）。 */
+const COLLECTED_LEVELS = new Set(['error', 'warning'])
+
+/** CDP 的 `RemoteObject` 陣列收成一行字。物件不展開（`preview` 夠用，深挖要多跑往返）。 */
+function describeArgs(args = []) {
+  return args
+    .map((arg) => {
+      if (arg.type === 'string') return arg.value
+      if ('value' in arg) return JSON.stringify(arg.value)
+      return arg.description ?? arg.className ?? arg.type
+    })
+    .join(' ')
+}
+
+/**
+ * 訂閱 renderer 的 console 錯誤與未捕捉例外。
+ *
+ * ## 為什麼探針此前一個字都收不到
+ *
+ * `send()` 的 message handler 只認得帶 `id` 的回應 —— **事件訊息（沒有 `id`）被直接忽略**。
+ * 於是 dev 模式那七條穩定失敗，至今沒有任何現場證據：子條件的 detail 能說出是 `rail` / `root` /
+ * `visible` 哪一個不成立，卻說不出**為什麼**，而 dev 與 build 唯一的結構差異（多一層開發伺服器）
+ * 的失敗正是留在 console 而不在 DOM 上。
+ *
+ * ## 捕捉窗口涵蓋 `enable` 之前 —— 這是實測，不是推論
+ *
+ * 直覺會認為「enable 之後才開始收」，那樣的話 renderer 在 CDP client attach 之前寫的東西全部
+ * 拿不到 —— 而那正是模組載入失敗會出現的地方。**實測推翻了它**（2026-08-13，Electron 43，
+ * 以「ws 連上但先不 enable → `Runtime.evaluate` 發出訊息 → 才 enable」模擬）：
+ *
+ * ```
+ * enable 之前的訊息，重播收到：3
+ *     Runtime.consoleAPICalled  {"type":"error","args":[…"BEFORE_ENABLE_CONSOLE"]}
+ *     Log.entryAdded            {"source":"security","level":"error","text":"…CSP…"}
+ *     Log.entryAdded            {"source":"javascript","level":"error","text":"Fetch API cannot load…"}
+ * ```
+ *
+ * Chromium 兩個 domain 都會緩衝並在 enable 時重播。**這個性質是承重的**：日後 Electron 升版若
+ * 改掉它，症狀是「採不到早期訊息」而不是任何一條紅燈。
+ */
+function subscribeConsole(ws, send) {
+  ws.addEventListener('message', (event) => {
+    const msg = JSON.parse(event.data)
+    if (msg.id) return // 這是某次 send 的回應，不是事件
+
+    const token = sectionToken()
+    if (msg.method === 'Runtime.consoleAPICalled') {
+      const level = msg.params.type === 'warning' ? 'warning' : msg.params.type
+      if (!COLLECTED_LEVELS.has(level)) return
+      noteConsole({ level, source: 'console', text: describeArgs(msg.params.args) }, token)
+    } else if (msg.method === 'Runtime.exceptionThrown') {
+      const d = msg.params.exceptionDetails
+      noteConsole(
+        {
+          level: 'error',
+          source: 'exception',
+          // 與 `evaluate` 同一條教訓：`text` 幾乎恆為 "Uncaught"，真正的訊息在 description。
+          text: d?.exception?.description ?? d?.exception?.value ?? d?.text ?? '(未捕捉的例外)',
+        },
+        token,
+      )
+    } else if (msg.method === 'Log.entryAdded') {
+      const entry = msg.params.entry
+      if (!COLLECTED_LEVELS.has(entry.level)) return
+      noteConsole({ level: entry.level, source: entry.source, text: entry.text }, token)
+    }
+  })
+
+  // 不 await：`connect()` 的呼叫端在意的是 client 可用了沒。這兩個 enable 各是一次往返，
+  // 而它們的效果（含重播）不需要被等待 —— 事件會自己抵達。
+  void send('Runtime.enable')
+  void send('Log.enable')
 }
 
 /** 在座標處按下、移動、放開 —— 用來拖動 role="separator" 的分界。 */

@@ -26,7 +26,7 @@
  */
 
 import { writeFileSync } from 'node:fs'
-import { beginSection, sectionSummary } from './instrument.mjs'
+import { beginSection, sectionConsole, sectionSummary } from './instrument.mjs'
 
 /**
  * 段落的預設時限。
@@ -140,14 +140,14 @@ function wanted(selected, name) {
  *
  * @returns {Promise<Array<{name: string, status: 'passed'|'failed'|'skipped', reason?: string}>>}
  */
-async function runOneMode(sections, mode, modeConfig, selected, afterMode) {
+async function runOneMode(sections, mode, modeConfig, selected, afterMode, results) {
   /** 這個模式自己的 context —— **build 與 dev 各持一份，不得互串**（兩者各自建立 fixture）。 */
   const context = {}
   const failed = new Set()
   const outcomes = []
 
   try {
-    await runSectionsOfMode(sections, mode, modeConfig, selected, context, failed, outcomes)
+    await runSectionsOfMode(sections, mode, modeConfig, selected, context, failed, outcomes, results)
   } finally {
     // **模式收尾必須在 finally** —— 多個段落共用一個 app 時（`probe:openspec` 全程只有一次
     // `launch()`），關閉它的責任不能落在「最後一個段落」身上：中途任一段 throw，那一段就
@@ -164,7 +164,7 @@ async function runOneMode(sections, mode, modeConfig, selected, afterMode) {
   return outcomes
 }
 
-async function runSectionsOfMode(sections, mode, modeConfig, selected, context, failed, outcomes) {
+async function runSectionsOfMode(sections, mode, modeConfig, selected, context, failed, outcomes, results) {
   for (const section of sections) {
     if (!wanted(selected, section.name)) continue
 
@@ -181,7 +181,11 @@ async function runSectionsOfMode(sections, mode, modeConfig, selected, context, 
     // 它的殘留活動會繼續呼叫 `check()` 與 `pollFor()`，而下一個段落是無辜的。
     beginSection()
     const startedAt = Date.now()
+    const assertionsBefore = results?.length ?? 0
     const meter = () => ({ seconds: (Date.now() - startedAt) / 1000, ...sectionSummary() })
+    /** 這一段有沒有紅燈斷言 —— 例外與逾時走 catch，這裡問的是第三種失敗。 */
+    const hadRedAssertion = () =>
+      (results ?? []).slice(assertionsBefore).some((passed) => passed === false)
 
     try {
       const produced = await withTimeout(
@@ -191,6 +195,8 @@ async function runSectionsOfMode(sections, mode, modeConfig, selected, context, 
       )
       if (produced && typeof produced === 'object') Object.assign(context, produced)
       outcomes.push({ name: section.name, status: 'passed', ...meter() })
+      // 段落沒有 throw，但可能有紅燈斷言 —— #19 那七條全部是這一種。
+      if (hadRedAssertion()) reportConsole(mode, section.name)
     } catch (error) {
       failed.add(section.name)
       const timedOut = error instanceof SectionTimeout
@@ -215,7 +221,30 @@ async function runSectionsOfMode(sections, mode, modeConfig, selected, context, 
         console.error(`\n✗ ${mode}：${section.name} 拋出例外，本段記為失敗，繼續其後的段落`)
         console.error(error?.stack ?? String(error))
       }
+      reportConsole(mode, section.name)
     }
+  }
+}
+
+/**
+ * 把這一段收到的 renderer console 錯誤印出來。
+ *
+ * **只在該段落確實失敗時呼叫**（紅燈斷言、例外、或逾時），而且**沒有訊息就不輸出任何東西**。
+ *
+ * 三種比較容易想到的做法都不對：
+ *
+ * - **「斷言失敗就立刻印」** —— 目標的那七條紅分佈在三支探針的不同段落，逐條印會把 dev 模式
+ *   本來就吵的輸出鋪滿。以段落收口，一段只印一次。
+ * - **「只在段落拋出例外時印」** —— 那七條是**斷言紅、不是例外**，只接 throw 就正好採不到它們。
+ * - **「一律印」** —— 一個恆常出現的欄位掛在每個正常段落上，只會讓人學會不看它
+ *   （與窗口耗盡累計同一條紀律）。
+ */
+function reportConsole(mode, sectionName) {
+  const entries = sectionConsole()
+  if (entries.length === 0) return
+  console.error(`  ── ${mode}：${sectionName} 期間 renderer 的 console（最近 ${entries.length} 則）──`)
+  for (const entry of entries) {
+    console.error(`     [${entry.level}${entry.source ? `/${entry.source}` : ''}] ${entry.text}`)
   }
 }
 
@@ -250,7 +279,7 @@ export async function runSections({ sections, build, dev, results, afterMode, cl
   const outcomes = { build: [], dev: [] }
 
   try {
-    outcomes.build = await runOneMode(sections, 'build', build, selectedBuild, afterMode)
+    outcomes.build = await runOneMode(sections, 'build', build, selectedBuild, afterMode, results)
 
     // **dev server 起得很慢 —— 沒有任何 dev 段要跑時就不要起它。**
     const needsDev = sections.some((s) => wanted(selectedDev, s.name))
@@ -262,6 +291,7 @@ export async function runSections({ sections, build, dev, results, afterMode, cl
         { ...dev, rendererUrl: devServer.url },
         selectedDev,
         afterMode,
+        results,
       )
     }
   } finally {
