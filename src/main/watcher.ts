@@ -15,21 +15,36 @@ import { type FSWatcher, watch as chokidarWatch } from 'chokidar'
  * 「建立一個沒有錯誤處理的 watcher」表達不出來。這道約束由 eslint（擋靜態 import）與
  * `scripts/watcher-source.test.mjs`（擋動態 import、擋本模組再導出 chokidar 的值）共同維持。
  *
- * ## 兩個路徑參數是分開的，不要合併
+ * ## 輪詢的判定依據：預設與監看目標一致，顯式才分開
  *
  * `shouldUsePolling(p)` 會 `realpath(p)` 再查 `/proc/mounts`，判定的是**那條路徑所在掛載點**的
- * 檔案系統 —— 而三個站點餵給它的路徑本來就不同（有的傳 folder 根、有的傳監看目標）。合併成一個
- * 參數會讓「worktree 在網路檔案系統、folder 根在本機」的情形靜默退回 native watch，而那種失效
- * **連底下的錯誤 handler 都救不到**：`fs.watch` 只是永遠不觸發，沒有任何錯誤可以 emit。
+ * 檔案系統。判定錯誤的後果是靜默的，而且**連底下的錯誤 handler 都救不到** —— `fs.watch` 只是
+ * 永遠不觸發，沒有任何錯誤可以 emit。
+ *
+ * 四個建立點裡有**三個**服務單一目標（`branch-service` 兩層、`openspec-service`），它們的正確
+ * 答案就是自己的 `target`；只有 `watch-service` 一個 watcher 服務 N 個動態增減的子目標，需要
+ * 另一條路徑。`pollingRoot` 因此是**可省略**的：省略即以 `target` 判定。
+ *
+ * 這個預設是有由來的 —— 它此前是必填，於是每個呼叫端都得自己想一次，而 `branch-service` 第二層
+ * 想錯了：它監看 gitdir 底下的 `HEAD`（worktree／submodule 時可能在另一個掛載點），卻傳 folder
+ * 根（issue #16）。**但預設值救得了「忘記想」，救不了「想錯」** —— 顯式傳入的那一處由
+ * `watch-service` 自己的測試釘住。
  */
 export interface CreateWatcherOptions {
   /** 要監看的路徑。 */
   target: string
   /**
-   * 判定是否改用輪詢的依據路徑 —— 常常**不等於** `target`（見檔頭）。
-   * 一個 watcher 服務多個子目標時傳它們的共同根，一對一時傳 `target` 自己。
+   * 判定是否改用輪詢的依據路徑。**省略即以 `target` 判定**，那是一對一監看的正確答案。
+   *
+   * 顯式傳入是一個帶語意的宣告：**「我這個監看者服務多個目標，請以它們的共同根判定」**。
+   * 產品程式碼中只有 `watch-service` 該這樣做。
+   *
+   * **限定**：共同根只在該根與其所有目標位於**同一掛載點**時成立。路徑上的包含關係不是同一
+   * 檔案系統的保證 —— folder 內掛載網路儲存、`node_modules` 位於另一檔案系統、bind mount 都會
+   * 讓兩者分家，那時會發生與 issue #16 同種的靜默失效。單一 watcher 的 `usePolling` 於建構時
+   * 決定，服務跨掛載點的多個目標在結構上無解，其解法（每個掛載點一個 watcher）不在此處。
    */
-  pollingRoot: string
+  pollingRoot?: string
   /**
    * 錯誤回報時用來識別這個 watcher 的路徑。
    *
@@ -49,7 +64,7 @@ export function createWatcher({
   depth,
   alwaysStat,
 }: CreateWatcherOptions): FSWatcher {
-  const usePolling = shouldUsePolling(pollingRoot)
+  const usePolling = shouldUsePolling(pollingRoot ?? target)
   const interval = pollingInterval()
 
   // callback 必須同步（見 core 的 withAuthoritativeChokidarEnv）：env 的對齊只在

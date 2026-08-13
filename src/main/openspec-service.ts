@@ -861,11 +861,10 @@ export class OpenSpecService {
     target: string,
     options?: { depth?: number; events?: string[] },
   ): FSWatcher {
-    // 這裡是一個 watcher 對一個目標，所以 polling 判定與識別標籤都用 `target` 本身
-    // （同一個 folder 底下有多個：`openspec/`、工作目錄清單、每個工作目錄的 `openspec/`）。
+    // 這裡是一個 watcher 對一個目標（同一個 folder 底下有多個：`openspec/`、工作目錄清單、
+    // 每個工作目錄的 `openspec/`）：輪詢判定靠預設（即 `target` 自己），識別標籤同樣用 `target`。
     const watcher = createWatcher({
       target,
-      pollingRoot: target,
       label: target,
       ...(options?.depth === undefined ? {} : { depth: options.depth }),
     })

@@ -108,6 +108,15 @@ export class WatchService {
     private readonly store: FolderLookup,
     private readonly send: (batch: WatchBatch) => void,
     private readonly debounceMs: number = DEFAULT_DEBOUNCE_MS,
+    /**
+     * 建立 watcher 的實作，預設即 `createWatcher`。與 `BranchService` 的同名參數同一個理由：
+     * **這個服務餵給輪詢判定的是哪一條路徑，從它的外部行為看不出來**。
+     *
+     * 這裡的斷言只到「傳出的依據路徑是 folder 根」為止 —— 要驗到實際效果，得讓某個子目標落在
+     * 與 folder 根不同的掛載點上，而那正是規格宣告不支援的組態（單一 watcher 服務跨掛載點的
+     * 多個目標，`usePolling` 於建構時就定了）。**一個規格宣告不支援的情形，驗收造不出來。**
+     */
+    private readonly watcherFactory: typeof createWatcher = createWatcher,
   ) {}
 
   /** 目前被訂閱的樹節點總數。驗收「收合後不再監看」與「重新載入不累積」用得上。 */
@@ -234,7 +243,11 @@ export class WatchService {
     // 增減的子目標**（見下方的 `watcher.add()` / `unwatch()`）：那些子目標都在 folder 之內，
     // 用根判定 polling 是正確的；而 chokidar 的錯誤事件不指出是哪一個目標失敗，印 `target`
     // 只會識別到「碰巧第一個被訂閱的目錄」。
-    const watcher = createWatcher({
+    //
+    // **這是產品程式碼中唯一顯式傳 `pollingRoot` 的地方**（其餘三個建立點都是一對一，靠預設）。
+    // 因此它看起來會像一個可以順手清掉的殘留 —— 刪掉它不會讓型別、既有測試或探針變紅，只會讓
+    // 跨掛載點的使用者靜默受害。`watch-service.test.ts` 有一條測試專門釘住它，別繞過。
+    const watcher = this.watcherFactory({
       target,
       pollingRoot: root,
       label: root,

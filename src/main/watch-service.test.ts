@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, it } from 'node:test'
 import { FsBoundaryError } from './fs-boundary'
 import { FsServiceError, writeFile } from './fs-service'
 import { type WatchBatch, WatchService } from './watch-service'
+import { createWatcher } from './watcher'
 import type { FolderLookup, WorkspaceFolder } from './workspace-store'
 
 let base: string
@@ -63,6 +64,37 @@ beforeEach(() => {
 afterEach(async () => {
   await service.dispose()
   fs.rmSync(base, { recursive: true, force: true })
+})
+
+/**
+ * `watch-service` 是產品程式碼中**唯一**顯式傳 `pollingRoot` 的地方 —— 其餘三個建立點都是
+ * 一對一、靠預設。孤例看起來很像可以順手清掉的殘留，而刪掉它不會讓型別、既有測試或探針變紅：
+ * folder 根與其子目標在本機同屬一個掛載點，兩種判定得到相同答案。**這條測試就是那道防線。**
+ *
+ * 它斷言的是傳出的依據路徑，不是實際的 `usePolling` —— 後者需要某個子目標落在與 folder 根
+ * 不同的掛載點上，而那正是規格宣告不支援的組態（`resolveWithinRoot` 也擋掉了用 symlink 造它
+ * 的路）。一個規格宣告不支援的情形，驗收造不出來。
+ */
+describe('WatchService 的輪詢判定依據', () => {
+  it('以 folder 根判定，而非個別子目標', async () => {
+    const seen: Array<{ target: string; pollingRoot?: string }> = []
+    const spy: typeof createWatcher = (options) => {
+      seen.push({ target: options.target, pollingRoot: options.pollingRoot })
+      return createWatcher(options)
+    }
+
+    const spied = new WatchService(okFolder(), () => {}, 10, spy)
+    try {
+      await spied.watch('f1', 'sub')
+
+      assert.equal(seen.length, 1)
+      // 這個 watcher 服務 N 個動態增減的子目標；以其中任何一個判定都是錯的。
+      assert.equal(seen[0].pollingRoot, repo, '未以 folder 根判定 —— 顯式的 pollingRoot 被移除了？')
+      assert.notEqual(seen[0].target, seen[0].pollingRoot, '此 fixture 未使兩者相異，斷言沒有鑑別力')
+    } finally {
+      await spied.dispose()
+    }
+  })
 })
 
 describe('WatchService 的事件', () => {

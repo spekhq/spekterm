@@ -390,11 +390,22 @@ workspace 之外的位置。邊界檢查一律在**主行程**執行；preload �
   `followSymlinks` 出現在別處。三個站點曾各自建構，於是演化出三種錯誤姿態，其中
   `branch-service` 根本沒掛 handler —— Node 對沒有 listener 的 `'error'` 直接 throw，
   **主行程一死所有 pty 陪葬**。
-  - **建立入口的 `target` 與 `pollingRoot` 是兩個參數，不要合併。** `shouldUsePolling(p)` 判定的是
-    **`p` 所在掛載點**的檔案系統，而三處餵給它的路徑本來就不同（`watch-service` 傳 folder 根 ——
-    它一個 watcher 服務 N 個子目標；`openspec-service` 傳 target）。合併會讓「worktree 在網路
-    檔案系統」靜默退回 native watch，而**那種失效連錯誤 handler 都救不到**（`fs.watch` 只是永遠
-    不觸發，沒有錯誤可 emit）。
+  - **輪詢判定的依據路徑：預設等於監看目標，`pollingRoot` 是給服務多目標的 watcher 的例外。**
+    `shouldUsePolling(p)` 判定的是 **`p` 所在掛載點**的檔案系統。**四個建立點裡三個是一對一**
+    （`branch-service` 兩層、`openspec-service`），正確答案就是自己的 `target` —— 所以省略。
+    餵錯路徑會讓「gitdir 在網路檔案系統」靜默退回 native watch，而**那種失效連錯誤 handler 都
+    救不到**（`fs.watch` 只是永遠不觸發，沒有錯誤可 emit）。
+    - **`watch-service` 是唯一顯式傳 `pollingRoot` 的地方**（它一個 watcher 服務 N 個動態增減的
+      子目標）。**孤例看起來很像可以順手清掉的殘留**，而本機刪掉它不會讓型別、測試或探針變紅
+      —— `watch-service.test.ts` 有一條專門釘住它的測試，別繞過。
+    - **「共同根」只在該根與所有目標同掛載點時成立** —— 路徑包含不是同一檔案系統的保證
+      （folder 內掛載網路儲存、bind mount）。單一 watcher 的 `usePolling` 建構時就定了，服務跨
+      掛載點的多目標**結構上無解**，已登記為缺口。也因此那個站點的驗收只驗得到參數：**一個規格
+      宣告不支援的組態，驗收造不出來。**
+    - **驗收造得出對比，不要以為造不出。** 本機 `/proc/mounts` 有 FUSE 掛載點，core 對 `fuse*`
+      一律判定需要輪詢，且**路徑不需要存在**（`realpath` 失敗時沿用原字串比對）。
+      `polling-mount.testkit.ts` 負責探測，並**自檢對照組**（環境覆寫會讓所有路徑一起變 true，
+      那時鑑別力已經沒了，必須 skip 而不是通過）。
   - **`label` 同理不能一律用 `target`**：一個 watcher 服務多個目標時，chokidar 的錯誤事件不指出
     是哪一個失敗。
 - **watcher 受同一道邊界約束**：`followSymlinks: false`（它**預設是 `true`** —— folder 內一個指向

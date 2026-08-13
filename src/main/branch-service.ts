@@ -48,12 +48,24 @@ export class BranchService {
   readonly #folders = new Map<string, FolderWatchers>()
   readonly #store: FolderLookup
   readonly #onChanged: () => void
+  readonly #createWatcher: typeof createWatcher
   #debounce: NodeJS.Timeout | null = null
   #disposed = false
 
-  constructor(store: FolderLookup, onChanged: () => void) {
+  /**
+   * @param watcherFactory 建立 watcher 的實作，預設即 `createWatcher`。
+   *
+   * 之所以是個可注入的依賴：**這個服務對輪詢判定餵進去哪一條路徑，從它的外部行為完全看不出來**
+   * —— 兩層 watcher 都只把事件收斂成一個 `onChanged` 回呼。不把建立這件事顯式化，就只能斷言
+   * 「傳出的參數」（測不到建立入口自己的解析）或去猜。issue #16 的失效正是這條看不見的路徑上
+   * 的一個錯誤，因此它需要被觀察得到。
+   *
+   * 語意與 `OpenSpecService` 注入 `scan` 相同：**依賴反轉，不是測試分支** —— 產品路徑只有一條。
+   */
+  constructor(store: FolderLookup, onChanged: () => void, watcherFactory: typeof createWatcher = createWatcher) {
     this.#store = store
     this.#onChanged = onChanged
+    this.#createWatcher = watcherFactory
   }
 
   /** 依當前的 folder 清單建立／銷毀 watcher。folder 新增或移除後呼叫。 */
@@ -79,9 +91,8 @@ export class BranchService {
 
   #watchFolder(folder: WorkspaceFolder): void {
     // 第一層：folder 根目錄，depth 0 —— 只關心 `.git` 這個直屬項目的出現與消失。
-    const root = createWatcher({
+    const root = this.#createWatcher({
       target: folder.path,
-      pollingRoot: folder.path,
       label: folder.path,
       depth: 0,
     })
@@ -117,10 +128,9 @@ export class BranchService {
     // worktree 的 HEAD 在 gitdir 底下，那**可能在 folder 邊界之外** —— 這是主行程自己的
     // 檔案存取，推給 renderer 的仍然只有分支字串。
     //
-    // **`pollingRoot` 傳 folder 根而非 `target`，是刻意保留的現況，不是這裡的判斷** ——
-    // gitdir 可能落在別的掛載點上，以 folder 根判定 polling 看起來是既有的 bug。它需要一個
-    // 跨掛載點的 worktree 才驗得到，與本模組的錯誤回報無關，已開為 issue #16。
-    const head = createWatcher({ target, pollingRoot: folder.path, label: target })
+    // 輪詢判定靠預設（即 `target` 自己）—— gitdir 可能與 folder 根落在不同掛載點上，
+    // 以 folder 根判定會讓「gitdir 在網路檔案系統」靜默退回 native watch（issue #16）。
+    const head = this.#createWatcher({ target, label: target })
     head.on('all', () => this.#notify())
     watchers.head = head
   }
