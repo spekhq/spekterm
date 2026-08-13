@@ -35,6 +35,7 @@ import {
   waitForPageTarget,
 } from './lib/cdp.mjs'
 import { copy, prefixOf } from './lib/copy.mjs'
+import { sectionConsole } from './lib/instrument.mjs'
 import { MOUNTED, describeMounted } from './lib/mounted.mjs'
 import { electronExtraArgs } from './lib/display.mjs'
 import { runSections } from './lib/sections.mjs'
@@ -1703,8 +1704,149 @@ async function runMode(label, { port, rendererUrl }) {
       const r = tab.getBoundingClientRect()
       return { x: r.x, y: r.y, width: r.width, height: r.height }
     })()`)
+
+    // ── 釋放渲染資源＝歸還並存額度，不只是移除 DOM 產物
+    //
+    // 判準是**該脈絡自身是否已失效**，不是「並存上限被觸發時誰先被回收」。後者的回收順序
+    // （最早取得者優先）會讓「有歸還」與「沒歸還」在多數佈局下結果完全相同 —— 追這個缺陷時
+    // 兩度得到那種無差別的結果，差點據此推翻一個正確的結論。
+    //
+    // **探針持有脈絡的參照，這件事是承重的**：它讓觀察不受 GC 時機影響。未歸還額度的實作之所以
+    // 多半沒出事，正是因為 GC 碰巧來得及 —— 一個受 GC 時機影響的斷言，測到的是回收器的心情。
+    const CAPTURE_GL = `(() => {${RENDER_PATH_PRELUDE}
+      window.__probeGl = hostsOf().map((host) => {
+        const screen = host.querySelector('.xterm-screen')
+        if (!screen) return null
+        // 主 canvas 不帶 class，link layer 帶 xterm-link-layer；兩者都已持有脈絡，
+        // 因此這裡的 getContext 取回既有的那一個，不會新建（不影響待測狀態）。
+        const main = [...screen.querySelectorAll('canvas')].find((c) => !c.classList.contains('xterm-link-layer'))
+        return main ? main.getContext('webgl2') : null
+      })
+      return window.__probeGl.map((gl) => (gl ? !gl.isContextLost() : null))
+    })()`
+    const glBefore = await app.client.evaluate(CAPTURE_GL)
+
     await realClick(app.client, firstTabRect)
     await sleep(400)
+
+    const glAfter = await app.client.evaluate(
+      `window.__probeGl.map((gl) => (gl ? gl.isContextLost() : null))`,
+    )
+    // 切換前顯示中的那一個（唯一被抓到脈絡的）此刻已隱藏 —— 它的脈絡必須已失效。
+    const releasedIndex = glBefore.findIndex((alive) => alive === true)
+    check(
+      results,
+      `${label}：終端由顯示轉隱藏時歸還其渲染資源的並存額度`,
+      releasedIndex >= 0 && glAfter[releasedIndex] === true,
+      `切換前 alive=${JSON.stringify(glBefore)} 切換後 lost=${JSON.stringify(glAfter)}` +
+        `（切換前沒有任何一個是 alive 就表示這條沒有鑑別力）`,
+    )
+
+    // 切過去的那個終端要**重新取得**一份有效的渲染資源 —— 釋放若做過頭（例如連新建的一起
+    // lose），症狀就出現在這裡。
+    //
+    // **這條不是「釋放的是它自己的資源」的載體**（實測）：切換會讓 React 為新顯示的終端重建
+    // 脈絡，因此即使釋放時誤傷了它，這裡量到的也是那個**重建後**的新脈絡 —— 綠燈。
+    // 那條 scenario 的載體在後面「關閉分頁」那一段，關閉不會觸發任何重建。
+    const shownAfter = await app.client.evaluate(`(() => {${RENDER_PATH_PRELUDE}
+      const shown = hostsOf().filter((d) => !d.classList.contains('hidden'))
+      return shown.map((host) => {
+        const screen = host.querySelector('.xterm-screen')
+        const main = screen && [...screen.querySelectorAll('canvas')].find((c) => !c.classList.contains('xterm-link-layer'))
+        const gl = main ? main.getContext('webgl2') : null
+        return gl ? gl.isContextLost() : 'no-context'
+      })
+    })()`)
+    check(
+      results,
+      `${label}：切過去的終端持有一份有效的渲染資源`,
+      shownAfter.length > 0 && shownAfter.every((lost) => lost === false),
+      `顯示中的終端 lost=${JSON.stringify(shownAfter)}（應全為 false；no-context 表示它根本沒取得）`,
+    )
+
+    // ── 抓不到釋放介面時要出聲（`terminal-sessions` 的 scenario）
+    //
+    // **以注入構造，不等它自然發生** —— 與上面共用暫存畫布那條同一條紀律：等待版沒有鑑別力。
+    // 覆寫 `getExtension` 讓釋放介面取不到，再切走切回（切回會重新取得渲染資源，那正是發聲的
+    // 路徑），然後還原。**發聲在取得而非釋放的路徑上**，所以每次切回來都會再叫一次。
+    const CTRL_TAB = { key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9, nativeVirtualKeyCode: 9, modifiers: 2 }
+    const ctrlTab = async () => {
+      for (const type of ['keyDown', 'keyUp']) {
+        await app.client.send('Input.dispatchKeyEvent', { type, ...CTRL_TAB })
+      }
+    }
+    // **對照組先做**：此刻已經歷多次取得／釋放，若正常路徑也在叫，下面那條就分不出
+    // 「有出聲」與「一直在出聲」。
+    check(
+      results,
+      `${label}：正常路徑不發出「抓不到釋放介面」的警告`,
+      !sectionConsole().some((e) => e.text.includes('cannot capture WebGL context')),
+      `本段至此收到 ${sectionConsole().length} 則 console`,
+    )
+
+    await app.client.evaluate(`(() => {
+      const proto = WebGL2RenderingContext.prototype
+      proto.__probeRealGetExtension = proto.getExtension
+      proto.getExtension = function (name) {
+        return name === 'WEBGL_lose_context' ? null : proto.__probeRealGetExtension.call(this, name)
+      }
+      return true
+    })()`)
+    await ctrlTab()
+    await sleep(300)
+    await ctrlTab()
+    const warned = await pollFor({
+      read: () => sectionConsole(),
+      settled: (entries) => entries.some((e) => e.text.includes('cannot capture WebGL context')),
+      timeoutMs: 4000,
+      interval: 100,
+      label: '取不到釋放介面時的警告',
+    })
+    await app.client.evaluate(`(() => {
+      const proto = WebGL2RenderingContext.prototype
+      if (proto.__probeRealGetExtension) {
+        proto.getExtension = proto.__probeRealGetExtension
+        delete proto.__probeRealGetExtension
+      }
+      return true
+    })()`)
+    check(
+      results,
+      `${label}：抓不到渲染資源的釋放介面時出聲（不靜默略過）`,
+      warned.some((e) => e.text.includes('cannot capture WebGL context')),
+      `本段收到 ${warned.length} 則：${JSON.stringify(warned.map((e) => e.text.slice(0, 60)))}`,
+    )
+
+    // 還原之後再切一次，讓該終端重新取得一份**可釋放**的渲染資源 —— 否則後續段落會在一個
+    // 抓不到釋放介面的終端上繼續跑，而那不是待測狀態。
+    await ctrlTab()
+    await sleep(300)
+    await ctrlTab()
+    await sleep(300)
+
+    // ── 反覆切換之後，顯示中的終端**仍走程式化繪製**
+    //
+    // 「終端仍顯示得出來、打得了字」擋不住這個迴歸 —— 退回 glyph 路徑的終端一樣正常。
+    // 而「主動釋放之後再也拿不回程式化繪製」正是本能力最可能引入的迴歸。
+    for (let i = 0; i < 20; i += 1) await ctrlTab()
+    const pathAfterChurn = await pollUntil(
+      app.client,
+      `(() => {${RENDER_PATH_PRELUDE}
+        const hosts = hostsOf()
+        return {
+          顯示中: hosts.filter((d) => !d.classList.contains('hidden')).map((d) => renderPathOf(d)),
+          隱藏中: hosts.filter((d) => d.classList.contains('hidden')).map((d) => renderPathOf(d)),
+        }
+      })()`,
+      (v) => v.顯示中.length > 0 && v.顯示中.every((p) => p === 'programmatic'),
+      5000,
+    )
+    check(
+      results,
+      `${label}：反覆切換 20 次後顯示中的終端仍走程式化繪製`,
+      pathAfterChurn.顯示中.length > 0 && pathAfterChurn.顯示中.every((p) => p === 'programmatic'),
+      `顯示中=${JSON.stringify(pathAfterChurn.顯示中)} 隱藏中=${JSON.stringify(pathAfterChurn.隱藏中)}`,
+    )
 
     // 判準走**產品自己的複製路徑**（拖曳選取 → 複製 → 讀剪貼簿），不讀 DOM ——
     // 那條管道跨 renderer 不變（見 `readTerminalText`）。
@@ -1980,8 +2122,40 @@ async function runMode(label, { port, rendererUrl }) {
     )
 
     // ── 關閉一個分頁 → 該 pty 被清掉
+    //
+    // **順帶承載「釋放的是它自己的資源」**：此刻 focused（顯示中）的是第二個分頁，即將被關閉的
+    // 是第一個（隱藏、已退回 glyph 路徑、其節點下沒有 canvas）。因此文件中唯一符合
+    // 「`.xterm-screen` 下不帶 link-layer class 的 canvas」的，正是**顯示中那個**的主 canvas ——
+    // 一個以 `document` 為查詢範圍的釋放實作會在這裡把它弄壞。
+    //
+    // **這條不能用「切換」來驗**（實測）：切換後 React 會為新顯示的終端重建一個有效的脈絡，
+    // 事後檢查因此看不到破壞 —— 那樣的斷言在誤釋放的實作下**照樣是綠的**。關閉才是能觀察到的
+    // 時機：顯示中的那個自始至終沒有換過，沒有任何重建會掩蓋它。
+    const glShownBeforeClose = await app.client.evaluate(`(() => {${RENDER_PATH_PRELUDE}
+      const shown = hostsOf().filter((d) => !d.classList.contains('hidden'))
+      window.__probeGlShown = shown.map((host) => {
+        const screen = host.querySelector('.xterm-screen')
+        const main = screen && [...screen.querySelectorAll('canvas')].find((c) => !c.classList.contains('xterm-link-layer'))
+        return main ? main.getContext('webgl2') : null
+      })
+      return window.__probeGlShown.map((gl) => (gl ? !gl.isContextLost() : null))
+    })()`)
+
     await app.client.evaluate(CLOSE_FIRST_TAB)
     const tabs3 = await pollUntil(app.client, TABS, (value) => value.length === 1, 8000)
+
+    const glShownAfterClose = await app.client.evaluate(
+      `window.__probeGlShown.map((gl) => (gl ? gl.isContextLost() : null))`,
+    )
+    check(
+      results,
+      `${label}：釋放的是該終端自己的資源（關閉他者不影響顯示中的終端）`,
+      glShownBeforeClose.some((alive) => alive === true) &&
+        glShownAfterClose.every((lost) => lost === false || lost === null),
+      `關閉前 alive=${JSON.stringify(glShownBeforeClose)} 關閉後 lost=${JSON.stringify(glShownAfterClose)}` +
+        `（關閉前沒有任何一個是 alive 就表示這條沒有鑑別力）`,
+    )
+
     const pids3 = await waitForPtyCount(marker, 1)
     check(
       results,

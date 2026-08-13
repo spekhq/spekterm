@@ -300,6 +300,64 @@ export function createXterm(options: XtermOptions): XtermHandle {
 
   // 當前的 webgl addon（null＝正在用 DOM renderer）。
   let webgl: WebglAddon | null = null
+  /**
+   * 當前 webgl renderer 的繪製脈絡與它的釋放介面。
+   *
+   * **為什麼要在建立時就抓住，而不是釋放時再去找**：所有 session 的終端**同時掛載**（隱藏的
+   * 只是加上 `hidden`），因此以 `document` 為範圍的查詢會回傳**另一個、正在顯示**的終端的
+   * canvas —— 釋放它等於讓使用者當場看到空白，而那正是「渲染資源只給顯示中的終端」這條規格
+   * 要防止的結果本身。終端銷毀那條路更確定：React 的 cleanup 跑在節點移除之後，此時該終端
+   * 已脫離文件，查詢**只可能**命中別人的。
+   */
+  let webglContext: { gl: WebGL2RenderingContext; lose: WEBGL_lose_context } | null = null
+
+  /** 該終端 `.xterm-screen` 底下的 canvas。**查詢根是這個終端自己，不是 `document`**（見上）。 */
+  function screenCanvases(): Set<HTMLCanvasElement> {
+    const screen = term.element?.querySelector('.xterm-screen')
+    return new Set(screen ? [...screen.querySelectorAll('canvas')] : [])
+  }
+
+  /**
+   * 取得 webgl renderer 剛建立的那個繪製脈絡。
+   *
+   * **以「這一次新增了哪些節點」為判準（差集），不是以選擇器排除已知的其他 canvas。**
+   * 後者是黑名單：`.xterm-screen` 底下日後多一顆節點時它會靜默選錯，而對一個尚未持有脈絡的
+   * canvas 查詢脈絡**會當場建立一個新的** —— 一次意在釋放的操作反而多佔一個額度。差集讓這兩種
+   * 誤選在結構上都不可能發生。
+   */
+  function captureWebglContext(
+    before: Set<HTMLCanvasElement>,
+  ): { gl: WebGL2RenderingContext; lose: WEBGL_lose_context } | null {
+    // link layer 帶著自己的 class，且它是 2d；主 canvas 不帶 class。
+    const added = [...screenCanvases()].filter((c) => !before.has(c) && !c.classList.contains('xterm-link-layer'))
+    const gl = added.length === 1 ? added[0].getContext('webgl2') : null
+    const lose = gl?.getExtension('WEBGL_lose_context') ?? null
+
+    if (!gl || !lose) {
+      // 靜默的話，「沒抓到」與「正確釋放了」在外部完全無法區分 —— 而那正是本 change 所修的
+      // 缺陷的形狀（dispose 看起來做了事，實際沒還額度）。在**取得**的路徑發聲：每次切到該
+      // session 都會經過這裡，問題因此反覆可見，而不是只在關閉時出現一次。
+      console.warn(
+        `[terminal] cannot capture WebGL context for release (added=${added.length}, gl=${!!gl}, ext=${!!lose}); ` +
+          'the context will not be released and its slot stays occupied until GC',
+      )
+      return null
+    }
+    return { gl, lose }
+  }
+
+  /**
+   * 歸還並存額度。
+   *
+   * **順序是 dispose 之後**：`dispose()` 會解除 addon 的 DOM listener，因此這裡不會觸發它的
+   * `webglcontextlost` handler。反過來（先 lose 再 dispose）會踩到兩件事：該 handler 排一個
+   * **3000ms** 的 timer，而那個 timer **只有 `webglcontextrestored` 會清、`dispose()` 不清** ——
+   * 三秒後仍會印訊息，且若使用者在那三秒內切回來，它會把剛建好的新 addon 蓋成 `null`。
+   */
+  function releaseWebglContext(): void {
+    webglContext?.lose.loseContext()
+    webglContext = null
+  }
 
   return {
     open(parent) {
@@ -417,6 +475,7 @@ export function createXterm(options: XtermOptions): XtermHandle {
         // dispose 之後 xterm 自動退回 DOM renderer —— buffer 不動，scrollback 不受影響。
         webgl?.dispose()
         webgl = null
+        releaseWebglContext()
         return false
       }
 
@@ -426,11 +485,16 @@ export function createXterm(options: XtermOptions): XtermHandle {
         //
         // **注意它擋不住「超出並存上限」**（那時最舊的 context 被靜默丟棄、不觸發此事件）——
         // 那由「只給 active 終端」承擔，見介面上的說明。
+        //
+        // 這裡**不**呼叫 `loseContext()`：脈絡已經失效，再 lose 一次沒有意義。
         addon.onContextLoss(() => {
           addon.dispose()
           webgl = null
+          webglContext = null
         })
+        const before = screenCanvases()
         term.loadAddon(addon)
+        webglContext = captureWebglContext(before)
         webgl = addon
         return true
       } catch (error) {
@@ -438,6 +502,7 @@ export function createXterm(options: XtermOptions): XtermHandle {
         // 舊驅動都會走到這裡）。
         console.warn('[terminal] GPU renderer unavailable, falling back to DOM renderer', error)
         webgl = null
+        webglContext = null
         return false
       }
     },
@@ -446,6 +511,7 @@ export function createXterm(options: XtermOptions): XtermHandle {
     },
     dispose() {
       webgl?.dispose()
+      releaseWebglContext()
       serializeAddon.dispose()
       fitAddon.dispose()
       term.dispose()
