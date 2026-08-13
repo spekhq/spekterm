@@ -54,7 +54,7 @@ tmux 與自寫 daemon 取捨。**不要把「重建」誤當成「常駐」**：
 
 | 你要動的東西 | 先讀 |
 |---|---|
-| 任何一支 `scripts/probe-*.mjs`、加一條驗收斷言、追一個 flaky | **`docs/lessons/probes.md`** |
+| 任何一支 `scripts/probe-*.mjs`、`scripts/lib/` 的儀器（`instrument` / `cdp` / `mounted`）、加一條驗收斷言或一種等待、追一個 flaky | **`docs/lessons/probes.md`** |
 | pty、`src/renderer/src/shell/terminal/`、session 持久化與重建 | **`docs/lessons/terminal.md`** |
 | `src/renderer/src/side-panel/`、`@spekjs/core` 或 `@spekjs/ui` 升級 | **`docs/lessons/side-panel.md`** |
 
@@ -715,11 +715,15 @@ session 開得進 worktree 之後，邊界保證從「renderer 沒有路徑詞�
 不是它自稱在測的東西」。**寫或改任何一支 `scripts/probe-*.mjs`、加一條驗收斷言、或追一個 flaky
 之前，先把它讀完。**
 
-只記住這兩句是不夠的，但它們是那份文件的骨幹：
+只記住這三句是不夠的，但它們是那份文件的骨幹：
 
 - **對照組是唯一擋得住假綠的東西** —— 把修正退回，確認測試真的變紅。這個 repo 每一條重要的守衛都
   這樣驗過，而**幾次沒這樣驗的，全部是假綠**。
-- **一個方便取得、看起來相關的量，不等於規格真正在乎的那個量。** 已經咬過三次。
+- **一個方便取得、看起來相關的量，不等於規格真正在乎的那個量。** 已經咬過四次 —— 最近一次是**用來
+  推導方案的那個量測腳本自己**算錯了。
+- **等待落空是靜默的。** 所有等待走 `lib/instrument.mjs` 的 `pollFor`（兩道原始碼守衛擋著手寫的
+  迴圈與沒有 detail 的複合斷言）；每條斷言的行首帶著距上一條的耗時與 CDP 往返，段落總結帶著
+  該段的窗口耗盡次數 —— **那三個數字是「這一段為什麼跑那麼久」唯一的證據來源。**
 
 ## 工具鏈與環境的陷阱
 

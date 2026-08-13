@@ -28,6 +28,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { electronExtraArgs } from './lib/display.mjs'
+import { check, pollFor } from './lib/instrument.mjs'
 
 const PROJECT_ROOT = realpathSync(new URL('..', import.meta.url).pathname)
 const SUMMARY_TIMEOUT_MS = 60_000
@@ -229,23 +230,31 @@ async function runApp(scanPath) {
   const listeners = new Set()
   const blindSpots = new Set()
   const appeared = new Map()
-  const deadline = Date.now() + SUMMARY_TIMEOUT_MS
-
+  // **這一段在語意上是「取樣」而不是「等待」** —— 每一輪都往三個集合累積證據，順帶檢查兩個
+  // 結束條件。它仍在原語的定義域內（`read` 做取樣、`settled` 判結束），但「窗口耗盡」對它的
+  // 意思是「摘要一直沒出現」，而不是「某個東西沒好」。
   try {
-    while (Date.now() < deadline) {
-      if (onLinux && child.exitCode === null && child.pid) {
-        const sample = sampleListeners(child.pid)
-        sample.listeners.forEach((l) => listeners.add(l))
-        sample.blindSpots.forEach((p) => blindSpots.add(p))
-        // 不倚賴逐 pid 權限的第二道判準：app 存活期間本 netns 新增的 LISTEN socket
-        for (const [inode, addr] of hostListenTable()) {
-          if (!baseline.has(inode)) appeared.set(inode, addr)
+    await pollFor({
+      read: () => {
+        if (onLinux && child.exitCode === null && child.pid) {
+          const sample = sampleListeners(child.pid)
+          sample.listeners.forEach((l) => listeners.add(l))
+          sample.blindSpots.forEach((p) => blindSpots.add(p))
+          // 不倚賴逐 pid 權限的第二道判準：app 存活期間本 netns 新增的 LISTEN socket
+          for (const [inode, addr] of hostListenTable()) {
+            if (!baseline.has(inode)) appeared.set(inode, addr)
+          }
         }
-      }
-      if (SUMMARY_RE.test(stdout) || /\[openspec] scan failed/.test(stdout)) break
-      if (child.exitCode !== null) break
-      await sleep(SAMPLE_INTERVAL_MS)
-    }
+        return {
+          summaryPrinted: SUMMARY_RE.test(stdout) || /\[openspec] scan failed/.test(stdout),
+          exited: child.exitCode !== null,
+        }
+      },
+      settled: (state) => state.summaryPrinted || state.exited,
+      timeoutMs: SUMMARY_TIMEOUT_MS,
+      interval: SAMPLE_INTERVAL_MS,
+      label: '等主行程印出 openspec 掃描摘要',
+    })
   } finally {
     child.kill('SIGTERM')
   }
@@ -279,11 +288,6 @@ async function runApp(scanPath) {
 // ── 檢查 ────────────────────────────────────────────────────────────────────
 
 const results = []
-function check(name, passed, detail) {
-  console.log(`  ${passed ? '✓' : '✗'} ${name}${detail ? `：${detail}` : ''}`)
-  results.push(passed)
-  return passed
-}
 
 console.log('spek-core-integration 驗收：\n')
 
@@ -294,8 +298,8 @@ const declared = pkg.dependencies?.['@spekjs/core']
 const resolved = lock.packages?.['node_modules/@spekjs/core']?.resolved ?? ''
 
 console.log('以已發佈的 npm 套件取得 core')
-check('依賴宣告為語意化版本，無本機協定', Boolean(declared) && !/^(file|link|portal):/.test(declared), `"@spekjs/core": "${declared}"`)
-check('lockfile 自 npm registry 解析', resolved.startsWith('https://registry.npmjs.org/'), resolved || '(未解析)')
+check(results, '依賴宣告為語意化版本，無本機協定', Boolean(declared) && !/^(file|link|portal):/.test(declared), `"@spekjs/core": "${declared}"`)
+check(results, 'lockfile 自 npm registry 解析', resolved.startsWith('https://registry.npmjs.org/'), resolved || '(未解析)')
 
 // Requirement: 掃描不經 HTTP 或 IPC 中介（靜態面）
 console.log('\n掃描不經 HTTP 或 IPC 中介')
@@ -310,8 +314,11 @@ function readMainSources(dir) {
 }
 
 const mainSources = readMainSources(join(PROJECT_ROOT, 'src', 'main')).join('\n')
-check('主行程直接 import @spekjs/core', /from '@spekjs\/core'/.test(mainSources) && /scanOpenSpec\(/.test(mainSources))
-check('主行程未建立 server', !/createServer|\.listen\(/.test(mainSources))
+const importsCore = /from '@spekjs\/core'/.test(mainSources)
+const callsScan = /scanOpenSpec\(/.test(mainSources)
+check(results, '主行程直接 import @spekjs/core', importsCore && callsScan,
+  `import 到 @spekjs/core=${importsCore}；呼叫 scanOpenSpec()=${callsScan}`)
+check(results, '主行程未建立 server', !/createServer|\.listen\(/.test(mainSources))
 
 const tempDirs = []
 function bail(message) {
@@ -337,28 +344,29 @@ if (
 }
 
 const onFixture = await runApp(fixture)
-if (!check('主行程輸出掃描摘要', onFixture.summary !== null, onFixture.summary ? '' : onFixture.stderr.trim().slice(0, 400))) {
+if (!check(results, '主行程輸出掃描摘要', onFixture.summary !== null, onFixture.summary ? '' : onFixture.stderr.trim().slice(0, 400))) {
   bail('無摘要可比對，中止。')
 }
 
 const f = onFixture.summary
-check('掃描目標為指定的 repo 路徑', realpathSync(f.repoPath) === fixture, f.repoPath)
-check('specs 數量正確（含忽略無 spec.md 的目錄）', f.specCount === expected.specCount, `${f.specCount}（期望 ${expected.specCount}）`)
-check('activeChanges 數量正確（含忽略 dotfile 目錄）', f.activeChangeCount === expected.activeChangeCount, `${f.activeChangeCount}（期望 ${expected.activeChangeCount}）`)
-check('archivedChanges 數量正確', f.archivedChangeCount === expected.archivedChangeCount, `${f.archivedChangeCount}（期望 ${expected.archivedChangeCount}）`)
-check('defaultSchema 等於 openspec/config.yaml 宣告值', f.defaultSchema === expected.defaultSchema, `${f.defaultSchema}（期望 ${expected.defaultSchema}）`)
+check(results, '掃描目標為指定的 repo 路徑', realpathSync(f.repoPath) === fixture, f.repoPath)
+check(results, 'specs 數量正確（含忽略無 spec.md 的目錄）', f.specCount === expected.specCount, `${f.specCount}（期望 ${expected.specCount}）`)
+check(results, 'activeChanges 數量正確（含忽略 dotfile 目錄）', f.activeChangeCount === expected.activeChangeCount, `${f.activeChangeCount}（期望 ${expected.activeChangeCount}）`)
+check(results, 'archivedChanges 數量正確', f.archivedChangeCount === expected.archivedChangeCount, `${f.archivedChangeCount}（期望 ${expected.archivedChangeCount}）`)
+check(results, 'defaultSchema 等於 openspec/config.yaml 宣告值', f.defaultSchema === expected.defaultSchema, `${f.defaultSchema}（期望 ${expected.defaultSchema}）`)
 
 // 同樣的掃描套用在真實 repo 上，順帶在全程抽樣 TCP listener
 console.log('\n掃描含 openspec 目錄的 repo（本 repo）')
 const onSelf = await runApp(PROJECT_ROOT)
 const selfExpected = expectedCounts(PROJECT_ROOT)
-if (!check('主行程輸出掃描摘要', onSelf.summary !== null, onSelf.summary ? '' : onSelf.stderr.trim().slice(0, 400))) {
+if (!check(results, '主行程輸出掃描摘要', onSelf.summary !== null, onSelf.summary ? '' : onSelf.stderr.trim().slice(0, 400))) {
   bail('無摘要可比對，中止。')
 }
 
 const s = onSelf.summary
-check('掃描目標為指定的 repo 路徑', realpathSync(s.repoPath) === PROJECT_ROOT, s.repoPath)
+check(results, '掃描目標為指定的 repo 路徑', realpathSync(s.repoPath) === PROJECT_ROOT, s.repoPath)
 check(
+    results,
   '四項數值符合檔案系統',
   s.specCount === selfExpected.specCount &&
     s.activeChangeCount === selfExpected.activeChangeCount &&
@@ -370,10 +378,10 @@ check(
 // Scenario: 掃描期間未開啟網路埠
 console.log('\n掃描期間未開啟網路埠')
 if (!onLinux) {
-  check('可檢視行程樹的 socket', false, `本檢查僅實作 Linux /proc，當前平台 ${process.platform}`)
+  check(results, '可檢視行程樹的 socket', false, `本檢查僅實作 Linux /proc，當前平台 ${process.platform}`)
 } else {
-  check('行程樹中無行程持有 LISTEN socket', onSelf.listeners.length === 0, onSelf.listeners.join('; '))
-  check('app 存活期間本 netns 未新增 LISTEN socket', onSelf.vanished.length === 0, onSelf.vanished.join('; '))
+  check(results, '行程樹中無行程持有 LISTEN socket', onSelf.listeners.length === 0, onSelf.listeners.join('; '))
+  check(results, 'app 存活期間本 netns 未新增 LISTEN socket', onSelf.vanished.length === 0, onSelf.vanished.join('; '))
   if (onSelf.blindSpots.length > 0) {
     // 兩道判準的用意正在於此：第一道逐 pid 歸屬，會被權限死角擋住；
     // 第二道只看 netns 的 LISTEN 表，不需要讀任何 pid 的 fd —— 死角行程若在同一個
@@ -387,10 +395,11 @@ console.log('\n掃描不含 openspec 目錄的路徑')
 const emptyDir = realpathSync(mkdtempSync(join(tmpdir(), 'spekterm-noopenspec-')))
 tempDirs.push(emptyDir)
 const withoutSpec = await runApp(emptyDir)
-check('回傳空結構而非拋出例外', withoutSpec.summary !== null && !withoutSpec.scanFailed, withoutSpec.scanFailed ? '主行程回報 scan failed' : '')
+check(results, '回傳空結構而非拋出例外', withoutSpec.summary !== null && !withoutSpec.scanFailed, withoutSpec.scanFailed ? '主行程回報 scan failed' : '')
 if (withoutSpec.summary) {
   const e = withoutSpec.summary
   check(
+    results,
     '空結構的計數皆為 0、defaultSchema 為 (none)',
     e.specCount === 0 && e.activeChangeCount === 0 && e.archivedChangeCount === 0 && e.defaultSchema === '(none)',
     `specs=${e.specCount} activeChanges=${e.activeChangeCount} archivedChanges=${e.archivedChangeCount} defaultSchema=${e.defaultSchema}`,

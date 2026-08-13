@@ -55,9 +55,10 @@ import {
 import { dirname, join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { fileURLToPath } from 'node:url'
-import { check, connect, pollUntil, waitForPageTarget } from './lib/cdp.mjs'
+import { check, connect, pollFor, pollUntil, waitForPageTarget } from './lib/cdp.mjs'
 import { electronExtraArgs } from './lib/display.mjs'
 import { copy } from './lib/copy.mjs'
+import { MOUNTED_WITHOUT_VISIBILITY as MOUNTED, describeMounted } from './lib/mounted.mjs'
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..')
 
@@ -126,21 +127,16 @@ function ptyPids() {
 }
 
 async function waitForPty(expected, timeoutMs = 20_000) {
-  const deadline = Date.now() + timeoutMs
-  let pids = ptyPids()
-  while (Date.now() < deadline && pids.length !== expected) {
-    await sleep(200)
-    pids = ptyPids()
-  }
-  return pids
+  return pollFor({
+    read: () => ptyPids(),
+    settled: (pids) => pids.length === expected,
+    timeoutMs,
+    interval: 200,
+    label: `waitForPty（期待 ${expected} 個 pty）`,
+  })
 }
 
 // ── 頁面上的量測 ─────────────────────────────────────────────────────────────
-
-const MOUNTED = `Boolean(
-  document.querySelector('aside[aria-label="${copy('rail.label')}"]') &&
-  document.getElementById('root')?.children.length
-)`
 
 const RECT_OF = (selector) => `(() => {
   const el = document.querySelector(${JSON.stringify(selector)})
@@ -220,13 +216,8 @@ async function typeLine(client, text) {
 }
 
 /** 輪詢一個**磁碟上的**條件（`pollUntil` 求值的是頁面裡的 expression，這裡要的不是那個）。 */
-async function pollDisk(predicate, timeoutMs) {
-  const deadline = Date.now() + timeoutMs
-  while (Date.now() < deadline) {
-    if (predicate()) return true
-    await sleep(250)
-  }
-  return predicate()
+async function pollDisk(predicate, timeoutMs, label = 'pollDisk（磁碟上的條件）') {
+  return pollFor({ read: () => predicate(), settled: (value) => value === true, timeoutMs, label })
 }
 
 // ── 驗收 ────────────────────────────────────────────────────────────────────
@@ -293,7 +284,7 @@ try {
   check(results, '打包產物開啟視窗並載入 renderer', title === 'spekterm', `title="${title}"`)
   check(results, '產物脫離 repo 仍可執行', !appImage.startsWith(repoRoot), appImage)
 
-  await pollUntil(client, MOUNTED, (value) => value === true, 20_000)
+  await pollUntil(client, MOUNTED, (value) => value?.ok === true, 20_000)
 
   // ── production CSP ────────────────────────────────────────────────────────
   // **導航完成之後**才武裝收集器（見 `CSP_ARM` 的說明）—— 此時 MOUNTED 已成立。

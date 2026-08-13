@@ -22,10 +22,11 @@ import {
   writeFileSync,
 } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
-import { check, connect, dragMouse, pollUntil, pressKey, waitForPageTarget } from './lib/cdp.mjs'
+import { check, connect, dragMouse, pollFor, pollUntil, pressKey, waitForPageTarget } from './lib/cdp.mjs'
 import { copy, prefixOf } from './lib/copy.mjs'
+import { MOUNTED, describeMounted } from './lib/mounted.mjs'
 import { electronExtraArgs } from './lib/display.mjs'
 import { runSections } from './lib/sections.mjs'
 
@@ -105,14 +106,13 @@ function makeWorktreeFixture() {
  * 檔案只有命令**真的執行**才會出現，回顯不會產生它。
  */
 async function waitForFile(path, settled = (value) => value.trim().length > 0, timeoutMs = 8000) {
-  const deadline = Date.now() + timeoutMs
-  let last = ''
-  while (Date.now() < deadline) {
-    last = existsSync(path) ? readFileSync(path, 'utf8') : ''
-    if (settled(last)) return last
-    await sleep(150)
-  }
-  return last
+  return pollFor({
+    read: () => (existsSync(path) ? readFileSync(path, 'utf8') : ''),
+    settled,
+    timeoutMs,
+    interval: 150,
+    label: `waitForFile(${basename(path)})`,
+  })
 }
 
 /**
@@ -328,22 +328,16 @@ function ptyCmdlines(marker) {
 }
 
 async function waitForPtyCount(marker, expected, timeoutMs = 8000) {
-  const deadline = Date.now() + timeoutMs
-  let pids = ptyPids(marker)
-  while (Date.now() < deadline && pids.length !== expected) {
-    await sleep(150)
-    pids = ptyPids(marker)
-  }
-  return pids
+  return pollFor({
+    read: () => ptyPids(marker),
+    settled: (pids) => pids.length === expected,
+    timeoutMs,
+    interval: 150,
+    label: `waitForPtyCount(期待 ${expected} 個 pty)`,
+  })
 }
 
 // ── app 啟動 ────────────────────────────────────────────────────────────────
-
-const MOUNTED = `Boolean(
-  document.querySelector('aside[aria-label="${copy('rail.label')}"]') &&
-  document.getElementById('root')?.children.length &&
-  document.visibilityState === 'visible'
-)`
 
 const ANSI_PATTERN = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, 'g')
 const stripAnsi = (text) => text.replace(ANSI_PATTERN, '')
@@ -400,7 +394,7 @@ async function launch({ port, profileDir, rendererUrl, marker, stub }) {
 
   const target = await waitForPageTarget(port, 30_000)
   const client = await connect(target)
-  const mounted = await pollUntil(client, MOUNTED, (value) => value === true)
+  const mounted = await pollUntil(client, MOUNTED, (value) => value?.ok === true)
 
   return {
     client,
@@ -967,24 +961,18 @@ const SCREEN_RECT = `(() => {
  * 每一輪是一次「拖曳 + 複製」（約 0.5 秒），刻意把間隔放寬。
  */
 async function pollTerminalText(client, settled, timeoutMs = 10_000) {
-  const deadline = Date.now() + timeoutMs
-  let last = ''
-  let lastError = null
-  while (Date.now() < deadline) {
-    try {
-      last = await readTerminalText(client)
-      lastError = null
-      if (settled(last)) return last
-    } catch (error) {
-      // **輪詢中的「選不到東西」是「還沒好」，不是「管道壞了」** —— 終端在重播完成之前是空的，
-      // 而空的終端沒有東西可選。但**逾時之後仍讀不到，就是真的壞了**：那時要把哨兵的錯誤丟出去，
-      // 不可以默默回空字串（那正是本 change 要消滅的東西）。
-      lastError = error
-    }
-    await sleep(400)
-  }
-  if (lastError) throw lastError
-  return last
+  // **輪詢中的「選不到東西」是「還沒好」，不是「管道壞了」** —— 終端在重播完成之前是空的，
+  // 而空的終端沒有東西可選。但**逾時之後仍讀不到，就是真的壞了**：那時要把哨兵的錯誤丟出去，
+  // 不可以默默回空字串。`tolerateErrors` 承載的正是這個語意（每次成功讀取即清掉上一個例外，
+  // 只有最後一次仍失敗才拋）。
+  return pollFor({
+    read: () => readTerminalText(client),
+    settled,
+    timeoutMs,
+    interval: 400,
+    label: 'pollTerminalText（讀終端內容）',
+    tolerateErrors: true,
+  })
 }
 
 async function readTerminalText(client) {
@@ -1026,12 +1014,7 @@ async function readTerminalText(client) {
  * 「內容此刻已經在畫面上」—— 而 shell 的 prompt 與命令輸出都是非同步抵達的。
  */
 async function pollUntilText(read, settled, timeoutMs = 10_000) {
-  const deadline = Date.now() + timeoutMs
-  for (;;) {
-    const text = await read()
-    if (settled(text) || Date.now() >= deadline) return text
-    await sleep(200)
-  }
+  return pollFor({ read, settled, timeoutMs, interval: 200, label: 'pollUntilText（自訂取值）' })
 }
 
 /** 自 rail 的 folder 列建立 session（該入口 hover 才顯示，但 rect 與點擊不受 opacity 影響）。 */
@@ -1076,7 +1059,7 @@ async function runMode(label, { port, rendererUrl }) {
   const app = await launch({ port, profileDir: profile, rendererUrl, marker, stub })
 
   try {
-    check(results, `${label}：app 掛載`, app.mounted === true)
+    check(results, `${label}：app 掛載`, app.mounted?.ok === true, describeMounted(app.mounted))
 
     await pollUntil(app.client, SELECT_FOLDER('repo-a'), (value) => value === true, 10_000)
     await sleep(300)
@@ -2010,7 +1993,10 @@ async function runMode(label, { port, rendererUrl }) {
       tabsClaude.length === 1,
       JSON.stringify(tabsClaude.map((t) => t.label)),
     )
-    check(results, `${label}：建立 claude session 後 app 仍運作`, (await app.client.evaluate(MOUNTED)) === true)
+    // **issue #19 的三條紅燈之一就在這裡** —— 此前它只說得出「不是 true」。
+    const mountedAfterClaude = await app.client.evaluate(MOUNTED)
+    check(results, `${label}：建立 claude session 後 app 仍運作`, mountedAfterClaude?.ok === true,
+      describeMounted(mountedAfterClaude))
 
     // 尚未宣告標題 → 本地標籤（序號承自 folder 內的計數）
     check(
@@ -2225,16 +2211,18 @@ async function runMode(label, { port, rendererUrl }) {
     const pidsBeforeReload = ptyPids(marker)
 
     await app.client.send('Page.reload', {})
-    await pollUntil(app.client, MOUNTED, (value) => value === true, 20_000)
+    await pollUntil(app.client, MOUNTED, (value) => value?.ok === true, 20_000)
 
-    let orphans = pidsBeforeReload
-    const orphanDeadline = Date.now() + 10_000
-    while (Date.now() < orphanDeadline) {
-      const alive = new Set(ptyPids(marker))
-      orphans = pidsBeforeReload.filter((pid) => alive.has(pid))
-      if (orphans.length === 0) break
-      await sleep(100)
-    }
+    const orphans = await pollFor({
+      read: () => {
+        const alive = new Set(ptyPids(marker))
+        return pidsBeforeReload.filter((pid) => alive.has(pid))
+      },
+      settled: (value) => value.length === 0,
+      timeoutMs: 10_000,
+      interval: 100,
+      label: 'reload 後等舊 pty 全數釋放',
+    })
     check(
       results,
       `${label}：重新載入釋放先前的所有 pty（不留孤兒）`,
@@ -2367,12 +2355,14 @@ const SNAPSHOT_SETTLE_MS = 3200
 
 /** 等到帶 marker 的 pty 全部消失（app 自己清乾淨，或我們自己收拾）。 */
 async function waitPtysGone(marker, timeoutMs = 10_000) {
-  const deadline = Date.now() + timeoutMs
-  while (Date.now() < deadline) {
-    if (ptyPids(marker).length === 0) return true
-    await sleep(100)
-  }
-  return false
+  const pids = await pollFor({
+    read: () => ptyPids(marker),
+    settled: (value) => value.length === 0,
+    timeoutMs,
+    interval: 100,
+    label: 'waitPtysGone（等所有 pty 消失）',
+  })
+  return pids.length === 0
 }
 
 /**
@@ -2533,15 +2523,13 @@ async function runRestore(label, { port, rendererUrl }) {
 
     // ── 切到 shell session：它才被喚醒（首次被顯示時 spawn）
     await realClick(app.client, await app.client.evaluate(TAB_RECT(1)))
-    const woken = await (async () => {
-      const deadline = Date.now() + 10_000
-      while (Date.now() < deadline) {
-        const pids = ptySessionPids(marker)
-        if (pids.length === 2) return pids
-        await sleep(150)
-      }
-      return ptySessionPids(marker)
-    })()
+    const woken = await pollFor({
+      read: () => ptySessionPids(marker),
+      settled: (pids) => pids.length === 2,
+      timeoutMs: 10_000,
+      interval: 150,
+      label: '等休眠的 session 被顯示後啟動 pty',
+    })
     check(
       results,
       `${label}：顯示一個休眠的 session 使其啟動 pty`,
@@ -2709,15 +2697,13 @@ async function runHealAndCrash(label, { port, rendererUrl }) {
     await pollUntil(app.client, SELECT_FOLDER('repo-a'), (value) => value === true, 10_000)
     await pollUntil(app.client, TAB_LABELS, (value) => value.length === 1, 10_000)
 
-    const healed = await (async () => {
-      const deadline = Date.now() + 15_000
-      while (Date.now() < deadline) {
-        const calls = stub.calls()
-        if (calls.length >= 3) return calls
-        await sleep(200)
-      }
-      return stub.calls()
-    })()
+    const healed = await pollFor({
+      read: () => stub.calls(),
+      settled: (calls) => calls.length >= 3,
+      timeoutMs: 15_000,
+      interval: 200,
+      label: '等 stub claude 的第三次呼叫（--resume 失敗後的自癒）',
+    })
 
     check(
       results,
@@ -3632,7 +3618,11 @@ const killStrays = () => {
 const LONG = 14 * 60 * 1000
 
 const SECTIONS = [
-  { name: 'runMode', run: runMode, onTimeout: killStrays },
+  // **`runMode` 的時限必須放寬。** 它的最壞等待預算（各次等待的時限總和，含它呼叫的輔助
+  // 函式）已經**大於**預設時限 —— 於是幾個等待落空，它就會在跑完後半段之前被時限殺掉。
+  // 被吃掉的不是已經印出來的行（stdout 是 inherit，那些留著），而是**尚未執行的部分與這一段
+  // 的累計**（窗口耗盡幾次、CDP 往返多少）—— 而那正是要拿去回答 issue #21 的東西。
+  { name: 'runMode', run: runMode, timeoutMs: LONG, onTimeout: killStrays },
   { name: 'runUnicodeWidth', run: runUnicodeWidth, onTimeout: killStrays },
   { name: 'runRestore', run: runRestore, timeoutMs: LONG, onTimeout: killStrays },
   { name: 'runHealAndCrash', run: runHealAndCrash, timeoutMs: LONG, onTimeout: killStrays },

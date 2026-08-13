@@ -21,6 +21,7 @@ import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { app } from 'electron'
+import { check } from './lib/instrument.mjs'
 
 const require = createRequire(import.meta.url)
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..')
@@ -32,10 +33,6 @@ const REQUIRED_PLATFORMS = [
 ]
 
 const results = []
-function check(name, passed, detail) {
-  results.push(passed)
-  console.log(`  ${passed ? '✓' : '✗'} ${name}${detail ? `：${detail}` : ''}`)
-}
 function info(name, detail) {
   console.log(`  · ${name}：${detail}`)
 }
@@ -90,28 +87,30 @@ async function runProbe() {
   const allDeps = { ...pkg.dependencies, ...pkg.devDependencies }
   const ptyRange = pkg.dependencies?.['node-pty'] ?? ''
 
-  check('node-pty 版本釘死（無範圍運算子）',
+  check(results, 'node-pty 版本釘死（無範圍運算子）',
     /^\d+\.\d+\.\d+/.test(ptyRange) && !/[\^~><|*x]/.test(ptyRange), ptyRange)
-  check('不依賴 @electron/rebuild',
-    !('@electron/rebuild' in allDeps) && !('electron-rebuild' in allDeps))
-  check('無重建 native 模組的 postinstall 步驟',
-    !/rebuild/i.test(pkg.scripts?.postinstall ?? '') && !/rebuild/i.test(pkg.scripts?.install ?? ''))
+  check(results, '不依賴 @electron/rebuild',
+    !('@electron/rebuild' in allDeps) && !('electron-rebuild' in allDeps),
+    `@electron/rebuild=${'@electron/rebuild' in allDeps} electron-rebuild=${'electron-rebuild' in allDeps}`)
+  check(results, '無重建 native 模組的 postinstall 步驟',
+    !/rebuild/i.test(pkg.scripts?.postinstall ?? '') && !/rebuild/i.test(pkg.scripts?.install ?? ''),
+    `postinstall=${JSON.stringify(pkg.scripts?.postinstall ?? null)} install=${JSON.stringify(pkg.scripts?.install ?? null)}`)
 
   // 安裝結果
   const ptyRoot = join(repoRoot, 'node_modules', 'node-pty')
-  check('安裝未觸發本地編譯（無 build/ 目錄）', !existsSync(join(ptyRoot, 'build')))
+  check(results, '安裝未觸發本地編譯（無 build/ 目錄）', !existsSync(join(ptyRoot, 'build')))
 
   const prebuildsDir = join(ptyRoot, 'prebuilds')
   const present = existsSync(prebuildsDir) ? readdirSync(prebuildsDir) : []
   const missing = REQUIRED_PLATFORMS.filter((p) => !present.includes(p))
-  check('prebuilds 涵蓋全部目標平台', missing.length === 0,
+  check(results, 'prebuilds 涵蓋全部目標平台', missing.length === 0,
     missing.length ? `缺少 ${missing.join(', ')}` : `${present.length} 個平台`)
 
   // Node-API 判定
   const nativeFile = join(prebuildsDir, `${process.platform}-${process.arch}`, 'pty.node')
   const sym = inspectSymbols(nativeFile)
   if (sym.supported) {
-    check('pty.node 為 Node-API 實作（引用 napi_*、不引用 v8::）',
+    check(results, 'pty.node 為 Node-API 實作（引用 napi_*、不引用 v8::）',
       sym.napi > 0 && sym.v8 === 0, `napi=${sym.napi} v8=${sym.v8}`)
   } else {
     info('符號表檢查', '此平台無 nm，略過（不影響其餘判定）')
@@ -121,18 +120,18 @@ async function runProbe() {
   let pty = null
   try {
     pty = require('node-pty')
-    check('Electron 主行程載入 node-pty', true, '未針對 Electron ABI 重建')
+    check(results, 'Electron 主行程載入 node-pty', true, '未針對 Electron ABI 重建')
   } catch (err) {
-    check('Electron 主行程載入 node-pty', false, err.message.slice(0, 120))
+    check(results, 'Electron 主行程載入 node-pty', false, err.message.slice(0, 120))
   }
 
   if (pty) {
     const r = await spawnPty(pty)
-    check('spawn shell 並取得輸出',
+    check(results, 'spawn shell 並取得輸出',
       !r.timedOut && r.exitCode === 0 && /PTY_OK/.test(r.output), `exitCode=${r.exitCode}`)
 
     if (process.platform !== 'win32') {
-      check('取得的是偽終端而非管線', /\/dev\/(pts|ttys)/.test(r.output),
+      check(results, '取得的是偽終端而非管線', /\/dev\/(pts|ttys)/.test(r.output),
         (r.output.match(/\/dev\/\S+/) ?? ['未取得 tty'])[0])
     } else {
       info('偽終端檢查', 'Windows 走 ConPTY，無 tty(1) 可驗，略過')

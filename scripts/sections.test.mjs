@@ -9,6 +9,8 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { setTimeout as sleep } from 'node:timers/promises'
+import { pollFor } from './lib/instrument.mjs'
 import { runSections } from './lib/sections.mjs'
 
 /** 攔掉段落執行器的輸出，否則測試報告會被段落狀態淹掉。 */
@@ -309,4 +311,70 @@ test('PROBE_ONLY 指定不存在的段落時明確失敗', async () => {
       /不存在的段落：nope/,
     )
   })
+})
+
+// ── 段落的耗時與累計 ────────────────────────────────────────────────────────
+//
+// **為什麼這些要在段落這一層驗**：逐次的窗口耗盡那一行散在幾百行輸出裡，而「哪一段吃掉了
+// 那一輪」是段落總結唯一能回答的問題。這兩條的失效方式都是「少印一段字」——靜默。
+
+/** 收集段落執行器的輸出（`quiet` 是丟掉，這裡是留下來看）。 */
+async function capture(fn) {
+  const lines = []
+  const log = console.log
+  const error = console.error
+  console.log = (...args) => lines.push(args.join(' '))
+  console.error = (...args) => lines.push(args.join(' '))
+  try {
+    await fn()
+    return lines
+  } finally {
+    console.log = log
+    console.error = error
+  }
+}
+
+test('段落狀態的總結附上每個段落的耗時', async () => {
+  const sections = [{ name: 'slow', run: async () => sleep(30) }]
+  const lines = await withOnly(null, () =>
+    capture(() => runSections({ sections, build: BUILD, dev: null, results: [true] })),
+  )
+  const row = lines.find((l) => l.includes('build：slow'))
+  assert.ok(row, '總結要有這一段')
+  assert.match(row, /（\d+\.\d+s/, `每個已執行的段落都要附耗時，實際：${row}`)
+})
+
+test('段落的窗口耗盡累計進總結', async () => {
+  const sections = [
+    {
+      name: 'burns',
+      run: () => pollFor({ read: () => null, settled: () => false, timeoutMs: 20, interval: 5, label: 'x' }),
+    },
+  ]
+  const lines = await withOnly(null, () =>
+    capture(() => runSections({ sections, build: BUILD, dev: null, results: [true] })),
+  )
+  const row = lines.find((l) => l.includes('build：burns'))
+  assert.match(row, /窗口耗盡 1 次／\d+\.\d+s/, `一段跑很久時，「它慢」與「它有幾個等待落空」是兩件事，實際：${row}`)
+})
+
+test('對照組：沒有窗口耗盡時，總結不出現那一段文字', async () => {
+  const sections = [{ name: 'clean', run: async () => {} }]
+  const lines = await withOnly(null, () =>
+    capture(() => runSections({ sections, build: BUILD, dev: null, results: [true] })),
+  )
+  const row = lines.find((l) => l.includes('build：clean'))
+  assert.ok(!row.includes('窗口耗盡'), `正常的段落不該帶著一個恆為零的欄位，實際：${row}`)
+})
+
+test('未執行的段落不附耗時', async () => {
+  const sections = [
+    { name: 'a', run: async () => { throw new Error('boom') } },
+    { name: 'b', deps: ['a'], run: async () => {} },
+  ]
+  const lines = await withOnly(null, () =>
+    capture(() => runSections({ sections, build: BUILD, dev: null, results: [true] })),
+  )
+  const row = lines.find((l) => l.includes('build：b') && l.includes('未執行'))
+  assert.ok(row && !/（\d+\.\d+s/.test(row), `沒跑過的段落給一個耗時數字，等於憑空捏造，實際：${row}`)
 })

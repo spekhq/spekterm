@@ -27,8 +27,9 @@ import {
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
-import { check, connect, pollUntil, waitForPageTarget } from './lib/cdp.mjs'
+import { check, connect, pollFor, pollUntil, waitForPageTarget } from './lib/cdp.mjs'
 import { copy } from './lib/copy.mjs'
+import { MOUNTED, describeMounted } from './lib/mounted.mjs'
 import { electronExtraArgs } from './lib/display.mjs'
 
 const BUILD_PORT = 9224
@@ -111,12 +112,6 @@ function seedProfile(folders) {
 
 // ── app 啟動 ────────────────────────────────────────────────────────────────
 
-const MOUNTED = `Boolean(
-  document.querySelector('aside[aria-label="${copy('rail.label')}"]') &&
-  document.getElementById('root')?.children.length &&
-  document.visibilityState === 'visible'
-)`
-
 // vite 的輸出帶顏色。以 fromCharCode 組出 ESC，避免在 regex 字面量裡放控制字元。
 const ANSI_PATTERN = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, 'g')
 const stripAnsi = (text) => text.replace(ANSI_PATTERN, '')
@@ -176,7 +171,7 @@ async function launch({ port, profileDir, rendererUrl }) {
 
   const target = await waitForPageTarget(port, 30_000)
   const client = await connect(target)
-  const mounted = await pollUntil(client, MOUNTED, (value) => value === true)
+  const mounted = await pollUntil(client, MOUNTED, (value) => value?.ok === true)
 
   return {
     client,
@@ -430,13 +425,15 @@ const FOCUS_EDITOR = `(() => {
 const RELOAD = `(() => { location.reload(); return true })()`
 
 /** 輪詢磁碟上的一個條件（存檔、CRUD 都以磁碟為最終真相，而非 UI 時序）。 */
-async function pollDisk(predicate, { timeoutMs = 4000 } = {}) {
-  const deadline = Date.now() + timeoutMs
-  while (Date.now() < deadline) {
-    if (predicate()) return true
-    await sleep(100)
-  }
-  return false
+async function pollDisk(predicate, { timeoutMs = 4000, label = 'pollDisk（磁碟上的條件）' } = {}) {
+  const settledValue = await pollFor({
+    read: () => predicate(),
+    settled: (value) => value === true,
+    timeoutMs,
+    interval: 100,
+    label,
+  })
+  return settledValue === true
 }
 
 /**
@@ -587,7 +584,8 @@ const READ_FILE = (folderId, relPath) => `window.workspace.fs.readFile(${JSON.st
 async function probeBuild(fixture, profile) {
   const app = await launch({ port: BUILD_PORT, profileDir: profile })
   try {
-    if (!check(results, '應用程式啟動（建置模式）', app.mounted === true, app.mounted ? '' : app.stderr().slice(0, 300))) {
+    if (!check(results, '應用程式啟動（建置模式）', app.mounted?.ok === true,
+      app.mounted?.ok ? '' : `${describeMounted(app.mounted)} ${app.stderr().slice(0, 300)}`)) {
       throw new Error('未掛載，後續斷言無意義')
     }
 
@@ -637,7 +635,9 @@ async function probeBuild(fixture, profile) {
     await app.client.evaluate(SELECT_FOLDER('repo-openspec'))
     const rootRows = await pollUntil(app.client, ROWS, (rows) => rows.length >= 6)
 
-    check(results, '呈現根目錄的直接子項目', rootRows.some((r) => r.path === 'README.md') && rootRows.some((r) => r.path === 'sub'))
+    check(results, '呈現根目錄的直接子項目',
+      rootRows.some((r) => r.path === 'README.md') && rootRows.some((r) => r.path === 'sub'),
+      JSON.stringify(rootRows.map((r) => r.path)))
 
     // **相對時間的 locale 必須跟著 UI 的語言走**（`ui-localization`）。這條非驗不可：
     // `Intl.RelativeTimeFormat` 的 locale 若脫鉤，畫面上就會在一片英文裡混出「3 分鐘前」，
@@ -759,8 +759,8 @@ async function probeBuild(fixture, profile) {
     console.log('\nrenderer 重新載入')
     await app.client.evaluate(RELOAD)
     await sleep(500)
-    const remounted = await pollUntil(app.client, MOUNTED, (value) => value === true)
-    check(results, '重新載入後 renderer 重新掛載', remounted === true)
+    const remounted = await pollUntil(app.client, MOUNTED, (value) => value?.ok === true)
+    check(results, '重新載入後 renderer 重新掛載', remounted?.ok === true, describeMounted(remounted))
 
     await app.client.evaluate(SELECT_FOLDER('repo-openspec'))
     await pollUntil(app.client, ROW_PATHS, (paths) => paths.includes('README.md'))
@@ -818,7 +818,9 @@ async function probeBuild(fixture, profile) {
     const beforeEdit = await app.client.evaluate(EDITOR_TEXT)
     await app.client.send('Input.insertText', { text: 'EDIT ' })
     const afterEdit = await pollUntil(app.client, EDITOR_TEXT, (text) => /EDIT /.test(text ?? ''))
-    check(results, '於編輯器輸入時內容隨之改變', beforeEdit !== afterEdit && /EDIT /.test(afterEdit ?? ''))
+    check(results, '於編輯器輸入時內容隨之改變',
+      beforeEdit !== afterEdit && /EDIT /.test(afterEdit ?? ''),
+      `內容有變=${beforeEdit !== afterEdit}；含 EDIT=${/EDIT /.test(afterEdit ?? '')}`)
 
     // 返回檔案樹 —— 未存的變更必須活過這次換頁，且該列要標記出來（file-explorer / D9）。
     await app.client.evaluate(BACK_TO_TREE)
@@ -957,7 +959,8 @@ async function probeBuild(fixture, profile) {
 
     check(results, 'markdown 以渲染後的樣貌呈現', md?.headings === 1 && md?.tables === 1,
       `h1=${md?.headings} table=${md?.tables}`)
-    check(results, '原始 HTML 不被當作 HTML 執行', md?.scriptElements === 0 && md?.pwned === false)
+    check(results, '原始 HTML 不被當作 HTML 執行', md?.scriptElements === 0 && md?.pwned === false,
+      `scriptElements=${md?.scriptElements} pwned=${md?.pwned}`)
     check(results, 'script 標籤以純文字呈現', /<script>/.test(md?.text ?? ''))
     check(results, 'javascript: 連結不可點（未渲染為 anchor）',
       !(md?.anchors ?? []).some((href) => /^javascript:/i.test(href ?? '')), (md?.anchors ?? []).join(' '))
@@ -1108,9 +1111,11 @@ async function probeBuild(fixture, profile) {
       (await pollUntil(app.client, NAME_DIALOG_PRESENT, (v) => v === true, 6000)) === true)
 
     await pressCtrlP(app.client)
+    const quickOpenUnderDialog = await app.client.evaluate(QUICK_OPEN)
+    const dialogStillOpen = await app.client.evaluate(NAME_DIALOG_PRESENT)
     check(results, '命名對話框開啟時 Ctrl+P 為無操作且對話框維持開啟',
-      (await app.client.evaluate(QUICK_OPEN)) === null &&
-        (await app.client.evaluate(NAME_DIALOG_PRESENT)) === true)
+      quickOpenUnderDialog === null && dialogStillOpen === true,
+      `quick open=${JSON.stringify(quickOpenUnderDialog)}；對話框仍開著=${dialogStillOpen}`)
     await pressEsc(app.client)
     await sleep(400)
   } finally {
@@ -1129,8 +1134,8 @@ async function probeDev(fixture, profile) {
   try {
     app = await launch({ port: DEV_PORT, profileDir: profile, rendererUrl: server.url })
 
-    if (!check(results, `應用程式啟動（開發模式，renderer 由 ${server.url} 提供）`, app.mounted === true,
-      app.mounted ? '' : app.stderr().slice(-300))) {
+    if (!check(results, `應用程式啟動（開發模式，renderer 由 ${server.url} 提供）`, app.mounted?.ok === true,
+      app.mounted?.ok ? '' : `${describeMounted(app.mounted)} ${app.stderr().slice(-300)}`)) {
       return
     }
 

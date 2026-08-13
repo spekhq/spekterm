@@ -30,8 +30,9 @@ import {
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
-import { check, connect, pollUntil, waitForPageTarget } from './lib/cdp.mjs'
+import { check, connect, pollFor, pollUntil, waitForPageTarget } from './lib/cdp.mjs'
 import { copy, prefixOf, suffixOf } from './lib/copy.mjs'
+import { MOUNTED, describeMounted } from './lib/mounted.mjs'
 import { electronExtraArgs } from './lib/display.mjs'
 import { runSections } from './lib/sections.mjs'
 
@@ -332,12 +333,6 @@ function seedProfile(folders) {
 
 // ── app 啟動 ────────────────────────────────────────────────────────────────
 
-const MOUNTED = `Boolean(
-  document.querySelector('aside[aria-label="${copy('rail.label')}"]') &&
-  document.getElementById('root')?.children.length &&
-  document.visibilityState === 'visible'
-)`
-
 const ANSI_PATTERN = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, 'g')
 const stripAnsi = (text) => text.replace(ANSI_PATTERN, '')
 
@@ -391,7 +386,7 @@ async function launch({ port, profileDir, rendererUrl, stub }) {
 
   const target = await waitForPageTarget(port, 30_000)
   const client = await connect(target)
-  const mounted = await pollUntil(client, MOUNTED, (value) => value === true)
+  const mounted = await pollUntil(client, MOUNTED, (value) => value?.ok === true)
 
   return {
     client,
@@ -1020,27 +1015,29 @@ async function realClick(client, rect) {
  * 這與「先訂閱、再列目錄」同源：**在會變動的東西上取一次快照，就是在賭它不變。**
  */
 async function stableRect(client, expression, { samples = 3, gapMs = 250, timeoutMs = 15_000 } = {}) {
-  const deadline = Date.now() + timeoutMs
+  // **`settled` 是有狀態的閉包** —— 它要的不是「這一次的值對不對」，而是「連續幾次沒變」。
+  // 原語的判準本來就是閉包，因此這個形狀不需要為它開特例（唯一的差別是逾時時回傳的是
+  // 最後一次讀到的值，與原本回傳 `previous` 等價 —— 迴圈結束時 `previous` 就是它）。
   let previous = null
   let same = 0
+  return pollFor({
+    read: () => client.evaluate(expression),
+    settled: (rect) => {
+      const unchanged =
+        rect &&
+        previous &&
+        rect.x === previous.x &&
+        rect.y === previous.y &&
+        rect.width === previous.width
 
-  while (Date.now() < deadline) {
-    const rect = await client.evaluate(expression)
-    const unchanged =
-      rect &&
-      previous &&
-      rect.x === previous.x &&
-      rect.y === previous.y &&
-      rect.width === previous.width
-
-    same = unchanged ? same + 1 : 0
-    previous = rect
-    if (same >= samples - 1) return rect
-
-    await sleep(gapMs)
-  }
-
-  return previous
+      same = unchanged ? same + 1 : 0
+      previous = rect
+      return same >= samples - 1
+    },
+    timeoutMs,
+    interval: gapMs,
+    label: 'stableRect（等量到的矩形連續數次不變）',
+  })
 }
 
 async function pressEscape(client) {
@@ -1245,9 +1242,11 @@ async function runQuickOpenScope(app) {
   await pressEscape(app.client)
   await sleep(300)
 
+  const pickerOpened = await app.client.evaluate(CLICK_WORKTREE_PICKER)
+  const worktreePicked = await app.client.evaluate(CLICK_WORKTREE_ITEM('feat-inside'))
   check(results, 'quick open 前置 —— 切換工作目錄至 wt-inside',
-    (await app.client.evaluate(CLICK_WORKTREE_PICKER)) === true &&
-      (await app.client.evaluate(CLICK_WORKTREE_ITEM('feat-inside'))) === true)
+    pickerOpened === true && worktreePicked === true,
+    `選單開啟=${pickerOpened}；點到 feat-inside=${worktreePicked}`)
   await pollUntil(app.client, WORKTREE_PICKER, (v) => v?.includes('feat-inside') === true, 8000)
   await sleep(600)
 
@@ -1276,9 +1275,11 @@ async function runQuickOpenScope(app) {
 
   await app.client.evaluate(FOCUS_SIDE_PANEL)
   await pressCtrlP(app.client)
+  const quickOpenUnderOverlay = await app.client.evaluate(QUICK_OPEN)
+  const overlayStillOpen = await app.client.evaluate(OVERLAY)
   check(results, '全視窗 overlay 開啟時 Ctrl+P 為無操作',
-    (await app.client.evaluate(QUICK_OPEN)) === null &&
-      (await app.client.evaluate(OVERLAY)) !== null)
+    quickOpenUnderOverlay === null && overlayStillOpen !== null,
+    `quick open=${JSON.stringify(quickOpenUnderOverlay)}；overlay 仍開著=${overlayStillOpen !== null}`)
 
   await app.client.evaluate(CLICK_VIZ_CLOSE)
   await pollUntil(app.client, OVERLAY, (v) => v === null, 8000)
@@ -1330,7 +1331,7 @@ async function runPanelBasics(label, { port, rendererUrl }) {
 
   const stub = makeStubClaude()
   const app = await launch({ port, profileDir: profile, rendererUrl, stub })
-  check(results, 'app 掛載', app.mounted === true)
+  check(results, 'app 掛載', app.mounted?.ok === true, describeMounted(app.mounted))
 
 
     // ── 預設身分、兩個視圖、衍生的預設錨定 ──────────────────────────────────
@@ -2132,7 +2133,7 @@ async function runAnchoringAndCoordinate(label, config, { app, single }) {
     console.log('\n重新載入之後，側欄仍隨檔案變更更新')
     await app.client.send('Page.reload', {})
     await sleep(1500)
-    await pollUntil(app.client, MOUNTED, (value) => value === true, 20_000)
+    await pollUntil(app.client, MOUNTED, (value) => value?.ok === true, 20_000)
 
     await pollUntil(app.client, SELECT_FOLDER('repo-single'), (value) => value === true, 15_000)
     const reloadedIdentity = await pollUntil(app.client, IDENTITY, (value) => value === 'openspec', 10_000)
@@ -2323,7 +2324,7 @@ async function runAnchoringAndCoordinate(label, config, { app, single }) {
     await sleep(900)
     await app.client.send('Page.reload', {})
     await sleep(1500)
-    await pollUntil(app.client, MOUNTED, (v) => v === true, 20_000)
+    await pollUntil(app.client, MOUNTED, (v) => v?.ok === true, 20_000)
     await pollUntil(app.client, SELECT_FOLDER('repo-single'), (v) => v === true, 15_000)
     await pollUntil(app.client, IDENTITY, (v) => v === 'openspec', 10_000)
     const rebuiltTabs = await pollUntil(app.client, SESSION_TABS, (l) => l.length === 2, 15_000)
@@ -2437,12 +2438,14 @@ async function runWorktreeAggregation(label, config, { app, worktree }) {
 
     // **這條是防假綠的關鍵**：worktree ≤ 1 時 core 會靜默退回非聚合，而上一條在那種情況下
     // 仍可能因為別的原因通過。它們確實不在主工作目錄底下 —— 那才是「聚合真的發生了」的證據。
+    const insideInMain = existsSync(join(worktree.repo, 'openspec/changes/inside-change'))
+    const outsideInMain = existsSync(join(worktree.repo, 'openspec/changes/outside-change'))
+    const insideInWorktree = existsSync(join(worktree.inside, 'openspec/changes/inside-change'))
     check(
       results,
       '那些 change 不存在於主工作目錄的 openspec/changes/ 底下',
-      !existsSync(join(worktree.repo, 'openspec/changes/inside-change')) &&
-        !existsSync(join(worktree.repo, 'openspec/changes/outside-change')) &&
-        existsSync(join(worktree.inside, 'openspec/changes/inside-change')),
+      !insideInMain && !outsideInMain && insideInWorktree,
+      `主工作目錄：inside=${insideInMain} outside=${outsideInMain}；worktree 內 inside=${insideInWorktree}`,
     )
 
     const rowOf = (slug) => (wtActive ?? []).find((r) => r.slug === slug)
@@ -3106,7 +3109,7 @@ async function runWorktreeAggregation(label, config, { app, worktree }) {
     await sleep(1200)
     await app.client.send('Page.reload', {})
     await sleep(1500)
-    await pollUntil(app.client, MOUNTED, (v) => v === true, 20_000)
+    await pollUntil(app.client, MOUNTED, (v) => v?.ok === true, 20_000)
 
     // **先選 folder 再判定身分** —— 沒有選中任何 folder 時側欄是空狀態，而那個 section 的
     // `aria-label` 是身分切換器的字串、不是 OpenSpec 面板的，`IDENTITY` 於是回 null。

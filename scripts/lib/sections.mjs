@@ -26,6 +26,7 @@
  */
 
 import { writeFileSync } from 'node:fs'
+import { beginSection, sectionSummary } from './instrument.mjs'
 
 /**
  * 段落的預設時限。
@@ -176,6 +177,12 @@ async function runSectionsOfMode(sections, mode, modeConfig, selected, context, 
       continue
     }
 
+    // **每個段落換一個 token 並重置累計**（見 `instrument.mjs`）—— 逾時的段落不會被中止，
+    // 它的殘留活動會繼續呼叫 `check()` 與 `pollFor()`，而下一個段落是無辜的。
+    beginSection()
+    const startedAt = Date.now()
+    const meter = () => ({ seconds: (Date.now() - startedAt) / 1000, ...sectionSummary() })
+
     try {
       const produced = await withTimeout(
         () => section.run(mode, modeConfig, context),
@@ -183,7 +190,7 @@ async function runSectionsOfMode(sections, mode, modeConfig, selected, context, 
         `${mode}：${section.name}`,
       )
       if (produced && typeof produced === 'object') Object.assign(context, produced)
-      outcomes.push({ name: section.name, status: 'passed' })
+      outcomes.push({ name: section.name, status: 'passed', ...meter() })
     } catch (error) {
       failed.add(section.name)
       const timedOut = error instanceof SectionTimeout
@@ -191,6 +198,7 @@ async function runSectionsOfMode(sections, mode, modeConfig, selected, context, 
         name: section.name,
         status: 'failed',
         reason: timedOut ? `逾時（${error.limitMs / 1000}s）` : (error?.message ?? String(error)),
+        ...meter(),
       })
       if (timedOut) {
         console.error(`\n✗ ${mode}：${section.name} 逾時（超過 ${error.limitMs / 1000} 秒），本段記為失敗`)
@@ -277,6 +285,25 @@ export async function runSections({ sections, build, dev, results, afterMode, cl
   return summarize(outcomes, results)
 }
 
+/**
+ * 段落的耗時與累計。
+ *
+ * **窗口耗盡的次數與合計時間必須在這裡出現**，理由與耗時同一條：一段跑了幾百秒時，
+ * 「它慢」與「它有六個等待落空」要修的是不同的東西，而逐次的那一行散在幾百行輸出裡。
+ * 未執行的段落沒有數字（`seconds` 為 undefined），不印。
+ */
+function meterOf(outcome) {
+  if (outcome.seconds === undefined) return ''
+  const parts = [`${outcome.seconds.toFixed(1)}s`]
+  if (outcome.timeouts > 0) {
+    parts.push(`窗口耗盡 ${outcome.timeouts} 次／${(outcome.timeoutMs / 1000).toFixed(1)}s`)
+  }
+  if (outcome.cdpCalls > 0) {
+    parts.push(`cdp ${outcome.cdpCalls}×${(outcome.cdpMs / 1000).toFixed(1)}s`)
+  }
+  return `（${parts.join('，')}）`
+}
+
 /** 印出段落狀態與斷言總數，並以結束碼反映結果。 */
 function summarize(outcomes, results) {
   const all = [...outcomes.build.map((o) => ({ ...o, mode: 'build' })), ...outcomes.dev.map((o) => ({ ...o, mode: 'dev' }))]
@@ -288,7 +315,7 @@ function summarize(outcomes, results) {
     for (const o of all) {
       const mark = o.status === 'passed' ? '通過' : o.status === 'failed' ? '失敗' : '未執行'
       const detail = o.reason ? ` —— ${o.reason}` : ''
-      console.log(`  ${mark}  ${o.mode}：${o.name}${detail}`)
+      console.log(`  ${mark}  ${o.mode}：${o.name}${detail}${meterOf(o)}`)
     }
   }
 

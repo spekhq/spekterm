@@ -15,8 +15,9 @@ import { mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync
 import { homedir, tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
-import { check, connect, dragMouse, pollUntil, pressKey, waitForPageTarget } from './lib/cdp.mjs'
+import { check, connect, dragMouse, pollFor, pollUntil, pressKey, waitForPageTarget } from './lib/cdp.mjs'
 import { copy, patternOf, prefixOf, suffixOf } from './lib/copy.mjs'
+import { describeMounted, mountedExpression } from './lib/mounted.mjs'
 import { electronExtraArgs } from './lib/display.mjs'
 
 const DEBUG_PORT = 9223
@@ -98,16 +99,14 @@ function seedProfile(folders) {
  * ResizeObserver —— 此時送出的滑鼠事件會被接收，版面卻不會動。
  * 因此必須等到 visible 且三個分界都就位，才開始互動。
  */
-const MOUNTED = `(() => {
-  const rail = document.querySelector('aside[aria-label="${copy('rail.label')}"]')
-  return Boolean(
-    rail &&
-    document.getElementById('root')?.children.length &&
-    document.visibilityState === 'visible' &&
-    document.querySelectorAll('[role="separator"]').length === 3 &&
-    rail.getBoundingClientRect().width > 0
-  )
-})()`
+// **這支額外要求兩件事**：三個分界器都在、rail 量得出寬度 —— 它驗的就是版面本身，
+// 「掛載了但版面還沒成形」對它而言與沒掛載無異。
+const MOUNTED = mountedExpression({
+  extra: {
+    separators: `document.querySelectorAll('[role="separator"]').length === 3`,
+    railWidth: `document.querySelector('aside[aria-label="${copy('rail.label')}"]')?.getBoundingClientRect().width > 0`,
+  },
+})
 
 async function launch(profileDir) {
   const electron = spawn(
@@ -120,7 +119,7 @@ async function launch(profileDir) {
 
   const target = await waitForPageTarget(DEBUG_PORT)
   const client = await connect(target)
-  const mounted = await pollUntil(client, MOUNTED, (value) => value === true)
+  const mounted = await pollUntil(client, MOUNTED, (value) => value?.ok === true)
 
   return {
     client,
@@ -200,13 +199,13 @@ const ACTIVITY_BAR = `[...document.querySelectorAll('nav[aria-label="${copy('act
  * 固定 sleep 在慢機器上會偽性失敗，在快機器上則白等。
  */
 async function layoutUntil(client, predicate, timeoutMs = 4_000) {
-  const deadline = Date.now() + timeoutMs
-  let last = await client.evaluate(LAYOUT)
-  while (Date.now() < deadline && !predicate(last)) {
-    await sleep(80)
-    last = await client.evaluate(LAYOUT)
-  }
-  return last
+  return pollFor({
+    read: () => client.evaluate(LAYOUT),
+    settled: predicate,
+    timeoutMs,
+    interval: 80,
+    label: 'layoutUntil（等版面達到預期）',
+  })
 }
 
 /**
@@ -332,7 +331,8 @@ let app = null
 
 try {
   app = await launch(profile)
-  if (!check(results, '應用程式啟動且 rail 掛載', app.mounted === true, app.mounted ? '' : app.stderr().slice(0, 300))) {
+  if (!check(results, '應用程式啟動且 rail 掛載', app.mounted?.ok === true,
+    app.mounted?.ok ? '' : `${describeMounted(app.mounted)} ${app.stderr().slice(0, 300)}`)) {
     throw new Error('rail 未掛載，後續斷言無意義')
   }
 
@@ -437,10 +437,12 @@ try {
   check(results, '以相對路徑列出目錄', listRoot.ok && listRoot.entries.some((e) => e.name === 'openspec' && e.kind === 'directory'),
     listRoot.ok ? listRoot.entries.map((e) => `${e.name}:${e.kind}`).join(' ') : listRoot.message)
   check(results, '回報符號連結為 symlink 而非其指向的種類',
-    listRoot.ok && listRoot.entries.find((e) => e.name === 'escape-link')?.kind === 'symlink')
+    listRoot.ok && listRoot.entries.find((e) => e.name === 'escape-link')?.kind === 'symlink',
+    `列目錄成功=${listRoot.ok}；escape-link 的 kind=${listRoot.entries?.find((e) => e.name === 'escape-link')?.kind ?? '(不在清單裡)'}`)
 
   const listSub = await app.client.evaluate(callListDir('f-openspec', 'sub'))
-  check(results, '可列出子目錄', listSub.ok && listSub.entries.length === 0)
+  check(results, '可列出子目錄', listSub.ok && listSub.entries.length === 0,
+    `列目錄成功=${listSub.ok}；項目數=${listSub.entries?.length ?? '(無 entries)'}`)
 
   for (const [name, relPath] of [
     ['絕對路徑', '/etc'],
@@ -692,12 +694,11 @@ try {
 
   // **「它不是被合成出來的一筆 folder」的鑑別點在磁碟上，不在畫面上。**
   // 使用者今日的變通（把 `~` 加進 workspace）在畫面上長得很像，差別是那樣會有一筆真的 folder。
+  const persisted = JSON.parse(readFileSync(join(profile, 'workspace.json'), 'utf8'))
+  const persistedHasHome = persisted.folders.some((f) => f.path === homedir())
   check(results, 'workspace 的持久化設定中沒有代表全域項目的條目',
-    await (async () => {
-      const raw = JSON.parse(readFileSync(join(profile, 'workspace.json'), 'utf8'))
-      const home = homedir()
-      return raw.folders.length === 3 && !raw.folders.some((f) => f.path === home)
-    })())
+    persisted.folders.length === 3 && !persistedHasHome,
+    `條目數=${persisted.folders.length}（期望 3）；含家目錄=${persistedHasHome}`)
 
   // 拖曳它：順序不變（它不是 workspace 的成員，沒有順序可言）。
   const orderBeforeGlobalDrag = (await app.client.evaluate(RAIL_ROWS)).map((r) => r.name).join(',')
@@ -1125,7 +1126,7 @@ try {
   const badPrefsProfile = mkTemp('spekterm-badprefs-')
   writeFileSync(join(badPrefsProfile, 'preferences.json'), '{ not json at all')
   app = await launch(badPrefsProfile)
-  check(results, '偏好設定檔損毀時應用程式仍正常啟動', app.mounted === true)
+  check(results, '偏好設定檔損毀時應用程式仍正常啟動', app.mounted?.ok === true, describeMounted(app.mounted))
   const defaultPrefs = await app.client.evaluate('window.workspace.settings.get()')
   check(results, '損毀的偏好以預設啟動（空偏好）',
     defaultPrefs && Object.keys(defaultPrefs).length === 0, JSON.stringify(defaultPrefs))
@@ -1138,9 +1139,10 @@ try {
   const corruptProfile = mkTemp('spekterm-corrupt-')
   writeFileSync(join(corruptProfile, 'workspace.json'), '{ this is not json')
   app = await launch(corruptProfile)
-  check(results, '損毀時應用程式仍正常啟動', app.mounted === true)
+  check(results, '損毀時應用程式仍正常啟動', app.mounted?.ok === true, describeMounted(app.mounted))
   const emptyFolders = await app.client.evaluate('window.workspace.folders.list()')
-  check(results, '以空 workspace 啟動', Array.isArray(emptyFolders) && emptyFolders.length === 0)
+  check(results, '以空 workspace 啟動', Array.isArray(emptyFolders) && emptyFolders.length === 0,
+    Array.isArray(emptyFolders) ? `${emptyFolders.length} 個 folder` : `不是陣列：${JSON.stringify(emptyFolders)}`)
   const kept = readdirSync(corruptProfile).filter((name) => name.includes('workspace.json.corrupt-'))
   check(results, '原檔改名保留而非刪除', kept.length === 1, kept[0] ?? '(無)')
   await app.close()

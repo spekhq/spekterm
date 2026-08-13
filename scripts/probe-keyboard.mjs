@@ -19,8 +19,9 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
-import { check, connect, pollUntil, waitForPageTarget } from './lib/cdp.mjs'
+import { check, connect, pollFor, pollUntil, waitForPageTarget } from './lib/cdp.mjs'
 import { copy, prefixOf } from './lib/copy.mjs'
+import { MOUNTED, describeMounted } from './lib/mounted.mjs'
 import { electronExtraArgs } from './lib/display.mjs'
 import { runSections } from './lib/sections.mjs'
 
@@ -79,14 +80,13 @@ async function pressEnter(client) {
  */
 async function waitForPtyFile(name, settled, timeoutMs = 8000) {
   const path = join(ptyOutDir, name)
-  const deadline = Date.now() + timeoutMs
-  let last = ''
-  while (Date.now() < deadline) {
-    last = existsSync(path) ? readFileSync(path, 'utf8') : ''
-    if (settled(last)) return last
-    await sleep(150)
-  }
-  return last
+  return pollFor({
+    read: () => (existsSync(path) ? readFileSync(path, 'utf8') : ''),
+    settled,
+    timeoutMs,
+    interval: 150,
+    label: `waitForPtyFile(${name})`,
+  })
 }
 
 function seedProfile(repos) {
@@ -107,12 +107,6 @@ function seedProfile(repos) {
 }
 
 // ── app 啟動 ────────────────────────────────────────────────────────────────
-
-const MOUNTED = `Boolean(
-  document.querySelector('aside[aria-label="${copy('rail.label')}"]') &&
-  document.getElementById('root')?.children.length &&
-  document.visibilityState === 'visible'
-)`
 
 const ANSI_PATTERN = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, 'g')
 const stripAnsi = (text) => text.replace(ANSI_PATTERN, '')
@@ -158,7 +152,7 @@ async function launch({ port, profileDir, rendererUrl }) {
 
   const target = await waitForPageTarget(port, 30_000)
   const client = await connect(target)
-  const mounted = await pollUntil(client, MOUNTED, (value) => value === true)
+  const mounted = await pollUntil(client, MOUNTED, (value) => value?.ok === true)
 
   return {
     client,
@@ -549,9 +543,11 @@ async function runQuickOpen(label, app, repos) {
 
   await pressKey(app.client, 'Escape')
   await sleep(400)
+  const quickOpenAfterEsc = await app.client.evaluate(QUICK_OPEN)
+  const openedAfterEsc = await app.client.evaluate(OPENED_FILE)
   check(results, `${label}：Esc 關閉入口且未開啟任何檔案`,
-    (await app.client.evaluate(QUICK_OPEN)) === null &&
-      (await app.client.evaluate(OPENED_FILE)) === null)
+    quickOpenAfterEsc === null && openedAfterEsc === null,
+    `quick open=${JSON.stringify(quickOpenAfterEsc)}；開啟的檔案=${JSON.stringify(openedAfterEsc)}`)
 
   await pressKey(app.client, 'p', ['ctrl'])
   const reopened = await pollUntil(app.client, QUICK_OPEN, (v) => v !== null, 8000)
@@ -609,18 +605,20 @@ async function runMode(label, { port, rendererUrl }) {
   const app = await launch({ port, profileDir: profile, rendererUrl })
 
   try {
-    check(results, `${label}：app 掛載`, app.mounted === true)
+    check(results, `${label}：app 掛載`, app.mounted?.ok === true, describeMounted(app.mounted))
 
     // ── 還沒選中任何 repo 時，Ctrl+T 為無操作
     //
     // 這個狀態下「+ session」按鈕根本不在 DOM 裡 —— 驗的是它不會炸，也不會憑空生出一個選單。
     await pressKey(app.client, 't', ['ctrl'])
     await sleep(500)
+    const menuWithoutRepo = await app.client.evaluate(MENU_STATE)
+    const mountedWithoutRepo = await app.client.evaluate(MOUNTED)
     check(
       results,
       `${label}：沒有選中的 repo 時，Ctrl+T 為無操作且 app 不崩潰`,
-      (await app.client.evaluate(MENU_STATE)) === null &&
-        (await app.client.evaluate(MOUNTED)) === true,
+      menuWithoutRepo === null && mountedWithoutRepo?.ok === true,
+      `選單=${JSON.stringify(menuWithoutRepo)}；${describeMounted(mountedWithoutRepo) || '掛載正常'}`,
     )
 
     await pollUntil(app.client, SELECT_FOLDER('repo-a'), (value) => value === true, 10_000)
@@ -850,11 +848,13 @@ async function runMode(label, { port, rendererUrl }) {
     const focusedBeforeMenu = await app.client.evaluate(FOCUSED_TAB)
     await pressKey(app.client, 'Tab', ['ctrl'])
     await sleep(400)
+    const focusedUnderMenu = await app.client.evaluate(FOCUSED_TAB)
+    const menuStillOpen = await app.client.evaluate(MENU_STATE)
     check(
       results,
       `${label}：spawn 選單開啟時，導航快捷鍵不生效`,
-      (await app.client.evaluate(FOCUSED_TAB)) === focusedBeforeMenu &&
-        (await app.client.evaluate(MENU_STATE)) !== null,
+      focusedUnderMenu === focusedBeforeMenu && menuStillOpen !== null,
+      `focused ${focusedBeforeMenu} → ${focusedUnderMenu}；選單仍開著=${menuStillOpen !== null}`,
     )
 
     // ↓ 到末端會循環回第一項
@@ -941,12 +941,17 @@ async function runMode(label, { port, rendererUrl }) {
     await pressKey(app.client, 'Tab', ['ctrl'])
     await pressKey(app.client, 'Tab', ['ctrl', 'shift'])
     await sleep(400)
+    // **issue #19 指名的那一條** —— 它原本沒有 detail，於是三個條件哪個不成立無從得知。
+    const tabsAfterCtrlTab = await app.client.evaluate(TABS)
+    const mountedAfterCtrlTab = await app.client.evaluate(MOUNTED)
     check(
       results,
       `${label}：repo 沒有 session 時，Ctrl+Tab 為無操作且 app 不崩潰`,
       emptyTabs.length === 0 &&
-        (await app.client.evaluate(TABS)).length === 0 &&
-        (await app.client.evaluate(MOUNTED)) === true,
+        tabsAfterCtrlTab.length === 0 &&
+        mountedAfterCtrlTab?.ok === true,
+      `按之前 ${emptyTabs.length} 個分頁 → 之後 ${tabsAfterCtrlTab.length} 個；` +
+        `${describeMounted(mountedAfterCtrlTab) || '掛載正常'}`,
     )
 
     await createSession(app.client)
@@ -958,7 +963,7 @@ async function runMode(label, { port, rendererUrl }) {
     check(
       results,
       `${label}：repo 只有一個 session 時，Ctrl+Tab 為無操作`,
-      stillSole === soleFocused && (await app.client.evaluate(MOUNTED)) === true,
+      stillSole === soleFocused && (await app.client.evaluate(MOUNTED))?.ok === true,
       `${soleFocused} → ${stillSole}`,
     )
 
@@ -1271,7 +1276,7 @@ async function checkSingleFolder(label, { port, rendererUrl }) {
     check(
       results,
       `${label}：workspace 只有一個 folder 時，切換 repo 為無操作且 app 不崩潰`,
-      after === before && (await app.client.evaluate(MOUNTED)) === true,
+      after === before && (await app.client.evaluate(MOUNTED))?.ok === true,
       `${before} → ${after}`,
     )
 
@@ -1286,7 +1291,7 @@ async function checkSingleFolder(label, { port, rendererUrl }) {
       results,
       `${label}：workspace 只有一個 folder 時，排序快捷鍵為無操作且 app 不崩潰`,
       JSON.stringify(await app.client.evaluate(RAIL_ORDER)) === JSON.stringify(orderBefore) &&
-        (await app.client.evaluate(MOUNTED)) === true,
+        (await app.client.evaluate(MOUNTED))?.ok === true,
       JSON.stringify(orderBefore),
     )
 
@@ -1301,7 +1306,7 @@ async function checkSingleFolder(label, { port, rendererUrl }) {
       `${label}：repo 只有一個 session 時，排序快捷鍵為無操作且 app 不崩潰`,
       stillSole.length === 1 &&
         stillSole[0].label === soleTab[0].label &&
-        (await app.client.evaluate(MOUNTED)) === true,
+        (await app.client.evaluate(MOUNTED))?.ok === true,
       JSON.stringify(stillSole.map((t) => t.label)),
     )
   } finally {

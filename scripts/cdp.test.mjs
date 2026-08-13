@@ -1,0 +1,259 @@
+/**
+ * `scripts/lib/instrument.mjs` 的單元測試 —— 純邏輯、不起任何 app、毫秒級。
+ *
+ * **為什麼這些能以單元測試承擔**：等待原語的逾時語意、斷言的輸出格式、累計的段落歸屬，
+ * 全部與 Electron、CDP、真實視窗無關。把它們釘在這一層，探針就不必為了驗自己的儀器而多跑
+ * 幾輪 —— 而這些機制的失效方式**全部是靜默的**（少一行輸出、多算一次往返、把例外吞掉），
+ * 靠跑探針時「覺得哪裡怪怪的」是抓不到的。
+ *
+ * 每一條「機制生效」的測試都配一條對照組（把機制拿掉就會變紅）。
+ */
+import { test } from 'node:test'
+import assert from 'node:assert/strict'
+import { beginSection, check, noteCdp, pollFor, sectionSummary, sectionToken } from './lib/instrument.mjs'
+import { waitForPageTarget } from './lib/cdp.mjs'
+import { describeMounted, mountedExpression } from './lib/mounted.mjs'
+
+/** 收集 `console.log` 的輸出並還原 —— 這些機制的產物就是輸出本身。 */
+async function captured(fn) {
+  const lines = []
+  const log = console.log
+  console.log = (...args) => lines.push(args.join(' '))
+  try {
+    const value = await fn()
+    return { value, lines }
+  } finally {
+    console.log = log
+  }
+}
+
+const never = () => false
+const always = () => true
+
+// ── 等待原語的逾時語意 ──────────────────────────────────────────────────────
+
+test('窗口耗盡時回傳最後一次讀到的值，且不拋出例外', async () => {
+  let reads = 0
+  const { value } = await captured(() =>
+    pollFor({
+      read: () => ++reads,
+      settled: never,
+      timeoutMs: 60,
+      interval: 10,
+      label: '測試用',
+    }),
+  )
+  assert.equal(value, reads, '逾時要回傳最後一次讀到的值 —— 既有斷言靠它把該值印進 detail')
+  assert.ok(reads > 1, '窗口內要反覆求值')
+})
+
+test('窗口耗盡時輸出一行，載明等待時間與標的', async () => {
+  const { lines } = await captured(() =>
+    pollFor({ read: () => null, settled: never, timeoutMs: 30, interval: 10, label: 'waitForFile(cols-C1.txt)' }),
+  )
+  const line = lines.find((l) => l.includes('等待窗口耗盡'))
+  assert.ok(line, '靜默的等待落空正是「一個段落跑了幾百秒」的實際去向')
+  assert.match(line, /\d+\.\d+s/, '要載明等了多久')
+  assert.ok(line.includes('waitForFile(cols-C1.txt)'), '要載明在等什麼 —— 沒有標籤等於沒有輸出')
+})
+
+test('對照組：條件滿足時不產生任何窗口耗盡的輸出', async () => {
+  const { value, lines } = await captured(() =>
+    pollFor({ read: () => 'ok', settled: always, timeoutMs: 1000, interval: 10, label: '不該印' }),
+  )
+  assert.equal(value, 'ok')
+  assert.equal(
+    lines.filter((l) => l.includes('等待窗口耗盡')).length,
+    0,
+    '正常路徑上出現這一行，它就會變成人人忽略的噪音',
+  )
+})
+
+test('時限極短時仍然至少求值一次', async () => {
+  let reads = 0
+  await captured(() =>
+    pollFor({ read: () => ++reads, settled: never, timeoutMs: 0, interval: 10, label: '零時限' }),
+  )
+  assert.equal(reads, 1, '先讀一次再判斷 deadline —— 否則時限為 0 時一次都不量')
+})
+
+// ── tolerateErrors：逐字對齊 pollTerminalText 的既有語意 ─────────────────────
+
+test('tolerateErrors：只有最後一次讀取仍失敗才拋出', async () => {
+  await assert.rejects(
+    () =>
+      captured(() =>
+        pollFor({
+          read: () => {
+            throw new Error('讀不到')
+          },
+          settled: never,
+          timeoutMs: 30,
+          interval: 10,
+          label: '一直失敗',
+          tolerateErrors: true,
+        }),
+      ),
+    /讀不到/,
+    '逾時之後仍讀不到，就是真的壞了 —— 不可以默默回空值',
+  )
+})
+
+test('tolerateErrors：窗口內失敗過但最後成功時不拋，回傳最後的值', async () => {
+  let reads = 0
+  const { value } = await captured(() =>
+    pollFor({
+      read: () => {
+        reads += 1
+        if (reads === 1) throw new Error('還沒好')
+        return `第 ${reads} 次`
+      },
+      settled: never,
+      timeoutMs: 40,
+      interval: 10,
+      label: '先失敗後成功',
+      tolerateErrors: true,
+    }),
+  )
+  assert.match(
+    value,
+    /^第 \d+ 次$/,
+    '實作成「窗口內出現過例外就拋」的話，今天只是讓斷言變紅的路徑會變成段落中斷',
+  )
+})
+
+test('對照組：未開 tolerateErrors 時例外直接往外拋，不被吞掉', async () => {
+  await assert.rejects(
+    () =>
+      captured(() =>
+        pollFor({
+          read: () => {
+            throw new Error('管道壞了')
+          },
+          settled: never,
+          timeoutMs: 1000,
+          interval: 10,
+          label: '不容忍例外',
+        }),
+      ),
+    /管道壞了/,
+  )
+})
+
+test('呼叫端可把逾時升級為例外，而其他呼叫端不受影響', async () => {
+  // **這條驗的是分工**：原語一律回傳最後的值（上面那條），要不要拋由呼叫端決定。
+  // `waitForPageTarget` 就是那個「要」的呼叫端 —— 等不到 CDP target 還往下走，只會紅在一個
+  // 與根因無關的地方。**沒有這條，spec 那句「呼叫端可將逾時升級為例外」就沒有載體**
+  // （而本 change 的載體對照表原本正是這樣宣稱它的 —— issue #12 那個形狀的第五次）。
+  await assert.rejects(
+    () => captured(() => waitForPageTarget(9299, 150)),
+    /等待 CDP target 逾時/,
+    '原語不拋，不代表沒有人該拋',
+  )
+})
+
+// ── 斷言的耗時與往返計數 ────────────────────────────────────────────────────
+
+test('每一條斷言都帶耗時與 CDP 往返計數（無門檻）', async () => {
+  beginSection()
+  const results = []
+  const { lines } = await captured(() => {
+    check(results, '一條很快就完成的斷言', true)
+    check(results, '另一條', false, '細節')
+  })
+  assert.equal(results.length, 2)
+  for (const line of lines) {
+    assert.match(line, /\[\+\d+\.\d+s cdp \d+×\d+\.\d+s\]/, '門檻會藏掉基準線 —— 每一條都要有數字')
+  }
+  assert.ok(lines[0].includes('✓'))
+  assert.ok(lines[1].includes('✗') && lines[1].includes('細節'))
+})
+
+test('往返計數累進到下一條斷言，且輸出後歸零', async () => {
+  beginSection()
+  const token = sectionToken()
+  const results = []
+  const { lines } = await captured(() => {
+    noteCdp(100, token)
+    noteCdp(200, token)
+    check(results, '第一條', true)
+    noteCdp(50, token)
+    check(results, '第二條', true)
+  })
+  assert.ok(lines[0].includes('cdp 2×0.3s'), `第一條要含區間內的兩次往返，實際：${lines[0]}`)
+  assert.ok(lines[1].includes('cdp 1×0.1s'), `區間計數要歸零重算，實際：${lines[1]}`)
+})
+
+// ── 段落歸屬：逾時的段落不會被中止，它的殘留活動不得污染下一段 ──────────────
+
+test('殭屍段落的往返與窗口耗盡不計入下一個段落', async () => {
+  beginSection()
+  const stale = sectionToken()
+  noteCdp(1000, stale)
+
+  beginSection() // 下一個段落開始 —— 上一段的殘留活動仍在背景跑
+  noteCdp(1000, stale)
+  const summary = sectionSummary()
+  assert.equal(summary.cdpCalls, 0, '下一個段落是無辜的 —— 殘留活動不該切碎它的數字')
+  assert.equal(summary.cdpMs, 0)
+})
+
+test('對照組：本段落自己的往返有被計入', async () => {
+  beginSection()
+  noteCdp(1000, sectionToken())
+  assert.equal(sectionSummary().cdpCalls, 1, '歸屬機制不能連本段的都丟掉')
+})
+
+test('段落累計含窗口耗盡的次數與合計時間', async () => {
+  beginSection()
+  await captured(() =>
+    pollFor({ read: () => null, settled: never, timeoutMs: 20, interval: 5, label: 'a' }),
+  )
+  await captured(() =>
+    pollFor({ read: () => null, settled: never, timeoutMs: 20, interval: 5, label: 'b' }),
+  )
+  const summary = sectionSummary()
+  assert.equal(summary.timeouts, 2, '逐次的那一行散在幾百行輸出裡，段落層級要有累計')
+  assert.ok(summary.timeoutMs >= 40, `合計時間要反映實際等待，實際：${summary.timeoutMs}`)
+})
+
+test('beginSection 重置上一段的累計', async () => {
+  beginSection()
+  noteCdp(500, sectionToken())
+  beginSection()
+  assert.deepEqual(sectionSummary(), { timeouts: 0, timeoutMs: 0, cdpCalls: 0, cdpMs: 0 })
+})
+
+// ── MOUNTED：判定與 detail 必須同源 ─────────────────────────────────────────
+
+test('describeMounted 指出是哪些子條件不成立', () => {
+  const detail = describeMounted({ rail: true, root: true, visible: false, ok: false })
+  assert.match(detail, /visible/, '「renderer 不見了」與「視窗被判定為不可見」是兩個不同的病')
+  assert.ok(!detail.includes('未成立：rail'), '不該把成立的子條件也列成失敗')
+  assert.match(detail, /rail=true root=true visible=false/, '要能看到每一個子條件的值')
+})
+
+test('describeMounted 在判定成立時沒什麼好說的', () => {
+  assert.equal(describeMounted({ rail: true, root: true, visible: true, ok: true }), '')
+})
+
+test('describeMounted 區分「求值沒有回傳值」與「子條件不成立」', () => {
+  assert.match(
+    describeMounted(undefined),
+    /求值本身失敗/,
+    'renderer 不在時求值回 undefined —— 那與「某個子條件是 false」是兩件事',
+  )
+})
+
+test('describeMounted 是純函式，拿不到 client（結構上不可能事後補一次求值）', () => {
+  assert.equal(describeMounted.length, 1, '只吃已求值的物件 —— 多一個 client 參數就能事後取樣')
+  const before = { rail: true, root: false, visible: true, ok: false }
+  const first = describeMounted(before)
+  const second = describeMounted(before)
+  assert.equal(first, second, '同一個值要給出同一段話 —— 它不該去看外面的世界')
+})
+
+test('mountedExpression 可省略與追加子條件', () => {
+  assert.ok(!mountedExpression({ omit: ['visible'] }).includes('visibilityState'))
+  assert.ok(mountedExpression({ extra: { separators: 'x === 3' } }).includes('separators'))
+})
