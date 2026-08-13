@@ -2178,6 +2178,27 @@ async function runMode(label, { port, rendererUrl }) {
     )
 
     // ── 自 rail 的 session 子列關閉 session
+    //
+    // **順帶承載「銷毀時歸還並存額度」** —— 這是與上面那條（關閉分頁）不同的一條路徑，而它
+    // **只有在這裡驗得到**：
+    //
+    // - 上面 `:2144` 關掉的是**隱藏**的那一個，它的脈絡早在切換時就已釋放 ⇒ 銷毀路徑做或不做
+    //   結果完全相同，那條斷言在銷毀路徑失效時**依然全綠**（實測：拿掉 `xterm.ts` 的
+    //   `dispose()` 裡那行 `releaseWebglContext()`，`runMode:build` 仍是全綠）。
+    // - 「由顯示轉隱藏」那條（`:1739`）驗的是 `setGpuRenderer(false)`，走的是另一個入口。
+    //
+    // 此刻即將被關掉的是**當下顯示中**的那一個（上一條斷言剛驗過 `[1].selected === true`），
+    // 且中間沒有任何切換 —— 那正是規格描述的失效情境：使用者不切換、直接關閉正在用的 session。
+    const glClosingBefore = await app.client.evaluate(`(() => {${RENDER_PATH_PRELUDE}
+      const shown = hostsOf().filter((d) => !d.classList.contains('hidden'))
+      window.__probeGlClosing = shown.map((host) => {
+        const screen = host.querySelector('.xterm-screen')
+        const main = screen && [...screen.querySelectorAll('canvas')].find((c) => !c.classList.contains('xterm-link-layer'))
+        return main ? main.getContext('webgl2') : null
+      })
+      return window.__probeGlClosing.map((gl) => (gl ? !gl.isContextLost() : null))
+    })()`)
+
     const railClose = await app.client.evaluate(RAIL_CLOSE_SESSION_RECT(1))
     await realClick(app.client, railClose)
     const tabsAfterRailClose = await pollUntil(app.client, TABS, (value) => value.length === 1, 8000)
@@ -2187,6 +2208,23 @@ async function runMode(label, { port, rendererUrl }) {
       `${label}：自 rail 的 session 子列關閉 session 並終止其 pty`,
       tabsAfterRailClose.length === 1 && pidsAfterRailClose.length === 1,
       `tabs=${tabsAfterRailClose.length} pids=${pidsAfterRailClose.length}`,
+    )
+
+    const glClosingAfter = await app.client.evaluate(
+      `window.__probeGlClosing.map((gl) => (gl ? gl.isContextLost() : null))`,
+    )
+    const closedIndex = glClosingBefore.findIndex((alive) => alive === true)
+    check(
+      results,
+      `${label}：銷毀當下顯示中的終端時歸還其渲染資源的並存額度`,
+      // **「被關掉的就是顯示中的那一個」是判定式的一部分，不是註解裡的說明** —— 取樣點日後
+      // 若被挪去關閉隱藏分頁處，這條會紅，而不是靜默地失去鑑別力。
+      tabsAfterRailCreate[1]?.selected === true &&
+        closedIndex >= 0 &&
+        glClosingAfter[closedIndex] === true,
+      `關閉的是顯示中的那一個=${tabsAfterRailCreate[1]?.selected} ` +
+        `關閉前 alive=${JSON.stringify(glClosingBefore)} 關閉後 lost=${JSON.stringify(glClosingAfter)}` +
+        `（關閉前沒有任何一個是 alive 就表示這條沒有鑑別力）`,
     )
 
     // ── pty 自行結束：標示為已結束，但**不從清單消失**（使用者要讀得到最後的輸出）

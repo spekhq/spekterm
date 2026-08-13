@@ -221,6 +221,31 @@ const RECT_OF = (selector) => `(() => {
 const NEW_SESSION_RECT = RECT_OF(`[aria-label="${copy('sessions.new')}"]`)
 const TERMINAL_RECT = RECT_OF(`section[aria-label="${copy('stage.terminal')}"]`)
 
+/**
+ * rail 上**全域項目**的建立 session 入口。
+ *
+ * 與 `NEW_SESSION_RECT` 是兩個東西：後者是主舞台的按鈕，而**零 folder 時沒有選中的 repo**，
+ * 主舞台根本不呈現它。寫法取自 `probe-package.mjs`（那支同樣在零 folder 下建 session）。
+ */
+const GLOBAL_NEW_SESSION_RECT = RECT_OF(
+  `aside[aria-label="${copy('rail.label')}"] [aria-label="${copy('rail.newSessionIn', { name: copy('rail.globalName') })}"]`,
+)
+
+/** 狀態列的文字。空狀態與有脈絡兩種情形都由它讀出（寫法取自 `probe-openspec.mjs`）。 */
+const STATUS_BAR_TEXT = `(() => {
+  const bar = document.querySelector('footer[aria-label="${copy('statusBar.label')}"]')
+  return bar ? (bar.textContent ?? '') : null
+})()`
+
+/** 側欄在 Files 身分下的文字 —— 無來源時的提示由它讀出。 */
+const FILES_PANEL_TEXT = `(() => {
+  const panel = document.querySelector('section[aria-label="${copy('files.label')}"]')
+  return panel ? (panel.textContent ?? '') : null
+})()`
+
+/** 有沒有對話框或選單開著 —— 快捷鍵的抑制條件（`KeyboardNavigation.tsx`）。 */
+const SUPPRESSORS = `document.querySelectorAll('[role="dialog"], [role="menu"]').length`
+
 const MENU_ITEM_RECT = (label) => `(() => {
   const menu = document.querySelector('[role="menu"]')
   if (!menu) return null
@@ -1951,7 +1976,127 @@ async function checkReordering(label, { port, rendererUrl }) {
 }
 
 /**
- * 三個段落**彼此獨立** —— 每一段各自 `makeFixture()`、`seedProfile()`、`launch()` 與收屍
+ * **零 folder 的 workspace** —— 五條 scenario 的共同載體，橫跨四個 capability：
+ *
+ * | capability | scenario |
+ * |---|---|
+ * | `global-session` | 尚無任何 folder 時仍呈現 |
+ * | `keyboard-navigation` | rail 只有全域項目時為無操作 |
+ * | `status-bar` | workspace 為空且無任何 session 時 |
+ * | `status-bar` | workspace 為空但有全域 session 時不呈現空狀態 |
+ * | `file-explorer` | 沒有可用的側欄來源 |
+ *
+ * **這一段的成本核心是那一次零 folder 冷啟動，五條共用它** —— 分開驗就是五次啟動，而它們
+ * 的前置條件完全相同。
+ *
+ * **失效方向是假綠，這是本段存在的唯一理由**：種有 folder 的環境**區分不了「恆常呈現」與
+ * 「有 folder 時才呈現」**。一個「rail 為空就不渲染任何東西」的實作，照樣通過 `runMode` 那條
+ * 「全域項目是 rail 的第一個項目」。
+ */
+async function checkEmptyWorkspace(label, { port, rendererUrl }) {
+  // **不呼叫 `makeFixture()`** —— 這一段要的就是「磁碟上沒有任何 repo、清單裡沒有任何 folder」。
+  const profile = seedProfile([])
+  const app = await launch({ port, profileDir: profile, rendererUrl })
+
+  try {
+    const GLOBAL = copy('rail.globalName')
+
+    // ── 前提：沒有任何東西抑制快捷鍵
+    //
+    // **這不是背景檢查，是 D4 的承重前提**：快捷鍵在對話框或選單開啟時一律被抑制，而零 folder
+    // 是罕被執行的啟動狀態。若那時有引導性的對話框，「按了沒反應」與「規格要求的無操作」在
+    // 結果上完全相同 —— 下面那條無操作斷言會以假綠的形式通過。
+    const suppressors = await pollUntil(app.client, SUPPRESSORS, (v) => v !== null, 10_000)
+    check(results, `${label}：零 folder 啟動時沒有任何對話框或選單抑制快捷鍵`,
+      suppressors === 0, `[role="dialog"], [role="menu"] 共 ${suppressors} 個`)
+
+    // ── global-session：尚無任何 folder 時仍呈現全域項目
+    //
+    // **`length === 1` 是這條的全部重點。** runMode 那條「全域項目是 rail 的第一個項目」跑在
+    // 種了三個 folder 的 fixture 上，它對「rail 為空就不渲染任何東西」的實作照樣是綠的。
+    const items = await pollUntil(app.client, RAIL_ITEMS, (v) => v !== null, 10_000)
+    check(results, `${label}：尚無任何 folder 時 rail 仍呈現全域項目，且它是唯一的項目`,
+      items.length === 1 && items[0] === GLOBAL, JSON.stringify(items))
+
+    // ── status-bar：workspace 為空且無任何 session 時呈現空狀態
+    //
+    // **判準是「屬於那兩句之一」，不寫死哪一句** —— 規格要的是「呈現空狀態文字」，而實作依
+    // 有沒有選中項目在 `noRepo` / `noSession` 之間選。綁死其中一句，會讓一次無關的選中狀態
+    // 調整把這條弄紅。
+    const EMPTY_TEXTS = [copy('statusBar.noRepo'), copy('statusBar.noSession')]
+    const barEmpty = await pollUntil(app.client, STATUS_BAR_TEXT, (v) => v !== null, 10_000)
+    check(results, `${label}：workspace 為空且無任何 session 時，狀態列存在且呈現空狀態文字`,
+      barEmpty !== null && EMPTY_TEXTS.some((t) => barEmpty.includes(t)),
+      JSON.stringify(barEmpty))
+
+    // ── keyboard-navigation：rail 只有全域項目時 Ctrl+↑↓ 為無操作
+    //
+    // **兩步，而順序是承重的。** 第一步是「這顆鍵在此狀態下是活的」的證據 —— 少了它，第二步
+    // 在快捷鍵完全失效時（例如有東西抑制了它）**依然全綠**，因為「選中項不變」在兩種情形下
+    // 都成立。上面那條抑制檢查是同一件事的另一面，兩條都留著。
+    await pressKey(app.client, 'ArrowDown', ['ctrl'])
+    const selectedFirst = await pollUntil(app.client, SELECTED_ITEM, (v) => v === GLOBAL, 4000)
+    check(results, `${label}：尚未選中任何項目時 Ctrl+↓ 選中全域項目（前提：快捷鍵未被抑制）`,
+      selectedFirst === GLOBAL, String(selectedFirst))
+
+    await pressKey(app.client, 'ArrowDown', ['ctrl'])
+    await sleep(400)
+    const afterDown = await app.client.evaluate(SELECTED_ITEM)
+    const mountedAfterDown = await app.client.evaluate(MOUNTED)
+    check(results, `${label}：rail 只有全域項目時 Ctrl+↓ 為無操作且 app 不崩潰`,
+      afterDown === GLOBAL && mountedAfterDown?.ok === true,
+      `${selectedFirst} → ${afterDown}；${describeMounted(mountedAfterDown) || '掛載正常'}`)
+
+    // 相反方向的邊界 —— 條文管的是「這兩個快捷鍵」，而 `(0 - 1 + 1) % 1` 是會出事的那一類算式。
+    await pressKey(app.client, 'ArrowUp', ['ctrl'])
+    await sleep(400)
+    const afterUp = await app.client.evaluate(SELECTED_ITEM)
+    const mountedAfterUp = await app.client.evaluate(MOUNTED)
+    check(results, `${label}：rail 只有全域項目時 Ctrl+↑ 為無操作且 app 不崩潰`,
+      afterUp === GLOBAL && mountedAfterUp?.ok === true,
+      `${afterDown} → ${afterUp}；${describeMounted(mountedAfterUp) || '掛載正常'}`)
+
+    // ── file-explorer：沒有可用的側欄來源
+    //
+    // **「來源未選定」與「沒有 folder 可選」是兩個狀態**，而既有載體（「來源未選定時 Files
+    // 不呈現任何檔案列」）跑在有 folder 的 fixture 上 —— 它驗的是前者。
+    await app.client.evaluate(IDENTITY_FILES)
+    const filesText = await pollUntil(app.client, FILES_PANEL_TEXT, (v) => v !== null, 6000)
+    check(results, `${label}：沒有任何 folder 可作為側欄來源時，Files 身分呈現說明此狀態的提示`,
+      filesText !== null && filesText.includes(copy('files.noSource')),
+      JSON.stringify(filesText))
+
+    // ── status-bar：workspace 為空但有全域 session 時不呈現空狀態
+    //
+    // **走 rail 上全域項目的建立入口**，不走 `createSession()`（它找的是主舞台的按鈕，而零
+    // folder 時沒有選中的 repo）。也**刻意不走 `Ctrl+T`** —— 那會讓這條依賴上面剛驗過的
+    // 快捷鍵，兩條斷言就不再獨立。
+    const plus = await pollUntil(app.client, GLOBAL_NEW_SESSION_RECT, (v) => v !== null, 10_000)
+    if (!plus) throw new Error('rail 上找不到全域項目的建立 session 入口')
+    await realClick(app.client, plus)
+    const shellItem = await pollUntil(
+      app.client, MENU_ITEM_RECT(copy('sessions.spawnShell')), (v) => v !== null, 6000)
+    if (!shellItem) throw new Error('選單中找不到 shell')
+    await realClick(app.client, shellItem)
+
+    const globalTabs = await pollUntil(app.client, TABS, (v) => v.length === 1, 15_000)
+    const barWithSession = await pollUntil(
+      app.client, STATUS_BAR_TEXT,
+      (v) => v !== null && !EMPTY_TEXTS.some((t) => v.includes(t)), 10_000)
+    check(results,
+      `${label}：workspace 為空但有全域 session 時，狀態列呈現該 session 的脈絡而非空狀態`,
+      globalTabs.length === 1 &&
+        barWithSession !== null &&
+        !EMPTY_TEXTS.some((t) => barWithSession.includes(t)) &&
+        barWithSession.includes(copy('statusBar.sessions', { here: 1, total: 1 })),
+      `分頁=${globalTabs.length} 狀態列=${JSON.stringify(barWithSession)}`)
+  } finally {
+    await app.destroy()
+  }
+}
+
+/**
+ * 四個段落**彼此獨立** —— 每一段各自 `makeFixture()`、`seedProfile()`、`launch()` 與收屍
  * （實際逐段確認，非假設），因此沒有一項需要宣告 `deps`。
  *
  * 此前這裡是六行寫死的呼叫，沒有段落機制 —— 於是任何一段 throw 就吃掉其後全部，而迭代時
@@ -1970,6 +2115,7 @@ const SECTIONS = [
   { name: 'runMode', run: runMode, onTimeout: killStrays },
   { name: 'checkSingleFolder', run: checkSingleFolder, onTimeout: killStrays },
   { name: 'checkReordering', run: checkReordering, onTimeout: killStrays },
+  { name: 'checkEmptyWorkspace', run: checkEmptyWorkspace, onTimeout: killStrays },
 ]
 
 const outcome = await runSections({

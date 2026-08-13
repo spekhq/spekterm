@@ -109,7 +109,10 @@ npm run probe:workspace # workspace-folders / filesystem-access / workspace-layo
                         #   terminal-preferences（分支呈現與更新、repo 拖曳排序、Settings 對話框）
 npm run probe:files     # file-explorer / file-viewer / 編輯 / CRUD / 導航防護 / worker / CSP
 npm run probe:terminal  # terminal-sessions + session-persistence + GPU renderer
-npm run probe:keyboard  # keyboard-navigation（切換、排序、按鍵不進 pty、對話框抑制、捲動）
+npm run probe:keyboard  # keyboard-navigation（切換、排序、按鍵不進 pty、對話框抑制、捲動）＋
+                        #   **零 folder 的 workspace**（`checkEmptyWorkspace` —— 五條以「沒有任何
+                        #   folder」為前提的 scenario 唯一的載體，橫跨 global-session／status-bar／
+                        #   file-explorer；種有 folder 的環境對它們一律假綠）
 npm run probe:openspec  # openspec-data-access / openspec-panel / worktree 聚合 / side-panel-source
 npm run probe:native    # native-module-toolchain（主行程載入 node-pty + spawn pty）
 npm run probe:core      # spek-core-integration（主行程掃描 OpenSpec，且不開 TCP 埠）
