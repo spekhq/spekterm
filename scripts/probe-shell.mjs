@@ -13,7 +13,7 @@ import { spawn } from 'node:child_process'
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { check, connect, pollUntil, waitForPageTarget } from './lib/cdp.mjs'
+import { check, connectToApp, pollUntil } from './lib/cdp.mjs'
 import { copy } from './lib/copy.mjs'
 import { electronExtraArgs } from './lib/display.mjs'
 import { quitAndWait } from './lib/quit.mjs'
@@ -205,8 +205,7 @@ const results = []
 let exitCode = 1
 
 try {
-  const target = await waitForPageTarget(DEBUG_PORT, STARTUP_TIMEOUT_MS)
-  const client = await connect(target)
+  const client = await connectToApp(DEBUG_PORT, { targetTimeoutMs: STARTUP_TIMEOUT_MS })
 
   const r = await pollUntil(client, PROBE_EXPRESSION, (value) => value?.mounted === true)
   client.close()

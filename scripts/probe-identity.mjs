@@ -30,7 +30,7 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { fileURLToPath } from 'node:url'
-import { check, connect, pollUntil, waitForPageTarget } from './lib/cdp.mjs'
+import { check, connectToApp, pollUntil } from './lib/cdp.mjs'
 import { electronExtraArgs } from './lib/display.mjs'
 import { quitAndWait } from './lib/quit.mjs'
 import { PROBE_PORTS } from './lib/ports.mjs'
@@ -89,8 +89,7 @@ async function launchAndObserve({ port, extraEnv = {} }) {
   electron.stderr.on('data', (chunk) => (stderr += chunk))
 
   try {
-    const target = await waitForPageTarget(port, STARTUP_TIMEOUT_MS)
-    const client = await connect(target)
+    const client = await connectToApp(port, { targetTimeoutMs: STARTUP_TIMEOUT_MS })
     // CDP target 一就緒就讀會拿到空字串 —— 那時文件還沒解析到 <title>。等它非空。
     const title = await pollUntil(client, 'document.title', (value) => Boolean(value))
     client.close()

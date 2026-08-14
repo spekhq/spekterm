@@ -27,7 +27,7 @@ import {
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
-import { check, connect, pollFor, pollUntil, waitForPageTarget } from './lib/cdp.mjs'
+import { check, connectToApp, pollFor, pollUntil } from './lib/cdp.mjs'
 import { copy } from './lib/copy.mjs'
 import { awaitMounted, describeMounted } from './lib/mounted.mjs'
 import { electronExtraArgs } from './lib/display.mjs'
@@ -171,8 +171,7 @@ async function launch({ port, profileDir, rendererUrl }) {
   child.stderr?.on('data', (chunk) => (stderr += chunk))
   child.stdout?.on('data', (chunk) => (stderr += chunk))
 
-  const target = await waitForPageTarget(port, 30_000)
-  const client = await connect(target)
+  const client = await connectToApp(port, { targetTimeoutMs: 30_000 })
   const mounted = await awaitMounted(client)
 
   return {

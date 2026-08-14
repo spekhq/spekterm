@@ -30,7 +30,8 @@ import {
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
-import { check, connect, pollFor, pollUntil, waitForPageTarget } from './lib/cdp.mjs'
+import { check, connectToApp, pollFor, pollUntil, retryAction } from './lib/cdp.mjs'
+import { menuEvidence } from './lib/menu-evidence.mjs'
 import { copy, prefixOf, suffixOf } from './lib/copy.mjs'
 import { awaitMounted, describeMounted } from './lib/mounted.mjs'
 import { electronExtraArgs } from './lib/display.mjs'
@@ -386,8 +387,7 @@ async function launch({ port, profileDir, rendererUrl, stub }) {
   child.stderr?.on('data', (chunk) => (stderr += chunk))
   child.stdout?.on('data', (chunk) => (stderr += chunk))
 
-  const target = await waitForPageTarget(port, 30_000)
-  const client = await connect(target)
+  const client = await connectToApp(port, { targetTimeoutMs: 30_000 })
   const mounted = await awaitMounted(client)
 
   return {
@@ -1078,25 +1078,44 @@ async function typeLine(client, text) {
   await client.send('Input.dispatchKeyEvent', { type: 'keyUp', ...key })
 }
 
-/** 自分頁列的「+ session」建立一個 shell session。 */
+/**
+ * 自分頁列的「+ session」建立一個 shell session。
+ *
+ * **點完要確認選單真的開了，沒開就重量再點。** 對手是一個外部行程（pty）何時吐出標題，
+ * 穩定判準只能把機率壓低、消不掉它。點空的那一下最多是點到隔壁分頁（把它 focus 起來），
+ * 無害；而標題抵達後版面就不再動，重試必定收斂。
+ *
+ * ## 預算 51 秒的推導
+ *
+ * 一輪 ＝ `stableRect` 的窗口（**預設 15 秒**）＋ 等選單項目的 2 秒 ＝ 17 秒；收斂前是固定
+ * 三輪 ⇒ **51 秒**。
+ *
+ * **那 15 秒是本 change 第一版漏掉的**：它只看到迴圈裡寫著 `2000`，把上界算成 6 秒 —— 少了
+ * 八倍。照 6 秒訂下去，在最需要重試的那種輪次上（`stableRect` 真的燒滿窗口時），重試會從
+ * 三輪掉到**一輪**。乘積要含**被呼叫函式內部的等待**，這條定義寫在規格裡就是為了這個。
+ */
 async function createSession(client, target = 'shell') {
-  //
-  // **點完要確認選單真的開了，沒開就重量再點。** 對手是一個外部行程（pty）何時吐出標題，
-  // 穩定判準只能把機率壓低、消不掉它。點空的那一下最多是點到隔壁分頁（把它 focus 起來），
-  // 無害；而標題抵達後版面就不再動，重試必定收斂。
-  for (let attempt = 1; attempt <= 3; attempt++) {
-    const btn = await stableRect(client, NEW_SESSION_RECT)
-    if (!btn) throw new Error('找不到「+ session」按鈕')
-    await realClick(client, btn)
+  let clicked = null
 
-    const item = await pollUntil(client, MENU_ITEM_RECT(target), (value) => value !== null, 2000)
-    if (item) {
-      await realClick(client, item)
-      return
-    }
-  }
+  const item = await retryAction({
+    act: async () => {
+      const btn = await stableRect(client, NEW_SESSION_RECT)
+      if (!btn) throw new Error('找不到「+ session」按鈕')
+      clicked = btn
+      await realClick(client, btn)
+    },
+    read: () => client.evaluate(MENU_ITEM_RECT(target)),
+    settled: (value) => value !== null,
+    attemptWindowMs: 2000,
+    timeoutMs: 51_000,
+    label: `createSession（${target} 的選單）`,
+    evidence: () => menuEvidence(client, { expected: target, clicked }),
+  })
 
-  throw new Error(`選單中找不到 ${target}（重量再點 3 次仍未開啟）`)
+  // **這個呼叫端要拋** —— 沒建成 session，其後每一條斷言都會紅在與根因無關的地方。
+  // 原語一律回傳最後的值，升不升級為例外由呼叫端決定（`anchorChange` 正好是相反的選擇）。
+  if (!item) throw new Error(`選單中找不到 ${target}（重試預算 51s 耗盡）`)
+  await realClick(client, item)
 }
 
 /**
@@ -1178,26 +1197,49 @@ async function openInFileTree(client, relPath, rootPrefix = '') {
   return true
 }
 
+/**
+ * 在瀏覽視圖點一列 change，並確認錨定**真的**切過去了。
+ *
+ * ## 預算 42 秒的推導
+ *
+ * 一輪 ＝ 等樹上出現該列的 8 秒 ＋ 等錨定切過去的 6 秒 ＝ 14 秒；收斂前是固定三輪 ⇒ **42 秒**。
+ *
+ * ## 這個呼叫端**不拋**，與其他七個相反
+ *
+ * 預算耗盡時回傳當下的實際錨定值，讓呼叫端的斷言紅得有話可說（鑑別力不因重試而消失）。
+ * 那正是共用原語把「升不升級為例外」留給呼叫端的理由 —— 九個站點裡八個要拋，只有這一個要值。
+ */
 async function anchorChange(client, slug) {
-  for (let attempt = 1; attempt <= 3; attempt++) {
-    // **切視圖本身也要納入重試** —— 建立 session 之後畫面仍在變動，`CLICK_VIEW` 會落空；
+  const anchored = await retryAction({
+    // **切視圖本身也要納入動作** —— 建立 session 之後畫面仍在變動，`CLICK_VIEW` 會落空；
     // 而落空的徵狀是「樹永遠不出現」，不是「點錯地方」（實測：兩個模式都紅在同一處，
     // 重試三次也救不回來 —— 因為每次重試都在同一個沒切過去的視圖裡等一棵不存在的樹）。
-    await client.evaluate(CLICK_VIEW(copy('openspec.tabBrowse')))
-    const rows = await pollUntil(
-      client,
-      CHANGE_TREE_ROWS('Active'),
-      (list) => list.some((r) => r.slug === slug),
-      8000,
-    )
-    if (!rows) continue
-
-    await client.evaluate(ACTIVATE_TREE_ROW(slug))
+    act: async () => {
+      await client.evaluate(CLICK_VIEW(copy('openspec.tabBrowse')))
+      // 第一階段的等待留在動作之內：樹沒出現就沒有東西可以點，這一輪直接讓內層去等逾時。
+      const rows = await pollUntil(
+        client,
+        CHANGE_TREE_ROWS('Active'),
+        (list) => list.some((r) => r.slug === slug),
+        8000,
+      )
+      if (!rows) return
+      await client.evaluate(ACTIVATE_TREE_ROW(slug))
+    },
     // 在樹上選一個 change 會錨定它並切回「本 change」視圖，`ANCHORED_SLUG` 讀的正是那裡的標題。
-    const anchored = await pollUntil(client, ANCHORED_SLUG, (v) => v === slug, 6000)
-    if (anchored === slug) return slug
-  }
-  return await client.evaluate(ANCHORED_SLUG)
+    read: () => client.evaluate(ANCHORED_SLUG),
+    settled: (value) => value === slug,
+    attemptWindowMs: 6000,
+    timeoutMs: 42_000,
+    label: `anchorChange（${slug}）`,
+    evidence: async () => {
+      const rows = await client.evaluate(CHANGE_TREE_ROWS('Active'))
+      const now = await client.evaluate(ANCHORED_SLUG)
+      return `錨定=${JSON.stringify(now)}；樹上的 Active=${JSON.stringify((rows ?? []).map((r) => r.slug))}`
+    },
+  })
+
+  return anchored
 }
 
 // ── 主流程 ──────────────────────────────────────────────────────────────────

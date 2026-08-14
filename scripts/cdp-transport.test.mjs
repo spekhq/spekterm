@@ -14,7 +14,8 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { CALL_TIMEOUT_MS, CONNECT_TIMEOUT_MS, connect } from './lib/cdp.mjs'
+import { createServer } from 'node:http'
+import { CALL_TIMEOUT_MS, CONNECT_TIMEOUT_MS, connect, connectToApp } from './lib/cdp.mjs'
 
 /** 每條測試的上限 —— 遠大於測試自訂的毫秒級時限，遠小於預設的 30 秒。 */
 const TEST_TIMEOUT = 3_000
@@ -131,4 +132,151 @@ test('未注入時採用預設常數', { timeout: TEST_TIMEOUT }, async () => {
   const client = await connectFake(socket)
   assert.deepEqual(await client.send('Runtime.evaluate', {}), { ok: 1 })
   client.close()
+})
+
+// ── connectToApp：握手失敗要重試，而探詢失敗不重試 ──────────────────────────
+
+/**
+ * 起一個假的 devtools endpoint。**用真的 HTTP server 而不是攔截 `fetch`** —— 這一族的判準是
+ * 「每一輪有沒有重新探詢」，而那唯一誠實的量法就是數 server 收到幾次請求。
+ */
+async function withTargetServer(handler, fn) {
+  const server = createServer(handler)
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
+  try {
+    return await fn(server.address().port)
+  } finally {
+    server.close()
+  }
+}
+
+/** 回一份正常的 target 清單，並計數被問了幾次。 */
+function targetEndpoint(counter) {
+  return (req, res) => {
+    counter.hits += 1
+    res.writeHead(200, { 'content-type': 'application/json' })
+    res.end(JSON.stringify([{ type: 'page', webSocketDebuggerUrl: `ws://fake/${counter.hits}` }]))
+  }
+}
+
+test('connectToApp：第一次握手失敗、其後成功時連線建立成功', { timeout: TEST_TIMEOUT }, async () => {
+  const counter = { hits: 0 }
+  let handshakes = 0
+  await withTargetServer(targetEndpoint(counter), async (port) => {
+    const client = await connectToApp(port, {
+      targetTimeoutMs: 300,
+      connectTimeoutMs: 60,
+      budgetMs: 1500,
+      createSocket: () => {
+        handshakes += 1
+        // 前兩次以 error 事件失敗，第三次正常開起來。
+        const socket = fakeSocket({ autoOpen: handshakes >= 3 })
+        if (handshakes < 3) queueMicrotask(() => socket.emit('error', { error: new Error('ECONNRESET') }))
+        return socket
+      },
+    })
+    assert.ok(client, '一次性的握手失敗不該讓整支探針中斷（issue #7）')
+    client.close()
+  })
+  assert.equal(handshakes, 3)
+})
+
+test('connectToApp：每一輪重新探詢 target，不重用快照', { timeout: TEST_TIMEOUT }, async () => {
+  // **這是這個入口存在的關鍵**：target 若已消失，重試同一個位址永遠不會成功 ——
+  // 那樣的重試比不重試更糟，它把一次快速失敗換成等滿整個窗口。
+  const counter = { hits: 0 }
+  const urls = []
+  await withTargetServer(targetEndpoint(counter), async (port) => {
+    let handshakes = 0
+    const client = await connectToApp(port, {
+      targetTimeoutMs: 300,
+      connectTimeoutMs: 60,
+      budgetMs: 1500,
+      createSocket: (url) => {
+        urls.push(url)
+        handshakes += 1
+        const socket = fakeSocket({ autoOpen: handshakes >= 3 })
+        if (handshakes < 3) queueMicrotask(() => socket.emit('error', { error: new Error('boom') }))
+        return socket
+      },
+    })
+    client.close()
+  })
+  assert.ok(counter.hits >= 3, `每一輪都要重新問一次 endpoint，實際 ${counter.hits} 次`)
+  assert.equal(new Set(urls).size, urls.length, `每一輪拿到的是新的 target，實際 ${JSON.stringify(urls)}`)
+})
+
+test('connectToApp：探詢失敗時立即終止，不進入重試', { timeout: TEST_TIMEOUT }, async () => {
+  // 探詢失敗的意思是「app 已經不在」—— 重試它只會把「立刻失敗並指出處置」變成 N 倍的等待。
+  const started = Date.now()
+  await withTargetServer(
+    (req, res) => {
+      res.writeHead(500)
+      res.end('nope')
+    },
+    async (port) => {
+      await assert.rejects(
+        () => connectToApp(port, { targetTimeoutMs: 120, connectTimeoutMs: 60, budgetMs: 5000 }),
+        /等待 CDP target 逾時/,
+        '拋的必須是探詢自己的訊息（它會查 port 持有者並給出兩種解釋）',
+      )
+    },
+  )
+  const elapsed = Date.now() - started
+  assert.ok(elapsed < 2000, `應在一個探詢窗口內結束，而不是燒完 5 秒的預算（實際 ${elapsed}ms）`)
+})
+
+test('connectToApp：預算耗盡的訊息載明 error 內容與 target 存否', { timeout: TEST_TIMEOUT }, async () => {
+  const counter = { hits: 0 }
+  await withTargetServer(targetEndpoint(counter), async (port) => {
+    await assert.rejects(
+      () =>
+        connectToApp(port, {
+          targetTimeoutMs: 200,
+          connectTimeoutMs: 40,
+          budgetMs: 250,
+          createSocket: () => {
+            const socket = fakeSocket({ autoOpen: false })
+            queueMicrotask(() => socket.emit('error', { error: Object.assign(new Error('拒絕連線'), { code: 'ECONNREFUSED' }) }))
+            return socket
+          },
+        }),
+      (error) => {
+        // 沒有主詞的「連線失敗」正是這條要消滅的東西 —— 三種成因的處置完全不同。
+        assert.match(error.message, /ECONNREFUSED/, '要載明 error 事件實際帶著什麼')
+        assert.match(error.message, /可連線的 page/, '要載明 target 當下還在不在')
+        return true
+      },
+    )
+  })
+})
+
+test('connectToApp：每一次失敗的 socket 都被關閉，不殘留 listener', { timeout: TEST_TIMEOUT }, async () => {
+  const counter = { hits: 0 }
+  const sockets = []
+  await withTargetServer(targetEndpoint(counter), async (port) => {
+    await assert.rejects(() =>
+      connectToApp(port, {
+        targetTimeoutMs: 200,
+        connectTimeoutMs: 40,
+        budgetMs: 250,
+        createSocket: () => {
+          const socket = fakeSocket({ autoOpen: false })
+          socket.closed = 0
+          const close = socket.close
+          socket.close = () => {
+            socket.closed += 1
+            close()
+          }
+          sockets.push(socket)
+          queueMicrotask(() => socket.emit('error', { error: new Error('boom') }))
+          return socket
+        },
+      }),
+    )
+  })
+  assert.ok(sockets.length >= 1)
+  for (const socket of sockets) {
+    assert.ok(socket.closed >= 1, '重試會製造多個半死的連線，各自還掛著 listener')
+  }
 })

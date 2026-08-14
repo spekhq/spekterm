@@ -19,7 +19,8 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
-import { check, connect, pollFor, pollUntil, waitForPageTarget } from './lib/cdp.mjs'
+import { check, connectToApp, pollFor, pollUntil, retryAction } from './lib/cdp.mjs'
+import { menuEvidence } from './lib/menu-evidence.mjs'
 import { sectionConsole } from './lib/instrument.mjs'
 import { copy, prefixOf } from './lib/copy.mjs'
 import { MOUNTED, awaitMounted, describeMounted } from './lib/mounted.mjs'
@@ -152,8 +153,7 @@ async function launch({ port, profileDir, rendererUrl }) {
     },
   )
 
-  const target = await waitForPageTarget(port, 30_000)
-  const client = await connect(target)
+  const client = await connectToApp(port, { targetTimeoutMs: 30_000 })
   const mounted = await awaitMounted(client)
 
   return {
@@ -505,14 +505,45 @@ async function typeLine(client, text) {
   await client.send('Input.dispatchKeyEvent', { type: 'keyUp', ...key })
 }
 
-async function createSession(client) {
-  const btn = await pollUntil(client, NEW_SESSION_RECT, (value) => value !== null, 10_000)
-  if (!btn) throw new Error('找不到「+ session」按鈕')
-  await realClick(client, btn)
+/**
+ * 開一個 spawn 選單並點其中一項。
+ *
+ * 兩個站點（分頁列的「+ session」、rail 上全域項目的建立入口）共用它 —— 它們此前是兩份幾乎
+ * 一樣的程式碼，各自等入口、各自等項目、各自 throw，而**都不重試**。
+ *
+ * @param {object} spec `{ entry, entryWindowMs, itemWindowMs, budgetMs, name }`
+ */
+async function openSpawnMenu(client, itemLabel, { entry, entryWindowMs, itemWindowMs, budgetMs, name }) {
+  let clicked = null
 
-  const item = await pollUntil(client, MENU_ITEM_RECT(copy('sessions.spawnShell')), (value) => value !== null, 3000)
-  if (!item) throw new Error('選單中找不到 shell')
+  const item = await retryAction({
+    act: async () => {
+      const btn = await pollUntil(client, entry, (value) => value !== null, entryWindowMs)
+      if (!btn) throw new Error(`找不到${name}`)
+      clicked = btn
+      await realClick(client, btn)
+    },
+    read: () => client.evaluate(MENU_ITEM_RECT(itemLabel)),
+    settled: (value) => value !== null,
+    attemptWindowMs: itemWindowMs,
+    timeoutMs: budgetMs,
+    label: `${name}的 spawn 選單（${itemLabel}）`,
+    evidence: () => menuEvidence(client, { expected: itemLabel, clicked }),
+  })
+
+  if (!item) throw new Error(`選單中找不到 ${itemLabel}（重試預算 ${budgetMs / 1000}s 耗盡）`)
   await realClick(client, item)
+}
+
+async function createSession(client) {
+  // **預算 13 秒的推導**：一輪 ＝ 等入口的 10 秒 ＋ 等項目的 3 秒；收斂前是一輪（不重試）。
+  return openSpawnMenu(client, copy('sessions.spawnShell'), {
+    entry: NEW_SESSION_RECT,
+    entryWindowMs: 10_000,
+    itemWindowMs: 3000,
+    budgetMs: 13_000,
+    name: '「+ session」按鈕',
+  })
 }
 
 // ── 主流程 ──────────────────────────────────────────────────────────────────
@@ -2071,13 +2102,14 @@ async function checkEmptyWorkspace(label, { port, rendererUrl }) {
     // **走 rail 上全域項目的建立入口**，不走 `createSession()`（它找的是主舞台的按鈕，而零
     // folder 時沒有選中的 repo）。也**刻意不走 `Ctrl+T`** —— 那會讓這條依賴上面剛驗過的
     // 快捷鍵，兩條斷言就不再獨立。
-    const plus = await pollUntil(app.client, GLOBAL_NEW_SESSION_RECT, (v) => v !== null, 10_000)
-    if (!plus) throw new Error('rail 上找不到全域項目的建立 session 入口')
-    await realClick(app.client, plus)
-    const shellItem = await pollUntil(
-      app.client, MENU_ITEM_RECT(copy('sessions.spawnShell')), (v) => v !== null, 6000)
-    if (!shellItem) throw new Error('選單中找不到 shell')
-    await realClick(app.client, shellItem)
+    // **預算 16 秒的推導**：一輪 ＝ 等入口的 10 秒 ＋ 等項目的 6 秒；收斂前是一輪（不重試）。
+    await openSpawnMenu(app.client, copy('sessions.spawnShell'), {
+      entry: GLOBAL_NEW_SESSION_RECT,
+      entryWindowMs: 10_000,
+      itemWindowMs: 6000,
+      budgetMs: 16_000,
+      name: 'rail 上全域項目的建立 session 入口',
+    })
 
     const globalTabs = await pollUntil(app.client, TABS, (v) => v.length === 1, 15_000)
     const barWithSession = await pollUntil(

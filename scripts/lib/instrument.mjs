@@ -223,6 +223,124 @@ export async function retrySample(read, { timeoutMs, label, interval = 200 }) {
   return pollFor({ read, settled: () => true, timeoutMs, interval, label, tolerateErrors: true })
 }
 
+/**
+ * **帶副作用的動作，做了之後等它生效；沒生效就重做。** 開一個選單並點其中一項就是這個形狀。
+ *
+ * ## 它與另外兩個入口的差別是**頻率**，不是「有沒有副作用」
+ *
+ * 直覺會說「動作有副作用，所以不能塞進 `pollFor` 的 `read`」—— **那是錯的**，本檔案裡就有
+ * 反例：`retrySample` 唯一的實質用途 `readTerminalText` 其動作是「真滑鼠拖曳 ＋ 右鍵 ＋ 點複製
+ * ＋ 寫剪貼簿」，副作用滿載，而那個形狀是可行的。
+ *
+ * 真正的差別是**動作與生效之間有沒有外部延遲**：
+ *
+ * | 入口 | 在等什麼 | 動作與檢查的頻率 |
+ * |---|---|---|
+ * | `pollFor` | 畫面變成某個樣子 | 沒有動作 |
+ * | `retrySample` | 讀取本身成功 | **同頻**（動作即讀取，做完就知道成不成） |
+ * | `retryAction` | 一個帶副作用的動作生效 | **異頻** —— 做完還要等 renderer 把結果畫出來 |
+ *
+ * 同頻重做在這裡會**自己製造失敗**：選單剛要出現時再點一次入口，那一下就把它關掉了。
+ *
+ * ## 為什麼是 `pollFor` 的組合，而不是第二份輪詢實作
+ *
+ * 「等待必須經由單一原語實作」那條要求的守衛（`scripts/wait-source.test.mjs`）以**函式名**
+ * 豁免原語自身，而那個豁免是**單一硬編的 `'pollFor'`**。任何第二份「自己算 deadline」的實作
+ * 都會逼那個豁免從一個名字變成一組名字 —— 而那是對既有要求的實質改動，不是實作細節。
+ *
+ * 組合起來還順帶把「外層何時檢查總時限」變成確定的：`pollFor` 的迴圈是**先讀一次再判斷
+ * deadline**，因此**第一輪必定完整執行**，其後每輪之間檢查一次。實際輪數 ＝ 在 `timeoutMs`
+ * 內跑得完幾輪，最少一輪。
+ *
+ * ## 上界是時限，而且沒有次數參數
+ *
+ * 這不是風格。收斂之前有九個站點各自為政（重試 0 到 5 輪、一輪的內層預算 1.7 到 17 秒），
+ * 而**沒有任何一處把「總共願意等多久」寫下來過** —— 那個數字藏在「次數 × 內層窗口」的乘法裡，
+ * 連算都沒有人算過（第一版的提案就把其中一個站點算少了八倍）。
+ *
+ * @param {object} options
+ * @param {Function} options.act 每輪執行一次的動作（可為 async）。**帶副作用**
+ * @param {Function} options.read 檢查動作有沒有生效的讀取
+ * @param {Function} options.settled 讀到的值算不算生效。**必須是純函式** —— 內外兩層各會呼叫它，
+ *   有狀態的判定（例如「連續三次不變」）在這裡會被呼叫的次數騙到
+ * @param {number} options.attemptWindowMs 單輪等生效的窗口
+ * @param {number} [options.attemptIntervalMs] 單輪之內的輪詢間隔。省略即沿用 `pollFor` 的預設；
+ *   **窗口小於一個間隔時，一輪的實際耗時由間隔決定**（見實作處的註解）
+ * @param {number} options.timeoutMs **總預算**。呼叫端顯式給定，且其推導要寫在呼叫端
+ * @param {string} options.label
+ * @param {number} [options.interval] 兩輪之間的額外間隔。預設 0 —— 內層本來就已經花掉時間了
+ * @param {Function} [options.evidence] 耗盡時取一次現場（可為 async，回傳字串）。
+ *   **它自己失敗不會改變回傳值** —— 「重試最終失敗」最常見的原因就是 renderer 已經不在，
+ *   而此時對它求值會拋；把那個例外往外送，呼叫端就從「拿到最後一次的值」變成「收到一個
+ *   指向錯地方的例外」
+ */
+export async function retryAction({
+  act,
+  read,
+  settled,
+  attemptWindowMs,
+  attemptIntervalMs,
+  timeoutMs,
+  label,
+  interval = 0,
+  evidence,
+}) {
+  const startedAt = Date.now()
+  let rounds = 0
+  // **記在外層 `settled` 裡，不在返回後重判** —— 重判會多呼叫一次呼叫端的判定式，而那對
+  // 有狀態的判定不等價；更實際的是，那一次重判讀到的是**下一刻**的狀態。
+  let succeeded = false
+
+  const last = await pollFor({
+    read: async () => {
+      rounds += 1
+      await act()
+      return pollFor({
+        read,
+        settled,
+        timeoutMs: attemptWindowMs,
+        // **省略即沿用 `pollFor` 的預設**（250ms）—— 真實站點的內層窗口是秒級，預設沒問題。
+        // 可注入是為了可驗收性：`pollFor` 只在兩次讀取之間檢查 deadline，因此內層窗口小於
+        // 一個 interval 時，**一輪的實際耗時由 interval 決定而不是由窗口決定**。單元測試層
+        // 的定位是毫秒級，不可注入的話這個入口的多輪行為就只能靠真的等幾秒來驗。
+        ...(attemptIntervalMs === undefined ? {} : { interval: attemptIntervalMs }),
+        label: `${label}（第 ${rounds} 輪）`,
+      })
+    },
+    settled: (value) => {
+      const ok = settled(value)
+      if (ok) succeeded = true
+      return ok
+    },
+    timeoutMs,
+    interval,
+    label: `${label}（重試預算）`,
+  })
+
+  if (succeeded) return last
+
+  // **匯總的存在理由**：以時限為界之後，輪數由環境決定，於是輸出裡會出現 N 行內層的窗口耗盡。
+  // 少了這一行，那 N 行讀起來像 N 件事，而它們是一件事。
+  console.log(
+    `  ↻ 重試耗盡（${label}）：${rounds} 輪／${seconds(Date.now() - startedAt)}，` +
+      `每輪內層窗口 ${seconds(attemptWindowMs)}`,
+  )
+
+  if (evidence) {
+    let scene
+    try {
+      scene = await evidence()
+    } catch (error) {
+      scene = `（現場採樣自己失敗：${String(error)}）`
+    }
+    if (scene) console.log(`  🔍 現場：${scene}`)
+  }
+
+  // 與 `pollFor` 同一條語意：回傳最後一次讀到的值，**升不升級為例外由呼叫端決定**。
+  // 九個站點裡八個要拋、一個（`anchorChange`）要拿這個值去讓斷言紅得有話可說。
+  return last
+}
+
 function noteTimeout(elapsedMs, token) {
   if (token !== currentToken) return
   counters.timeouts += 1

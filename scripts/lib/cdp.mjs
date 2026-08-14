@@ -4,12 +4,12 @@
  * 驗收一律透過 CDP 連進執行中的 app，而不是在產品程式碼裡塞測試分支 ——
  * 要驗的正是被出貨的那份程式碼，任何為測試而加的岔路都會讓結論失效。
  */
-import { noteCdp, noteConsole, pollFor, sectionToken } from './instrument.mjs'
+import { noteCdp, noteConsole, pollFor, retryAction, sectionToken } from './instrument.mjs'
 import { lookupHolder } from './preflight.mjs'
 
 // 斷言與等待原語的**唯一定義**在 `instrument.mjs`（它與 CDP 無關，`sections.mjs` 與
 // `probe-native` 都要用）。這裡轉出，是為了讓既有的 `from './lib/cdp.mjs'` 一字不必改。
-export { check, pollFor, retrySample } from './instrument.mjs'
+export { check, pollFor, retryAction, retrySample } from './instrument.mjs'
 
 /**
  * 一次 CDP 往返的時限。
@@ -31,22 +31,30 @@ export const CONNECT_TIMEOUT_MS = 30_000
  */
 const TARGET_FETCH_TIMEOUT_MS = 3_000
 
+/**
+ * 問一次 devtools endpoint 有哪些可連線的 page target。
+ *
+ * **取不到回 `null`，取得到但沒有 page 回 `[]`** —— 兩者的意思不同（endpoint 沒回應 vs
+ * app 還在但沒有可連線的頁面），而失敗現場要說得出是哪一種。
+ */
+async function fetchTargets(port) {
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/json/list`, {
+      signal: AbortSignal.timeout(TARGET_FETCH_TIMEOUT_MS),
+    })
+    const targets = await res.json()
+    return targets.filter((t) => t.type === 'page' && t.webSocketDebuggerUrl)
+  } catch {
+    return null
+  }
+}
+
 export async function waitForPageTarget(port, timeoutMs = 30_000) {
   // **這個呼叫端要拋錯**：等不到 CDP target 還往下走，只會紅在一個與根因無關的地方。
   // 原語一律回傳最後的值，升不升級為例外由呼叫端決定 —— 這裡就是那個「要」的呼叫端。
   const page = await pollFor({
-    read: async () => {
-      try {
-        const res = await fetch(`http://127.0.0.1:${port}/json/list`, {
-          signal: AbortSignal.timeout(TARGET_FETCH_TIMEOUT_MS),
-        })
-        const targets = await res.json()
-        return targets.find((t) => t.type === 'page' && t.webSocketDebuggerUrl) ?? null
-      } catch {
-        // devtools endpoint 尚未就緒 —— 這是「還沒好」，不是「壞了」
-        return null
-      }
-    },
+    // devtools endpoint 尚未就緒時 `fetchTargets` 回 `null` —— 那是「還沒好」，不是「壞了」。
+    read: async () => (await fetchTargets(port))?.[0] ?? null,
     settled: (value) => value !== null,
     timeoutMs,
     label: `CDP target（port ${port}）`,
@@ -65,6 +73,103 @@ export async function waitForPageTarget(port, timeoutMs = 30_000) {
     )
   }
   return page
+}
+
+/** 單次握手的時限 —— 見 `connectToApp` 的三層時限說明。 */
+export const HANDSHAKE_TIMEOUT_MS = 5_000
+
+/**
+ * **連上被測 app** —— 探針啟動路徑上唯一該用的入口。
+ *
+ * ## 為什麼要包一層，而不是各呼叫端自己 `waitForPageTarget` + `connect`
+ *
+ * 八個呼叫端此前各寫兩行，而 `connect()` 的握手**一次失敗就放棄**（issue #7：一次
+ * relaunch 的握手失敗讓整支探針中斷，代價是一輪十幾分鐘，且要重跑才知道是 flake）。
+ *
+ * **重試必須重新探詢 target，這是整件事的關鍵而不是細節。** `waitForPageTarget` 交出來的是
+ * 取得清單那一刻的**一次性快照**；target 若已消失（頁面重載換了新的 target id），重試同一個
+ * `webSocketDebuggerUrl` **永遠不會成功** —— 那樣的重試比不重試更糟，它把一次快速失敗換成
+ * 等滿整個窗口。
+ *
+ * ## 探詢失敗**不**被重試接住
+ *
+ * 兩種失敗的意思不同，處置也相反：
+ *
+ * | 失敗 | 意思 | 處置 |
+ * |---|---|---|
+ * | 握手失敗 | target 還在，只是握不上手 | **重試** |
+ * | 探詢失敗 | app 已經不在 | **立即終止** |
+ *
+ * 重試探詢會把「app 根本沒起來」從一個窗口變成 N 個窗口，而 CLAUDE.md 的既有教訓正好相反
+ *（前置不成立就立刻失敗並指出處置）。而且 `waitForPageTarget` 的錯誤訊息本來就會查出 port
+ * 持有者並給出兩種不同的解釋 —— 那比任何一次重試都有用。
+ *
+ * ## 三層時限
+ *
+ * | 層 | 值 | 為什麼 |
+ * |---|---|---|
+ * | 單次 fetch（`TARGET_FETCH_TIMEOUT_MS`） | 3s | 既有：必須明顯小於包住它的探詢窗口 |
+ * | 探詢窗口（`targetTimeoutMs`） | 呼叫端給（多為 30s） | 它等的是 **app 冷啟動**，不該縮 |
+ * | 握手（`HANDSHAKE_TIMEOUT_MS`） | **5s** | app 已經在了；握手要 30 秒就是有問題 |
+ * | 重試預算（`budgetMs`） | 探詢窗口 ＋ 4 × 握手 | 見下 |
+ *
+ * **預算必須明顯大於一輪的最壞內層耗時**，否則外層的顯式時限只是一個不生效的裝飾（實際返回
+ * 時間由內層決定）。這是既有那條「網路探詢的時限須明顯小於包住它的等待窗口」同一條紀律升
+ * 一層。取「探詢窗口 ＋ 4 × 握手」：第一輪最壞會吃掉整個探詢窗口（等 app 起來），其後每輪的
+ * 探詢是「確認 target 還在」而非「等它出現」，快得多 —— 於是預算裡留下的空間夠再試三到四次
+ * 握手，而那正是 issue #7 那種一次性失敗需要的。
+ *
+ * @param {number} port
+ * @param {object} [options]
+ * @param {number} [options.targetTimeoutMs] 探詢窗口。**呼叫端各自保留自己的值**
+ *   （`probe:package` 等的是真正的 AppImage 冷啟動，比其他人長）
+ * @param {number} [options.connectTimeoutMs] 單次握手時限
+ * @param {number} [options.budgetMs] 重試預算。省略即由上面兩者推導
+ * @param {Function} [options.createSocket] 注入點（可驗收性）
+ * @param {number} [options.callTimeoutMs] 轉交給 `connect()`
+ */
+export async function connectToApp(
+  port,
+  { targetTimeoutMs = 30_000, connectTimeoutMs = HANDSHAKE_TIMEOUT_MS, budgetMs, createSocket, callTimeoutMs } = {},
+) {
+  const budget = budgetMs ?? targetTimeoutMs + 4 * connectTimeoutMs
+  let client = null
+  let lastError = null
+  let scene = null
+
+  const connected = await retryAction({
+    act: async () => {
+      client = null
+      // **這一行的例外不被接住，是刻意的**（見上面的表）：`retryAction` 的外層 `pollFor`
+      // 未開容忍，所以 `waitForPageTarget` 的 throw 會直接往外傳，終止整個重試。
+      const target = await waitForPageTarget(port, targetTimeoutMs)
+      try {
+        client = await connect(target, { createSocket, callTimeoutMs, connectTimeoutMs })
+      } catch (error) {
+        // 握手失敗才是可重試的那一種 —— 記下來，讓這一輪不成立。
+        lastError = error
+      }
+    },
+    // 結果在 `act` 返回時就已經確定，沒有東西要等 ⇒ 內層窗口為 0（讀一次就返回）。
+    read: () => client,
+    settled: (value) => value !== null,
+    attemptWindowMs: 0,
+    timeoutMs: budget,
+    label: `connectToApp（port ${port}）`,
+    evidence: async () => {
+      const alive = await fetchTargets(port)
+      scene =
+        `最後一次握手：${lastError ? lastError.message : '(沒有錯誤被記下來)'}；` +
+        `target 當下${alive === null ? '探詢不到（endpoint 沒有回應）' : `有 ${alive.length} 個可連線的 page`}`
+      return scene
+    },
+  })
+
+  if (connected) return connected
+
+  throw new Error(
+    `連上被測 app 失敗（port ${port}，重試預算 ${budget}ms 耗盡）` + (scene ? `\n  ${scene}` : ''),
+  )
 }
 
 /**
@@ -100,6 +205,18 @@ export async function waitForPageTarget(port, timeoutMs = 30_000) {
  * @param {object} [options] **存在的理由是可驗收性**：不可注入的話，每條逾時測試都得真的跑滿
  *   預設時限，而單元測試層的定位是秒級、可隨時跑
  */
+/**
+ * WebSocket 的 `error` 事件帶著什麼，取決於實作 —— Node 內建的 WebSocket 把底層錯誤放在
+ * `event.error`，有些實作只有 `event.message`。**取不到就說取不到**，不要回一個空字串
+ * 假裝有內容（那正是這裡原本的病：一句沒有主詞的「連線失敗」）。
+ */
+function describeSocketError(event) {
+  const error = event?.error
+  if (error) return error.code ? `${error.code} ${error.message ?? ''}`.trim() : String(error.message ?? error)
+  if (event?.message) return String(event.message)
+  return '(事件未帶任何細節)'
+}
+
 export async function connect(
   target,
   {
@@ -113,15 +230,29 @@ export async function connect(
     // **握手也要時限**：`open` 與 `error` 兩者都不來時（TCP 連上但沒有 upgrade 回應），
     // 這個 promise 永遠不 resolve —— 而它在每一支探針的啟動路徑上。
     const timer = setTimeout(
-      () => reject(new Error(`CDP WebSocket 握手逾時（${connectTimeoutMs}ms）`)),
+      () => failWith(new Error(`CDP WebSocket 握手逾時（${connectTimeoutMs}ms）`)),
       connectTimeoutMs,
     )
     const settle = (fn) => (arg) => {
       clearTimeout(timer)
       fn(arg)
     }
+    // **失敗的 socket 要確實丟棄。** 這個入口現在會被重試（`connectToApp`），而一個沒有關掉
+    // 的半死連線仍掛著 listener —— N 輪就是 N 個。`close()` 自己再拋沒有意義（它可能已經
+    // 在關閉中），吞掉。
+    const failWith = settle((error) => {
+      try {
+        ws.close()
+      } catch {
+        // 已經在關閉或從未開啟 —— 兩者都不需要處理。
+      }
+      reject(error)
+    })
     ws.addEventListener('open', settle(resolve), { once: true })
-    ws.addEventListener('error', settle(() => reject(new Error('CDP WebSocket 連線失敗'))), {
+    // **帶主詞地失敗。** 此前這裡是 `new Error('CDP WebSocket 連線失敗')` —— 事件的內容
+    // 整個被丟掉，於是 issue #7 那次失敗至今分辨不出是連線被拒、是 target 在取得清單與握手
+    // 之間消失、還是握手被拒。三者的處置完全不同。
+    ws.addEventListener('error', (event) => failWith(new Error(`CDP WebSocket 連線失敗：${describeSocketError(event)}`)), {
       once: true,
     })
   })

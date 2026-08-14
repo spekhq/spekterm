@@ -55,7 +55,8 @@ import {
 import { dirname, join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { fileURLToPath } from 'node:url'
-import { check, connect, pollFor, pollUntil, waitForPageTarget } from './lib/cdp.mjs'
+import { check, connectToApp, pollFor, pollUntil, retryAction } from './lib/cdp.mjs'
+import { menuEvidence } from './lib/menu-evidence.mjs'
 import { electronExtraArgs } from './lib/display.mjs'
 import { copy } from './lib/copy.mjs'
 import { MOUNTED_WITHOUT_VISIBILITY as MOUNTED, awaitMounted, describeMounted } from './lib/mounted.mjs'
@@ -274,8 +275,7 @@ try {
   child.stderr?.on('data', (chunk) => (stderr += chunk))
   child.stdout?.on('data', (chunk) => (stderr += chunk))
 
-  const target = await waitForPageTarget(DEBUG_PORT, STARTUP_TIMEOUT_MS)
-  const client = await connect(target)
+  const client = await connectToApp(DEBUG_PORT, { targetTimeoutMs: STARTUP_TIMEOUT_MS })
 
   /**
    * 視窗載入成功同時證明了 **ESM 進入點在 asar 內解析成功**：`package.json` 宣告
@@ -306,12 +306,24 @@ try {
    * **走全域項目，不加任何 folder** —— 它不需要 workspace 裡有東西，於是這一段完全不必碰
    * 檔案對話框（那是原生 UI，CDP 打不到）。
    */
-  const plus = await pollUntil(client, GLOBAL_NEW_SESSION_RECT, (value) => value !== null, 15_000)
-  if (!plus) throw new Error('rail 上找不到全域項目的建立 session 入口')
-  await realClick(client, plus)
-
-  const shellItem = await pollUntil(client, MENU_ITEM_RECT(copy('sessions.spawnShell')), (v) => v !== null, 6000)
-  if (!shellItem) throw new Error('spawn 選單沒有出現')
+  // **預算 21 秒的推導**：一輪 ＝ 等入口的 15 秒 ＋ 等項目的 6 秒；收斂前是一輪（不重試）。
+  // 入口的窗口比其他站點寬，是因為這一支等的是**真正的 AppImage** 冷啟動。
+  let clicked = null
+  const shellItem = await retryAction({
+    act: async () => {
+      const plus = await pollUntil(client, GLOBAL_NEW_SESSION_RECT, (value) => value !== null, 15_000)
+      if (!plus) throw new Error('rail 上找不到全域項目的建立 session 入口')
+      clicked = plus
+      await realClick(client, plus)
+    },
+    read: () => client.evaluate(MENU_ITEM_RECT(copy('sessions.spawnShell'))),
+    settled: (value) => value !== null,
+    attemptWindowMs: 6000,
+    timeoutMs: 21_000,
+    label: 'rail 上全域項目的 spawn 選單',
+    evidence: () => menuEvidence(client, { expected: copy('sessions.spawnShell'), clicked }),
+  })
+  if (!shellItem) throw new Error('spawn 選單沒有出現（重試預算 21s 耗盡）')
   await realClick(client, shellItem)
 
   const pids = await waitForPty(1)

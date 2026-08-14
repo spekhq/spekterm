@@ -15,7 +15,7 @@ import { mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync
 import { homedir, tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
-import { check, connect, dragMouse, pollFor, pollUntil, pressKey, waitForPageTarget } from './lib/cdp.mjs'
+import { check, connectToApp, dragMouse, pollFor, pollUntil, pressKey } from './lib/cdp.mjs'
 import { copy, patternOf, prefixOf, suffixOf } from './lib/copy.mjs'
 import { awaitMounted, describeMounted, mountedExpression } from './lib/mounted.mjs'
 import { electronExtraArgs } from './lib/display.mjs'
@@ -119,8 +119,7 @@ async function launch(profileDir) {
   let stderr = ''
   electron.stderr.on('data', (chunk) => (stderr += chunk))
 
-  const target = await waitForPageTarget(DEBUG_PORT)
-  const client = await connect(target)
+  const client = await connectToApp(DEBUG_PORT)
   const mounted = await awaitMounted(client, { expression: MOUNTED })
 
   return {

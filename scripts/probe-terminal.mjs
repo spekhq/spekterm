@@ -26,14 +26,15 @@ import { basename, dirname, join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import {
   check,
-  connect,
+  connectToApp,
   dragMouse,
   pollFor,
   pollUntil,
   pressKey,
+  retryAction,
   retrySample,
-  waitForPageTarget,
 } from './lib/cdp.mjs'
+import { menuEvidence } from './lib/menu-evidence.mjs'
 import { copy, prefixOf } from './lib/copy.mjs'
 import { sectionConsole } from './lib/instrument.mjs'
 import { MOUNTED, awaitMounted, describeMounted } from './lib/mounted.mjs'
@@ -404,8 +405,7 @@ async function launch({ port, profileDir, rendererUrl, marker, stub }) {
   child.stderr?.on('data', (chunk) => (stderr += chunk))
   child.stdout?.on('data', (chunk) => (stderr += chunk))
 
-  const target = await waitForPageTarget(port, 30_000)
-  const client = await connect(target)
+  const client = await connectToApp(port, { targetTimeoutMs: 30_000 })
   const mounted = await awaitMounted(client)
 
   return {
@@ -785,18 +785,41 @@ async function realClick(client, rect) {
  * 症狀是探針在某個看似無關的地方 `TypeError: Cannot read properties of null` —— 因為
  * `MENU_ITEM_RECT(...)` 找不到選單。**不要重用一個量過的 rect 去點第二次。**
  */
-async function openTabMenu(client, index, attempts = 5) {
-  for (let attempt = 0; attempt < attempts; attempt++) {
-    const rect = await client.evaluate(TAB_RECT(index))
-    if (rect) {
+async function openTabMenu(client, index) {
+  // **預算 8.5 秒的推導**：一輪 ＝ 等選單的 1.5 秒 ＋ 兩輪之間的 0.2 秒；收斂前是固定五輪
+  // ⇒ **8.5 秒**（那個 `sleep(200)` 無條件執行、含最後一輪，所以計入是對的）。
+  let clicked = null
+
+  const menu = await retryAction({
+    act: async () => {
+      // **每輪重新量測座標** —— 分頁標籤的寬度會因 pty 宣告的 OSC 標題或使用者改名而改變，
+      // 上一次量到的 rect 在幾毫秒內就過期。**不要重用一個量過的 rect 去點第二次。**
+      const rect = await client.evaluate(TAB_RECT(index))
+      if (!rect) return
+      clicked = rect
       const at = center(rect)
       await realMouse(client, at.x, at.y, 'right')
-      const menu = await pollUntil(client, MENU_IN_VIEWPORT, (value) => value !== null, 1500)
-      if (menu) return menu
-    }
-    await sleep(200)
+    },
+    read: () => client.evaluate(MENU_IN_VIEWPORT),
+    settled: (value) => value !== null,
+    attemptWindowMs: 1500,
+    interval: 200,
+    timeoutMs: 8500,
+    label: `openTabMenu（分頁 ${index} 的右鍵選單）`,
+    evidence: async () => {
+      const scene = await menuEvidence(client, { clicked })
+      const now = await client.evaluate(TAB_RECT(index))
+      // 座標過期是這一處記載的成因，所以現場要能回答「分頁自己有沒有動」。
+      const moved = clicked && now ? now.x !== clicked.x || now.width !== clicked.width : null
+      return `${scene}；分頁矩形${moved === null ? '取不到' : moved ? '**已改變**' : '未變'}` +
+        `（點時 ${JSON.stringify(clicked)} → 現在 ${JSON.stringify(now)}）`
+    },
+  })
+
+  if (!menu) {
+    throw new Error(`分頁 ${index} 的右鍵選單開不起來（重試預算 8.5s 耗盡；座標持續過期或選單溢出 viewport）`)
   }
-  throw new Error(`分頁 ${index} 的右鍵選單開不起來（座標持續過期或選單溢出 viewport）`)
+  return menu
 }
 
 /**
@@ -1093,34 +1116,70 @@ async function pollUntilText(read, settled, timeoutMs = 10_000) {
   return pollFor({ read, settled, timeoutMs, interval: 200, label: 'pollUntilText（自訂取值）' })
 }
 
-/** 自 rail 的 folder 列建立 session（該入口 hover 才顯示，但 rect 與點擊不受 opacity 影響）。 */
-async function openSessionViaRail(client, itemLabel) {
-  const btn = await pollUntil(client, RAIL_NEW_SESSION_RECT, (value) => value !== null, 8000)
-  if (!btn) throw new Error('找不到 rail 上的建立 session 入口')
-  await realClick(client, btn)
+/**
+ * 開一個 spawn 選單並點其中一項。
+ *
+ * ## 這兩個函式此前有一個可指認的缺陷（不是策略問題）
+ *
+ * 它們等到**選單容器**出現之後，用**一次 `evaluate`** 讀其中的項目 —— 沒有任何等待。
+ * 選單已開、項目那一刻還沒渲染，就直接 throw。issue #19 記載的
+ * 「選單中找不到『Login shell』」正是這個形狀。
+ *
+ * 修法是把等待的標的從**容器**換成**項目**：容器出現而項目未出現，本來就是「還沒好」，
+ * 不是「壞了」。預算不變（見各自的推導），改變的只是那段預算花在等什麼。
+ *
+ * @param {object} spec `{ entry, entryWindowMs, budgetMs, name }`
+ */
+async function openSpawnMenu(client, itemLabel, { entry, entryWindowMs, budgetMs, name }) {
+  let clicked = null
 
-  const menu = await pollUntil(client, MENU_IN_VIEWPORT, (value) => value !== null, 3000)
-  const itemRect = await client.evaluate(MENU_ITEM_RECT(itemLabel))
-  if (!itemRect) throw new Error(`rail 的選單中找不到「${itemLabel}」`)
+  const itemRect = await retryAction({
+    act: async () => {
+      // 用 poll 而非一次求值：重新載入之後 rail 與分頁列要等 renderer 重新掛載才出現
+      //（實測 dev 模式在 reload 後直接找按鈕會撲空）。
+      const btn = await pollUntil(client, entry, (value) => value !== null, entryWindowMs)
+      if (!btn) throw new Error(`找不到${name}的建立 session 入口`)
+      clicked = btn
+      await realClick(client, btn)
+    },
+    // 選單必須活過開啟它的那次 click（它會冒泡到 window，而選單自己掛著 dismiss listener）。
+    read: () => client.evaluate(MENU_ITEM_RECT(itemLabel)),
+    settled: (value) => value !== null,
+    attemptWindowMs: 3000,
+    timeoutMs: budgetMs,
+    label: `${name}的 spawn 選單（${itemLabel}）`,
+    evidence: () => menuEvidence(client, { expected: itemLabel, clicked }),
+  })
 
+  if (!itemRect) {
+    throw new Error(`${name}的選單中找不到「${itemLabel}」（重試預算 ${budgetMs / 1000}s 耗盡）`)
+  }
+
+  // 項目在，容器必定也在（項目是它底下的 button）—— 呼叫端要的是容器的 viewport 資訊。
+  const menu = await client.evaluate(MENU_IN_VIEWPORT)
   await realClick(client, itemRect)
   return menu
 }
 
+/** 自 rail 的 folder 列建立 session（該入口 hover 才顯示，但 rect 與點擊不受 opacity 影響）。 */
+async function openSessionViaRail(client, itemLabel) {
+  // **預算 11 秒的推導**：一輪 ＝ 等入口的 8 秒 ＋ 等項目的 3 秒；收斂前是一輪（不重試）。
+  return openSpawnMenu(client, itemLabel, {
+    entry: RAIL_NEW_SESSION_RECT,
+    entryWindowMs: 8000,
+    budgetMs: 11_000,
+    name: 'rail',
+  })
+}
+
 async function openSessionViaMenu(client, itemLabel) {
-  // 用 poll 而非一次求值：重新載入之後 rail 與分頁列要等 renderer 重新掛載才出現
-  //（實測 dev 模式在 reload 後直接找按鈕會撲空）。
-  const btn = await pollUntil(client, NEW_SESSION_RECT, (value) => value !== null, 10_000)
-  if (!btn) throw new Error('找不到「+ session」按鈕')
-  await realClick(client, btn)
-
-  // 選單必須活過開啟它的那次 click（它會冒泡到 window，而選單自己掛著 dismiss listener）。
-  const menu = await pollUntil(client, MENU_IN_VIEWPORT, (value) => value !== null, 3000)
-  const itemRect = await client.evaluate(MENU_ITEM_RECT(itemLabel))
-  if (!itemRect) throw new Error(`選單中找不到「${itemLabel}」`)
-
-  await realClick(client, itemRect)
-  return menu
+  // **預算 13 秒的推導**：一輪 ＝ 等入口的 10 秒 ＋ 等項目的 3 秒；收斂前是一輪（不重試）。
+  return openSpawnMenu(client, itemLabel, {
+    entry: NEW_SESSION_RECT,
+    entryWindowMs: 10_000,
+    budgetMs: 13_000,
+    name: '分頁列',
+  })
 }
 
 // ── 主流程 ──────────────────────────────────────────────────────────────────
@@ -2300,11 +2359,19 @@ async function runMode(label, { port, rendererUrl }) {
     // 少了這條斷言，一個很難察覺的錯誤會靜悄悄地發生：`~/.profile` 把 `$HOME/.local/bin`
     // prepend 到 PATH，於是**真的 claude** 被 spawn 起來，探針真的開了一個 Claude Code session
     // （實測踩過 —— 分頁標籤變成它宣告的任務描述，四條斷言以看不懂的方式失敗）。
-    let stubRan = false
-    for (let i = 0; i < 60 && !stubRan; i++) {
-      stubRan = existsSync(stub.receipt)
-      if (!stubRan) await sleep(250)
-    }
+    // **以次數為界的等待是同一個病的第四種形狀**：`60 × 250ms` 是一個 15 秒的預算，而它藏在
+    // 乘法裡、沒有任何一處寫下來過。它不帶副作用（不是重試）、每輪沒有淨效果（不是遞增），
+    // 所以用既有的 `pollFor` 而不是 `retryAction`。
+    //
+    // **兩道原始碼守衛都抓不到這個形狀**（等待守衛認 `Date.now()` 的比較，重試守衛認純計數的
+    // 界加體內提早退出）—— 已登記為已知缺口，見 `docs/lessons/probes.md`。
+    const stubRan = await pollFor({
+      read: () => existsSync(stub.receipt),
+      settled: (ran) => ran === true,
+      timeoutMs: 15_000,
+      interval: 250,
+      label: `claude stub 的憑據（${stub.receipt}）`,
+    })
     check(
       results,
       `${label}：claude 目標 spawn 的是探針的 stub（不是本機真的 claude）`,

@@ -15,11 +15,13 @@ import {
   check,
   noteCdp,
   pollFor,
+  retryAction,
   retrySample,
   sectionSummary,
   sectionToken,
 } from './lib/instrument.mjs'
 import { waitForPageTarget } from './lib/cdp.mjs'
+import { menuEvidence } from './lib/menu-evidence.mjs'
 import { runInNewContext } from 'node:vm'
 import { awaitMounted, describeFrameStall, describeMounted, mountedExpression } from './lib/mounted.mjs'
 
@@ -234,6 +236,191 @@ test('對照組：retrySample 不會把失手吞成一個可以讓斷言通過�
         ),
       ),
     /讀不到/,
+  )
+})
+
+// ── retryAction：帶副作用的動作，做了之後等它生效 ──────────────────────────
+
+/** 造一個「第 N 輪才會生效」的假站點。`state` 模擬 renderer 那一側的呈現。 */
+function fakeSite({ succeedsOnRound = Infinity } = {}) {
+  const site = { acts: 0, reads: 0, state: null }
+  return {
+    site,
+    act: () => {
+      site.acts += 1
+      // **動作本身不立刻生效** —— 那正是這個入口存在的理由（動作與生效之間有外部延遲）。
+      site.state = site.acts >= succeedsOnRound ? `開了（第 ${site.acts} 輪）` : null
+    },
+    read: () => {
+      site.reads += 1
+      return site.state
+    },
+    settled: (value) => value !== null,
+  }
+}
+
+test('retryAction：第一輪即生效時，動作恰好執行一次', async () => {
+  const { site, act, read, settled } = fakeSite({ succeedsOnRound: 1 })
+  const { value, lines } = await captured(() =>
+    retryAction({ act, read, settled, attemptWindowMs: 50, attemptIntervalMs: 5, timeoutMs: 500, label: '假的選單' }),
+  )
+  assert.equal(value, '開了（第 1 輪）')
+  assert.equal(site.acts, 1, '生效之後不該再重做動作')
+  assert.deepEqual(lines, [], '成功路徑上不得有任何輸出')
+})
+
+test('retryAction：一輪內多次輪詢，動作仍只執行一次', async () => {
+  // **這是這個入口與 `retrySample` 的分界**：同頻重做會在選單剛要出現時把它關掉。
+  const { site, act, read, settled } = fakeSite({ succeedsOnRound: 2 })
+  await captured(() =>
+    retryAction({ act, read, settled, attemptWindowMs: 60, attemptIntervalMs: 5, timeoutMs: 400, label: '假的選單' }),
+  )
+  assert.equal(site.acts, 2, '兩輪 ⇒ 動作兩次')
+  assert.ok(site.reads > site.acts, '每輪的內層要輪詢多次，而動作只在輪首做一次')
+})
+
+test('retryAction：預算耗盡時回傳最後一次讀到的值，且不拋出例外', async () => {
+  const { site, act, read, settled } = fakeSite()
+  const { value } = await captured(() =>
+    retryAction({ act, read, settled, attemptWindowMs: 30, attemptIntervalMs: 5, timeoutMs: 90, label: '永遠不開的選單' }),
+  )
+  assert.equal(value, null, '回傳最後一次讀到的值 —— 升不升級為例外由呼叫端決定')
+  assert.ok(site.acts > 1, '預算內要重做，而不是試一次就放棄')
+})
+
+test('retryAction：預算耗盡時輸出匯總與現場', async () => {
+  const { act, read, settled } = fakeSite()
+  const { lines } = await captured(() =>
+    retryAction({
+      act,
+      read,
+      settled,
+      attemptWindowMs: 30,
+      attemptIntervalMs: 5,
+      timeoutMs: 90,
+      label: '永遠不開的選單',
+      evidence: () => 'menu=null；剛才點的矩形 {x:10,y:20}；該座標命中 <div class="tab">',
+    }),
+  )
+  const summary = lines.find((line) => line.includes('重試耗盡'))
+  assert.ok(summary, '耗盡時要有一行匯總 —— 少了它，N 行內層耗盡讀起來像 N 件事')
+  assert.match(summary, /永遠不開的選單/)
+  assert.match(summary, /\d+ 輪/)
+  assert.ok(
+    lines.some((line) => line.includes('elementFromPoint') || line.includes('該座標命中')),
+    '現場必須被輸出 —— 它的價值只在失敗那一次兌現',
+  )
+})
+
+test('對照組：retryAction 成功時不輸出匯總，也不取現場', async () => {
+  // 一個恆常出現的欄位掛在每個正常站點上，只會讓人學會不看它（既有紀律）。
+  let sampled = 0
+  const { act, read, settled } = fakeSite({ succeedsOnRound: 1 })
+  const { lines } = await captured(() =>
+    retryAction({
+      act,
+      read,
+      settled,
+      attemptWindowMs: 50,
+      attemptIntervalMs: 5,
+      timeoutMs: 500,
+      label: '假的選單',
+      evidence: () => {
+        sampled += 1
+        return '不該被取樣'
+      },
+    }),
+  )
+  assert.equal(sampled, 0, '成功時不得呼叫現場採樣')
+  assert.deepEqual(lines, [])
+})
+
+test('retryAction：現場採樣自己失敗，不改變呼叫端拿到的回傳值', async () => {
+  // **失效方向**：「重試最終失敗」最常見的原因就是 renderer 已經不在，而此時對它求值會拋。
+  // 把那個例外往外送，一條本來紅得清楚的斷言就變成一個指向錯地方的中斷。
+  const { act, read, settled } = fakeSite()
+  const { value, lines } = await captured(() =>
+    retryAction({
+      act,
+      read,
+      settled,
+      attemptWindowMs: 30,
+      attemptIntervalMs: 5,
+      timeoutMs: 60,
+      label: '永遠不開的選單',
+      evidence: () => {
+        throw new Error('Inspected target navigated or closed')
+      },
+    }),
+  )
+  assert.equal(value, null, '採樣失敗不得改變回傳值')
+  assert.ok(
+    lines.some((line) => line.includes('現場採樣自己失敗')),
+    '採樣失敗本身要出聲，否則「沒有現場」與「現場是空的」分不開',
+  )
+})
+
+test('retryAction：每一輪的內層窗口耗盡都照常回報', async () => {
+  const { act, read, settled } = fakeSite()
+  const { lines } = await captured(() =>
+    retryAction({ act, read, settled, attemptWindowMs: 25, attemptIntervalMs: 5, timeoutMs: 90, label: '永遠不開的選單' }),
+  )
+  const inner = lines.filter((line) => line.includes('等待窗口耗盡') && line.includes('第'))
+  assert.ok(inner.length >= 2, `每輪各一行，實際 ${inner.length} 行：${JSON.stringify(lines)}`)
+  assert.ok(
+    lines.some((line) => line.includes('等待窗口耗盡') && line.includes('重試預算')),
+    '外層的總預算耗盡也要出聲',
+  )
+})
+
+test('retryAction：兩種相反的呼叫端姿態共存，且互不影響', async () => {
+  // **這條驗的是分工**：原語一律回傳最後的值（上面那條），要不要拋由呼叫端決定。
+  // 真實站點裡兩種姿態都在：`createSession` 耗盡即 throw（沒建成 session，其後每條斷言都會
+  // 紅在與根因無關的地方），而 `anchorChange` 耗盡時回傳當下的實際錨定值，讓斷言紅得有話
+  // 可說。原語若自行決定，就得為其中一邊開例外開關。
+  //
+  // **限制**：這裡的兩個呼叫端是這兩種姿態的縮影，不是那兩個函式本身（它們住在探針腳本裡、
+  // 需要一個真的 app 才跑得起來）。**真實站點確實各採其中一種**，由 §7.4 的原始碼稽核確認。
+  const strict = async () => {
+    const { act, read, settled } = fakeSite()
+    const value = await retryAction({
+      act, read, settled,
+      attemptWindowMs: 25, attemptIntervalMs: 5, timeoutMs: 60, label: '拋出側',
+    })
+    if (!value) throw new Error('選單中找不到 shell（重試預算耗盡）')
+    return value
+  }
+  const lenient = async () => {
+    const { act, read, settled } = fakeSite()
+    return retryAction({
+      act, read, settled,
+      attemptWindowMs: 25, attemptIntervalMs: 5, timeoutMs: 60, label: '回傳側',
+    })
+  }
+
+  await captured(async () => {
+    await assert.rejects(strict, /選單中找不到 shell/, '拋出側要拿得到升級為例外的機會')
+    assert.equal(await lenient(), null, '回傳側不受另一個呼叫端的選擇影響')
+  })
+})
+
+test('對照組：retryAction 沒有任何參數能把內層的窗口耗盡關掉', async () => {
+  // 既有規格明文禁止「這次的逾時是預期的，不要印」之類的開關 —— 開關一旦存在就會被用在
+  // 不該用的地方。這條釘的是**介面**：把每一個看起來像抑制開關的名字都傳進去，輸出不變。
+  const { act, read, settled } = fakeSite()
+  const base = { act, read, settled, attemptWindowMs: 25, attemptIntervalMs: 5, timeoutMs: 60, label: '永遠不開的選單' }
+  const { lines: normal } = await captured(() => retryAction({ ...base }))
+  const { lines: muted } = await captured(() =>
+    retryAction({ ...base, quiet: true, silent: true, expectTimeout: true, suppressTimeout: true }),
+  )
+  // **判準是「有沒有被抑制」，不是「行數一不一樣」。** 行數取決於預算內跑得完幾輪，而那是
+  // 時間相關的 —— 拿它當判準，這條測試自己就會 flaky（初版就是，實測紅過一次）。
+  // 這正是本 repo 那條教訓在測試層的重演：**一個方便取得、看起來相關的量，不等於規格真正
+  // 在乎的那個量**。開關若真的存在，`muted` 會是 0，這個判準抓得到。
+  assert.ok(normal.some((line) => line.includes('等待窗口耗盡')), '正常路徑本來就該有窗口耗盡的輸出')
+  assert.ok(
+    muted.some((line) => line.includes('等待窗口耗盡')),
+    '沒有任何參數能把窗口耗盡的輸出關掉',
   )
 })
 
@@ -522,4 +709,56 @@ test('診斷取樣自己拋錯時，回傳值不受影響（不得把回傳換�
   const { value, lines } = await captured(() => awaitMounted(client, { timeoutMs: 10 }))
   assert.equal(value.ok, false, '仍然拿得到最後一次的判定值')
   assert.ok(lines.some((line) => /取樣失敗/.test(line)), '而且失敗本身要出聲')
+})
+
+// ── menuEvidence：現場採樣不得在被測頁面留下常駐物 ─────────────────────────
+
+test('menuEvidence：只做一次求值，且求值的是純讀取', async () => {
+  // **判準落在原始碼結構上，不是「跑一次 app 數節點」。** 後者要一個真的 app（十幾分鐘），
+  // 而且「這一輪沒看到殘留」證明不了「下一版不會留」。這裡驗的是**不變式**：送進頁面的那段
+  // 程式碼裡不存在任何能留下東西的呼叫。
+  const sent = []
+  const client = {
+    evaluate: (expression) => {
+      sent.push(expression)
+      return { menu: true, items: ['Shell'], at: null, hit: null, dialogs: 0, menus: 1, visibility: 'visible' }
+    },
+  }
+  await menuEvidence(client, { expected: 'Shell', clicked: { x: 1, y: 2, width: 10, height: 4 } })
+
+  assert.equal(sent.length, 1, '一次求值 —— 多跑幾次就多幾次與被測頁面的競態')
+  const expression = sent[0]
+  for (const forbidden of [
+    'addEventListener',
+    'setInterval',
+    'setTimeout',
+    'requestAnimationFrame',
+    'appendChild',
+    'window.__',
+    'MutationObserver',
+  ]) {
+    assert.ok(
+      !expression.includes(forbidden),
+      `現場採樣不得留下常駐物，也不得阻塞：求值字串裡出現了 ${forbidden}`,
+    )
+  }
+})
+
+test('menuEvidence：現場說得出「選單開了但那一項不在」', async () => {
+  // 這正是 issue #19 那個中斷的形狀，而它此前與「選單根本沒開」在輸出上分不開。
+  const client = {
+    evaluate: () => ({
+      menu: true,
+      items: ['Login shell'],
+      at: { x: 5, y: 6 },
+      hit: 'button[New session] «+»',
+      dialogs: 0,
+      menus: 1,
+      visibility: 'visible',
+    }),
+  }
+  const scene = await menuEvidence(client, { expected: 'claude', clicked: { x: 0, y: 0, width: 10, height: 10 } })
+  assert.match(scene, /menu=yes/)
+  assert.match(scene, /期待的「claude」=不在/)
+  assert.match(scene, /命中 button\[New session\]/)
 })
