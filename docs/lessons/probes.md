@@ -333,9 +333,14 @@ instance 耗盡），三輪探針約 30 分鐘全花在懷疑產品 —— 而�
   `env -u ELECTRON_RENDERER_URL -u NODE_ENV_ELECTRON_VITE -u ELECTRON_MAJOR_VER -u ELECTRON_CLI_ARGS
   -u ELECTRON_EXEC_PATH -u npm_lifecycle_script npm run probe:files`。
   **這是跨 change 的紀律**：dogfood 中途要跑 probe，先確認 dev 是否還在跑並清 env。
-- **對已 `close()` 的 CDP client 呼叫 `evaluate`，會無限等待。** `send` 是靠 message id 配對 resolve
-  的 —— WebSocket 關掉之後那個 Promise **永遠不會 resolve：不拋錯、不逾時**。而**症狀看起來像
-  「Electron 啟動很慢」**。量測要併進 `PROBE_EXPRESSION`。
+- **對已 `close()` 的 CDP client 呼叫 `evaluate`，會無限等待** —— `send` 是靠 message id 配對
+  resolve 的，WebSocket 關掉之後那個 Promise **永遠不會 resolve：不拋錯、不逾時**，而**症狀
+  看起來像「Electron 啟動很慢」**。
+  **這條已由結構修掉**（`lib/cdp.mjs`：每次往返有時限、連線關閉時 pending 全部 reject、關閉後
+  發起的往返立即失敗）。敘述留著，是因為它說明了那道結構**為什麼**要存在 —— 這個缺陷在這份
+  文件裡記載了兩個月都沒有被修，代價是 issue #22（一輪 `test:e2e` 卡 1 小時 30 分）。
+  **共用等待原語擋不住它**：`pollFor` 的時限只在**兩次讀取之間**檢查，一次不返回的 `read()`
+  讓那個時限形同不存在。
 - **在模板字串裡寫註解，反引號會把字串提前結束。** 這條在 `global-session` 咬了五次，而 `node --check`
   **只抓到其中三次** —— 另外兩次外層恰好仍是合法的 JS，要到執行時才炸成 `SyntaxError` 或一句看不懂
   的 `Invalid parameters`。**可靠的做法不是「記得別用反引號」，是把說明寫在模板字串外面。**
@@ -451,6 +456,71 @@ instance 耗盡），三輪探針約 30 分鐘全花在懷疑產品 —— 而�
 
 **判定「確定性 vs 負載型」要換的是環境，不是改動。** 跑之前先確認：沒有殘留的 electron／
 `electron-vite dev` 孫行程／`Xvfb`／`dconf` 抓著 debugging port。
+
+> **後續（2026-08-14）：那個「環境因素」被指認出來了，而它不是負載** —— 是 renderer 被判定為
+> 不可見之後進入背景節流。#17 那條教訓（「三次一致的失敗來自三次一致的環境條件，不是來自程式
+> 的確定性」）**完全正確，被誤診的是它的實例**：真正的變因是「這一次視窗有沒有被判定為不可見」，
+> 而它與負載相關但不由負載決定。**「機器靜下來重跑就全綠」看起來像負載的證據，其實只是那一次
+> 剛好沒撞到。** 見下一節。
+
+## 畫面不更新 vs 連線變慢 —— 一個把三張票釘在一起的環境失真
+
+**症狀**：`probe:openspec` 的 dev 段紅了兩條 Monaco 相關的斷言、`runAnchoringAndCoordinate`
+在「選單中找不到 shell」中斷；`probe:terminal` 的 `runMode` 曾在 dev 逾時 480 秒。三張票
+（#21 / #19 / #17）各自的定調是「這一段慢」「穩定失敗」「等待窗口在負載下不夠」。
+
+**現場**（自外部連上一支正在跑的探針的 debugging port）：
+
+```
+vis=hidden focus=true ready=complete root=1 raf=0 timer=4
+```
+
+焦點還在、DOM 完全正常，而 **`requestAnimationFrame` 一次都沒跳**，計時器被節流到 1 秒。
+**Monaco 的 view 更新、xterm 的渲染與 fit、選單的呈現全部走 rAF。**
+
+### 兩個必須分開的形狀
+
+- **失敗的形狀是「畫面不更新」，不是「連線變慢」。** 最能說明問題的一條：
+  `[+18.7s cdp 81×0.4s] ✗ 在 Files 身分中產生未存的編輯` —— **81 次 CDP 往返只花 0.4 秒
+  （約 5ms／次，完全正常）**，而 18.2 秒全部燒在兩次落空的等待上。而下一條「未存的變更仍被
+  標記」**通過** —— 編輯確實生效了（model 已改、dirty 標記正確），只是 `.view-lines` 沒有被
+  重繪。**這是這個病的乾淨簽章。**
+- **慢的形狀是「少數區間各卡數秒」，不是「每次往返都慢」。** 一輪無旗標的執行：1065 次往返共
+  133.1 秒，而其中 **11 個區間（634 次）就佔了 129.9 秒；其餘 431 次只花 3.2 秒**（7.4ms／次）。
+  停用背景節流之後，**≥2s 的區間數是 0**。
+  > 把它講成「往返慢一個數量級」會**揉合兩個不同的病** —— 而 `probe-execution-scope` 設立
+  > CDP 往返這個尺度的**唯一理由**正是要分開它們。這是「一個方便取得、看起來相關的量」的
+  > 第五次重演，而這一次它藏在三張票的標題裡。
+
+### 判讀規則
+
+**看到一批「等畫面變成某個樣子」的等待同時落空，先問畫面時鐘有沒有在動**，再問斷言對不對。
+`MOUNTED` 的診斷欄位帶著 `frameClock`（`document.timeline.currentTime`），而 `awaitMounted`
+在等不到掛載時會取樣兩次並印出「沒有任何 frame 被產生」。
+
+`document.timeline.currentTime` 在無 frame 時**確實會凍結**，這是實測的（隱藏視窗 2.5 秒：
+rAF +0、時鐘 +0，而 `performance.now()` +2503 —— **那個對照是承重的**，它證明兩次取樣真的隔了
+那麼久）。**不要改用「等一次 rAF 回呼」** —— 在正好要偵測的那個狀態下它永遠不會完成，
+**一個為了診斷 hang 而寫的探測，自己會 hang**。
+
+### 處置與它的限制
+
+探針啟動 Electron 時一律傳 `--disable-backgrounding-occluded-windows` 與
+`--disable-renderer-backgrounding`（`lib/display.mjs`，**與螢幕是虛擬或實體無關**）。
+
+**兩個誠實的限制**：
+
+1. **`hidden` 的成因未確立。** 虛擬螢幕上沒有視窗管理器、只有一個視窗，**沒有東西可以遮住它**
+   —— 「遮蔽」是推論。兩個旗標涵蓋兩條可能的路徑，而「有沒有一個有效」是由多輪觀測建立的。
+2. **探針因此不覆蓋背景節流下的行為。** 任何要關心它的 requirement 必須自備載體。
+
+### 這裡犯過的判讀錯誤，兩個都值得記住
+
+- **用平均往返耗時揉合兩個病**（見上）。
+- **以單輪的一紅一綠當作偶發現象的對照組。** 前置調查一度宣稱「同一段落、唯一差別是兩個旗標」，
+  而自己的資料就有反例：同一段落、同樣沒有旗標，`openspec-basics-1` 紅而 `openspec-basics-2`
+  全綠。**現象偶發時（觀測到的下界是七輪中三輪），單輪的全綠有過半機率純屬運氣** ——
+  它證明不了任何事。
 
 ## 前置條件：兩種完全不同的病，長得一模一樣
 

@@ -29,8 +29,9 @@ import { join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { check, connect, pollFor, pollUntil, waitForPageTarget } from './lib/cdp.mjs'
 import { copy } from './lib/copy.mjs'
-import { MOUNTED, describeMounted } from './lib/mounted.mjs'
+import { awaitMounted, describeMounted } from './lib/mounted.mjs'
 import { electronExtraArgs } from './lib/display.mjs'
+import { quitAndWait } from './lib/quit.mjs'
 import { PROBE_PORTS } from './lib/ports.mjs'
 
 const BUILD_PORT = PROBE_PORTS.files.build
@@ -172,7 +173,7 @@ async function launch({ port, profileDir, rendererUrl }) {
 
   const target = await waitForPageTarget(port, 30_000)
   const client = await connect(target)
-  const mounted = await pollUntil(client, MOUNTED, (value) => value?.ok === true)
+  const mounted = await awaitMounted(client)
 
   return {
     client,
@@ -180,8 +181,7 @@ async function launch({ port, profileDir, rendererUrl }) {
     stderr: () => stderr,
     async close() {
       client.close()
-      child.kill('SIGTERM')
-      await sleep(400)
+      await quitAndWait(child)
       // `node_modules/.bin/electron` 是個 node wrapper，它自己再 spawn 真正的 electron
       // 二進位。殺掉 wrapper 不會帶走那個真 electron —— 它會變孤兒，繼續佔著 debugging
       // port（尤其面板留有未存變更時，關閉會觸發原生對話框 design D15，擋住 SIGTERM）。
@@ -760,7 +760,7 @@ async function probeBuild(fixture, profile) {
     console.log('\nrenderer 重新載入')
     await app.client.evaluate(RELOAD)
     await sleep(500)
-    const remounted = await pollUntil(app.client, MOUNTED, (value) => value?.ok === true)
+    const remounted = await awaitMounted(app.client)
     check(results, '重新載入後 renderer 重新掛載', remounted?.ok === true, describeMounted(remounted))
 
     await app.client.evaluate(SELECT_FOLDER('repo-openspec'))

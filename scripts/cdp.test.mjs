@@ -21,7 +21,7 @@ import {
 } from './lib/instrument.mjs'
 import { waitForPageTarget } from './lib/cdp.mjs'
 import { runInNewContext } from 'node:vm'
-import { describeMounted, mountedExpression } from './lib/mounted.mjs'
+import { awaitMounted, describeFrameStall, describeMounted, mountedExpression } from './lib/mounted.mjs'
 
 /** 收集 `console.log` 的輸出並還原 —— 這些機制的產物就是輸出本身。 */
 async function captured(fn) {
@@ -405,4 +405,121 @@ test('對照組：沒有 diagnostics 的舊形狀仍然可讀', () => {
   const text = describeMounted({ rail: false, root: true, visible: true, ok: false })
   assert.match(text, /未成立：rail/)
   assert.doesNotMatch(text, /｜/)
+})
+
+// ── 畫面時鐘：rAF 停擺的診斷（issue #21 / #19 / #17 的根因處置）────────────────
+//
+// **這一族的失效方式是「永遠不說話」**：若畫面時鐘在無 frame 時照樣前進，這個診斷就是一個
+// 恆為空字串的欄位 —— 而它的存在理由正是「處置哪天失效時，輸出要說得出話」。
+// 那個前提由 spike 實測建立（隱藏視窗 2.5 秒：rAF +0、timeline +0、performance.now() +2503）；
+// 這裡驗的是它有沒有被接上去。
+
+test('診斷欄位帶回畫面時鐘', () => {
+  const value = evaluateMounted(mountedExpression(), {
+    querySelector: () => ({}),
+    getElementById: () => ({ children: { length: 1 } }),
+    visibilityState: 'visible',
+    readyState: 'complete',
+    timeline: { currentTime: 1234.7 },
+  })
+  assert.equal(value.diagnostics.frameClock, 1235, '取整數 —— frame 間隔是 16.7ms，小數沒有意義')
+})
+
+test('畫面時鐘不參與 ok 的判定', () => {
+  // 與 readyState 同一條理由：進了判定就改變那七條紅**自己的判準**。
+  const stalled = evaluateMounted(mountedExpression(), {
+    querySelector: () => ({}),
+    getElementById: () => ({ children: { length: 1 } }),
+    visibilityState: 'visible',
+    readyState: 'complete',
+    timeline: { currentTime: 0 }, // ← 停在 0
+  })
+  assert.equal(stalled.ok, true, '時鐘停住不使判定失敗 —— 它只是診斷')
+})
+
+test('畫面時鐘讀不到時回 -1，而不是讓整段求值爆掉', () => {
+  const value = evaluateMounted(mountedExpression(), {
+    querySelector: () => ({}),
+    getElementById: () => ({ children: { length: 1 } }),
+    visibilityState: 'visible',
+    readyState: 'complete',
+    // document.timeline 不存在（舊環境／document 尚未 attach）
+  })
+  assert.equal(value.diagnostics.frameClock, -1)
+})
+
+test('describeFrameStall：兩次相同就說出沒有 frame 及其後果', () => {
+  const text = describeFrameStall(1556, 1556)
+  assert.match(text, /沒有任何 frame/)
+  assert.match(text, /等待都會落空/, '只說「沒有 frame」不夠 —— 要說它對驗收意味著什麼')
+})
+
+test('對照組：畫面時鐘前進時不產生任何說明', () => {
+  assert.equal(describeFrameStall(1556, 1573), '')
+})
+
+test('畫面時鐘讀不到（負值）時不誤報停擺', () => {
+  // **否定式的診斷寧可少說，不可亂說**：-1 表示讀不到，那與「停住」是兩件事。
+  assert.equal(describeFrameStall(-1, -1), '')
+})
+
+// ── awaitMounted：接線（純函式測到了、接線沒有，是本 repo 犯過四次的形狀）─────
+
+/**
+ * 假 client：判定恆不成立，畫面時鐘由呼叫端決定要不要前進。
+ *
+ * **兩種求值不能用 `includes('document.timeline')` 區分** —— 判定式自己就含那個字串
+ * （畫面時鐘是它的診斷欄位之一）。以「單獨的時鐘讀取是一個 `Math.round(...)` 運算式」判別。
+ */
+function fakeClient({ clocks, onFrameClock }) {
+  let index = 0
+  return {
+    evaluate: async (expression) => {
+      if (expression.trim().startsWith('Math.round(')) {
+        if (onFrameClock) onFrameClock()
+        return clocks[Math.min(index++, clocks.length - 1)]
+      }
+      return { rail: false, root: false, visible: false, ok: false, diagnostics: {} }
+    },
+  }
+}
+
+test('awaitMounted 等不到時採樣並輸出「沒有 frame」', async () => {
+  const { lines } = await captured(() =>
+    awaitMounted(fakeClient({ clocks: [900, 900] }), { timeoutMs: 10 }),
+  )
+  assert.ok(
+    lines.some((line) => /沒有任何 frame/.test(line)),
+    `應輸出停擺說明；實得 ${JSON.stringify(lines)}`,
+  )
+})
+
+test('對照組：畫面時鐘有前進時不輸出停擺說明', async () => {
+  const { lines } = await captured(() =>
+    awaitMounted(fakeClient({ clocks: [900, 917] }), { timeoutMs: 10 }),
+  )
+  assert.ok(!lines.some((line) => /沒有任何 frame/.test(line)))
+})
+
+test('awaitMounted 回傳最後一次的判定值（語意與 pollUntil 相同）', async () => {
+  const { value } = await captured(() =>
+    awaitMounted(fakeClient({ clocks: [900, 900] }), { timeoutMs: 10 }),
+  )
+  assert.equal(value.ok, false)
+  assert.equal(value.rail, false, '呼叫端照樣把它餵給 describeMounted')
+})
+
+test('診斷取樣自己拋錯時，回傳值不受影響（不得把回傳換成例外）', async () => {
+  // **這是最容易漏的一條**：等不到掛載最常見的原因就是 renderer 已經不在了 —— 而此時對它
+  // 求值會拋。讓那個例外往外送，十一處呼叫端拿到的東西就從「最後的判定值」變成「例外」，
+  // 而 describeMounted 正是為前者準備的。
+  const client = fakeClient({
+    clocks: [900, 900],
+    onFrameClock: () => {
+      throw new Error('Target closed')
+    },
+  })
+  const { value, lines } = await captured(() => awaitMounted(client, { timeoutMs: 10 }))
+  assert.equal(value.ok, false, '仍然拿得到最後一次的判定值')
+  assert.ok(lines.some((line) => /取樣失敗/.test(line)), '而且失敗本身要出聲')
 })

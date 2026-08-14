@@ -17,8 +17,9 @@ import { basename, join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { check, connect, dragMouse, pollFor, pollUntil, pressKey, waitForPageTarget } from './lib/cdp.mjs'
 import { copy, patternOf, prefixOf, suffixOf } from './lib/copy.mjs'
-import { describeMounted, mountedExpression } from './lib/mounted.mjs'
+import { awaitMounted, describeMounted, mountedExpression } from './lib/mounted.mjs'
 import { electronExtraArgs } from './lib/display.mjs'
+import { quitAndWait } from './lib/quit.mjs'
 import { PROBE_PORTS } from './lib/ports.mjs'
 
 const DEBUG_PORT = PROBE_PORTS.workspace.main
@@ -120,16 +121,25 @@ async function launch(profileDir) {
 
   const target = await waitForPageTarget(DEBUG_PORT)
   const client = await connect(target)
-  const mounted = await pollUntil(client, MOUNTED, (value) => value?.ok === true)
+  const mounted = await awaitMounted(client, { expression: MOUNTED })
 
   return {
     client,
     mounted,
     stderr: () => stderr,
+    /**
+     * 關閉這個 app。
+     *
+     * **等到主行程確實結束才返回，理由與 `probe-terminal` 的 `quitGracefully` 相同**
+     * （issue #8）—— 而這支的風險更高：`close()` 之後隨即以**同一個 profile** 重啟，
+     * 緊接著就是「清單與使用者排定的順序於重啟後一致」與「終端字型偏好於重啟後還原」
+     * 兩條斷言。**被斷言的正是舊行程收尾時寫下的那份檔案。**
+     *
+     * 此前是 `SIGTERM` ＋ 固定 600ms，九支裡最弱的一個（連 `pkill` 都沒有）。
+     */
     async close() {
       client.close()
-      electron.kill('SIGTERM')
-      await sleep(600)
+      await quitAndWait(electron)
     },
   }
 }
@@ -1105,6 +1115,12 @@ try {
   // 這條重啟路徑漏了 —— 同一個教訓 CLAUDE.md 已為 `probe:openspec` 記過一次。
   //
   // 輪詢的是「列渲染出來了沒」，**不是**「順序對不對」：順序錯的話 length 仍是 3，下面照樣紅。
+  //
+  // **上面那個「還沒畫出來」的歸因，當時沒有排除另一個解釋**：`close()` 此前只送 SIGTERM 再
+  // 固定等 600ms，於是**舊主行程可能還在寫 `workspace.json`**，而下面兩條斷言讀的正是它。
+  // 兩個 Electron 行程短暫共用同一個 userData，後寫的贏 —— 症狀同樣是「順序不對」。
+  // 關閉改為等到行程確實結束之後（`quitAndWait`，issue #8 同族），若這條不再偶發變紅，
+  // 上面那段歸因要回頭更正。
   const afterRestart = await pollUntil(app.client, RAIL_ROWS, (rows) => rows.length === 3, 10_000)
   check(results, '清單與使用者排定的順序於重啟後一致',
     afterRestart.map((r) => r.name).join(',') === 'repo-plain,repo-openspec,repo-missing',

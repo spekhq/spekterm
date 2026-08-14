@@ -22,7 +22,7 @@ import { setTimeout as sleep } from 'node:timers/promises'
 import { check, connect, pollFor, pollUntil, waitForPageTarget } from './lib/cdp.mjs'
 import { sectionConsole } from './lib/instrument.mjs'
 import { copy, prefixOf } from './lib/copy.mjs'
-import { MOUNTED, describeMounted } from './lib/mounted.mjs'
+import { MOUNTED, awaitMounted, describeMounted } from './lib/mounted.mjs'
 import { electronExtraArgs } from './lib/display.mjs'
 import { runSections } from './lib/sections.mjs'
 import { PROBE_PORTS } from './lib/ports.mjs'
@@ -154,7 +154,7 @@ async function launch({ port, profileDir, rendererUrl }) {
 
   const target = await waitForPageTarget(port, 30_000)
   const client = await connect(target)
-  const mounted = await pollUntil(client, MOUNTED, (value) => value?.ok === true)
+  const mounted = await awaitMounted(client)
 
   return {
     client,

@@ -32,8 +32,9 @@ import { join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { check, connect, pollFor, pollUntil, waitForPageTarget } from './lib/cdp.mjs'
 import { copy, prefixOf, suffixOf } from './lib/copy.mjs'
-import { MOUNTED, describeMounted } from './lib/mounted.mjs'
+import { awaitMounted, describeMounted } from './lib/mounted.mjs'
 import { electronExtraArgs } from './lib/display.mjs'
+import { quitAndWait } from './lib/quit.mjs'
 import { runSections } from './lib/sections.mjs'
 import { PROBE_PORTS } from './lib/ports.mjs'
 
@@ -387,7 +388,7 @@ async function launch({ port, profileDir, rendererUrl, stub }) {
 
   const target = await waitForPageTarget(port, 30_000)
   const client = await connect(target)
-  const mounted = await pollUntil(client, MOUNTED, (value) => value?.ok === true)
+  const mounted = await awaitMounted(client)
 
   return {
     client,
@@ -395,8 +396,7 @@ async function launch({ port, profileDir, rendererUrl, stub }) {
     stderr: () => stderr,
     async close() {
       client.close()
-      child.kill('SIGTERM')
-      await sleep(400)
+      await quitAndWait(child)
       // wrapper 殺不到它 spawn 的真 electron —— 以獨一無二的 profile 路徑連根拔除整棵樹。
       try {
         execFileSync('pkill', ['-9', '-f', profileDir], { stdio: 'ignore' })
@@ -2134,7 +2134,7 @@ async function runAnchoringAndCoordinate(label, config, { app, single }) {
     console.log('\n重新載入之後，側欄仍隨檔案變更更新')
     await app.client.send('Page.reload', {})
     await sleep(1500)
-    await pollUntil(app.client, MOUNTED, (value) => value?.ok === true, 20_000)
+    await awaitMounted(app.client)
 
     await pollUntil(app.client, SELECT_FOLDER('repo-single'), (value) => value === true, 15_000)
     const reloadedIdentity = await pollUntil(app.client, IDENTITY, (value) => value === 'openspec', 10_000)
@@ -2325,7 +2325,7 @@ async function runAnchoringAndCoordinate(label, config, { app, single }) {
     await sleep(900)
     await app.client.send('Page.reload', {})
     await sleep(1500)
-    await pollUntil(app.client, MOUNTED, (v) => v?.ok === true, 20_000)
+    await awaitMounted(app.client)
     await pollUntil(app.client, SELECT_FOLDER('repo-single'), (v) => v === true, 15_000)
     await pollUntil(app.client, IDENTITY, (v) => v === 'openspec', 10_000)
     const rebuiltTabs = await pollUntil(app.client, SESSION_TABS, (l) => l.length === 2, 15_000)
@@ -3110,7 +3110,7 @@ async function runWorktreeAggregation(label, config, { app, worktree }) {
     await sleep(1200)
     await app.client.send('Page.reload', {})
     await sleep(1500)
-    await pollUntil(app.client, MOUNTED, (v) => v?.ok === true, 20_000)
+    await awaitMounted(app.client)
 
     // **先選 folder 再判定身分** —— 沒有選中任何 folder 時側欄是空狀態，而那個 section 的
     // `aria-label` 是身分切換器的字串、不是 OpenSpec 面板的，`IDENTITY` 於是回 null。

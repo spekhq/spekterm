@@ -36,8 +36,9 @@ import {
 } from './lib/cdp.mjs'
 import { copy, prefixOf } from './lib/copy.mjs'
 import { sectionConsole } from './lib/instrument.mjs'
-import { MOUNTED, describeMounted } from './lib/mounted.mjs'
+import { MOUNTED, awaitMounted, describeMounted } from './lib/mounted.mjs'
 import { electronExtraArgs } from './lib/display.mjs'
+import { quitAndWait } from './lib/quit.mjs'
 import { runSections } from './lib/sections.mjs'
 import { PROBE_PORTS } from './lib/ports.mjs'
 
@@ -405,16 +406,26 @@ async function launch({ port, profileDir, rendererUrl, marker, stub }) {
 
   const target = await waitForPageTarget(port, 30_000)
   const client = await connect(target)
-  const mounted = await pollUntil(client, MOUNTED, (value) => value?.ok === true)
+  const mounted = await awaitMounted(client)
 
   return {
     client,
     mounted,
     stderr: () => stderr,
-    /** 正常關閉（SIGTERM）：要驗的正是 app 自己會不會把 pty 清乾淨。 */
+    /**
+     * 正常關閉（SIGTERM）：要驗的正是 app 自己會不會把 pty 清乾淨。
+     *
+     * **等到主行程確實結束才返回。** 送出訊號就返回會讓呼叫端接下來的動作與主行程的收尾
+     * 競態 —— 而收尾正是它寫 `sessions.json` 的時候（原子寫：暫存檔 ＋ rename）。issue #8：
+     * 那次 rename 若落在探針寫入損毀內容之後，損毀內容就被蓋掉，於是該段驗到的是「正常
+     * 啟動」而不是它宣稱在驗的「損毀降級」。
+     *
+     * **順帶修正了一條斷言的前提**：「關閉視窗終止其所有 pty（不留孤兒行程）」此前是在
+     * 主行程**可能還活著**的時候就開始數 pty 的。
+     */
     async quitGracefully() {
       client.close()
-      child.kill('SIGTERM')
+      await quitAndWait(child)
     },
     /** 收尾：連根拔除 electron 樹。pty 若還在，是 app 的漏網之魚，不是這裡的責任。 */
     async destroy() {
@@ -2487,7 +2498,7 @@ async function runMode(label, { port, rendererUrl }) {
     const pidsBeforeReload = ptyPids(marker)
 
     await app.client.send('Page.reload', {})
-    await pollUntil(app.client, MOUNTED, (value) => value?.ok === true, 20_000)
+    await awaitMounted(app.client)
 
     const orphans = await pollFor({
       read: () => {
@@ -2905,7 +2916,24 @@ async function runRestore(label, { port, rendererUrl }) {
     app = null
 
     // ── 損毀韌性：整份無法解析 → app 照常啟動、無 session、原檔保留
-    writeFileSync(join(profile, 'sessions.json'), '{ 損毀的內容')
+    //
+    // **這一族的斷言在前提不成立時仍然可能通過**：讀到一份正常的檔案，同樣會得到「照常啟動、
+    // 沒有隔離檔」。issue #8 就是這麼發生的 —— 主行程收尾時的原子寫（暫存檔 ＋ rename）落在
+    // 這次 `writeFileSync` 之後，損毀內容被蓋掉，於是這一段驗到的是「正常啟動」。
+    // 關閉端已改為等到主行程確實結束（`quitGracefully`），下面兩條不變式讓它**下次再發生時
+    // 看得見**。
+    const corruptContent = '{ 損毀的內容'
+    writeFileSync(join(profile, 'sessions.json'), corruptContent)
+
+    // 不變式一：啟動之前，磁碟上那一份確實仍是損毀的。
+    const onDiskBeforeLaunch = readFileSync(join(profile, 'sessions.json'), 'utf8')
+    check(
+      results,
+      `${label}：重新啟動前，持久化檔案確實仍是損毀的（否則下一條驗的是正常啟動）`,
+      onDiskBeforeLaunch === corruptContent,
+      `磁碟上讀回=${JSON.stringify(onDiskBeforeLaunch.slice(0, 40))}`,
+    )
+
     app = await launch({ port, profileDir: profile, rendererUrl, marker, stub })
     await pollUntil(app.client, SELECT_FOLDER('repo-a'), (value) => value === true, 10_000)
     await sleep(1200)
@@ -2916,6 +2944,22 @@ async function runRestore(label, { port, rendererUrl }) {
       `${label}：持久化檔案損毀時應用程式照常啟動，且原檔保留`,
       tabsAfterCorrupt.length === 0 && quarantined.length === 1,
       `分頁=${tabsAfterCorrupt.length} 隔離檔=${quarantined.join(',') || '無'}`,
+    )
+
+    // 不變式二：被隔離的那一份，內容就是我們寫進去的那一份。
+    //
+    // **上一條不變式只覆蓋一半的時序** —— 覆蓋若發生在它之後、啟動之前，它照樣是綠的。
+    // 這一條在任何時序下都成立，而它證明的正是這一段宣稱在驗的東西：**被隔離的是那份損毀的
+    // 檔案**，不是別的東西。
+    const quarantinedContent =
+      quarantined.length === 1 ? readFileSync(join(profile, quarantined[0]), 'utf8') : null
+    check(
+      results,
+      `${label}：被隔離的正是我們寫進去的那一份損毀內容`,
+      quarantinedContent === corruptContent,
+      quarantined.length === 1
+        ? `隔離檔=${quarantined[0]} 內容=${JSON.stringify(quarantinedContent?.slice(0, 40))}`
+        : `沒有唯一的隔離檔（${quarantined.length} 個）—— 這條沒有鑑別力`,
     )
     await app.quitGracefully()
     await waitPtysGone(marker)

@@ -28,6 +28,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { electronExtraArgs } from './lib/display.mjs'
+import { quitAndWait } from './lib/quit.mjs'
 import { check, pollFor } from './lib/instrument.mjs'
 
 const PROJECT_ROOT = realpathSync(new URL('..', import.meta.url).pathname)
@@ -226,7 +227,6 @@ async function runApp(scanPath) {
   child.stdout.on('data', (chunk) => (stdout += chunk))
   child.stderr.on('data', (chunk) => (stderr += chunk))
 
-  const exited = new Promise((resolve) => child.once('exit', resolve))
   const listeners = new Set()
   const blindSpots = new Set()
   const appeared = new Map()
@@ -256,11 +256,11 @@ async function runApp(scanPath) {
       label: '等主行程印出 openspec 掃描摘要',
     })
   } finally {
-    child.kill('SIGTERM')
+    // 等 app 真的結束再看殘留：仍在監聽的 socket 屬於別的行程，隨 app 一起消失的才是它的。
+    // **這裡曾經是一份手寫的「SIGTERM → 等 exit → 5 秒後 SIGKILL」** —— 與 `quitAndWait`
+    // 逐字同一件事。收斂它不是整理，是讓那道守衛有意義（第二份實作＝守衛的漏洞）。
+    await quitAndWait(child, { timeoutMs: 5_000 })
   }
-
-  // 等 app 真的結束再看殘留：仍在監聽的 socket 屬於別的行程，隨 app 一起消失的才是它的
-  await Promise.race([exited, sleep(5_000).then(() => child.kill('SIGKILL'))])
   await sleep(300)
   const lingering = onLinux ? hostListenTable() : new Map()
   const vanished = [...appeared].filter(([inode]) => !lingering.has(inode)).map(([, addr]) => addr)

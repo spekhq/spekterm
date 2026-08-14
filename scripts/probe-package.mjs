@@ -58,7 +58,7 @@ import { fileURLToPath } from 'node:url'
 import { check, connect, pollFor, pollUntil, waitForPageTarget } from './lib/cdp.mjs'
 import { electronExtraArgs } from './lib/display.mjs'
 import { copy } from './lib/copy.mjs'
-import { MOUNTED_WITHOUT_VISIBILITY as MOUNTED, describeMounted } from './lib/mounted.mjs'
+import { MOUNTED_WITHOUT_VISIBILITY as MOUNTED, awaitMounted, describeMounted } from './lib/mounted.mjs'
 import { PROBE_PORTS } from './lib/ports.mjs'
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..')
@@ -285,7 +285,7 @@ try {
   check(results, '打包產物開啟視窗並載入 renderer', title === 'spekterm', `title="${title}"`)
   check(results, '產物脫離 repo 仍可執行', !appImage.startsWith(repoRoot), appImage)
 
-  await pollUntil(client, MOUNTED, (value) => value?.ok === true, 20_000)
+  await awaitMounted(client, { expression: MOUNTED })
 
   // ── production CSP ────────────────────────────────────────────────────────
   // **導航完成之後**才武裝收集器（見 `CSP_ARM` 的說明）—— 此時 MOUNTED 已成立。

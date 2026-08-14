@@ -16,6 +16,7 @@ import { join } from 'node:path'
 import { check, connect, pollUntil, waitForPageTarget } from './lib/cdp.mjs'
 import { copy } from './lib/copy.mjs'
 import { electronExtraArgs } from './lib/display.mjs'
+import { quitAndWait } from './lib/quit.mjs'
 import { PROBE_PORTS } from './lib/ports.mjs'
 
 const DEBUG_PORT = PROBE_PORTS.shell.main
@@ -274,7 +275,7 @@ try {
   console.error(`probe 失敗：${error.message}`)
   if (stderr.trim()) console.error(`electron stderr:\n${stderr.trim().slice(0, 800)}`)
 } finally {
-  electron.kill('SIGTERM')
+  await quitAndWait(electron)
   rmSync(profileDir, { recursive: true, force: true })
 }
 

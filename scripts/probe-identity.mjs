@@ -32,6 +32,7 @@ import { setTimeout as sleep } from 'node:timers/promises'
 import { fileURLToPath } from 'node:url'
 import { check, connect, pollUntil, waitForPageTarget } from './lib/cdp.mjs'
 import { electronExtraArgs } from './lib/display.mjs'
+import { quitAndWait } from './lib/quit.mjs'
 import { PROBE_PORTS } from './lib/ports.mjs'
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..')
@@ -105,7 +106,7 @@ async function launchAndObserve({ port, extraEnv = {} }) {
     // 殺整個 process group：對 wrapper 送訊號殺不到它 spawn 的真行程
     //（會變孤兒、佔著 debugging port）。
     try {
-      if (process.platform === 'win32') electron.kill('SIGTERM')
+      if (process.platform === 'win32') await quitAndWait(electron)
       else process.kill(-electron.pid, 'SIGKILL')
     } catch {
       // 行程已自行結束

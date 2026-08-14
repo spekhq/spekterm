@@ -148,8 +148,18 @@ port 通不通 —— 任一不成立就**立刻失敗並指出處置**，不進
 認定。`terminal-sessions` 已把這條寫成規格：**自動化驗收通過 SHALL NOT 被詮釋為「程式化繪製的呈現
 是正確的」**。
 
+**第二條限制：探針不覆蓋「視窗不可見時」的行為。** 虛擬螢幕上 renderer 會被判定為不可見而
+進入背景節流 —— **rAF 完全停擺**，於是 Monaco、xterm、選單全部不更新，而 CDP 往返照樣是 5ms
+一次（**連線正常，只是畫面不更新**）。那曾經是三張票、七條紅、一次段落中斷。處置是啟動時一律
+停用背景節流（`lib/display.mjs`，**與螢幕是虛擬或實體無關**），代價就是這條覆蓋缺口：
+**任何要求「視窗不可見時仍如何如何」的 requirement 必須自備載體。**
+
+> **看到一批「等畫面變成某個樣子」的等待同時落空，先問畫面時鐘有沒有在動**（`MOUNTED` 的
+> `frameClock` 診斷、`awaitMounted` 的停擺說明），再問斷言對不對。
+
 環境細節見 **`docs/lessons/probes.md`**（GL 旗標為何是承重的、`probe:identity` 為何不傳
-`--user-data-dir`、`probe:files` 為何自己起 dev server、殭屍行程怎麼收）。
+`--user-data-dir`、`probe:files` 為何自己起 dev server、殭屍行程怎麼收、背景節流那一節的完整
+現場與判讀規則）。
 
 
 ## Relationship to `spek`

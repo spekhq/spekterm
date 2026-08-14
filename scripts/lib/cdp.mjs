@@ -11,13 +11,35 @@ import { lookupHolder } from './preflight.mjs'
 // `probe-native` 都要用）。這裡轉出，是為了讓既有的 `from './lib/cdp.mjs'` 一字不必改。
 export { check, pollFor, retrySample } from './instrument.mjs'
 
+/**
+ * 一次 CDP 往返的時限。
+ *
+ * **它是癱瘓的防線，不是效能的閘門** —— 與段落時限同一條理由。實測的病態值是 5–10 秒級
+ * （renderer 被背景節流時），而正常情形下 92 次往返合計 1.2 秒。訂 30 秒是為了擋住「永遠」，
+ * 不是為了擋住「慢」。
+ */
+export const CALL_TIMEOUT_MS = 30_000
+
+/** 建立連線（WebSocket 握手）的時限。 */
+export const CONNECT_TIMEOUT_MS = 30_000
+
+/**
+ * 探詢 devtools endpoint 的時限。
+ *
+ * **必須明顯小於包住它的等待窗口**（`waitForPageTarget` 預設 30 秒）—— 它打的是 loopback 上的
+ * `/json/list`，一次卡住的請求若能吃掉整個窗口，那就等於沒有時限。
+ */
+const TARGET_FETCH_TIMEOUT_MS = 3_000
+
 export async function waitForPageTarget(port, timeoutMs = 30_000) {
   // **這個呼叫端要拋錯**：等不到 CDP target 還往下走，只會紅在一個與根因無關的地方。
   // 原語一律回傳最後的值，升不升級為例外由呼叫端決定 —— 這裡就是那個「要」的呼叫端。
   const page = await pollFor({
     read: async () => {
       try {
-        const res = await fetch(`http://127.0.0.1:${port}/json/list`)
+        const res = await fetch(`http://127.0.0.1:${port}/json/list`, {
+          signal: AbortSignal.timeout(TARGET_FETCH_TIMEOUT_MS),
+        })
         const targets = await res.json()
         return targets.find((t) => t.type === 'page' && t.webSocketDebuggerUrl) ?? null
       } catch {
@@ -45,16 +67,98 @@ export async function waitForPageTarget(port, timeoutMs = 30_000) {
   return page
 }
 
-export async function connect(target) {
-  const ws = new WebSocket(target.webSocketDebuggerUrl)
+/**
+ * 連上一個 CDP target。
+ *
+ * ## 三個「永遠不返回」的缺口，全部收在這裡
+ *
+ * `docs/lessons/probes.md` 記載過其中一個：**對已 `close()` 的 client 求值會無限等待 ——
+ * 不拋錯、不逾時**，而症狀看起來像「Electron 啟動很慢」。它記載了兩個月沒被修，代價是
+ * issue #22：一輪 `test:e2e` 卡住 1 小時 30 分且永遠不會結束。
+ *
+ * **段落時限擋不住它**：那是十餘分鐘後才收屍的止血，而且逾時本身不帶任何資訊。更根本的是，
+ * 共用等待原語的時限**只在兩次讀取之間檢查**（`instrument.mjs`）—— 一次不返回的 `read()`
+ * 讓那個時限形同不存在。
+ *
+ * 於是這裡讓「一個永遠不返回的往返」**表達不出來**：
+ *
+ * | 缺口 | 處置 |
+ * |---|---|
+ * | 已送出、回應永不抵達 | 每次往返有時限，逾時拋出並**載明方法名** |
+ * | 連線關閉，pending 掛在半空 | `close` / `error` 時把 pending **全部** reject |
+ * | 連線關閉**之後**才發起 | 記已關閉旗標，**立即**拋（不等時限） |
+ * | 握手本身不完成 | 握手也有時限 |
+ *
+ * ## 一次逾時 ＝ 一次段落中斷，這是刻意接受的代價
+ *
+ * `pollUntil` 沒有開 `tolerateErrors`，而 `pollFor` 在未開容忍時會把讀取的例外**直接往外拋**
+ * —— 所以逾時不會被重試接住。**仍然接受**：段落中斷是有邊界、有堆疊、會被段落隔離接住的失敗，
+ * 而 hang 讓整輪永遠不結束，兩者不同級。**不要順手把 `pollUntil` 改成容忍** —— 那會把每一條
+ * 「等不到就紅」的斷言變成「等不到就重試到窗口耗盡」，改動的是數百條既有斷言的語意。
+ *
+ * @param {object} target `waitForPageTarget` 的回傳
+ * @param {object} [options] **存在的理由是可驗收性**：不可注入的話，每條逾時測試都得真的跑滿
+ *   預設時限，而單元測試層的定位是秒級、可隨時跑
+ */
+export async function connect(
+  target,
+  {
+    createSocket = (url) => new WebSocket(url),
+    callTimeoutMs = CALL_TIMEOUT_MS,
+    connectTimeoutMs = CONNECT_TIMEOUT_MS,
+  } = {},
+) {
+  const ws = createSocket(target.webSocketDebuggerUrl)
   await new Promise((resolve, reject) => {
-    ws.addEventListener('open', resolve, { once: true })
-    ws.addEventListener('error', () => reject(new Error('CDP WebSocket 連線失敗')), { once: true })
+    // **握手也要時限**：`open` 與 `error` 兩者都不來時（TCP 連上但沒有 upgrade 回應），
+    // 這個 promise 永遠不 resolve —— 而它在每一支探針的啟動路徑上。
+    const timer = setTimeout(
+      () => reject(new Error(`CDP WebSocket 握手逾時（${connectTimeoutMs}ms）`)),
+      connectTimeoutMs,
+    )
+    const settle = (fn) => (arg) => {
+      clearTimeout(timer)
+      fn(arg)
+    }
+    ws.addEventListener('open', settle(resolve), { once: true })
+    ws.addEventListener('error', settle(() => reject(new Error('CDP WebSocket 連線失敗'))), {
+      once: true,
+    })
   })
 
   let nextId = 1
+  /** id → 「以某個理由讓這次往返失敗」（已含清理）。 */
+  const pending = new Map()
+  let closed = false
+
+  /**
+   * 讓所有尚未完成的往返立即失敗。
+   *
+   * **先 `clear()` 再逐一 reject**：每個 rejector 自己會 `pending.delete(id)`，而在迭代中
+   * 修改集合是找麻煩。
+   */
+  const failAllPending = (reason) => {
+    const rejectors = [...pending.values()]
+    pending.clear()
+    for (const rejectWith of rejectors) rejectWith(new Error(reason))
+  }
+
+  const markClosed = (reason) => {
+    if (closed) return
+    closed = true
+    failAllPending(reason)
+  }
+
+  ws.addEventListener('close', () => markClosed('CDP 連線已關閉'), { once: true })
+  ws.addEventListener('error', () => markClosed('CDP 連線發生錯誤'))
 
   function send(method, params = {}) {
+    // 連線關閉後發起的往返：**立即**拋，不等時限。等滿 30 秒才說「連線關閉了」是在浪費時間，
+    // 而那件事在發起的當下就已經知道。
+    if (closed) {
+      return Promise.reject(new Error(`CDP 連線已關閉，不再送出：${method}`))
+    }
+
     const id = nextId++
     // **往返計時在這裡，因為只有這裡看得到每一次往返。** 一次拖曳是十餘個 `Input.*`、
     // 一次輪詢是數十次 `Runtime.evaluate` —— 「300 次往返共 3 秒」與「300 次共 90 秒」
@@ -62,16 +166,33 @@ export async function connect(target) {
     // token 在**發起**時取得：殭屍段落飛在半空的往返，完成時不該記到下一個段落頭上。
     const token = sectionToken()
     const started = Date.now()
-    const done = () => noteCdp(Date.now() - started, token)
     return new Promise((resolve, reject) => {
+      const finish = () => {
+        noteCdp(Date.now() - started, token)
+        clearTimeout(timer)
+        pending.delete(id)
+        ws.removeEventListener('message', onMessage)
+      }
       const onMessage = (event) => {
         const msg = JSON.parse(event.data)
         if (msg.id !== id) return
-        ws.removeEventListener('message', onMessage)
-        done()
+        finish()
         if (msg.error) return reject(new Error(msg.error.message))
         resolve(msg.result)
       }
+      // **不 `unref()` 這個計時器**（同 `sections.mjs` 的段落時限）：它可能是唯一撐住事件迴圈
+      // 的東西，unref 之後 Node 會判定無事可做而直接結束 —— 逾時形同不存在，而症狀是探針
+      // 靜默地提早結束。正常路徑上它一律被 `finish()` 清掉。
+      const timer = setTimeout(() => {
+        finish()
+        // **訊息要載明方法名** —— 「某次往返逾時」對追查毫無幫助，而 `Input.dispatchMouseEvent`
+        // 與 `Runtime.evaluate` 逾時是兩個不同的病。
+        reject(new Error(`CDP 往返逾時（${callTimeoutMs}ms）：${method}`))
+      }, callTimeoutMs)
+      pending.set(id, (error) => {
+        finish()
+        reject(error)
+      })
       ws.addEventListener('message', onMessage)
       ws.send(JSON.stringify({ id, method, params }))
     })
@@ -98,7 +219,16 @@ export async function connect(target) {
       }
       return result?.result?.value
     },
-    close: () => ws.close(),
+    /**
+     * 關閉連線。
+     *
+     * **主動關閉要立刻讓 pending 失敗，不能等 `close` 事件** —— 那個事件是非同步的，而
+     * 「`client.close()` 之後那些 promise 永遠不 resolve」正是 issue #22 的形狀。
+     */
+    close: () => {
+      markClosed('CDP 連線已由呼叫端關閉')
+      ws.close()
+    },
   }
 }
 
@@ -172,8 +302,14 @@ function subscribeConsole(ws, send) {
 
   // 不 await：`connect()` 的呼叫端在意的是 client 可用了沒。這兩個 enable 各是一次往返，
   // 而它們的效果（含重播）不需要被等待 —— 事件會自己抵達。
-  void send('Runtime.enable')
-  void send('Log.enable')
+  //
+  // **但「不 await」不等於「可以不接住」。** 往返有時限之後，這兩個 promise 是**會** reject 的
+  // （逾時、或連線在它們回來之前就關閉），而一個沒有 handler 的 rejected promise 會讓 Node
+  // 直接終結行程 —— 症狀是探針莫名其妙地死掉，且死在一個與被測行為無關的地方。
+  // 這兩次往返的失敗不影響任何斷言（收不到 console 訊息只是少一份診斷），因此吞掉是對的。
+  const ignore = () => {}
+  send('Runtime.enable').catch(ignore)
+  send('Log.enable').catch(ignore)
 }
 
 /** 在座標處按下、移動、放開 —— 用來拖動 role="separator" 的分界。 */
