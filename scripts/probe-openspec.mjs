@@ -322,7 +322,14 @@ function makeStubClaude() {
   return { home, bin }
 }
 
-function seedProfile(folders) {
+/**
+ * 種一份 userData。`panel` 省略時不寫 `panel.json` —— 那是絕大多數段落要的（座標全預設）。
+ *
+ * **帶 `panel` 的用法是「構造落盤內容」，不是「先用 UI 設好再重新載入」。** 兩者驗的東西不同：
+ * 後者驗的是 persist→restore 這一趟（既有的 reload 段落），前者驗的是**還原時遇到不再有效的
+ * 內容**要怎麼降級 —— 而那個情境經 UI 造不出來（探針加不回被移除的 folder）。
+ */
+function seedProfile(folders, panel) {
   const profile = mkTemp('spekterm-openspec-profile-')
   writeFileSync(
     join(profile, 'workspace.json'),
@@ -331,6 +338,8 @@ function seedProfile(folders) {
       folders: folders.map(([id, path]) => ({ id, path, addedAt: '2026-07-11T00:00:00.000Z' })),
     }),
   )
+  // 落點與 `workspace.json` 同層（`index.ts` 的 `join(app.getPath('userData'), 'panel.json')`）。
+  if (panel) writeFileSync(join(profile, 'panel.json'), JSON.stringify(panel))
   return profile
 }
 
@@ -742,6 +751,20 @@ const OPEN_FILE_PATH = `(() => {
   if (!nav) return null
   const last = nav.querySelector('span[title]')
   return last ? last.getAttribute('title') : null
+})()`
+
+/**
+ * 自檔案檢視器返回樹（麵包屑上的返回按鈕）。
+ *
+ * **開著檔案時 `TREE_ROWS` 恆為空陣列** —— `FilesPanel` 是 `openPath === null ? 樹 : 檢視器`，
+ * 兩者不同時掛載。而空陣列會讓「某某項目**不在**樹上」這一類斷言自動成立，所以要讀樹之前
+ * 必須先回到樹。
+ */
+const CLICK_BACK_TO_TREE = `(() => {
+  const btn = document.querySelector('[aria-label="${copy('files.backToTree')}"]')
+  if (!btn) return false
+  btn.click()
+  return true
 })()`
 
 /**
@@ -1357,6 +1380,76 @@ async function runQuickOpenScope(app) {
  * 關閉 app 的責任在 `runSections` 的 `afterMode`，**不在最後一段** —— 中途任一段 throw，
  * 那一段就不會執行，app 會活過整個 build 模式並與 dev 模式的 app 並存。
  */
+/**
+ * 落盤座標的降級還原（`side-panel-source`）。
+ *
+ * **這一段自帶 profile 與 app，不參與下面五段的共用鏈** —— 它要的 `panel.json` 帶著一筆非預設
+ * 的來源，而共用 fixture 裡**每一個 folder 的「來源為自身」都被某條既有斷言依賴著**
+ * （`repo-plain` 退回 Files 身分、`repo-single` 與 `repo-derived` 的衍生預設、`repo-archived-only`
+ * 的無錨定、`repo-many` 的「它自己的來源預設為它自己」、worktree 那兩個的整段聚合驗收、
+ * 全域項目的「來源預設為未選定」）。**共用的 fixture 裡沒有空位。**
+ *
+ * **它必須排在共用鏈之前**：五段共用的 app 直到 `afterMode` 才關閉，而同一個 mode 內所有段落
+ * 共用同一個 debugging port —— 排在後面會撞上一個還活著的 app。
+ */
+async function runPanelRestoreDegradation(label, { port, rendererUrl }) {
+  console.log(`\n── ${label} ──`)
+
+  const { many, single } = makeFixture()
+  // `f-ghost` 不在 folder 清單裡 —— 這就是「repoB 於應用程式未開啟期間被移出 workspace」
+  // 之後，落盤座標裡殘留的那一筆（`PanelStore.load()` 刻意不修剪孤兒）。
+  const profile = seedProfile(
+    [
+      ['f-a', many],
+      ['f-b', single],
+    ],
+    {
+      version: 1,
+      coordinates: {
+        'f-a': { sourceFolderId: 'f-ghost' },
+        'f-b': { sourceFolderId: 'f-a' },
+      },
+    },
+  )
+
+  // 本段不建立任何 session，但 `launch` 無條件以 stub 覆寫 `HOME` 與 `PATH`（那是它隔離
+  // 使用者真正的 claude 的方式）—— 省略它會在 spawn 時就 throw。
+  const app = await launch({ port, profileDir: profile, rendererUrl, stub: makeStubClaude() })
+
+  try {
+    // scenario 的後半句（「且應用程式正常啟動」）—— **明確斷言，不由其後的斷言隱含**：
+    // 不合法的落盤內容若使啟動失敗，其後每一條都會以「等不到元素」的形式失敗，與判定錯誤
+    // 在輸出上分不開。
+    check(results, '帶不合法座標的落盤內容仍使應用程式正常啟動', app.mounted?.ok === true,
+      describeMounted(app.mounted))
+
+    check(results, '（前置）選中來源指向已移除 folder 的那一項',
+      (await pollUntil(app.client, SELECT_FOLDER('repo-many'), (ok) => ok === true, 8000)) === true)
+
+    const degraded = await pollUntil(app.client, PANEL_SOURCE_LABEL, (v) => v !== null, 10_000)
+    check(results, '來源指向的 folder 已被移除時退回自身',
+      String(degraded).includes('repo-many'), String(degraded))
+
+    // **這一條是上一條的鑑別力來源，不是附加的覆蓋。**
+    //
+    // 「退回自身」就是預設值 —— 一個**完全不讀 `panel.json`** 的實作在上一條照樣是綠的。
+    // 合法的那一筆被還原，才證明整份內容確實被讀取了、而被丟棄的只有不合法的那一筆。
+    check(results, '（對照組）同一份落盤內容中合法的那一筆確實被還原',
+      (await pollUntil(app.client, SELECT_FOLDER('repo-single'), (ok) => ok === true, 8000)) === true)
+
+    const restored = await pollUntil(
+      app.client,
+      PANEL_SOURCE_LABEL,
+      (v) => String(v).includes('repo-many'),
+      10_000,
+    )
+    check(results, '合法的來源跨啟動還原（repo-single 的座標指向 repo-many）',
+      String(restored).includes('repo-many'), String(restored))
+  } finally {
+    await app.close()
+  }
+}
+
 async function runPanelBasics(label, { port, rendererUrl }) {
   console.log(`\n── ${label} ──`)
 
@@ -2509,6 +2602,71 @@ async function runWorktreeAggregation(label, config, { app, worktree }) {
       rowOf('main-change')?.text,
     )
 
+    // ── 尚無 session 時，跨身分導覽一併切換工作目錄（side-panel-worktree）──────
+    //
+    // **位置是承重的，而且限制比上一塊更緊**：本段必須排在下面那行 `createSession` 之前
+    // （這是它與「邊界內 worktree 的 artifact 可跨身分導覽」那條唯一的差別），且必須排在上面
+    // 那塊工作目錄選擇器之後 —— 那塊做完已於其末尾 `resetWorktreeToSelf` 還原，座標是乾淨的
+    // folder 自身。插進那塊之內的話，座標**本來就已經是** `feat-inside`，這裡驗什麼都是綠的。
+    //
+    // **與另外兩條既有斷言的分工**（三者看起來像，實際上驗的是三件事）。
+    // **以斷言的文字指認，不寫行號** —— 行號在插入這一段的當下就已經位移了：
+    //
+    //   「樹根確實切到該工作目錄」        —— **手動**經工作目錄選擇器切換（且它讀的是
+    //                                       選擇器的標籤，不是樹的內容）
+    //   「邊界內…可跨身分導覽」           —— 導覽的**入口在不在**，且在 session 之後
+    //   本段                             —— **跨身分導覽之後樹根有沒有跟著切**，且尚無 session
+    //
+    // 這條 requirement 是無條件的 SHALL，而它在 `panel-coordinate-per-folder` 之前於無 session
+    // 時**根本沒有兌現**（呼叫點包在 `if (focusedId)` 裡）—— 驗收一律先建 session，那一支零覆蓋。
+    check(results, '（前置）此時仍無任何 session',
+      (await app.client.evaluate(SESSION_TABS)).length === 0)
+
+    const preAnchor = await anchorChange(app.client, 'inside-change')
+    check(results, '（前置）尚無 session 時錨定 worktree 來源的 change',
+      preAnchor === 'inside-change', String(preAnchor))
+
+    await app.client.evaluate(CLICK_VIEW(copy('openspec.tabChange')))
+    check(results, '（前置）本 change 視圖已呈現檔案導覽入口',
+      (await pollUntil(app.client, HAS_OPEN_IN_FILES, (v) => v === true, 12_000)) === true)
+
+    check(results, '尚無 session 時仍可自 worktree 的 change 觸發檔案導覽',
+      (await app.client.evaluate(CLICK_OPEN_FILE('inside-change'))) === true)
+
+    // 導覽後 Files 呈現的是**檔案檢視器而非樹**（`FilesPanel` 的 `openPath === null ? 樹 : 檢視器`）
+    // —— 要讀樹得先按麵包屑上的返回。少了這一步，`TREE_ROWS` 恆為空陣列，而**空陣列會讓下面
+    // 第二條斷言（「不再呈現 folder 自身的根層項目」）自動成立**，那是一條假綠。
+    await pollUntil(app.client, OPEN_FILE_PATH, (v) => typeof v === 'string', 8000)
+    check(results, '（前置）自檔案檢視器返回樹',
+      (await app.client.evaluate(CLICK_BACK_TO_TREE)) === true)
+
+    const noSessionRoot = await pollUntil(
+      app.client,
+      TREE_ROWS,
+      (list) => Array.isArray(list) && list.includes('.claude/worktrees/wt-inside/openspec'),
+      12_000,
+    )
+    check(
+      results,
+      '尚無 session 時跨身分導覽亦切換樹根（根層是該工作目錄的項目）',
+      noSessionRoot?.includes('.claude/worktrees/wt-inside/openspec') === true,
+      JSON.stringify(noSessionRoot),
+    )
+    // **成對，而且這條才是關鍵**：切根若沒生效，上一條在使用者展開幾層之後同樣會成立。
+    // folder 自身的根層項目消失，才是「換了一棵樹」而非「多展開了幾層」的證據。
+    check(
+      results,
+      '且不再呈現 folder 自身的根層項目（成對的對照組）',
+      noSessionRoot?.includes('openspec') === false && noSessionRoot?.includes('docs') === false,
+      JSON.stringify(noSessionRoot),
+    )
+
+    // **自帶還原** —— 上面那塊的 `resetWorktreeToSelf` 在本段之前，涵蓋不到這裡。
+    // 跨身分導覽改動了工作目錄與身分兩個維度，兩者都跨段落存活。
+    await resetWorktreeToSelf(app.client)
+    await app.client.evaluate(CLICK_IDENTITY('◈'))
+    await app.client.evaluate(CLICK_VIEW(copy('openspec.tabBrowse')))
+
     // **續寫入口的條件 4 需要前三個條件全部成立** —— 否則擋住入口的會是 `noSession`，
     // 而那條先於它回報（實測踩過：沒建 session 就斷言，讀到的說明是「Start a session…」）。
     // 因此先在這個 repo 開一個執行中的 claude session（stub）。
@@ -3363,6 +3521,80 @@ async function runWorktreeAggregation(label, config, { app, worktree }) {
       JSON.stringify(globalQuickOpen && globalQuickOpen.titles))
     await pressEscape(app.client)
     await sleep(300)
+
+    // ── 錨定的跨項目寫入（artifact-continuation）────────────────────────────
+    //
+    // 這是整個 `panel-coordinate-per-folder` **唯一的跨項目寫入**，而它的失效是靜默的：
+    // 使用者要切 rail focus 過去才會發現側欄是空狀態，那時他已經不記得是哪一步造成的。
+    //
+    // **放在段落末尾**，理由與本段落自己放在最後一樣 —— 它改動 rail 選中項與側欄來源，
+    // 而那是共用鏈的狀態。收尾時還原成本段原本結束的樣子（rail 在全域項目、來源 repo-single）。
+    //
+    // **只驗正向，反向的「rail 選中的那一筆未被寫入」不驗。** 錨定的鍵是 rail 選中的項目
+    // （`MainStage` 的 `coordinateOf(selection)` 與 `setAnchor(selection, …)`），而要讓側欄
+    // 呈現來源 repo 的 change 就必須先錨定它 —— 於是觸發入口的那一刻，該 change **已經**是
+    // 選中那一筆的錨定。「未變為該 change」對正確實作為假、「未被改動」對「兩邊都寫」為真，
+    // 兩種寫法都沒有鑑別力，而「兩邊都寫」在這條路徑上也沒有可觀察的傷害（design D4）。
+    console.log('\n錨定的跨項目寫入')
+
+    check(results, '（前置）選中來源 folder 本身',
+      (await pollUntil(app.client, SELECT_FOLDER('repo-worktree'), (ok) => ok === true, 8000)) === true)
+
+    // **身分要切回 OpenSpec** —— 上一塊（quick-open 的作用域）結束時側欄停在 Files 身分，
+    // 而 `anchorChange` 只在 OpenSpec 身分內找得到 change 樹（它自己會切視圖，但不切身分）。
+    // 少了這行，前置會以「錨定回 null」的形式失敗，而那看起來像錨定壞了。
+    await app.client.evaluate(CLICK_IDENTITY('◈'))
+    await pollUntil(app.client, IDENTITY, (v) => v === 'openspec', 8000)
+
+    // **這一步是主斷言的鑑別力來源**：先把它的錨定設成**別的** change。少了它，最後切回來
+    // 看到 `inside-change` 可能只是它在本段前面留下的錨定 —— 一個什麼都不寫的實作照樣通過。
+    const seededAnchor = await anchorChange(app.client, 'main-change')
+    check(results, '（前置）先把來源 folder 的錨定設為另一個 change',
+      seededAnchor === 'main-change', String(seededAnchor))
+
+    check(results, '（前置）rail 改選另一個 repo',
+      (await pollUntil(app.client, SELECT_FOLDER('repo-single'), (ok) => ok === true, 8000)) === true)
+
+    // 把側欄來源指向 repo-worktree ⇒ 此刻「rail 選中的 folder」與「側欄來源」是不同兩筆，
+    // 而那正是這條 requirement 唯一有鑑別力的前提。
+    await realClick(app.client, await stableRect(app.client, PANEL_SOURCE_RECT))
+    const wtSourceItem = await pollUntil(app.client, MENU_ITEM_RECT('repo-worktree'), (v) => v !== null, 4000)
+    check(results, '（前置）下拉列出 repo-worktree 作為候選來源', wtSourceItem !== null)
+    await realClick(app.client, wtSourceItem)
+    const crossSource = await pollUntil(
+      app.client,
+      PANEL_SOURCE_LABEL,
+      (v) => v?.includes('repo-worktree') === true,
+      8000,
+    )
+    check(results, '（前置）側欄來源與 rail 選中項為不同兩筆',
+      crossSource?.includes('repo-worktree') === true, String(crossSource))
+
+    const crossAnchor = await anchorChange(app.client, 'inside-change')
+    check(results, '（前置）錨定來源 repo 中一個住在 worktree 的 change',
+      crossAnchor === 'inside-change', String(crossAnchor))
+
+    check(results, '（前置）跨 repo 時仍呈現「於該工作目錄開啟 session」的入口',
+      (await pollUntil(app.client, HAS_OPEN_SESSION_HERE, (v) => v === true, 10_000)) === true)
+    check(results, '觸發該入口', (await app.client.evaluate(CLICK_OPEN_SESSION_HERE)) === true)
+
+    // 主斷言：錨定要寫在**來源 folder**，切 rail focus 過去才讀得到。
+    check(results, '（前置）切 rail focus 至來源 folder',
+      (await pollUntil(app.client, SELECT_FOLDER('repo-worktree'), (ok) => ok === true, 8000)) === true)
+    const crossWritten = await pollUntil(app.client, ANCHORED_SLUG, (v) => v === 'inside-change', 12_000)
+    check(
+      results,
+      '側欄來源指向另一個 repo 時，錨定寫入該來源 folder',
+      crossWritten === 'inside-change',
+      String(crossWritten),
+    )
+
+    // **還原**：把本段結束時的狀態放回去（rail 在全域項目、其來源指向 repo-single），
+    // 否則下一段 `runQuickOpenSection` 會站在一個它沒有預期的 rail 項目上。
+    // `GLOBAL_ROW_RECT` 宣告於本函式稍早，此處沿用同一個選擇器。
+    const globalBack = await pollUntil(app.client, GLOBAL_ROW_RECT, (v) => v !== null, 8000)
+    if (globalBack) await realClick(app.client, globalBack)
+    await sleep(600)
 }
 
 async function runQuickOpenSection(label, config, { app }) {
@@ -3370,11 +3602,14 @@ async function runQuickOpenSection(label, config, { app }) {
 }
 
 /**
- * **依賴鏈是線性的** —— 五段共用 `runPanelBasics` 建立的那一個 app 與它累積下來的狀態
+ * **依賴鏈是線性的** —— **後五段**共用 `runPanelBasics` 建立的那一個 app 與它累積下來的狀態
  * （選中的 folder、開著的 artifact 分頁、側欄座標）。這與 `probe:terminal`／`probe:keyboard`
  * 相反，那兩支的每個段落各自 `launch()`，因此無需宣告依賴。
+ *
+ * **例外是排在最前面的 `runPanelRestoreDegradation`**：它自帶 profile 與 app（那是它要驗的東西
+ * 的一部分 —— 落盤內容必須在啟動前就構造好），跑完立刻關閉，其後共用鏈才建立自己的 app。
  */
-/** 逾時收屍 —— 五段共用同一個 app，殺掉它等於讓其後段落全部因前置失敗而標記未執行。 */
+/** 逾時收屍 —— 共用鏈的五段共用同一個 app，殺掉它等於讓其後段落全部因前置失敗而標記未執行。 */
 const killStrays = () => {
   try {
     execFileSync('pkill', ['-9', '-f', 'spekterm-openspec-[p]rofile'], { stdio: 'ignore' })
@@ -3384,6 +3619,10 @@ const killStrays = () => {
 }
 
 const SECTIONS = [
+  // **不宣告 `deps`，且必須排在第一個** —— 它自帶 profile 與 app（見該函式的說明），而共用鏈的
+  // app 直到 `afterMode` 才關閉、同一個 mode 內所有段落共用同一個 debugging port。
+  // profile 前綴與其餘段落相同，因此 `killStrays` 一併涵蓋它。
+  { name: 'runPanelRestoreDegradation', run: runPanelRestoreDegradation, onTimeout: killStrays },
   { name: 'runPanelBasics', run: runPanelBasics, onTimeout: killStrays },
   { name: 'runBrowseAndOverlays', run: runBrowseAndOverlays, deps: ['runPanelBasics'], onTimeout: killStrays },
   { name: 'runAnchoringAndCoordinate', run: runAnchoringAndCoordinate, deps: ['runBrowseAndOverlays'], onTimeout: killStrays },

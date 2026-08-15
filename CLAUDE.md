@@ -801,12 +801,17 @@ probe 的。**要看 exit code。**
 
 - **「補一條 scenario」與「覆蓋一條 scenario」是兩個動作。** 已經發生**四次**：`session-restore` 的
   休眠提示（spec 有 scenario、design 有交代、實作零覆蓋）、`worktree-reverse-navigation` 的「design
-  寫『由單元測試承擔』而那條測試沒寫」、`panel-coordinate-per-folder`、`global-session`（對照表宣稱
-  了四條不存在的載體）。**它們全都躲過了** `openspec validate --strict`（scenario 存在且格式合法）、
+  寫『由單元測試承擔』而那條測試沒寫」、`panel-coordinate-per-folder`（三條缺口**已由
+  `panel-coordinate-coverage-gaps` 清償**）、`global-session`（對照表宣稱了四條不存在的載體）。
+  **它們全都躲過了** `openspec validate --strict`（scenario 存在且格式合法）、
   delta 與主 spec 的 header 稽核（那支腳本不看驗收），以及探針全綠（沒有人在看那條）。
   **而後兩次是在寫下前兩條教訓之後犯的 —— 所以「記得要小心」顯然不是機制。**
   **能結構性擋住它的做法**（已開為 **issue #12**）：稽核腳本對**每一條新增的 scenario** 要求一個
   驗收指認（哪支探針、哪條斷言、或明寫「不覆蓋，理由是…」）。而修法**不是改標籤，是把載體做出來**。
+  > **清償那三條時學到的**：把載體做出來之後，**三條裡有兩條的第一版仍然是假綠** —— 一條的
+  > 被觀察值恰好就是預設值（「退回自身」對一個從不讀落盤內容的實作照樣通過），另一條的反向
+  > 斷言在結構上不可能紅（錨定的鍵是 rail 選中項，該值在動作前就已經在那裡了）。
+  > **「有載體」與「載體有鑑別力」又是兩個動作**，而分開它們的仍然只有對照組。
 - **加一個列舉值時，把所有 `===` 比較 grep 一遍。** TypeScript 一條都不會攔（既有判斷全是
   `x === 'a' ? A : B` 這種二分寫法，多一個值只是靜默落進 `else`）。踩過兩次：`dormant`（休眠的
   session 全亮紅燈說「已結束」、快照被重複追加分隔線）、`folderId: null`（全域 session 的終端
