@@ -2128,7 +2128,300 @@ async function checkEmptyWorkspace(label, { port, rendererUrl }) {
 }
 
 /**
- * 四個段落**彼此獨立** —— 每一段各自 `makeFixture()`、`seedProfile()`、`launch()` 與收屍
+ * **捲動位置的所有權** —— 導航才捲，其餘一律不捲。
+ *
+ * 三條斷言在此，各自針對 `keyboard-navigation` 的一種失效方向：
+ *
+ * 1. **與導航無關的更新 SHALL NOT 捲動**（新增的 requirement）。使用者手動捲到的位置是他的
+ *    意圖，而背景中運作的 agent 持續更新 session 狀態 —— 一次都不能拿來搶走它。
+ * 2. **`Shift+↑↓` 移動 rail 項目後它仍可見**、3. **`Shift+←→` 移動 session 後它仍可見**
+ *    —— 兩條既有 scenario 此前**零載體**，而它們一直是靠「重繪就捲」那個缺陷順帶成立的。
+ *
+ * **自成一段，不併進 `runMode`**：這一段要結束 session（破壞性）、要八個 session（`runMode`
+ * 的絕對斷言全部以三個 fixture repo 的既有狀態為前提），而 `runMode` 是這支探針最重的段落、
+ * build 與 dev 各跑一次 —— 再往它身上加料會逼近段落窗口，而**逾時的段落不走 finally，其後
+ * 的斷言會整批消失**。獨立一段也讓它能以 `PROBE_ONLY=checkScrollAnchoring` 單獨迭代。
+ */
+async function checkScrollAnchoring(label, { port, rendererUrl }) {
+  const repos = makeFixture()
+  const profile = seedProfile(repos)
+  const app = await launch({ port, profileDir: profile, rendererUrl })
+
+  const RAIL_UL = `document.querySelector('aside[aria-label="${copy('rail.label')}"] > ul')`
+  const TAB_LIST = `document.querySelector('[role="tablist"][aria-label="${copy('sessions.tabs')}"]')`
+
+  const RAIL_STATE = `(() => {
+    const ul = ${RAIL_UL}
+    if (!ul) return null
+    return {
+      overflows: ul.scrollHeight > ul.clientHeight + 4,
+      scrollTop: Math.round(ul.scrollTop),
+      max: Math.round(ul.scrollHeight - ul.clientHeight),
+    }
+  })()`
+
+  /**
+   * focused session 的 **rail 子列**。
+   *
+   * 子列沒有任何 aria 屬性標示 focused（只有一組 class，而 class 是樣式不是契約），因此
+   * **以分頁列的 `aria-selected` 取得序位**，再取同序位的子列 —— 兩者都是 `forFolder()` 的
+   * 順序，序位一致。找不到就回 `null`：前提斷言因此會**紅**，而不是靜默落進「不可見」。
+   */
+  const FOCUSED_ROW = `(() => {
+    const ul = ${RAIL_UL}
+    const tabs = [...document.querySelectorAll('[aria-label="${copy('sessions.tabs')}"] [role="tab"]')]
+    const index = tabs.findIndex((t) => t.getAttribute('aria-selected') === 'true')
+    const list = document.querySelector('ul[aria-label="${copy('rail.folderSessions', { name: 'repo-a' })}"]')
+    if (!ul || !list || index === -1) return null
+    const row = [...list.querySelectorAll(':scope > li > div[role="button"]')][index]
+    if (!row) return null
+    const a = ul.getBoundingClientRect()
+    const b = row.getBoundingClientRect()
+    return {
+      index,
+      title: row.getAttribute('title'),
+      hidden: b.bottom <= a.top + 0.5 || b.top >= a.bottom - 0.5,
+      scrollTop: Math.round(ul.scrollTop),
+    }
+  })()`
+
+  /** 選中的 rail **項目標題列**（`Shift+↑↓` 的目標，與上面那個是兩個不同的東西）。 */
+  const SELECTED_HEADER = `(() => {
+    const ul = ${RAIL_UL}
+    const rows = [...document.querySelectorAll('aside[aria-label="${copy('rail.label')}"] > ul > li > div[role="button"]')]
+    const row = rows.find((r) => r.getAttribute('aria-current') === 'true')
+    if (!ul || !row) return null
+    const a = ul.getBoundingClientRect()
+    const b = row.getBoundingClientRect()
+    return {
+      label: row.getAttribute('aria-label'),
+      visible: b.top >= a.top - 0.5 && b.bottom <= a.bottom + 0.5,
+      hidden: b.bottom <= a.top + 0.5 || b.top >= a.bottom - 0.5,
+      scrollTop: Math.round(ul.scrollTop),
+      contentTop: Math.round(b.top - a.top + ul.scrollTop),
+      max: Math.round(ul.scrollHeight - ul.clientHeight),
+      order: rows.map((r) => r.getAttribute('aria-label')),
+    }
+  })()`
+
+  const TAB_STATE = `(() => {
+    const el = ${TAB_LIST}
+    if (!el) return null
+    const tabs = [...el.querySelectorAll('[role="tab"]')]
+    const index = tabs.findIndex((t) => t.getAttribute('aria-selected') === 'true')
+    const a = el.getBoundingClientRect()
+    const b = index === -1 ? null : tabs[index].getBoundingClientRect()
+    return {
+      count: tabs.length,
+      index,
+      overflows: el.scrollWidth > el.clientWidth + 4,
+      scrollLeft: Math.round(el.scrollLeft),
+      title: index === -1 ? null : tabs[index].getAttribute('title'),
+      visible: b === null ? null : b.left >= a.left - 0.5 && b.right <= a.right + 0.5,
+      hidden: b === null ? null : b.right <= a.left + 0.5 || b.left >= a.right - 0.5,
+    }
+  })()`
+
+  /** 直接指派捲動位置 —— **不送滑鼠事件**，於是它自己不會觸發「以指標操作時不捲」的例外。 */
+  const FORCE_RAIL = (value) => `(() => {
+    const ul = ${RAIL_UL}
+    if (!ul) return null
+    ul.scrollTop = ${value}
+    return Math.round(ul.scrollTop)
+  })()`
+  const FORCE_TABS = (value) => `(() => {
+    const el = ${TAB_LIST}
+    if (!el) return null
+    el.scrollLeft = ${value}
+    return Math.round(el.scrollLeft)
+  })()`
+
+  const SESSION_COUNT = 8
+  const RUNNING = copy('sessions.statusRunning')
+  const EXITED = copy('sessions.statusExited')
+
+  /**
+   * 結束當前 focused 的 session，並**回傳它的狀態是否真的轉為已結束**。
+   *
+   * **這不是禮貌性的檢查，它是那兩條「捲動位置不變」唯一的活性證明** —— 那是相對判定，
+   * 觸發它的機制整個沒發生時它照樣是綠的。而這支探針裡就有一條具體的死法：好幾個段落以
+   * `cat -A > file` 把 shell 留在 `cat` 裡，那樣的 session 打 `exit` 只是把四個字寫進檔案，
+   * pty 不結束、`onExit` 不觸發、React 一次都不重繪。這裡的 session 全是剛建立、停在 prompt
+   * 的 shell，而這個回傳值就是那個前提的證據。
+   *
+   * 先點一下終端再打字：`Input.insertText` 送到當下的焦點元素。**終端不在 rail 或分頁列之內**，
+   * 所以這一下點擊不會設起任何一個捲動容器的 pointer 例外（而隨後打的每一顆鍵都會把它翻回
+   * 鍵盤來源）—— 斷言的綠燈因此不可能是 guard 給的。
+   */
+  const exitFocusedSession = async (read) => {
+    const terminal = await app.client.evaluate(TERMINAL_RECT)
+    if (terminal) await realClick(app.client, terminal)
+    await sleep(200)
+    await typeLine(app.client, 'exit')
+    return pollUntil(app.client, read, (v) => v !== null && String(v.title).includes(EXITED), 15_000)
+  }
+
+  try {
+    await pollUntil(app.client, SELECT_FOLDER('repo-a'), (v) => v === true, 10_000)
+    await sleep(300)
+
+    // 建立 session 於**預設尺寸**下進行 —— 壓縮視窗後「+ session」可能已被推出畫面。
+    for (let i = 1; i <= SESSION_COUNT; i += 1) {
+      await createSession(app.client)
+      await pollUntil(app.client, TAB_STATE, (v) => v !== null && v.count === i, 15_000)
+    }
+    const seeded = await app.client.evaluate(TAB_STATE)
+    check(results, `${label}：前提 —— repo-a 建得起 ${SESSION_COUNT} 個 session`,
+      seeded !== null && seeded.count === SESSION_COUNT, JSON.stringify(seeded))
+
+    // ══ rail（縱向）══════════════════════════════════════════════════════════
+    //
+    // **壓矮 viewport 讓 rail 溢出**，不去多塞 folder —— 後者要改 fixture，而 fixture 是全域的。
+    await app.client.send('Emulation.setDeviceMetricsOverride', {
+      width: 1280,
+      height: 300,
+      deviceScaleFactor: 0,
+      mobile: false,
+    })
+    await sleep(600)
+
+    const railReady = await pollUntil(app.client, RAIL_STATE, (v) => v !== null && v.overflows, 8000)
+    check(results, `${label}：前提 —— 壓矮 viewport 後 rail 確實溢出（否則整段沒有鑑別力）`,
+      railReady !== null && railReady.overflows === true && railReady.max > 60,
+      JSON.stringify(railReady))
+
+    // ── 移動 rail 項目後它仍可見（既有 scenario，此前零載體）
+    //
+    // **方向是被實測逼出來的，不是隨手選的。**
+    //
+    // 第一版是「選 repo-a、捲到底、`Shift+↓`」—— 它在**正確與錯誤的實作上都通過**（對照組
+    // 把序位自 key 拿掉，斷言照樣綠）。原因是瀏覽器的 **scroll anchoring**：被移動的那一塊
+    // 位於視野**上方**，內容一變動，瀏覽器就自動補償捲動位置，恰好把目標帶進視野 ——
+    // **一個看起來像實作做到了的假綠**。
+    //
+    // 改成「選 repo-c（最後一列）、捲到**頂**、`Shift+↑`」：變動發生在視野**下方**，
+    // anchoring 不介入，目標唯有被程式捲動才會可見。`keyboard-navigation` 的表格寫的是
+    // `Shift+↑↓`，兩個方向同屬一條 requirement。
+    await app.client.evaluate(SELECT_FOLDER('repo-c'))
+    await sleep(300)
+    await app.client.evaluate(FORCE_RAIL(0))
+    await sleep(200)
+    const beforeMove = await app.client.evaluate(SELECTED_HEADER)
+    check(results, `${label}：前提 —— rail 捲到頂後，選中的最後一個項目落在視野之外`,
+      beforeMove !== null && beforeMove.hidden === true, JSON.stringify(beforeMove))
+
+    // **等的是「目標可見」這個穩定狀態，不是「捲動位置變了」** —— 後者實測會抓到中途：
+    // 重排與捲動分兩次繪製，量到的可能是第一次的中間值，於是一條正確的實作被判為紅。
+    // **一個「開始動了」的條件不等於規格在乎的那個狀態。**
+    await pressKey(app.client, 'ArrowUp', ['shift'])
+    const afterMove = await pollUntil(
+      app.client, SELECTED_HEADER, (v) => v !== null && v.visible === true, 4000)
+    check(results, `${label}：以 Shift+↑ 移動選中的 rail 項目後，它被捲回可視範圍`,
+      afterMove !== null && afterMove.visible === true,
+      `${JSON.stringify(beforeMove)} → ${JSON.stringify(afterMove)}`)
+
+    // ── 與導航無關的更新不搶走 rail 的捲動位置
+    //
+    // 選回 repo-a（上一段把選取移到了 repo-c，而 repo-c 沒有 session），focused 走到最後一個
+    // session，再把 rail 捲到頂 —— 它的子列於是落在下方視野之外。
+    await app.client.evaluate(SELECT_FOLDER('repo-a'))
+    await sleep(400)
+    await pressKey(app.client, 'Tab', ['ctrl', 'shift'])
+    await sleep(500)
+    await app.client.evaluate(FORCE_RAIL(0))
+    await sleep(300)
+    const rowBefore = await app.client.evaluate(FOCUSED_ROW)
+    check(results, `${label}：前提 —— focused session 的 rail 子列找得到，且落在視野之外`,
+      rowBefore !== null && rowBefore.hidden === true && String(rowBefore.title).includes(RUNNING),
+      JSON.stringify(rowBefore))
+
+    const rowExited = await exitFocusedSession(FOCUSED_ROW)
+    check(results, `${label}：前提 —— 該 session 的狀態確實由 Running 轉為 Exited（這條斷言的活性證明）`,
+      rowExited !== null && String(rowExited.title).includes(EXITED), JSON.stringify(rowExited))
+    check(results, `${label}：session 結束這類與導航無關的更新，SHALL NOT 搶走 rail 的捲動位置`,
+      rowExited !== null && rowExited.scrollTop === rowBefore?.scrollTop,
+      `scrollTop ${rowBefore && rowBefore.scrollTop} → ${rowExited && rowExited.scrollTop}`)
+
+    // ══ 分頁列（橫向）══════════════════════════════════════════════════════════
+    await app.client.send('Emulation.setDeviceMetricsOverride', {
+      width: 640,
+      height: 700,
+      deviceScaleFactor: 0,
+      mobile: false,
+    })
+    await sleep(600)
+
+    const tabsReady = await pollUntil(
+      app.client, TAB_STATE, (v) => v !== null && v.overflows, 8000)
+    check(results, `${label}：前提 —— 壓窄 viewport 後分頁列確實溢出`,
+      tabsReady !== null && tabsReady.overflows === true, JSON.stringify(tabsReady))
+
+    // ── Shift+→ 移動 session 後它仍可見（既有 scenario，此前零載體）
+    //
+    // 走到第一個分頁再把分頁列**捲到最右**：focused 分頁於是落在左側視野之外，往右移動一格
+    // 後仍在視野之外 —— 與上面那條同一個鑑別力來源。
+    let walked = await app.client.evaluate(TAB_STATE)
+    for (let i = 0; i < SESSION_COUNT + 1 && walked !== null && walked.index !== 0; i += 1) {
+      await pressKey(app.client, 'Tab', ['ctrl'])
+      await sleep(250)
+      walked = await app.client.evaluate(TAB_STATE)
+    }
+    check(results, `${label}：前提 —— Ctrl+Tab 走得到第一個分頁`,
+      walked !== null && walked.index === 0, JSON.stringify(walked))
+
+    await app.client.evaluate(FORCE_TABS(1e6))
+    await sleep(200)
+    const tabBeforeMove = await app.client.evaluate(TAB_STATE)
+    check(results, `${label}：前提 —— 分頁列捲到最右後，focused 分頁落在視野之外`,
+      tabBeforeMove !== null && tabBeforeMove.hidden === true, JSON.stringify(tabBeforeMove))
+
+    await pressKey(app.client, 'ArrowRight', ['shift'])
+    const tabAfterMove = await pollUntil(
+      app.client, TAB_STATE, (v) => v !== null && v.visible === true, 4000)
+    check(results, `${label}：以 Shift+→ 移動 focused session 後，它的分頁被捲回可視範圍`,
+      tabAfterMove !== null && tabAfterMove.visible === true,
+      `${JSON.stringify(tabBeforeMove)} → ${JSON.stringify(tabAfterMove)}`)
+
+    // ── 與導航無關的更新不搶走分頁列的捲動位置
+    //
+    // **走到最後一個分頁**再把分頁列捲回最左 —— 第一版只按了一次 `Ctrl+Shift+Tab`，focused
+    // 於是落在 index 0，而捲到最左時它**當然可見**：那條前提立刻紅了，並連帶證明它保護的
+    // 「scrollLeft 不變」在那個狀態下是 `0 → 0` 的恆真式（正是它存在的理由）。
+    let atEnd = await app.client.evaluate(TAB_STATE)
+    for (
+      let i = 0;
+      i < SESSION_COUNT + 1 && atEnd !== null && atEnd.index !== atEnd.count - 1;
+      i += 1
+    ) {
+      await pressKey(app.client, 'Tab', ['ctrl'])
+      await sleep(250)
+      atEnd = await app.client.evaluate(TAB_STATE)
+    }
+    check(results, `${label}：前提 —— Ctrl+Tab 走得到最後一個分頁`,
+      atEnd !== null && atEnd.index === atEnd.count - 1, JSON.stringify(atEnd))
+    await app.client.evaluate(FORCE_TABS(0))
+    await sleep(300)
+    const tabBefore = await app.client.evaluate(TAB_STATE)
+    check(results, `${label}：前提 —— focused 分頁落在視野之外，且該 session 仍在運作`,
+      tabBefore !== null && tabBefore.hidden === true && String(tabBefore.title).includes(RUNNING),
+      JSON.stringify(tabBefore))
+
+    const tabExited = await exitFocusedSession(TAB_STATE)
+    check(results, `${label}：前提 —— 該 session 的狀態確實由 Running 轉為 Exited（這條斷言的活性證明）`,
+      tabExited !== null && String(tabExited.title).includes(EXITED), JSON.stringify(tabExited))
+    check(results, `${label}：session 結束這類與導航無關的更新，SHALL NOT 搶走分頁列的捲動位置`,
+      tabExited !== null && tabExited.scrollLeft === tabBefore?.scrollLeft,
+      `scrollLeft ${tabBefore && tabBefore.scrollLeft} → ${tabExited && tabExited.scrollLeft}`)
+
+    await app.client.send('Emulation.clearDeviceMetricsOverride', {})
+    await sleep(300)
+  } finally {
+    await app.destroy()
+  }
+}
+
+/**
+ * 五個段落**彼此獨立** —— 每一段各自 `makeFixture()`、`seedProfile()`、`launch()` 與收屍
  * （實際逐段確認，非假設），因此沒有一項需要宣告 `deps`。
  *
  * 此前這裡是六行寫死的呼叫，沒有段落機制 —— 於是任何一段 throw 就吃掉其後全部，而迭代時
@@ -2148,6 +2441,7 @@ const SECTIONS = [
   { name: 'checkSingleFolder', run: checkSingleFolder, onTimeout: killStrays },
   { name: 'checkReordering', run: checkReordering, onTimeout: killStrays },
   { name: 'checkEmptyWorkspace', run: checkEmptyWorkspace, onTimeout: killStrays },
+  { name: 'checkScrollAnchoring', run: checkScrollAnchoring, onTimeout: killStrays },
 ]
 
 const outcome = await runSections({

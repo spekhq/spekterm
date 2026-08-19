@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { ContextMenu, type MenuItem } from './files/dialogs'
 import { SessionNameDialog } from './terminal/SessionNameDialog'
@@ -143,7 +143,6 @@ function RailRow({
   const [menu, setMenu] = useState<{ x: number; y: number; session: SessionState } | null>(null)
   const [renaming, setRenaming] = useState<SessionState | null>(null)
   const rowRefs = useRef(new Map<number, HTMLDivElement>())
-  const rowScroll = useScrollIntoView()
 
   const rectOf = useCallback((index: number) => {
     return rowRefs.current.get(index)?.getBoundingClientRect() ?? null
@@ -160,15 +159,22 @@ function RailRow({
    * 只在 `selected` 時捲：否則切換選中的 repo 時，**每一列**都會搶著把自己的 focused 子列
    * 捲進視野，最後一個贏 —— 畫面會跳到一個使用者沒有選的地方。
    *
-   * 以指標直接點這一塊裡的東西時不捲（`guard` 掛在 `<li>` 上）—— 但在**分頁列**點一個分頁
+   * 以指標直接點這一塊裡的東西時不捲（guard 掛在 `<li>` 上）—— 但在**分頁列**點一個分頁
    * 時仍會捲，那是另一個容器，使用者還沒看到這裡的子列。
+   *
+   * **key 是「焦點 ＋ 位置」，索引在此算完、不進 key 以外的任何地方。** 它曾經是一個依賴著
+   * 整個 `sessions` 陣列的 effect —— 而該陣列來自 `forFolder()` 的 `filter()`，每次渲染都是新
+   * 身分，於是觸發條件實際上是「這個元件重繪了」：背景中運作的 agent 每改一次終端標題就把
+   * 使用者手動捲到的位置搶回來一次。
    */
-  useEffect(() => {
-    if (!selected || !focusedSessionId) return
-    const index = sessions.findIndex((session) => session.id === focusedSessionId)
-    if (index === -1) return
-    rowScroll.scrollIntoView(rowRefs.current.get(index), { block: 'nearest' })
-  }, [selected, focusedSessionId, sessions, rowScroll])
+  const focusedIndex = sessions.findIndex((session) => session.id === focusedSessionId)
+  const rowGuard = useScrollIntoView(
+    selected && focusedSessionId !== null && focusedIndex !== -1
+      ? `${focusedSessionId}:${focusedIndex}`
+      : null,
+    () => rowRefs.current.get(focusedIndex),
+    'block',
+  )
 
   const items: MenuItem[] = menu
     ? [
@@ -193,7 +199,7 @@ function RailRow({
   return (
     <li
       ref={blockRef}
-      {...rowScroll.guard}
+      {...rowGuard}
       className={
         'group ' +
         // 插入指示：拖到這裡放開，就會插在它前面。畫在**整塊**上，因為命中判定也是整塊。
@@ -437,7 +443,6 @@ export function WorkspaceRail({
    * 這一份供「捲入可視範圍」使用，兩者的目標與座標系都不同（見 `RailRow.headerRef`）。
    */
   const headerRefs = useRef(new Map<string | null, HTMLDivElement>())
-  const railScroll = useScrollIntoView()
 
   const blockRefs = useRef(new Map<number, HTMLLIElement>())
   // **量整個 `<li>`**（含展開的 session 子列），不是標題列 —— 那是使用者眼中「這個 repo 佔的
@@ -483,13 +488,27 @@ export function WorkspaceRail({
    * 會 double-invoke 它（這個 repo 為此付過一次「拖曳完全沒反應、且只有 dev 模式壞」的學費）。
    *
    * `block: 'nearest'` 讓「已完整可見就不捲動」成立，但**它不涵蓋滑鼠** —— 部分可見的元素
-   * 它照樣會捲。以指標直接操作時的例外由 `useScrollIntoView` 承擔（`guard` 掛在 `<aside>` 上）。
+   * 它照樣會捲。以指標直接操作時的例外由 `useScrollIntoView` 承擔（guard 掛在 `<aside>` 上）。
+   *
+   * **key 取的是選取的「值」，不是 `selection` 物件的身分** —— `folderSelection()` 每次呼叫都
+   * 造一個新物件，以身分為觸發時「把選取重設成同一個值」也會捲，而 `keyboard-navigation` 明載
+   * 選取未改變時 SHALL NOT 捲動。
+   *
+   * **而序位是承重的**：`Shift+↑↓` 移動選中的 folder 時，`selection` 一個位元都沒變 —— 少了
+   * 序位，這條 requirement 表格裡「`Shift+↑↓` → 選中的 rail 項目」那一列就靜默失效（它此前是
+   * 靠 `RailRow` 那個「重繪就捲」的缺陷順帶成立的）。全域項目恆為第一列、不參與排序，序位取
+   * `-1`。
    */
-  useEffect(() => {
-    if (!selection) return
-    const key = selection.kind === 'global' ? null : selection.id
-    railScroll.scrollIntoView(headerRefs.current.get(key), { block: 'nearest' })
-  }, [selection, railScroll])
+  const selectedKey = selection === null ? null : selection.kind === 'global' ? null : selection.id
+  const selectedRailIndex =
+    selection === null || selection.kind === 'global'
+      ? -1
+      : folders.findIndex((folder) => folder.id === selection.id)
+  const railGuard = useScrollIntoView(
+    selection === null ? null : `${selectedKey ?? 'global'}:${selectedRailIndex}`,
+    () => headerRefs.current.get(selectedKey),
+    'block',
+  )
 
   /** 選中一個 rail 項目 —— `null` ＝ 全域項目。兩種歸屬共用一個入口，呼叫端不必各自分岔。 */
   const selectItem = useCallback(
@@ -522,7 +541,7 @@ export function WorkspaceRail({
     <aside
       aria-label={t('rail.label')}
       className="flex h-full min-w-0 flex-col overflow-hidden border-r border-hairline bg-rail"
-      {...railScroll.guard}
+      {...railGuard}
     >
       {/* 標題不會自己截斷，於是它會撐住 rail 的 min-content —— 拖到最小寬度時就溢出到分界之外。 */}
       <h2 className="truncate px-3 pt-3 pb-2 text-xs tracking-widest text-ink-faint">

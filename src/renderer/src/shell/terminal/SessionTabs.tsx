@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useRef, useState } from 'react'
 import { ContextMenu, type MenuItem } from '../files/dialogs'
 import type { SpawnTarget } from '../types'
 import { SessionNameDialog } from './SessionNameDialog'
@@ -40,7 +40,6 @@ export function SessionTabs({
   const [menu, setMenu] = useState<{ x: number; y: number; session: SessionState } | null>(null)
   const [renaming, setRenaming] = useState<SessionState | null>(null)
   const tabRefs = useRef(new Map<number, HTMLDivElement>())
-  const tabScroll = useScrollIntoView()
 
   const rectOf = useCallback((index: number) => {
     return tabRefs.current.get(index)?.getBoundingClientRect() ?? null
@@ -52,19 +51,23 @@ export function SessionTabs({
    * focused session 改變時，把它的分頁捲進**橫向**可視範圍。
    *
    * 分頁列是 `overflow-x-auto` —— session 開多了，`Ctrl+Tab` 會切到一個看不見的分頁上，而
-   * 畫面上什麼都不會變（使用者只會判定快捷鍵壞了）。`inline: 'nearest'` 是橫向的那一半，
-   * 少了它這個 effect 對橫向捲動完全無效。
+   * 畫面上什麼都不會變（使用者只會判定快捷鍵壞了）。`'both'` 是橫向的那一半，少了它這個
+   * 捲動對橫向完全無效。
    *
    * `nearest` 只讓「**完全**可見就不捲」成立；以滑鼠點一個**半截**的分頁時它仍會捲，於是
-   * 那個分頁在游標底下跳走。該例外由 `useScrollIntoView` 承擔（`guard` 掛在分頁列上）——
+   * 那個分頁在游標底下跳走。該例外由 `useScrollIntoView` 承擔（guard 掛在分頁列上）——
    * 而在 rail 點一列 session 時**仍會捲**，那是另一個容器。
+   *
+   * **key 是「焦點 ＋ 位置」**：少了位置，`Shift+←→` 重排 focused session 時不會捲；而放進
+   * 整個 `sessions` 陣列（它每次渲染都是新身分）則會讓觸發條件退化成「任何重繪」—— 那正是
+   * 這裡此前的缺陷。
    */
-  useEffect(() => {
-    if (!focusedId) return
-    const index = sessions.findIndex((session) => session.id === focusedId)
-    if (index === -1) return
-    tabScroll.scrollIntoView(tabRefs.current.get(index), { block: 'nearest', inline: 'nearest' })
-  }, [focusedId, sessions, tabScroll])
+  const focusedIndex = sessions.findIndex((session) => session.id === focusedId)
+  const tabsGuard = useScrollIntoView(
+    focusedId !== null && focusedIndex !== -1 ? `${focusedId}:${focusedIndex}` : null,
+    () => tabRefs.current.get(focusedIndex),
+    'both',
+  )
 
   const items: MenuItem[] = menu
     ? [
@@ -105,7 +108,7 @@ export function SessionTabs({
   }
 
   return (
-    <div className="flex items-stretch border-b border-hairline bg-panel" {...tabScroll.guard}>
+    <div className="flex items-stretch border-b border-hairline bg-panel" {...tabsGuard}>
       {/*
         `tablist` 不佔 flex-1 —— 否則它會把建立入口一路推到分頁列的另一端，開第二個分頁之後
         滑鼠得橫越整條列才點得到。剩餘空間交給後面的 spacer 吸收。
