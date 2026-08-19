@@ -710,6 +710,8 @@ const SPEK_THEME_VARS = `(() => {
     accent: read('--spek-accent'),
     border: read('--spek-border'),
     ours: read('--color-accent'),
+    nodeActive: read('--spek-node-active'),
+    ourGreen: read('--color-green'),
   }
 })()`
 
@@ -1922,11 +1924,22 @@ async function runBrowseAndOverlays(label, config, { app }) {
     )
 
     // 顏色契約：套件的變數必須解析到**我們的**主題色。少了這道對應，圖畫得出來但沒有顏色。
+    //
+    // **`--spek-accent` 一個人擋不住漏接**：我們的 `--color-accent` 與套件的深色預設值都是
+    // `#f59e0b`，於是就算這一行覆寫整個消失，這條斷言照樣通過。`--spek-node-active` 才是有
+    // 鑑別力的那個（我們 `#34d399` vs 套件 `#22c55e`）—— 它也正是 `@spekjs/ui` 1.3 新增、
+    // 而宿主漏接時會靜默沿用套件顏色的那一個。
+    //
+    // 名單層級的完整性由 `scripts/spek-theme-contract.test.mjs` 在 `npm test` 守著（套件再加
+    // 變數就變紅）；這裡驗的是**執行期真的解析成我們的值**，兩者不重複。
     const themeVars = await app.client.evaluate(SPEK_THEME_VARS)
     check(
       results,
       '@spekjs/ui 的顏色契約接到我們的主題色',
-      Boolean(themeVars.accent) && themeVars.accent === themeVars.ours,
+      Boolean(themeVars.accent) &&
+        themeVars.accent === themeVars.ours &&
+        Boolean(themeVars.nodeActive) &&
+        themeVars.nodeActive === themeVars.ourGreen,
       JSON.stringify(themeVars),
     )
 

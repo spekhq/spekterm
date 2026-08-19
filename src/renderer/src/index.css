@@ -89,13 +89,19 @@
 }
 
 /*
- * `@spekjs/ui` 的顏色契約 —— 把套件的 8 個變數接到我們的 token 上。
+ * `@spekjs/ui` 的顏色契約 —— 把套件的 9 個變數接到我們的 token 上。
  *
  * 套件擁有自己的變數名（`--spek-*`），刻意不讀宿主的 token —— 我們的叫 `--color-ink` 那一套，
  * spek web 的叫 `--color-text-primary` 那一套，名字對不上。**這正是套件必須擁有自己命名的理由**：
  * 少了這道契約，Graph 會畫出來但完全沒有顏色。
  *
- * 必須排在套件的 `styles.css` 之後（同為 `:root`，後者勝出）。換膚就只有這 8 行。
+ * 必須排在套件的 `styles.css` 之後（同為 `:root`，後者勝出）。換膚就只有這 9 行。
+ *
+ * **漏掉其中一個是靜默的** —— 套件為每個變數都備了深色預設值，於是漏接的那一個不會消失，
+ * 只會偷偷用套件的顏色（`@spekjs/ui` 1.3 新增 `--spek-node-active` 時就是這個情形：
+ * Graph 上的 active change 節點會是套件的 `#22c55e`，而不是我們的綠）。
+ * `scripts/spek-theme-contract.test.mjs` 因此比對套件宣告的全集與這裡的宣告，
+ * **升級套件時漏接會在 `npm test` 變紅**，不必記得回來看這一段。
  */
 :root {
   --spek-bg-primary: var(--color-stage);
@@ -106,6 +112,8 @@
   --spek-text-secondary: var(--color-ink-dim);
   --spek-text-muted: var(--color-ink-faint);
   --spek-accent: var(--color-accent);
+  /* Graph 上「進行中的 change」節點 —— 雛型的 --green，與側欄既有的完成狀態同一個綠。 */
+  --spek-node-active: var(--color-green);
 }
 
 /*

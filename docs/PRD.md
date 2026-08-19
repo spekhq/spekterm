@@ -417,9 +417,10 @@ spekterm
 
 1. **元件是純呈現層** —— 沒有 router（導航改為回呼）、沒有 adapter（資料由 props 進）、沒有
    theme context。
-2. **顏色是一份明確的契約** —— 8 個 `--spek-*` CSS 變數，套件**擁有自己的變數名**而不讀宿主的
-   token。少了這道，我們的 token（`--color-ink` 那套）名字對不上，圖會畫出來但**完全沒有顏色**。
-   換膚就是在 `index.css` 覆寫那 8 個變數。
+2. **顏色是一份明確的契約** —— 一組 `--spek-*` CSS 變數（`@spekjs/ui` 1.3 起為 9 個），套件
+   **擁有自己的變數名**而不讀宿主的 token。少了這道，我們的 token（`--color-ink` 那套）名字對
+   不上，圖會畫出來但**完全沒有顏色**。換膚就是在 `index.css` 覆寫它們 —— **逐一**，漏接一個
+   會靜默沿用套件的預設色（見 `docs/lessons/side-panel.md`）。
 3. **React 為 peer 依賴** —— 兩份 React 實例會讓 hooks 直接爆炸。
 
 **`openspec.*` IPC 的形狀對齊 `ApiAdapter` 這個決定在這裡得到了回報**：接上套件時換的是 UI，

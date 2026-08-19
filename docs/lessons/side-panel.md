@@ -17,7 +17,16 @@
 
 - **套件擁有自己的顏色變數名（`--spek-*`），絕不讀宿主的 token。** spek web 叫
   `--color-text-primary`，我們叫 `--color-ink` —— 名字對不上時圖會**畫得出來但完全沒有顏色**。
-  換膚＝覆寫那 8 個變數。**React 必須是 peer 依賴**（兩份實例會讓 hooks 直接爆炸）。
+  換膚＝在 `index.css` 覆寫它們（`@spekjs/ui` 1.3 起是 **9 個**）。**React 必須是 peer 依賴**
+  （兩份實例會讓 hooks 直接爆炸）。
+  - **契約會變長，而漏接一個是靜默的。** 套件為每個變數都備了深色預設值 —— 漏接的那一個不會
+    消失，只會偷偷改用套件的顏色。1.3 新增 `--spek-node-active`（Graph 上進行中的 change 節點）
+    時正是如此，而當時 `probe:openspec` 只驗 `--spek-accent` 一個值：**我們的 `--color-accent`
+    與套件預設同為 `#f59e0b`，那條斷言連整段覆寫消失都察覺不到。**
+  - 名單的完整性現由 **`scripts/spek-theme-contract.test.mjs`** 守著（`npm test`，比對套件
+    `styles.css` 宣告的全集 ⊆ `index.css` 的宣告）—— **套件下次再加變數就會變紅**，不必有人
+    記得回來看那段註解。probe 那條則改驗有鑑別力的 `--spek-node-active`（我們 `#34d399`
+    vs 套件 `#22c55e`），驗的是執行期真的解析成我們的值，與名單守衛不重複。
 - **d3 把顏色寫進 SVG 屬性**（命令式），不能用 `var()` —— 宿主換膚時圖必須重畫。套件**不去偵測**
   主題（監看 `data-theme` 是在猜宿主的實作），由宿主換一個 `themeKey` 明說「該重畫了」。
 
