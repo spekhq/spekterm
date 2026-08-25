@@ -28,7 +28,18 @@
     "newSessionIn": "New session — {{name}}",
     "newSessionDisabled": "Path unavailable — cannot open a session",
     "removeFolder": "Remove {{name}} from workspace",
-    "removeFolderTooltip": "Remove {{name}} from workspace (does not delete the directory on disk)"
+    "removeFolderTooltip": "Remove {{name}} from workspace (does not delete the directory on disk)",
+    "pinnedList": "Pinned",
+    "folderList": "Repos",
+    "pinFolder": "Pin {{name}} to the top",
+    "unpinFolder": "Unpin {{name}}",
+    "pinTooltip": "Pin to the top of the list",
+    "unpinTooltip": "Unpin from the top of the list",
+    "globalPinned": "{{name}} is always pinned",
+    "globalPinnedTooltip": "Always pinned to the top — this cannot be changed",
+    "pinAction": "Pin to top",
+    "unpinAction": "Unpin",
+    "removeAction": "Remove from workspace"
   },
   "time": {
     "justNow": "just now"

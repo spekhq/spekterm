@@ -194,6 +194,10 @@ Electron，目標產出 macOS / Windows / Linux 三平台安裝檔。
 
 - **① 活動列**：`Sessions`（工作台，預設）／`Handoffs`（收件匣，帶待處理 badge）／🔍 搜尋（沿用 spek `Cmd+K`）／⚙ 設定。組織軸是 **Sessions 與 Handoffs**，不是檔案總管——點 `Handoffs` 會把主舞台整個換成 workspace 層級的 Handoff 收件匣（見 §6.4），點 `Sessions` 切回工作台。
 - **② workspace rail**：跨 repo 導覽。每個 repo 為一列，可展開露出其下的 session 子列；repo／session 上疊加最急迫的狀態燈與 handoff 標記（incoming badge、`↩ 接棒`、`待 ack`）。底部 `[+ Add folder]`（原生對話框、持久化）。沒有 `openspec/` 的 repo 於此標示（如 mockup 的 spek-web），提示它只能用 Files 身分。
+  rail 分為**置頂段**與其餘兩段，之間有一條分界：置頂段**位於捲動容器之外**，因此 repo 一多、
+  session 子列一展開時它仍留在視野裡 —— 那正是置頂相對於「把 repo 拖到最上面」的增量價值
+  （順序本來就可以自己排）。置頂以圖釘或 folder 的右鍵選單切換，**把 repo 拖過分界**亦然；
+  `Shift+↑↓` 移動一格時，分界本身算一格。全域項目恆為置頂段的第一列，其置頂狀態不可取消。
 - **③ 主舞台 · repo header**：左邊 repo 身分 + session 聚合資訊；右邊是 `[◈ OpenSpec │ ▤ Files]` segmented switch、`⤳ Handoff`（開 compose）、`+ session`、side panel 收合鈕。
 - **③ 主舞台 · session 分頁**：當前 repo 底下每個 session 一個分頁（branch + 狀態燈 + 錨定 change 的 badge）。切分頁 = 切 focused session；OpenSpec side panel 隨 focused session 的 change 更新。
 - **③ 主舞台 · 左 terminal**：跑 agent 的主場，`node-pty` 真 pty 跑 `claude`。**terminal 保持純淨**——結尾就是 `claude` 自己的 `>` prompt 行，spek **不另外畫輸入框**。`+ session` 開新 pty（預設 cwd = 當前 repo／worktree）。

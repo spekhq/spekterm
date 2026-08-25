@@ -41,6 +41,7 @@ function folderAt(folderPath: string): WorkspaceFolder {
     name: path.basename(folderPath),
     status: 'ok',
     hasOpenSpec: false,
+    pinned: false,
     branch: null,
   }
 }

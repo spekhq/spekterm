@@ -10,6 +10,7 @@ export const FOLDER_CHANNELS = {
   add: 'workspace:folders:add',
   remove: 'workspace:folders:remove',
   reorder: 'workspace:folders:reorder',
+  setPinned: 'workspace:folders:setPinned',
   /** 主行程 → renderer。目前唯一的推送來源是 git 分支變動（使用者在 terminal 裡切 branch）。 */
   changed: 'workspace:folders:changed',
 } as const
@@ -77,8 +78,19 @@ export function registerFolderHandlers(store: WorkspaceStore, panel: PanelStore)
   // **以識別碼定位而非位置** —— renderer 手上的清單是一份可能已經過期的複本（design D5）。
   ipcMain.handle(
     FOLDER_CHANNELS.reorder,
-    (event, id: string, toIndex: number): WorkspaceFolder[] => {
-      store.reorder(id, toIndex)
+    (event, id: string, toIndex: number, pinned: boolean): WorkspaceFolder[] => {
+      store.reorder(id, toIndex, pinned)
+      branchServiceFor(store, event.sender).sync()
+      return store.list()
+    },
+  )
+
+  // 置頂：**狀態是權威，位置由它推導**（跨越分界的最小移動）。與 reorder 互為表裡 ——
+  // 那邊是使用者拖到／按到某個位置、置頂狀態由落點推導。
+  ipcMain.handle(
+    FOLDER_CHANNELS.setPinned,
+    (event, id: string, pinned: boolean): WorkspaceFolder[] => {
+      store.setPinned(id, pinned)
       branchServiceFor(store, event.sender).sync()
       return store.list()
     },

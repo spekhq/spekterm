@@ -1,6 +1,7 @@
 import { useEffect } from 'react'
 import { t } from '@shared/i18n'
 import { useSessions } from './terminal/sessions'
+import { dividerRowOf, folderIndexToRow, placeFromRow } from './rail-rows'
 import { type RailSelection, type WorkspaceFolder, selectedFolderId } from './types'
 
 interface KeyboardNavigationProps {
@@ -11,7 +12,7 @@ interface KeyboardNavigationProps {
   onSelectGlobal: () => void
   onSelectFolder: (id: string) => void
   /** 把某個 folder 移到第 `toIndex` 個位置。**以 id 指定，不以位置**（design D5）。 */
-  onReorderFolder: (id: string, toIndex: number) => void
+  onReorderFolder: (id: string, toIndex: number, pinned: boolean) => void
 }
 
 /** 下一個／上一個，到末端就繞回去。清單為空時回傳 `null`。 */
@@ -133,16 +134,31 @@ export function KeyboardNavigation({
         // 假的移動。
         if (selection.kind !== 'folder') return true
 
-        // **索引以 folder 清單為基準，不以 rail 的列位置** —— rail 比它多了全域項目那一列。
-        // 以列位置計算的失效是兩個方向都錯：`Shift+↑` 會讓第二個 folder 算出等於它自己的目標
-        // 而靜默無操作，`Shift+↓` 會讓第一個 folder 多跳一格。而 workspace 只有兩個 folder
-        // 時**兩者都看不出來**（夾制會把越界的目標拉回末端，結果與正確實作相同）。
+        // **索引以 folder 清單為基準，不以 rail 的列位置** —— rail 比它多了全域項目那一列，
+        // 以及兩段之間的分界。以列位置計算的失效是兩個方向都錯：`Shift+↑` 會讓第二個 folder
+        // 算出等於它自己的目標而靜默無操作，`Shift+↓` 會讓第一個 folder 多跳一格。而 workspace
+        // 只有兩個 folder 時**兩者都看不出來**（夾制會把越界的目標拉回末端，結果與正確實作相同）。
         const index = folders.findIndex((folder) => folder.id === selection.id)
         if (index === -1) return true
 
-        const toIndex = index + (isDown ? 1 : -1)
-        if (toIndex < 0 || toIndex >= folders.length) return true
-        onReorderFolder(selection.id, toIndex)
+        /*
+          **分界本身算一格。** 移動一格是在**列空間**裡進行的（folder ＋ 分界），因此位於分界
+          相鄰位置的 repo 往分界方向按一下，會跨越它並改變置頂狀態 —— 而它在畫面上的位置幾乎
+          不動（動的是圖釘與分界）。
+
+          這一格 SHALL NOT 被跳過：跳過它，「剛被取消置頂、位於其餘段第一個」這個狀態就
+          **用鍵盤永遠到不了**，而那正是取消置頂之後的落點。
+
+          連帶：「只有一個 folder 時為無操作」因此收窄為「**該次移動不跨越分界**時」——
+          唯一的那個 folder 永遠與分界相鄰，無條件無操作會讓它的置頂狀態改不了。
+        */
+        const dividerRow = dividerRowOf(folders)
+        const fromRow = folderIndexToRow(index, dividerRow)
+        const toRow = fromRow + (isDown ? 1 : -1)
+        if (toRow < 0 || toRow > folders.length) return true
+
+        const { folderIndex, pinned } = placeFromRow(fromRow, toRow, dividerRow)
+        onReorderFolder(selection.id, folderIndex, pinned)
         return true
       }
 

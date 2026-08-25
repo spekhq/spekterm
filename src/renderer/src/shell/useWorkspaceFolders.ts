@@ -19,7 +19,12 @@ export interface WorkspaceFoldersState {
    * 複本（design D5）。`selectedId` 不必跟著調整：它存的是 id，不是位置，重排後選中的自然
    * 仍是同一個 repo。
    */
-  reorderFolders: (id: string, toIndex: number) => Promise<void>
+  reorderFolders: (id: string, toIndex: number, pinned: boolean) => Promise<void>
+  /**
+   * 切換置頂狀態。位置由狀態推導（跨越分界的最小移動），與 `reorderFolders`「位置是權威、
+   * 狀態由落點推導」恰好互為表裡。
+   */
+  setPinned: (id: string, pinned: boolean) => Promise<void>
 }
 
 export function useWorkspaceFolders(): WorkspaceFoldersState {
@@ -49,7 +54,7 @@ export function useWorkspaceFolders(): WorkspaceFoldersState {
     )
   }, [])
 
-  const reorderFolders = useCallback(async (id: string, toIndex: number) => {
+  const reorderFolders = useCallback(async (id: string, toIndex: number, pinned: boolean) => {
     // **先樂觀套用，再以主行程的回覆對帳。**
     //
     // 少了這一步，**連按 `Shift+↓` 會靜默丟失移動**：第二次按下時 `folders` 仍是舊的（IPC 還沒
@@ -58,22 +63,61 @@ export function useWorkspaceFolders(): WorkspaceFoldersState {
     // 像「快捷鍵有時候沒反應」。
     //
     // updater 必須是**純函式**（StrictMode 會 double-invoke 它）—— 這裡只計算新陣列，IPC 在外面。
-    setFolders((current) => {
-      const from = current.findIndex((folder) => folder.id === id)
-      if (from === -1) return current
-
-      const to = Math.min(Math.max(toIndex, 0), current.length - 1)
-      if (to === from) return current
-
-      const next = [...current]
-      const [moved] = next.splice(from, 1)
-      next.splice(to, 0, moved)
-      return next
-    })
+    setFolders((current) => applyPlacement(current, id, toIndex, pinned))
 
     // 權威仍在主行程 —— 它的回覆是最終的順序（樂觀更新只是把等待藏起來）。
-    setFolders(await window.workspace.folders.reorder(id, toIndex))
+    setFolders(await window.workspace.folders.reorder(id, toIndex, pinned))
   }, [])
 
-  return { folders, selection, select: setSelection, addFolder, removeFolder, reorderFolders }
+  const setPinned = useCallback(async (id: string, pinned: boolean) => {
+    // 落點是「跨越分界的最小移動」，與主行程 `setPinned` 的推導一致 —— 樂觀更新若算出別的位置，
+    // 使用者會看到它先跳到一個地方、再被主行程的回覆挪到另一個地方。
+    setFolders((current) => {
+      const rest = current.filter((folder) => folder.id !== id)
+      return applyPlacement(current, id, rest.filter((folder) => folder.pinned).length, pinned)
+    })
+    setFolders(await window.workspace.folders.setPinned(id, pinned))
+  }, [])
+
+  return {
+    folders,
+    selection,
+    select: setSelection,
+    addFolder,
+    removeFolder,
+    reorderFolders,
+    setPinned,
+  }
+}
+
+/**
+ * 樂觀更新用的擺放 —— 與主行程 `WorkspaceStore.place()` 同語意的一份複本。
+ *
+ * **早退的條件是「位置與置頂狀態**皆**未改變」。** 跨越分界的移動其序位前後**同值**（置頂段的
+ * 最後一個變成其餘段的第一個）；以「位置相同即返回」為早退條件時，樂觀更新會保留舊的置頂狀態，
+ * 畫面上就是「按了沒反應」，直到主行程的回覆才跳一下 —— 而若主行程那道閘門也沒改，就永遠不會
+ * 跳。這是同一個 bug 的第二份，兩道都要改。
+ */
+function applyPlacement(
+  folders: WorkspaceFolder[],
+  id: string,
+  folderIndex: number,
+  pinned: boolean,
+): WorkspaceFolder[] {
+  const from = folders.findIndex((folder) => folder.id === id)
+  if (from === -1) return folders
+
+  const next = [...folders]
+  const [moved] = next.splice(from, 1)
+  const pinnedCount = next.filter((folder) => folder.pinned).length
+
+  // 置頂者只能落在前綴之內，未置頂者只能落在其後 —— 與主行程同一條不變式。
+  const to = Math.min(
+    Math.max(folderIndex, pinned ? 0 : pinnedCount),
+    pinned ? pinnedCount : next.length,
+  )
+  if (to === from && pinned === moved.pinned) return folders
+
+  next.splice(to, 0, { ...moved, pinned })
+  return next
 }

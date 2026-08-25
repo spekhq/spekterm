@@ -4,6 +4,7 @@ import { ContextMenu, type MenuItem } from './files/dialogs'
 import { SessionNameDialog } from './terminal/SessionNameDialog'
 import { StatusDot, sessionLabel, sessionTitle, statusTitle } from './terminal/session-badge'
 import { type SessionState, useSessions } from './terminal/sessions'
+import { dividerRowOf, folderIndexToRow, placeFromRow, rowToFolderIndex } from './rail-rows'
 import { useDragReorder } from './useDragReorder'
 import { useScrollIntoView } from './useScrollIntoView'
 import { useSpawnMenu } from './terminal/useSpawnMenu'
@@ -18,8 +19,13 @@ interface WorkspaceRailProps {
   onSelectGlobal: () => void
   onAdd: () => void
   onRemove: (id: string) => void
-  /** 把某個 folder 移到清單的第 `toIndex` 個位置。**以 id 指定，不以位置**（design D5）。 */
-  onReorder: (id: string, toIndex: number) => void
+  /**
+   * 把某個 folder 移到清單的第 `toIndex` 個位置，並一併指定它移動後的置頂狀態。
+   * **以 id 指定，不以位置**（design D5）；`pinned` **必填** —— 每一次移動都可能跨越分界。
+   */
+  onReorder: (id: string, toIndex: number, pinned: boolean) => void
+  /** 切換置頂狀態；位置由它推導（跨越分界的最小移動）。 */
+  onSetPinned: (id: string, pinned: boolean) => void
 }
 
 // `cursor-pointer` 不是多餘的：瀏覽器的 UA 樣式給 `button` 一條 `cursor: default`，而 Tailwind v4
@@ -61,6 +67,24 @@ function GlobeIcon(): React.JSX.Element {
 }
 
 /**
+ * 圖釘。置頂時實心、未置頂時空心 —— 它同時是狀態指示與入口，兩種角色要一眼分得出來。
+ */
+function PinIcon({ filled }: { filled: boolean }): React.JSX.Element {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill={filled ? 'currentColor' : 'none'}
+      stroke="currentColor"
+      strokeWidth={1.8}
+      className="h-3.5 w-3.5"
+      aria-hidden="true"
+    >
+      <path d="M9 4h6l-1 5 3 3v2h-5v5l-1 2-1-2v-5H5v-2l3-3-1-5z" strokeLinejoin="round" />
+    </svg>
+  )
+}
+
+/**
  * rail 上一列所需的一切 —— **刻意不是 `WorkspaceFolder`**。
  *
  * rail 的項目集合不再等於 workspace 的 folder 清單（`global-session` 加了一個不隸屬任何 folder
@@ -80,6 +104,15 @@ interface RailItemView {
   /** 有值 ⇒ 呈現「路徑失效」徽章。全域項目恆無。 */
   missingPath?: string
   icon: React.JSX.Element
+  /** 置頂狀態。決定圖釘是實心還是空心，也決定它恆常呈現還是只在 hover 呈現。 */
+  pinned: boolean
+  /**
+   * 置頂狀態不可切換（全域項目）。圖釘改為**停用**：它仍然傳達狀態，但明確宣告自己動不了。
+   *
+   * 這與 `workspace-layout`「rail SHALL NOT 呈現不可操作的控制項」不衝突 —— 那條針對的是
+   * 「長得像可按、按下去什麼都不發生、且不傳達任何狀態」的元素（rail 曾有的那顆 `◈`）。
+   */
+  pinLocked?: boolean
 }
 
 function RailRow({
@@ -96,6 +129,7 @@ function RailRow({
   onRenameSession,
   onReorderSessions,
   onRemove,
+  onTogglePin,
   blockRef,
   headerRef,
   onDragStart,
@@ -117,6 +151,8 @@ function RailRow({
   onReorderSessions: (fromIndex: number, toIndex: number) => void
   /** 全域項目不可移除 —— 它不是 workspace 的成員（`global-session`）。 */
   onRemove?: () => void
+  /** 切換置頂。全域項目不傳（它的置頂狀態不可取消）。 */
+  onTogglePin?: () => void
   /** 整個 repo 區塊（含展開的 session 子列）—— repo 拖曳的命中判定以它為準（design D6）。 */
   blockRef?: (element: HTMLLIElement | null) => void
   /**
@@ -141,6 +177,9 @@ function RailRow({
   // 每個 folder 各持有自己的選單狀態 —— rail 上有很多列，共用一份會錨錯位置。
   const spawn = useSpawnMenu(onCreateSession)
   const [menu, setMenu] = useState<{ x: number; y: number; session: SessionState } | null>(null)
+  // folder 標題列自己的右鍵選單 —— 與 session 子列那一份分開：兩者的項目不同，共用一份狀態會
+  // 讓「在標題列按右鍵」跳出 session 的選單。
+  const [folderMenu, setFolderMenu] = useState<{ x: number; y: number } | null>(null)
   const [renaming, setRenaming] = useState<SessionState | null>(null)
   const rowRefs = useRef(new Map<number, HTMLDivElement>())
 
@@ -196,6 +235,38 @@ function RailRow({
       ]
     : []
 
+  /**
+   * 第二個 pin 入口。**全域項目不提供這個選單** —— 它既不可移除、置頂狀態也不可切換，一個只有
+   * 停用項目的選單正是 `workspace-layout` 禁止的那種東西。
+   */
+  const folderMenuItems: MenuItem[] = folderMenu
+    ? [
+        ...(onTogglePin
+          ? [
+              {
+                label: item.pinned ? t('rail.unpinAction') : t('rail.pinAction'),
+                onSelect: () => {
+                  onTogglePin()
+                  setFolderMenu(null)
+                },
+              },
+            ]
+          : []),
+        ...(onRemove
+          ? [
+              {
+                label: t('rail.removeAction'),
+                tone: 'danger' as const,
+                onSelect: () => {
+                  onRemove()
+                  setFolderMenu(null)
+                },
+              },
+            ]
+          : []),
+      ]
+    : []
+
   return (
     <li
       ref={blockRef}
@@ -236,6 +307,16 @@ function RailRow({
         onKeyDown={(event) => {
           if (event.key === 'Enter' || event.key === ' ') onSelect()
         }}
+        // 右鍵不會啟動拖曳 —— `useDragReorder.onMouseDown` 已濾掉非左鍵。
+        onContextMenu={
+          !onTogglePin && !onRemove
+            ? undefined
+            : (event) => {
+                event.preventDefault()
+                event.stopPropagation()
+                setFolderMenu({ x: event.clientX, y: event.clientY })
+              }
+        }
         title={item.title}
         className={
           // select-none：拖曳時不該把名稱與分支反白選起來。
@@ -304,6 +385,46 @@ function RailRow({
             {t('rail.missingBadge')}
           </span>
         )}
+
+        {/*
+          圖釘。**可見性依它當下扮演的角色**：置頂時它是狀態指示（恆常呈現），未置頂時它只是
+          一個入口（與 ＋／✕ 同族，hover 才出現）。因此不能直接沿用 `ICON_BUTTON_CLASS`
+          —— 那個 class 帶著 `opacity-0`。
+        */}
+        <button
+          type="button"
+          disabled={item.pinLocked === true}
+          aria-disabled={item.pinLocked === true ? 'true' : undefined}
+          aria-label={
+            item.pinLocked === true
+              ? t('rail.globalPinned', { name: item.name })
+              : item.pinned
+                ? t('rail.unpinFolder', { name: item.name })
+                : t('rail.pinFolder', { name: item.name })
+          }
+          title={
+            item.pinLocked === true
+              ? t('rail.globalPinnedTooltip')
+              : item.pinned
+                ? t('rail.unpinTooltip')
+                : t('rail.pinTooltip')
+          }
+          onClick={(event) => {
+            event.stopPropagation()
+            onTogglePin?.()
+          }}
+          className={
+            'shrink-0 rounded px-1.5 py-0.5 ' +
+            (item.pinLocked === true
+              ? // 停用：置灰、游標不是 pointer、恆常呈現（它傳達的是狀態，不是一個入口）。
+                'cursor-default text-ink-faint opacity-40 '
+              : item.pinned
+                ? 'cursor-pointer text-accent hover:text-ink '
+                : 'cursor-pointer text-ink-faint opacity-0 group-hover:opacity-100 hover:text-accent ')
+          }
+        >
+          <PinIcon filled={item.pinned} />
+        </button>
 
         {/* 在 rail 上看得到 session，就該能在原地開一個 —— 不必先切到主舞台。 */}
         <button
@@ -408,6 +529,15 @@ function RailRow({
       )}
 
       {spawn.menu}
+      {folderMenu && folderMenuItems.length > 0 && (
+        <ContextMenu
+          x={folderMenu.x}
+          y={folderMenu.y}
+          items={folderMenuItems}
+          onClose={() => setFolderMenu(null)}
+        />
+      )}
+
       {menu && <ContextMenu x={menu.x} y={menu.y} items={items} onClose={() => setMenu(null)} />}
       {renaming && (
         <SessionNameDialog
@@ -431,6 +561,7 @@ export function WorkspaceRail({
   onAdd,
   onRemove,
   onReorder,
+  onSetPinned,
 }: WorkspaceRailProps): React.JSX.Element {
   const { t } = useTranslation()
   const sessions = useSessions()
@@ -444,28 +575,64 @@ export function WorkspaceRail({
    */
   const headerRefs = useRef(new Map<string | null, HTMLDivElement>())
 
-  const blockRefs = useRef(new Map<number, HTMLLIElement>())
-  // **量整個 `<li>`**（含展開的 session 子列），不是標題列 —— 那是使用者眼中「這個 repo 佔的
-  // 地盤」，插入點以它判定才跟手（design D6）。
-  const folderRectOf = useCallback((index: number) => {
-    return blockRefs.current.get(index)?.getBoundingClientRect() ?? null
+  /**
+   * 拖曳命中判定的**列**（不是 folder）—— 鍵是**列索引**：
+   * `0…pinnedCount-1` 是置頂的 folder、`pinnedCount` 是分界、其後是未置頂的 folder。
+   *
+   * 全域項目不進來（`global-session`：它不可拖曳、也不作為落點）。
+   */
+  const rowRefs = useRef(new Map<number, HTMLElement>())
+
+  /** 分界所在的列索引。它同時是「置頂段的最後一格」與「其餘段的第一格」之間那個落點。 */
+  const dividerRow = dividerRowOf(folders)
+
+  /**
+   * **量整個 `<li>`**（含展開的 session 子列），不是標題列 —— 那是使用者眼中「這個 repo 佔的
+   * 地盤」，插入點以它判定才跟手（design D6）。
+   *
+   * **回傳的是該列與其所屬捲動容器可視區的交集，完全被裁掉時回 `null`。**
+   * `useDragReorder.insertAtFor` 依 **DOM 順序**掃描並比中線 —— 那只在「DOM 順序 ＝ 螢幕上的
+   * 垂直順序」時成立。rail 有兩個獨立裁切的區域：置頂段一旦內部捲動，被裁掉的置頂列其**未裁切**
+   * 的 rect 會落在其餘段**下方**，於是游標停在一個看得見的未置頂列上、掃描卻先命中一個看不見的
+   * 置頂列 —— 症狀是**一個使用者根本沒碰過的 repo 被移動並置頂**。取交集之後，看不見的列回
+   * `null`（`insertAtFor` 對它 `continue`），可見的列仍依螢幕順序排列。
+   */
+  const folderRectOf = useCallback((row: number) => {
+    const element = rowRefs.current.get(row)
+    if (!element) return null
+
+    const rect = element.getBoundingClientRect()
+    const clip = element.closest('ul')?.getBoundingClientRect()
+    if (!clip) return rect
+
+    const top = Math.max(rect.top, clip.top)
+    const bottom = Math.min(rect.bottom, clip.bottom)
+    if (bottom <= top) return null
+    return new DOMRect(rect.x, top, rect.width, bottom - top)
   }, [])
 
-  // 拖曳給的是位置，但送出去的必須是**識別碼** —— 清單的權威在主行程（design D5）。
-  //
-  // 這裡曾經把 `folders` 存進 ref（於渲染期間指派）以求 callback 穩定。那是不必要的：
-  // `useDragReorder` 明載 `onCommit` **不必穩定**（它變動時 window listener 於同一次 effect
-  // flush 內拆掉重掛，中間送不進任何滑鼠事件），而渲染期間寫 ref 是 React 的違規動作。
+  /**
+   * 列空間的落點 → `(folderIndex, pinned)`。
+   *
+   * 分界是一個**真正的落點列**，於是「置頂段的最後一格」與「其餘段的第一格」各自到得了，而
+   * 「有沒有移動」的判定留在列空間裡 —— 一次**只改變置頂狀態、序位不變**的拖曳（把置頂段最後
+   * 一個拖到分界之下）在列空間裡確實移動了一列，`useDragReorder` 既有的提交閘門因此放行。
+   *
+   * 抽成純函式是為了讓它**可單元測試** —— 這個 repo 已在同一族的索引換算上栽過三次。
+   */
   const commitFolderOrder = useCallback(
-    (fromIndex: number, toIndex: number) => {
-      const moved = folders[fromIndex]
-      if (moved) onReorder(moved.id, toIndex)
+    (fromRow: number, toRow: number) => {
+      const moved = folders[rowToFolderIndex(fromRow, dividerRow)]
+      if (!moved) return
+      const { folderIndex, pinned } = placeFromRow(fromRow, toRow, dividerRow)
+      onReorder(moved.id, folderIndex, pinned)
     },
-    [folders, onReorder],
+    [folders, dividerRow, onReorder],
   )
 
   const folderReorder = useDragReorder(
-    folders.length,
+    // 列數 ＝ folder 數 ＋ 分界那一列。
+    folders.length + 1,
     'vertical',
     folderRectOf,
     commitFolderOrder,
@@ -537,23 +704,103 @@ export function WorkspaceRail({
     [selectItem, sessions],
   )
 
+  /** 一列 folder 的完整接線 —— 兩段共用，差別只在它的列索引與置頂狀態。 */
+  const renderFolder = (folder: WorkspaceFolder, folderIndex: number): React.JSX.Element => {
+    const row = folderIndexToRow(folderIndex, dividerRow)
+    return (
+      <RailRow
+        key={folder.id}
+        blockRef={(element) => {
+          if (element) rowRefs.current.set(row, element)
+          else if (rowRefs.current.get(row) === element) rowRefs.current.delete(row)
+        }}
+        headerRef={(element) => {
+          if (element) headerRefs.current.set(folder.id, element)
+          else headerRefs.current.delete(folder.id)
+        }}
+        /*
+          **每一個與拖曳有關的索引都是「列」，不是 folder 序位。** 混用的具體後果：沒有任何
+          folder 被置頂時分界是第 0 列，於是把第一個 folder 拖到它自己的下半部會算出
+          `commitIndex(0, 2) = 1 ≠ 0` —— 畫出一條幽靈指示線，並送出一次會被 store 吞掉的提交。
+          而既有的探針只斷言「順序不變」，那是綠的。
+        */
+        onDragStart={(event) => folderReorder.onMouseDown(row, event)}
+        dropTarget={folderReorder.isDropTarget(row)}
+        dropAtEnd={folderReorder.dropAtEnd && row === folders.length}
+        dragged={folderReorder.drag?.fromIndex === row}
+        item={{
+          folderId: folder.id,
+          name: folder.name,
+          title: folder.path,
+          /*
+            副標只說**非常態**的事。「含有 `openspec/`」是常態 —— 每一列都喊一次的訊息
+            不傳達任何資訊，只是噪音。因此有 openspec 時它沉默，只在**缺少**時附註；
+            分支則是常時呈現的事實。
+          */
+          subtitle:
+            folder.status === 'missing'
+              ? t('rail.pathMissing')
+              : [folder.branch, folder.hasOpenSpec ? null : t('rail.noOpenspec')]
+                  .filter(Boolean)
+                  .join(' · '),
+          available: folder.status === 'ok',
+          missingPath: folder.status === 'missing' ? folder.path : undefined,
+          icon: <FolderIcon />,
+          pinned: folder.pinned,
+        }}
+        selected={folder.id === selectedFolderId(selection)}
+        sessions={sessions.forFolder(folder.id)}
+        focusedSessionId={sessions.focusedIdFor(folder.id)}
+        expanded={!collapsed.has(folder.id)}
+        onToggle={() => toggle(folder.id)}
+        onSelect={() => onSelect(folder.id)}
+        onSelectSession={(sessionId) => selectSession(folder.id, sessionId)}
+        onCloseSession={sessions.close}
+        onCreateSession={(spawnTarget) => createSession(folder.id, spawnTarget)}
+        onRenameSession={sessions.rename}
+        onReorderSessions={(fromIndex, toIndex) =>
+          sessions.reorder(folder.id, fromIndex, toIndex)
+        }
+        onRemove={() => onRemove(folder.id)}
+        onTogglePin={() => onSetPinned(folder.id, !folder.pinned)}
+      />
+    )
+  }
+
   return (
     <aside
       aria-label={t('rail.label')}
       className="flex h-full min-w-0 flex-col overflow-hidden border-r border-hairline bg-rail"
       {...railGuard}
     >
-      {/* 標題不會自己截斷，於是它會撐住 rail 的 min-content —— 拖到最小寬度時就溢出到分界之外。 */}
-      <h2 className="truncate px-3 pt-3 pb-2 text-xs tracking-widest text-ink-faint">
+      {/*
+        標題不會自己截斷，於是它會撐住 rail 的 min-content —— 拖到最小寬度時就溢出到分界之外。
+
+        **`shrink-0` 是承重的，不是保險。** 它與底部的加入入口同為 `<aside>` 的 flex item、
+        收縮因子同為 1，於是負的剩餘空間會分給**三個**項目而不只是置頂段；而 `truncate`
+        （`overflow: hidden`）讓它的自動最小尺寸變成 0 —— 實測置頂段一長，它會從 35px 被壓到
+        22px，**標題文字直接被裁掉**。
+      */}
+      <h2 className="shrink-0 truncate px-3 pt-3 pb-2 text-xs tracking-widest text-ink-faint">
         {t('rail.heading')}
       </h2>
 
-      <ul className="flex-1 overflow-y-auto">
+      {/*
+        **置頂段位於捲動容器之外**（不是 `position: sticky`）。等價於 sticky 的視覺效果，但
+        遮擋問題**從結構上消失** —— 捲動容器的視口從這一段的下緣才開始，容器內的元素不可能被它
+        蓋住，`scrollIntoView` 因此沒有東西要避讓（design D2／D4）。
+
+        `min-h-0 overflow-y-auto`：極端情況下（置頂很多、或全域項目展開了十幾個 session）它自己
+        內部捲動，內容不會變成不可達。
+      */}
+      <ul
+        aria-label={t('rail.pinnedList')}
+        className="min-h-0 shrink overflow-y-auto"
+      >
         {/*
-          全域項目恆為第一列，且**不進 `blockRefs`、不接 `onDragStart`** —— 它不是 workspace
-          的成員，既不可被拖曳，也不作為別人的落點。這同時是 design D7 那條的實作：拖曳的落點
-          索引以 **folder 清單**為基準，rail 比它多一列；把這一列算進去，每一次拖曳都會落錯一格
-          （而 workspace 只有兩個 folder 時，夾制會讓那個錯誤看起來是對的）。
+          全域項目恆為置頂段的第一列，且**不進 `rowRefs`、不接 `onDragStart`** —— 它不是
+          workspace 的成員，既不可被拖曳，也不作為別人的落點（`global-session`）。它的圖釘是
+          **停用**的：傳達「置頂，而且動不了」這個狀態，而不是一顆按下去沒反應的按鈕。
         */}
         <RailRow
           item={{
@@ -562,6 +809,8 @@ export function WorkspaceRail({
             title: t('rail.globalTooltip'),
             available: true,
             icon: <GlobeIcon />,
+            pinned: true,
+            pinLocked: true,
           }}
           selected={selection?.kind === 'global'}
           sessions={sessions.forFolder(null)}
@@ -583,69 +832,74 @@ export function WorkspaceRail({
           dragged={false}
         />
 
-        {/* 與 folder 清單的分隔 —— 使用者要一眼看出它與 repo 不是同一類東西。 */}
-        <li aria-hidden="true" className="mx-3 my-1 border-t border-hairline" />
+        {folders.filter((folder) => folder.pinned).map(renderFolder)}
+      </ul>
 
+      {/*
+        兩段之間的分界。**它是兩個 `<ul>` 的 sibling，不在置頂段之內** —— 放在段內它會是該段的
+        最後一個子節點，於是該段一內部捲動它就第一個離開視野，而它同時是「拖過這條線就改變置頂
+        狀態」的目標。放在這裡它不屬於任何捲動容器，因此於任何捲動位置都在。
+
+        它也是一個**真正的落點列**（列索引 = 置頂數）：分界的兩側各自是一個到得了的落點，
+        「置頂段的最後一格」與「其餘段的第一格」才都拖得到。
+      */}
+      <div
+        aria-hidden="true"
+        ref={(element) => {
+          if (element) rowRefs.current.set(dividerRow, element)
+          else if (rowRefs.current.get(dividerRow) === element) rowRefs.current.delete(dividerRow)
+        }}
+        className="relative mx-3 my-1 shrink-0 border-t border-hairline"
+      >
+        {/*
+          落在分界**之上** ⇒ 置頂段的最後一格。
+
+          **指示線不能直接畫在分界的 border 上** —— 那會蓋掉分界本身（同一個 CSS 屬性），於是
+          使用者只看到一條線，無從判斷它是分界還是落點；而另一個落點（其餘段的第一格）畫出來的
+          線就在幾個像素之外，長得一模一樣。分界必須留著當參照物，指示線疊在它**上方**，
+          兩個落點才讀得出「上面那一段」與「下面那一段」的差別。
+        */}
+        {folderReorder.isDropTarget(dividerRow) && (
+          <span className="absolute inset-x-0 -top-1.5 block h-0.5 rounded bg-accent" />
+        )}
+
+        {/*
+          **落到列空間的最後一格，而最後一格是分界本身**（＝所有 folder 都被置頂時）。
+
+          `dropAtEnd` 的指示線平常畫在最後一個 folder 之下 —— 但全部置頂時分界就是最後一列，
+          沒有任何 folder 拿得到它，於是「拖到線下面來取消置頂」這個**當下唯一的** unpin 手勢
+          會完全沒有指示線。探針抓到的就是這個。
+        */}
+        {folderReorder.dropAtEnd && dividerRow === folders.length && (
+          <span className="absolute inset-x-0 -bottom-1.5 block h-0.5 rounded bg-accent" />
+        )}
+      </div>
+
+      <ul
+        aria-label={t('rail.folderList')}
+        /*
+          **`min-h-[6rem]` 不是留白，是「下半段必須還能用」的直接編碼。** 這一段是
+          `flex: 1 1 0%`：它不會收縮，但也拿不到任何剩餘空間 —— 實測置頂段一長，它的
+          `clientHeight` 直接變成 0。而那**不是「置頂太多」才會遇到的事**：全域項目恆為置頂段的
+          成員，一個 repo 都沒置頂時，光是它展開十來個 session 就到得了。
+        */
+        className="min-h-[6rem] flex-1 overflow-y-auto"
+      >
         {folders.length === 0 ? (
           <li className="px-3 py-6 text-sm text-ink-faint">{t('rail.empty')}</li>
         ) : (
-          folders.map((folder, index) => (
-            <RailRow
-              key={folder.id}
-              blockRef={(element) => {
-                if (element) blockRefs.current.set(index, element)
-                else blockRefs.current.delete(index)
-              }}
-              headerRef={(element) => {
-                if (element) headerRefs.current.set(folder.id, element)
-                else headerRefs.current.delete(folder.id)
-              }}
-              onDragStart={(event) => folderReorder.onMouseDown(index, event)}
-              dropTarget={folderReorder.isDropTarget(index)}
-              dropAtEnd={folderReorder.dropAtEnd && index === folders.length - 1}
-              dragged={folderReorder.drag?.fromIndex === index}
-              item={{
-                folderId: folder.id,
-                name: folder.name,
-                title: folder.path,
-                /*
-                  副標只說**非常態**的事。「含有 `openspec/`」是常態 —— 每一列都喊一次的訊息
-                  不傳達任何資訊，只是噪音。因此有 openspec 時它沉默，只在**缺少**時附註；
-                  分支則是常時呈現的事實。
-                */
-                subtitle:
-                  folder.status === 'missing'
-                    ? t('rail.pathMissing')
-                    : [folder.branch, folder.hasOpenSpec ? null : t('rail.noOpenspec')]
-                        .filter(Boolean)
-                        .join(' · '),
-                available: folder.status === 'ok',
-                missingPath: folder.status === 'missing' ? folder.path : undefined,
-                icon: <FolderIcon />,
-              }}
-              selected={folder.id === selectedFolderId(selection)}
-              sessions={sessions.forFolder(folder.id)}
-              focusedSessionId={sessions.focusedIdFor(folder.id)}
-              expanded={!collapsed.has(folder.id)}
-              onToggle={() => toggle(folder.id)}
-              onSelect={() => onSelect(folder.id)}
-              onSelectSession={(sessionId) => selectSession(folder.id, sessionId)}
-              onCloseSession={sessions.close}
-              onCreateSession={(spawnTarget) => createSession(folder.id, spawnTarget)}
-              onRenameSession={sessions.rename}
-              onReorderSessions={(fromIndex, toIndex) =>
-                sessions.reorder(folder.id, fromIndex, toIndex)
-              }
-              onRemove={() => onRemove(folder.id)}
-            />
-          ))
+          folders
+            .map((folder, folderIndex) => ({ folder, folderIndex }))
+            .filter(({ folder }) => !folder.pinned)
+            .map(({ folder, folderIndex }) => renderFolder(folder, folderIndex))
         )}
       </ul>
 
+      {/* `shrink-0` 與 `<h2>` 同一條理由 —— 見上面那段註解。 */}
       <button
         type="button"
         onClick={onAdd}
-        className="m-2 cursor-pointer rounded border border-dashed border-hairline px-3 py-2 text-sm text-ink-dim hover:border-accent/40 hover:text-accent"
+        className="m-2 shrink-0 cursor-pointer rounded border border-dashed border-hairline px-3 py-2 text-sm text-ink-dim hover:border-accent/40 hover:text-accent"
       >
         {t('rail.addFolder')}
       </button>

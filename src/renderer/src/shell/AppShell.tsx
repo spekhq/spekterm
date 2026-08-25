@@ -15,7 +15,7 @@ import { useWorkspaceFolders } from './useWorkspaceFolders'
 const SEPARATOR_CLASS = 'w-[3px] cursor-col-resize bg-hairline transition-colors hover:bg-accent'
 
 export function AppShell(): React.JSX.Element {
-  const { folders, selection, select, addFolder, removeFolder, reorderFolders } =
+  const { folders, selection, select, addFolder, removeFolder, reorderFolders, setPinned } =
     useWorkspaceFolders()
   // Provider 在此 —— 未存的變更必須活過切換 folder（FilesPanel 以 folder.id 為 key 掛載）。
   // SessionsProvider 同理，且要同時涵蓋 rail 與主舞台：rail 呈現所有 folder 的 session，
@@ -43,7 +43,7 @@ export function AppShell(): React.JSX.Element {
               selection={selection}
               onSelectGlobal={() => select({ kind: 'global' })}
               onSelectFolder={(id) => select(folderSelection(id))}
-              onReorderFolder={(id, toIndex) => void reorderFolders(id, toIndex)}
+              onReorderFolder={(id, toIndex, pinned) => void reorderFolders(id, toIndex, pinned)}
             />
 
             {/*
@@ -74,7 +74,8 @@ export function AppShell(): React.JSX.Element {
                   onSelectGlobal={() => select({ kind: 'global' })}
                   onAdd={() => void addFolder()}
                   onRemove={(id) => void removeFolder(id)}
-                  onReorder={(id, toIndex) => void reorderFolders(id, toIndex)}
+                  onReorder={(id, toIndex, pinned) => void reorderFolders(id, toIndex, pinned)}
+                  onSetPinned={(id, pinned) => void setPinned(id, pinned)}
                 />
               </Panel>
 

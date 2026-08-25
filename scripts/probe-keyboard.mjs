@@ -19,7 +19,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
-import { check, connectToApp, pollFor, pollUntil, retryAction } from './lib/cdp.mjs'
+import { check, connectToApp, dragMouse, pollFor, pollUntil, retryAction } from './lib/cdp.mjs'
 import { menuEvidence } from './lib/menu-evidence.mjs'
 import { sectionConsole } from './lib/instrument.mjs'
 import { copy, prefixOf } from './lib/copy.mjs'
@@ -382,9 +382,36 @@ const OPENED_FILE = `(() => {
  * 可供 basename 取用（它的 `title` 是一句說明）。少了這道過濾，這份清單的第一項會變成那句
  * 說明的整串文字，而每一條順序斷言都會以「順序錯了」的樣貌失敗。
  */
+/**
+ * rail 的**捲動容器**。
+ *
+ * rail 現在有兩個並列的 `<ul>`：置頂段（**不捲動** —— 它位於捲動容器之外，因此不必也不可能
+ * 遮擋容器內的目標）與其餘段。以 `aside > ul` 取得會拿到**第一個**，也就是不捲動的那一個 ——
+ * 而那個失效的方向是混合的：`scrollHeight > clientHeight` 這類前置會**大聲失敗**，但所有
+ * 「SHALL NOT 捲動」的斷言會**安靜地變綠**（沒有東西在動，位置當然不變）。因此以 aria-label
+ * 指名，不靠位置。
+ */
+const RAIL_SCROLL_UL = `document.querySelector('aside[aria-label="${copy('rail.label')}"] > ul[aria-label="${copy('rail.folderList')}"]')`
+
+/** rail 上每一列的標題列 —— 跨**兩個** `<ul>`，`querySelectorAll` 回文件順序＝呈現順序。 */
+const RAIL_ROW_SEL = `aside[aria-label="${copy('rail.label')}"] > ul > li > div[role="button"]`
+
 const RAIL_ORDER = `[...document.querySelectorAll('aside[aria-label="${copy('rail.label')}"] > ul > li > div[role="button"]')]
   .filter((row) => row.getAttribute('aria-label') !== ${JSON.stringify(copy('rail.globalName'))})
   .map((row) => (row.getAttribute('title') ?? '').split('/').pop())`
+
+/**
+ * rail 兩段各自的項目 —— 置頂狀態就是「它在哪一段」，那正是使用者看到的事實。
+ * 置頂段的第一個恆為全域項目。
+ */
+const RAIL_SECTIONS = `(() => {
+  const named = (ul) => [...(ul?.querySelectorAll(':scope > li > div[role="button"]') ?? [])]
+    .map((row) => row.getAttribute('aria-label'))
+  return {
+    pinned: named(document.querySelector('aside[aria-label="${copy('rail.label')}"] > ul[aria-label="${copy('rail.pinnedList')}"]')),
+    rest: named(document.querySelector('aside[aria-label="${copy('rail.label')}"] > ul[aria-label="${copy('rail.folderList')}"]')),
+  }
+})()`
 
 /** rail 上**全部**項目的 aria-label（含全域項目）—— 導航序以它為準。 */
 const RAIL_ITEMS = `[...document.querySelectorAll('aside[aria-label="${copy('rail.label')}"] > ul > li > div[role="button"]')]
@@ -1371,18 +1398,52 @@ async function checkSingleFolder(label, { port, rendererUrl }) {
     // ── 排序快捷鍵在**單一項目**上的邊界（spec 的 scenario，否則零覆蓋）
     //
     // 這正是最容易寫成索引越界或無窮迴圈的地方 —— 而它在多項目的 fixture 上永遠測不到。
+    //
+    // **這裡曾經是一盞假綠，而且它撐過了一整輪 9/9。** 原本一次送 `Shift+↓` 再送 `Shift+↑`，
+    // 只斷言 `RAIL_ORDER` 不變。置頂能力加進來之後，唯一的那個 folder **永遠與分界相鄰**：
+    // `Shift+↑` 會跨過分界**把它置頂**，而 folder 清單的順序**確實沒有變**（`RAIL_ORDER` 只列
+    // folder 名稱）—— 斷言照過，fixture 的置頂狀態卻被靜默改掉。
+    // 兩個方向因此拆開，各自連**置頂狀態**一起斷言。
     const orderBefore = await app.client.evaluate(RAIL_ORDER)
+    const railOrderNow = async () => JSON.stringify(await app.client.evaluate(RAIL_ORDER))
+
+    // 往下：它下面沒有東西（分界在它上面）⇒ 真正的無操作。
     await pressKey(app.client, 'ArrowDown', ['shift'])
-    await pressKey(app.client, 'ArrowUp', ['shift'])
     await sleep(400)
-    const orderAfter = await app.client.evaluate(RAIL_ORDER)
-    const mountedAfterReorder = await app.client.evaluate(MOUNTED)
+    const afterDown = await app.client.evaluate(RAIL_SECTIONS)
+    const mountedAfterDown = await app.client.evaluate(MOUNTED)
     check(
       results,
-      `${label}：workspace 只有一個 folder 時，排序快捷鍵為無操作且 app 不崩潰`,
-      JSON.stringify(orderAfter) === JSON.stringify(orderBefore) && mountedAfterReorder?.ok === true,
-      `${JSON.stringify(orderBefore)}；${describeMounted(mountedAfterReorder) || '掛載正常'}`,
+      `${label}：只有一個 folder 且該次移動不跨越分界時，排序快捷鍵為無操作且 app 不崩潰`,
+      (await railOrderNow()) === JSON.stringify(orderBefore) &&
+        JSON.stringify(afterDown?.rest) === JSON.stringify(['repo-a']) &&
+        mountedAfterDown?.ok === true,
+      `${JSON.stringify(orderBefore)} / ${JSON.stringify(afterDown)}；${describeMounted(mountedAfterDown) || '掛載正常'}`,
     )
+
+    // 往上：跨過分界 ⇒ 置頂。**順序仍然不變** —— 那正是上面那盞假綠的來源，因此這條斷言的
+    // 鑑別力全部落在置頂狀態上。
+    await pressKey(app.client, 'ArrowUp', ['shift'])
+    const afterUp = await pollUntil(
+      app.client,
+      RAIL_SECTIONS,
+      (v) => v !== null && v.pinned.length === 2,
+      4000,
+    )
+    const mountedAfterUp = await app.client.evaluate(MOUNTED)
+    check(
+      results,
+      `${label}：只有一個 folder 時 Shift+↑ 仍跨得過分界（置頂），且順序不變、app 不崩潰`,
+      JSON.stringify(afterUp?.pinned) === JSON.stringify([copy('rail.globalName'), 'repo-a']) &&
+        JSON.stringify(afterUp?.rest) === JSON.stringify([]) &&
+        (await railOrderNow()) === JSON.stringify(orderBefore) &&
+        mountedAfterUp?.ok === true,
+      `${JSON.stringify(afterUp)}；${describeMounted(mountedAfterUp) || '掛載正常'}`,
+    )
+
+    // 還原成未置頂 —— 這一段其後的斷言以它為前提。
+    await pressKey(app.client, 'ArrowDown', ['shift'])
+    await pollUntil(app.client, RAIL_SECTIONS, (v) => v !== null && v.pinned.length === 1, 4000)
 
     await createSession(app.client)
     const soleTab = await pollUntil(app.client, TABS, (value) => value.length === 1, 10_000)
@@ -1459,17 +1520,58 @@ async function checkReordering(label, { port, rendererUrl }) {
       JSON.stringify(movedBack),
     )
 
+    // ── 分界本身算一格：往上跨過它就是置頂（rail-pinning）
+    //
+    // **這一格取代了此前那條「已在頂端時 Shift+↑ 為無操作」。** 置頂能力加進來之後，
+    // 第一個 folder 的上方不再是端點 —— 那裡是分界。此前那條斷言只看「順序不變」，
+    // 而跨界時順序**確實不變**（動的是置頂狀態）：它會保持綠燈，同時**讓 fixture 的置頂狀態
+    // 被靜默改掉**，其後每一條斷言都建立在被污染的狀態上（實測發生過，這就是那次的修正）。
+    await pressKey(app.client, 'ArrowUp', ['shift'])
+    const pinnedByKey = await pollUntil(
+      app.client,
+      RAIL_SECTIONS,
+      (v) => v.pinned.length === 2,
+      4000,
+    )
+    check(
+      results,
+      `${label}：Shift+↑ 跨過分界 ⇒ 該 repo 被置頂（順序不變，動的是置頂狀態）`,
+      JSON.stringify(pinnedByKey.pinned) === JSON.stringify(['Global', 'repo-a']) &&
+        JSON.stringify(pinnedByKey.rest) === JSON.stringify(['repo-b', 'repo-c']),
+      JSON.stringify(pinnedByKey),
+    )
+
     // ── 端點**不循環** —— 這是與導航快捷鍵刻意不同的地方（design D3）
     //
     // 少了這條，一個「照抄 cycle()」的實作也會全綠 —— 而它會把第一名丟到最後一名。
+    // **端點是「置頂段的第一個」**，而且要一併斷言置頂狀態沒變 —— 只看順序的話，一個
+    // 「循環到末端並順手取消置頂」的實作在這裡是分不出來的。
     await pressKey(app.client, 'ArrowUp', ['shift'])
     await sleep(500)
     const atTop = await app.client.evaluate(RAIL_ORDER)
+    const atTopSections = await app.client.evaluate(RAIL_SECTIONS)
     check(
       results,
-      `${label}：已在頂端時 Shift+↑ 為無操作（不循環到末端）`,
-      JSON.stringify(atTop) === JSON.stringify(['repo-a', 'repo-b', 'repo-c']),
-      `${JSON.stringify(atTop)}（循環的話會變成 repo-b, repo-c, repo-a）`,
+      `${label}：已在置頂段頂端時 Shift+↑ 為無操作（不循環、置頂狀態也不變）`,
+      JSON.stringify(atTop) === JSON.stringify(['repo-a', 'repo-b', 'repo-c']) &&
+        JSON.stringify(atTopSections.pinned) === JSON.stringify(['Global', 'repo-a']),
+      `${JSON.stringify(atTop)} / ${JSON.stringify(atTopSections)}（循環的話會變成 repo-b, repo-c, repo-a）`,
+    )
+
+    // ── 往下跨過分界 ⇒ 取消置頂。順帶把 fixture 還原成「全部未置頂」，後面的段落以它為前提。
+    await pressKey(app.client, 'ArrowDown', ['shift'])
+    const unpinnedByKey = await pollUntil(
+      app.client,
+      RAIL_SECTIONS,
+      (v) => v.pinned.length === 1,
+      4000,
+    )
+    check(
+      results,
+      `${label}：Shift+↓ 跨過分界 ⇒ 取消置頂，且序位不變（不被當作無操作）`,
+      JSON.stringify(unpinnedByKey.pinned) === JSON.stringify(['Global']) &&
+        JSON.stringify(unpinnedByKey.rest) === JSON.stringify(['repo-a', 'repo-b', 'repo-c']),
+      JSON.stringify(unpinnedByKey),
     )
 
     // ── Shift+→ / Shift+←：移動 focused session
@@ -1779,38 +1881,50 @@ async function checkReordering(label, { port, rendererUrl }) {
     //
     // **rail 溢出以壓矮 viewport 達成**，不以「多塞十幾個 folder」—— 後者要改 fixture，而
     // fixture 是全域的，前面每一條絕對斷言都會跟著壞。
+    //
+    // **高度要重新量，不能沿用。** 置頂段（含全域項目）移出捲動容器之後，捲動容器的內容少了
+    // 一列 —— 在原本的 300px 下實測 `max` 只剩 17px，連「把某一列切一半」都造不出來（那條
+    // 前提因此變紅）。壓到 240px 之後 `max` 回到可用的範圍。
     await app.client.send('Emulation.setDeviceMetricsOverride', {
       width: 1280,
-      height: 300,
+      height: 240,
       deviceScaleFactor: 0,
       mobile: false,
     })
     await sleep(600)
 
     const RAIL_SCROLLER = `(() => {
-      const ul = document.querySelector('aside[aria-label="${copy('rail.label')}"] > ul')
+      const ul = ${RAIL_SCROLL_UL}
       if (!ul) return null
       return { scrollHeight: ul.scrollHeight, clientHeight: ul.clientHeight, scrollTop: Math.round(ul.scrollTop) }
     })()`
 
     /** 選中的那一列是否**完整**落在捲動容器內 —— 這是本要求的不變式。 */
     const SELECTED_FULLY_VISIBLE = `(() => {
-      const ul = document.querySelector('aside[aria-label="${copy('rail.label')}"] > ul')
-      const rows = [...document.querySelectorAll('aside[aria-label="${copy('rail.label')}"] > ul > li > div[role="button"]')]
+      const scroller = ${RAIL_SCROLL_UL}
+      const rows = [...document.querySelectorAll('${RAIL_ROW_SEL}')]
       const row = rows.find((r) => r.getAttribute('aria-current') === 'true')
-      if (!ul || !row) return null
-      const a = ul.getBoundingClientRect()
+      if (!scroller || !row) return null
+      // **列與容器要成對取得。** rail 有兩個 <ul>：置頂段（不捲動）與其餘段。選中的若是置頂的
+      // repo 或全域項目，它在另一個容器裡 —— 拿其餘段的 rect 去量必然「不可見」，那會對正確的
+      // 實作亮紅燈。
+      const own = row.closest('ul')
+      const a = own.getBoundingClientRect()
       const b = row.getBoundingClientRect()
       return {
         label: row.getAttribute('aria-label'),
+        pinnedSection: own !== scroller,
         visible: b.top >= a.top - 0.5 && b.bottom <= a.bottom + 0.5,
-        scrollTop: Math.round(ul.scrollTop),
+        scrollTop: Math.round(scroller.scrollTop),
       }
     })()`
 
     const scroller = await pollUntil(app.client, RAIL_SCROLLER, (v) => v !== null, 8000)
-    check(results, `${label}：壓矮 viewport 後 rail 確實溢出（否則整段沒有鑑別力）`,
-      scroller !== null && scroller.scrollHeight > scroller.clientHeight + 10,
+    // **`clientHeight > 0` 不是多餘的。** 置頂段沒有上限，它可以把其餘段擠成零高度 —— 而一個
+    // 零高度容器的 `scrollHeight > clientHeight` **恆為真**，於是這條前提會通過，其後每一條
+    // 「捲動」斷言卻什麼都沒量到。
+    check(results, `${label}：壓矮 viewport 後 rail 確實溢出，且捲動容器有非零高度（否則整段沒有鑑別力）`,
+      scroller !== null && scroller.clientHeight > 0 && scroller.scrollHeight > scroller.clientHeight + 10,
       JSON.stringify(scroller))
 
     // 走到最後一個 repo —— 在這個高度下它必然落在初始視野之外。
@@ -1832,7 +1946,7 @@ async function checkReordering(label, { port, rendererUrl }) {
     // 兩種實作都會過（獨立稽核抓到的 m9）。強制捲動是直接指派 `scrollTop`，不送滑鼠事件 ——
     // 於是它不會誤觸下面那條「以滑鼠操作時不捲」的例外。
     const FORCE_RAIL_BOTTOM = `(() => {
-      const ul = document.querySelector('aside[aria-label="${copy('rail.label')}"] > ul')
+      const ul = ${RAIL_SCROLL_UL}
       if (!ul) return null
       ul.scrollTop = ul.scrollHeight
       return Math.round(ul.scrollTop)
@@ -1864,9 +1978,10 @@ async function checkReordering(label, { port, rendererUrl }) {
     // 因此改為**主動算**：把捲動位置設到讓某一列剛好被視窗邊緣切一半，先試上緣、再試下緣。
     // 直接指派 `scrollTop` 不送滑鼠事件，於是它自己不會誤觸這條例外。
     const CUT_A_RAIL_ROW = `(() => {
-      const ul = document.querySelector('aside[aria-label="${copy('rail.label')}"] > ul')
+      const ul = ${RAIL_SCROLL_UL}
       if (!ul) return null
-      const rows = [...document.querySelectorAll('aside[aria-label="${copy('rail.label')}"] > ul > li > div[role="button"]')]
+      // 只看**其餘段裡**的列 —— 置頂段的列不在這個容器內，拿它們算切半的捲動位置會算錯。
+      const rows = [...ul.querySelectorAll(':scope > li > div[role="button"]')]
       const max = ul.scrollHeight - ul.clientHeight
       for (const row of rows) {
         if (row.getAttribute('aria-current') === 'true') continue
@@ -1995,6 +2110,51 @@ async function checkReordering(label, { port, rendererUrl }) {
         wrapped !== null && wrapped.visible === true, JSON.stringify(wrapped))
       check(results, `${label}：分頁列確實橫向捲動了（對照組：無 scrollIntoView 時 scrollLeft 停在 0）`,
         wrapped !== null && wrapped.scrollLeft > 0, JSON.stringify(wrapped))
+
+      // ── 例外**僅及於被直接操作的那一個容器**
+      //
+      // 以滑鼠點 rail 的 session 子列，會使**分頁列**的 focused 分頁改變 —— 而那個分頁可能在
+      // 橫向視野之外。使用者直接操作的是 rail，不是分頁列，因此分頁列 SHALL 捲動。
+      //
+      // **此前零覆蓋**：那條「以滑鼠操作時不捲動」的例外只驗了 rail 這一側，而一個把例外寫成
+      // 全域旗標（而不是 per-container）的實作，會讓分頁列跟著不捲 —— 全綠。
+      const RAIL_SUBROW_RECT = (index) => `(() => {
+        const list = document.querySelector('ul[aria-label="${copy('rail.folderSessions', { name: 'repo-a' })}"]')
+        const row = [...(list?.querySelectorAll(':scope > li > div[role="button"]') ?? [])][${index}]
+        if (!row) return null
+        const r = row.getBoundingClientRect()
+        return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) }
+      })()`
+
+      // **焦點要先移開目標，否則點下去選取不變 ⇒ 依規格本來就不該捲**（實測踩過：前後
+      // `index` 都是 3，斷言以「沒捲」失敗，而那是正確行為）。先循環回第一個分頁，
+      // 再把分頁列捲到最左 —— 於是目標（最後一個）既非 focused、也在視野之外。
+      await pressKey(app.client, 'Tab', ['ctrl'])
+      await sleep(400)
+      await app.client.evaluate(FORCE_TABS_LEFT)
+      await sleep(300)
+      const beforeClick = await app.client.evaluate(TAB_SCROLLER)
+      // 分頁數在這一段是動態的（上面「不夠就補幾個 session」），因此取當下的值 ——
+      // `SESSION_COUNT` 是另一個段落的常數，這裡看不到它。
+      const lastRow = await app.client.evaluate(RAIL_SUBROW_RECT((beforeClick?.count ?? 1) - 1))
+      check(results, `${label}：前提 —— 最後一個分頁既非 focused 又落在視野之外，且它的 rail 子列點得到`,
+        beforeClick !== null && beforeClick.scrollLeft === 0 &&
+          beforeClick.index !== beforeClick.count - 1 && lastRow !== null,
+        `${JSON.stringify(beforeClick)} / ${JSON.stringify(lastRow)}`)
+
+      // **`realClick` 會對傳入的 rect 再取一次 `center()`** —— 而上面回的已經是中心點，
+      // `width` 是 undefined ⇒ NaN ⇒ CDP 回「Invalid parameters」並讓整個段落拋出例外。
+      // 直接送座標。
+      if (lastRow) await realMouse(app.client, lastRow.x, lastRow.y, 'left')
+      const afterClick = await pollUntil(
+        app.client,
+        TAB_SCROLLER,
+        (v) => v !== null && v.index === v.count - 1,
+        4000,
+      )
+      check(results, `${label}：以滑鼠點 rail 子列時，分頁列仍捲動（例外僅及於被直接操作的容器）`,
+        afterClick !== null && afterClick.visible === true && afterClick.scrollLeft > 0,
+        `${JSON.stringify(beforeClick)} → ${JSON.stringify(afterClick)}`)
     }
 
     await app.client.send('Emulation.clearDeviceMetricsOverride', {})
@@ -2147,14 +2307,16 @@ async function checkScrollAnchoring(label, { port, rendererUrl }) {
   const profile = seedProfile(repos)
   const app = await launch({ port, profileDir: profile, rendererUrl })
 
-  const RAIL_UL = `document.querySelector('aside[aria-label="${copy('rail.label')}"] > ul')`
+  const RAIL_UL = RAIL_SCROLL_UL
   const TAB_LIST = `document.querySelector('[role="tablist"][aria-label="${copy('sessions.tabs')}"]')`
 
   const RAIL_STATE = `(() => {
     const ul = ${RAIL_UL}
     if (!ul) return null
     return {
-      overflows: ul.scrollHeight > ul.clientHeight + 4,
+      // 同上：零高度容器的 overflows 恆為真，因此把高度一起帶出來給斷言檢查。
+    clientHeight: ul.clientHeight,
+    overflows: ul.clientHeight > 0 && ul.scrollHeight > ul.clientHeight + 4,
       scrollTop: Math.round(ul.scrollTop),
       max: Math.round(ul.scrollHeight - ul.clientHeight),
     }
@@ -2187,19 +2349,22 @@ async function checkScrollAnchoring(label, { port, rendererUrl }) {
 
   /** 選中的 rail **項目標題列**（`Shift+↑↓` 的目標，與上面那個是兩個不同的東西）。 */
   const SELECTED_HEADER = `(() => {
-    const ul = ${RAIL_UL}
-    const rows = [...document.querySelectorAll('aside[aria-label="${copy('rail.label')}"] > ul > li > div[role="button"]')]
+    const scroller = ${RAIL_UL}
+    const rows = [...document.querySelectorAll('${RAIL_ROW_SEL}')]
     const row = rows.find((r) => r.getAttribute('aria-current') === 'true')
-    if (!ul || !row) return null
+    if (!scroller || !row) return null
+    // 列與容器成對取得 —— 置頂的 repo 與全域項目在另一個 <ul> 裡（見 RAIL_SCROLL_UL）。
+    const ul = row.closest('ul')
     const a = ul.getBoundingClientRect()
     const b = row.getBoundingClientRect()
     return {
       label: row.getAttribute('aria-label'),
+      pinnedSection: ul !== scroller,
       visible: b.top >= a.top - 0.5 && b.bottom <= a.bottom + 0.5,
       hidden: b.bottom <= a.top + 0.5 || b.top >= a.bottom - 0.5,
-      scrollTop: Math.round(ul.scrollTop),
+      scrollTop: Math.round(scroller.scrollTop),
       contentTop: Math.round(b.top - a.top + ul.scrollTop),
-      max: Math.round(ul.scrollHeight - ul.clientHeight),
+      max: Math.round(scroller.scrollHeight - scroller.clientHeight),
       order: rows.map((r) => r.getAttribute('aria-label')),
     }
   })()`
@@ -2320,12 +2485,36 @@ async function checkScrollAnchoring(label, { port, rendererUrl }) {
       afterMove !== null && afterMove.visible === true,
       `${JSON.stringify(beforeMove)} → ${JSON.stringify(afterMove)}`)
 
-    // ── 與導航無關的更新不搶走 rail 的捲動位置
+    // ── Ctrl+Tab **也要捲 rail** —— 同一顆鍵要捲兩個容器
     //
-    // 選回 repo-a（上一段把選取移到了 repo-c，而 repo-c 沒有 session），focused 走到最後一個
-    // session，再把 rail 捲到頂 —— 它的子列於是落在下方視野之外。
+    // 這條 requirement 的表格裡，`Ctrl+Tab` 那一列寫著「分頁列（橫向）**與** rail（縱向）」。
+    // **rail 這一半此前零覆蓋**：`FOCUSED_ROW` 只被用在下面那條「不捲動」的前置上，從來沒有
+    // 一條斷言驗過「切過去之後子列真的被捲進來了」。一個只捲分頁列的實作會全綠。
     await app.client.evaluate(SELECT_FOLDER('repo-a'))
     await sleep(400)
+    await pressKey(app.client, 'Tab', ['ctrl', 'shift'])
+    await sleep(500)
+    await app.client.evaluate(FORCE_RAIL(0))
+    await sleep(300)
+    const subRowHidden = await app.client.evaluate(FOCUSED_ROW)
+    check(results, `${label}：前提 —— 切換之前，目標 session 的 rail 子列落在視野之外`,
+      subRowHidden !== null && subRowHidden.hidden === true, JSON.stringify(subRowHidden))
+
+    await pressKey(app.client, 'Tab', ['ctrl'])
+    const subRowShown = await pollUntil(
+      app.client,
+      FOCUSED_ROW,
+      (v) => v !== null && v.hidden === false,
+      4000,
+    )
+    check(results, `${label}：Ctrl+Tab 切換後，該 session 的 rail 子列被捲入 rail 的可視範圍`,
+      subRowShown !== null && subRowShown.hidden === false &&
+        subRowShown.scrollTop !== subRowHidden?.scrollTop,
+      `${JSON.stringify(subRowHidden)} → ${JSON.stringify(subRowShown)}`)
+
+    // ── 與導航無關的更新不搶走 rail 的捲動位置
+    //
+    // focused 走到最後一個 session，再把 rail 捲到頂 —— 它的子列於是落在下方視野之外。
     await pressKey(app.client, 'Tab', ['ctrl', 'shift'])
     await sleep(500)
     await app.client.evaluate(FORCE_RAIL(0))
@@ -2412,6 +2601,201 @@ async function checkScrollAnchoring(label, { port, rendererUrl }) {
     check(results, `${label}：session 結束這類與導航無關的更新，SHALL NOT 搶走分頁列的捲動位置`,
       tabExited !== null && tabExited.scrollLeft === tabBefore?.scrollLeft,
       `scrollLeft ${tabBefore && tabBefore.scrollLeft} → ${tabExited && tabExited.scrollLeft}`)
+
+    // ══ rail-pinning：置頂段 ═════════════════════════════════════════════════
+    //
+    // **先把 viewport 壓回矮的** —— 上面「分頁列」那一段改過 device metrics，此刻 rail 是不
+    // 溢出的；沿用它的話，下面每一條「捲動」斷言都會落在一個不會捲的容器上而恆為真。
+    await app.client.send('Emulation.setDeviceMetricsOverride', {
+      width: 1280,
+      height: 300,
+      deviceScaleFactor: 0,
+      mobile: false,
+    })
+    await sleep(600)
+
+    const pinButton = (name) =>
+      `document.querySelector('button[aria-label="${copy('rail.pinFolder', { name: '%N%' })}"]')`.replace('%N%', name)
+    const unpinButton = (name) =>
+      `document.querySelector('button[aria-label="${copy('rail.unpinFolder', { name: '%N%' })}"]')`.replace('%N%', name)
+
+    /** 置頂段與分界的幾何 —— 遮擋那一條要以它比對，不能只問「目標在不在視口內」。 */
+    const PINNED_GEOM = `(() => {
+      const rail = document.querySelector('aside[aria-label="${copy('rail.label')}"]')
+      const pinned = rail.querySelector(':scope > ul[aria-label="${copy('rail.pinnedList')}"]')
+      const rest = rail.querySelector(':scope > ul[aria-label="${copy('rail.folderList')}"]')
+      const divider = [...rail.children].find((c) => c.getAttribute('aria-hidden') === 'true')
+      if (!pinned || !rest || !divider) return null
+      const first = rest.querySelector(':scope > li > div[role="button"]')
+      const p = pinned.getBoundingClientRect()
+      const d = divider.getBoundingClientRect()
+      const r = rest.getBoundingClientRect()
+      const f = first ? first.getBoundingClientRect() : null
+      return {
+        pinnedTop: Math.round(p.top),
+        pinnedBottom: Math.round(p.bottom),
+        dividerBottom: Math.round(d.bottom),
+        restClientHeight: rest.clientHeight,
+        restOverflows: rest.clientHeight > 0 && rest.scrollHeight > rest.clientHeight + 4,
+        restScrollTop: Math.round(rest.scrollTop),
+        restScrollMax: Math.round(rest.scrollHeight - rest.clientHeight),
+        firstRestLabel: first ? first.getAttribute('aria-label') : null,
+        firstRestTop: f ? Math.round(f.top) : null,
+        firstRestVisible: f ? f.top >= r.top - 0.5 && f.bottom <= r.bottom + 0.5 : null,
+        pinnedLabels: [...pinned.querySelectorAll(':scope > li > div[role="button"]')]
+          .map((row) => row.getAttribute('aria-label')),
+      }
+    })()`
+
+    const FORCE_REST_BOTTOM = `(() => {
+      const rest = document.querySelector('aside[aria-label="${copy('rail.label')}"] > ul[aria-label="${copy('rail.folderList')}"]')
+      if (!rest) return null
+      rest.scrollTop = rest.scrollHeight
+      return Math.round(rest.scrollTop)
+    })()`
+
+    // ── 置頂一個**小**的 repo（repo-b），讓其餘段仍留著 repo-a 那 8 個展開的子列 ——
+    //    其餘段因此仍然溢出，「兩段行為不同」那條才有鑑別力。
+    await app.client.evaluate(`${pinButton('repo-b')}?.click()`)
+    const pinnedGeom = await pollUntil(
+      app.client,
+      PINNED_GEOM,
+      (v) => v !== null && v.pinnedLabels.includes('repo-b'),
+      6000,
+    )
+    check(results, `${label}：前提 —— 置頂 repo-b 之後，其餘段仍溢出且有非零高度`,
+      pinnedGeom !== null && pinnedGeom.restClientHeight > 0 && pinnedGeom.restOverflows === true,
+      JSON.stringify(pinnedGeom))
+
+    // ── 置頂段不隨 rail 捲動，且其餘段的內容確實會被捲走（後者才是鑑別力所在）
+    await app.client.evaluate(FORCE_REST_BOTTOM)
+    await sleep(300)
+    const atBottom = await app.client.evaluate(PINNED_GEOM)
+    check(results, `${label}：其餘段捲到底之後，置頂段的位置一個像素都沒動`,
+      atBottom !== null && pinnedGeom !== null &&
+        atBottom.pinnedTop === pinnedGeom.pinnedTop &&
+        atBottom.pinnedBottom === pinnedGeom.pinnedBottom,
+      `${JSON.stringify(pinnedGeom)} → ${JSON.stringify(atBottom)}`)
+    check(results, `${label}：而同一時刻，最前面的未置頂 folder 已被捲出視野（兩段確實不同）`,
+      atBottom !== null && atBottom.restScrollTop > 0 && atBottom.firstRestVisible === false,
+      JSON.stringify(atBottom))
+
+    // ── 遮擋：捲入視野的目標不得被置頂段蓋住
+    //
+    // **以幾何關係斷言**（目標上緣不低於分界下緣），不以「目標落在視口內」—— 後者對一個被
+    // 完全蓋住的目標**照樣通過**，而那正是這條要防的失效。目前的結構讓它恆為真（置頂段位於
+    // 捲動容器之外），這條因此是**回歸守衛**：改回 `position: sticky` 加 `scroll-padding-top`
+    // 就會紅。
+    // **選取必須真的改變，否則規格明載 SHALL NOT 捲動** —— 這一段前面已經選著 repo-a，
+    // 直接再選一次它是無操作，於是「它被捲進視野」的斷言會以「根本沒有捲」的樣貌失敗。
+    // 先選一個別的（repo-c，在捲到底之後本來就可見），再選回 repo-a。
+    await app.client.evaluate(SELECT_FOLDER('repo-c'))
+    await sleep(300)
+    await app.client.evaluate(FORCE_REST_BOTTOM)
+    await sleep(200)
+    const beforeSelect = await app.client.evaluate(PINNED_GEOM)
+    check(results, `${label}：前提 —— 目標（第一個未置頂 folder）此刻確實不可見`,
+      beforeSelect !== null && beforeSelect.firstRestVisible === false,
+      JSON.stringify(beforeSelect))
+
+    await app.client.evaluate(SELECT_FOLDER('repo-a'))
+    await sleep(500)
+    const afterSelect = await app.client.evaluate(PINNED_GEOM)
+    check(results, `${label}：捲入視野的目標不被置頂段遮擋（其上緣不低於分界的下緣）`,
+      afterSelect !== null && afterSelect.firstRestVisible === true &&
+        afterSelect.firstRestTop >= afterSelect.dividerBottom,
+      JSON.stringify(afterSelect))
+
+    // ── 置頂段內的目標不觸發捲動
+    //
+    // 選中一個**置頂的** repo（它恆常完整可見）時，其餘段的捲動位置 SHALL NOT 改變。
+    // 一個誤用 `scroll-padding-top` 的實作會在這裡把畫面拉回頂端。
+    await app.client.evaluate(FORCE_REST_BOTTOM)
+    await sleep(300)
+    const beforePinnedSelect = await app.client.evaluate(PINNED_GEOM)
+    check(results, `${label}：前提 —— 其餘段此刻確實捲離了頂端`,
+      beforePinnedSelect !== null && beforePinnedSelect.restScrollTop > 0,
+      JSON.stringify(beforePinnedSelect))
+    await app.client.evaluate(SELECT_FOLDER('repo-b'))
+    await sleep(500)
+    const afterPinnedSelect = await app.client.evaluate(PINNED_GEOM)
+    check(results, `${label}：切換至置頂的 repo 時，其餘段的捲動位置不變`,
+      afterPinnedSelect !== null &&
+        afterPinnedSelect.restScrollTop === beforePinnedSelect?.restScrollTop,
+      `${beforePinnedSelect && beforePinnedSelect.restScrollTop} → ${afterPinnedSelect && afterPinnedSelect.restScrollTop}`)
+
+    // 先把 repo-b 取消置頂 —— 下面那條裁切的斷言需要**兩個**未置頂的 repo 才拖得起來。
+    await app.client.evaluate(`${unpinButton('repo-b')}?.click()`)
+    await sleep(300)
+
+    // ── 置頂段撐滿時其餘段仍可用（rail-pinning）
+    //
+    // 把 repo-a（展開著 8 個 session 子列）置頂 —— 置頂段因此遠高於整個 rail。
+    // **沒有那條最小高度夾制的話，其餘段是 `flex: 1 1 0%`：它拿不到剩餘空間就是
+    // `clientHeight: 0`，整份未置頂的 folder 清單會消失。**
+    await app.client.evaluate(`${pinButton('repo-a')}?.click()`)
+    const crowded = await pollUntil(
+      app.client,
+      PINNED_GEOM,
+      (v) => v !== null && v.pinnedLabels.includes('repo-a'),
+      6000,
+    )
+    check(results, `${label}：置頂段撐滿整個 rail 時，其餘段仍保有可用的高度`,
+      crowded !== null && crowded.restClientHeight > 0 && crowded.firstRestLabel !== null,
+      JSON.stringify(crowded))
+
+    // ── 落點不會命中被裁切的列（rail-pinning）
+    //
+    // 置頂段此刻**自己在內部捲動**（repo-a 帶著 8 個展開的 session 子列）。它的 `<li>` 區塊
+    // 其**未裁切**的 rect 一路延伸到其餘段的下方 —— 命中判定若不與容器的可視區取交集，
+    // 游標停在一個**看得見**的未置頂列上時，掃描會先命中那個**看不見**的置頂列，
+    // 於是「一個使用者根本沒碰過的 repo 被移動並置頂」。
+    const REST_LI = `[...document.querySelectorAll('aside[aria-label="${copy('rail.label')}"] > ul[aria-label="${copy('rail.folderList')}"] > li')]`
+    const REST_NAMES = `${REST_LI}.map((li) => li.querySelector(':scope > div[role="button"]')?.getAttribute('aria-label'))`
+    const restRowRect = (index) => `(() => {
+      const row = ${REST_LI}[${index}]?.querySelector(':scope > div[role="button"]')
+      if (!row) return null
+      const r = row.getBoundingClientRect()
+      return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) }
+    })()`
+    const restBlockRect = (index) => `(() => {
+      const li = ${REST_LI}[${index}]
+      if (!li) return null
+      const r = li.getBoundingClientRect()
+      return { x: Math.round(r.x + r.width / 2), top: Math.round(r.top), height: Math.round(r.height) }
+    })()`
+
+    const restBefore = await app.client.evaluate(REST_NAMES)
+    const pinnedBefore = crowded?.pinnedLabels ?? []
+    check(results, `${label}：前提 —— 置頂段確實在內部捲動，且其餘段有兩列可拖`,
+      Array.isArray(restBefore) && restBefore.length === 2 &&
+        (await app.client.evaluate(`(() => {
+          const p = document.querySelector('aside[aria-label="${copy('rail.label')}"] > ul[aria-label="${copy('rail.pinnedList')}"]')
+          return p.scrollHeight > p.clientHeight + 4
+        })()`)) === true,
+      JSON.stringify({ restBefore, pinnedBefore }))
+
+    const dragFrom = await app.client.evaluate(restRowRect(0))
+    const dragTargetBlock = await app.client.evaluate(restBlockRect(1))
+    if (dragFrom && dragTargetBlock) {
+      await dragMouse(app.client, dragFrom, {
+        x: dragFrom.x,
+        y: dragTargetBlock.top + dragTargetBlock.height - 3,
+      })
+      await sleep(500)
+    }
+    const restAfter = await app.client.evaluate(REST_NAMES)
+    const pinnedAfter = (await app.client.evaluate(PINNED_GEOM))?.pinnedLabels ?? []
+    check(results, `${label}：置頂段內部捲動時，其餘段的拖曳落在它該落的地方`,
+      JSON.stringify(restAfter) === JSON.stringify([restBefore[1], restBefore[0]]),
+      `${JSON.stringify(restBefore)} → ${JSON.stringify(restAfter)}`)
+    check(results, `${label}：而且沒有任何被裁切的置頂列被當成落點（置頂段一列都沒變）`,
+      JSON.stringify(pinnedAfter) === JSON.stringify(pinnedBefore),
+      `${JSON.stringify(pinnedBefore)} → ${JSON.stringify(pinnedAfter)}`)
+
+    // 還原，避免置頂狀態外洩到別的段落（profile 是共用的）。
+    await app.client.evaluate(`${unpinButton('repo-a')}?.click()`)
+    await sleep(300)
 
     await app.client.send('Emulation.clearDeviceMetricsOverride', {})
     await sleep(300)

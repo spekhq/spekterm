@@ -15,7 +15,7 @@ import { mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync
 import { homedir, tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
-import { check, connectToApp, dragMouse, pollFor, pollUntil, pressKey } from './lib/cdp.mjs'
+import { check, connectToApp, dragMouse, pollFor, pollUntil, pressKey, retryAction } from './lib/cdp.mjs'
 import { copy, patternOf, prefixOf, suffixOf } from './lib/copy.mjs'
 import { awaitMounted, describeMounted, mountedExpression } from './lib/mounted.mjs'
 import { electronExtraArgs } from './lib/display.mjs'
@@ -803,6 +803,415 @@ try {
     (await app.client.evaluate(RAIL_ROWS)).map((r) => r.name).join(',') === railOrderBeforeSessionDrag,
     (await app.client.evaluate(RAIL_ROWS)).map((r) => r.name).join(', '))
 
+  // ── rail-pinning：置頂 ────────────────────────────────────────────────────
+  //
+  // 這一段的順序前提：上面拖曳段結束時是 `repo-plain, repo-openspec, repo-missing`，且
+  // repo-openspec 底下有兩個 session 子列（展開）。
+  console.log('\n置頂')
+
+  const PINNED_UL = `document.querySelector('aside[aria-label="${copy('rail.label')}"] > ul[aria-label="${copy('rail.pinnedList')}"]')`
+  const REST_UL = `document.querySelector('aside[aria-label="${copy('rail.label')}"] > ul[aria-label="${copy('rail.folderList')}"]')`
+
+  /** 兩段各自的 folder 名稱（以列的 title＝路徑取 basename，與 RAIL_ROWS 同一套）。 */
+  const SECTIONS = `(() => {
+    const namesOf = (ul) => [...(ul?.querySelectorAll(':scope > li > div[role="button"]') ?? [])]
+      .filter((row) => row.getAttribute('aria-label') !== ${JSON.stringify(copy('rail.globalName'))})
+      .map((row) => (row.getAttribute('title') ?? '').split('/').pop())
+    return { pinned: namesOf(${PINNED_UL}), rest: namesOf(${REST_UL}) }
+  })()`
+
+  // `copy()` 在 Node 端就把 name 代進去 —— 不要寫成 `.replace('%NAME%', '${name}')`：那個
+  // `'${name}'` 位於 `${...}` 之內，是一段**字面**的 `${name}`，不會被代換（實測踩過）。
+  const PIN_BUTTON = (name) =>
+    `document.querySelector('button[aria-label="${copy('rail.pinFolder', { name })}"]')`
+  const UNPIN_BUTTON = (name) =>
+    `document.querySelector('button[aria-label="${copy('rail.unpinFolder', { name })}"]')`
+
+  const sections = async () => app.client.evaluate(SECTIONS)
+
+  check(results, '初始狀態：沒有任何 repo 被置頂，全部都在其餘段',
+    JSON.stringify(await sections()) ===
+      JSON.stringify({ pinned: [], rest: ['repo-plain', 'repo-openspec', 'repo-missing'] }),
+    JSON.stringify(await sections()))
+
+  // **既有行為的回歸守衛**：沒有任何置頂 folder 時，分界的位置與置頂能力加進來之前相同 ——
+  // 緊接在全域項目之後。置頂段此時只有全域項目那一列。
+  check(results, '尚無置頂的 folder 時，分隔線緊接於全域項目之後',
+    await app.client.evaluate(`(() => {
+      const rows = [...(${PINNED_UL}?.querySelectorAll(':scope > li') ?? [])]
+      return rows.length === 1 &&
+        rows[0].querySelector('div[role="button"]')?.getAttribute('aria-label') ===
+          ${JSON.stringify(copy('rail.globalName'))}
+    })()`),
+    JSON.stringify(await sections()))
+
+  // ── 入口一：圖釘按鈕（rail-pinning「以控制項切換置頂」）
+  //
+  // **兩個入口各自要有自己的斷言，不得以其中一個推論另一個** —— 它們是兩條獨立的程式路徑。
+  check(results, '未置頂的列上有圖釘按鈕（hover 才顯示，但存在於 DOM）',
+    (await app.client.evaluate(`Boolean(${PIN_BUTTON('repo-plain')})`)) === true)
+  await app.client.evaluate(`${PIN_BUTTON('repo-plain')}.click()`)
+  const afterPin = await pollUntil(app.client, SECTIONS, (v) => v.pinned.length === 1, 4000)
+  check(results, '以圖釘按鈕置頂：該 repo 移入置頂段',
+    JSON.stringify(afterPin) ===
+      JSON.stringify({ pinned: ['repo-plain'], rest: ['repo-openspec', 'repo-missing'] }),
+    JSON.stringify(afterPin))
+
+  // 落點：置頂 → 置頂段的**末端**（既有置頂者的相對順序不變）。
+  await app.client.evaluate(`${PIN_BUTTON('repo-missing')}.click()`)
+  const afterSecondPin = await pollUntil(app.client, SECTIONS, (v) => v.pinned.length === 2, 4000)
+  check(results, '第二次置頂落在置頂段末端，既有置頂者的順序不變',
+    JSON.stringify(afterSecondPin) ===
+      JSON.stringify({ pinned: ['repo-plain', 'repo-missing'], rest: ['repo-openspec'] }),
+    JSON.stringify(afterSecondPin))
+
+  // ── 圖釘的可見性依它當下扮演的角色（rail-pinning）
+  //
+  // 置頂 ⇒ 它是**狀態指示**，恆常呈現；未置頂 ⇒ 它只是入口，hover 才出現。
+  // **以 computed opacity 判定，不以 class**（class 是樣式不是契約，而且 hover 變體的字串
+  // 也含 `opacity`）。
+  const OPACITY_OF = (selector) => `(() => {
+    const el = ${selector}
+    return el ? getComputedStyle(el).opacity : null
+  })()`
+
+  // **先把指標移開。** 上面那些拖曳把它留在某一列上，而未置頂的圖釘是 `group-hover` 才顯示的
+  // —— 不移開的話「未懸停時不呈現」量到的是 1，那條斷言會紅，而原因與實作無關。
+  await app.client.send('Input.dispatchMouseEvent', {
+    type: 'mouseMoved', x: 5, y: 5, button: 'none', buttons: 0,
+  })
+  await sleep(200)
+  check(results, '置頂的列在未懸停時仍呈現圖釘（它是狀態，不只是入口）',
+    (await app.client.evaluate(OPACITY_OF(UNPIN_BUTTON('repo-plain')))) === '1',
+    String(await app.client.evaluate(OPACITY_OF(UNPIN_BUTTON('repo-plain')))))
+  check(results, '未置頂的列在未懸停時不呈現圖釘',
+    (await app.client.evaluate(OPACITY_OF(PIN_BUTTON('repo-openspec')))) === '0',
+    String(await app.client.evaluate(OPACITY_OF(PIN_BUTTON('repo-openspec')))))
+
+  // ── 取消置頂的落點：其餘段的**首端**
+  await app.client.evaluate(`${UNPIN_BUTTON('repo-plain')}.click()`)
+  const afterUnpin = await pollUntil(app.client, SECTIONS, (v) => v.pinned.length === 1, 4000)
+  check(results, '取消置頂落在其餘段首端，其餘 folder 的相對順序不變',
+    JSON.stringify(afterUnpin) ===
+      JSON.stringify({ pinned: ['repo-missing'], rest: ['repo-plain', 'repo-openspec'] }),
+    JSON.stringify(afterUnpin))
+
+  // ── 入口二：folder 標題列的右鍵選單（rail-pinning「以右鍵選單切換置頂」）
+  const openFolderMenu = async (index) => {
+    const at = await app.client.evaluate(FOLDER_ROW_RECT(index))
+    await app.client.send('Input.dispatchMouseEvent', {
+      type: 'mousePressed', x: at.x, y: at.y, button: 'right', clickCount: 1, buttons: 2,
+    })
+    await app.client.send('Input.dispatchMouseEvent', {
+      type: 'mouseReleased', x: at.x, y: at.y, button: 'right', clickCount: 1, buttons: 0,
+    })
+    return pollUntil(app.client, `Boolean(document.querySelector('[role="menu"]'))`, (v) => v === true, 4000)
+  }
+
+  const MENU_LABELS = `[...document.querySelectorAll('[role="menu"] button[role="menuitem"]')]
+    .map((el) => el.textContent.trim())`
+
+  // index 1 ＝ folder 清單的第二個 ＝ repo-plain（置頂段 repo-missing 是第 0 個）。
+  await openFolderMenu(1)
+  const menuLabels = await app.client.evaluate(MENU_LABELS)
+  check(results, 'folder 標題列的右鍵選單含置頂與移除',
+    Array.isArray(menuLabels) &&
+      menuLabels.includes(copy('rail.pinAction')) &&
+      menuLabels.includes(copy('rail.removeAction')),
+    JSON.stringify(menuLabels))
+
+  // **選單必須能全鍵盤操作 —— 那是前提，不是加分項。** 焦點落在第一項、方向鍵循環、Enter 觸發。
+  const FOCUSED_MENU_ITEM = `document.activeElement?.getAttribute('role') === 'menuitem'
+    ? document.activeElement.textContent.trim() : null`
+  check(results, '右鍵選單開啟時焦點落在第一個項目',
+    (await app.client.evaluate(FOCUSED_MENU_ITEM)) === menuLabels[0],
+    String(await app.client.evaluate(FOCUSED_MENU_ITEM)))
+  await pressKey(app.client, 'ArrowDown')
+  await sleep(150)
+  check(results, '右鍵選單以方向鍵移動焦點',
+    (await app.client.evaluate(FOCUSED_MENU_ITEM)) === menuLabels[1],
+    String(await app.client.evaluate(FOCUSED_MENU_ITEM)))
+  // **循環**：最後一項再按 ↓ 要繞回第一項。R4 明寫「方向鍵循環」，而只驗相鄰移動的話，
+  // 一個「到底就停住」的實作照樣全綠。
+  await pressKey(app.client, 'ArrowDown')
+  await sleep(150)
+  check(results, '右鍵選單的方向鍵於末端繞回第一項（循環）',
+    (await app.client.evaluate(FOCUSED_MENU_ITEM)) === menuLabels[0],
+    `${JSON.stringify(menuLabels)} → ${String(await app.client.evaluate(FOCUSED_MENU_ITEM))}`)
+
+  await pressKey(app.client, 'Enter')
+  const afterMenuPin = await pollUntil(app.client, SECTIONS, (v) => v.pinned.length === 2, 4000)
+  check(results, '以右鍵選單置頂（與圖釘按鈕是兩條路徑，各自驗）',
+    JSON.stringify(afterMenuPin) ===
+      JSON.stringify({ pinned: ['repo-missing', 'repo-plain'], rest: ['repo-openspec'] }),
+    JSON.stringify(afterMenuPin))
+
+  // ── global-session：全域項目的停用圖釘
+  //
+  // **停用的判定不得用 `tabIndex`**（disabled 的 `<button>` 其 `tabIndex` 仍回報 0），
+  // **也不得用 `dispatchEvent(new MouseEvent('click'))`**（合成事件**會**觸發 listener）。
+  // 用 `:disabled` 命中、`.focus()` 之後 activeElement 沒變、以及 `.click()` 不改變任何東西。
+  const GLOBAL_PIN = `document.querySelector('button[aria-label="${copy('rail.globalPinned', { name: copy('rail.globalName') })}"]')`
+  const globalPinState = await app.client.evaluate(`(() => {
+    const el = ${GLOBAL_PIN}
+    if (!el) return null
+    const before = document.activeElement
+    el.focus()
+    const took = document.activeElement === el
+    return {
+      disabled: el.matches(':disabled'),
+      ariaDisabled: el.getAttribute('aria-disabled'),
+      focusable: took,
+      title: el.getAttribute('title'),
+      cursor: getComputedStyle(el).cursor,
+      restored: before === document.activeElement || !took,
+    }
+  })()`)
+  check(results, '全域項目呈現一個停用的置頂指示，且附有說明',
+    globalPinState !== null &&
+      globalPinState.disabled === true &&
+      globalPinState.ariaDisabled === 'true' &&
+      globalPinState.focusable === false &&
+      typeof globalPinState.title === 'string' && globalPinState.title.length > 0,
+    JSON.stringify(globalPinState))
+  check(results, '停用的置頂指示其游標不是 pointer（它不是一個入口）',
+    globalPinState?.cursor !== 'pointer', String(globalPinState?.cursor))
+
+  const sectionsBeforeGlobalPin = await sections()
+  await app.client.evaluate(`${GLOBAL_PIN}.click()`)
+  await sleep(300)
+  check(results, '觸發全域項目的置頂指示不改變任何東西（它不可取消）',
+    JSON.stringify(await sections()) === JSON.stringify(sectionsBeforeGlobalPin),
+    JSON.stringify(await sections()))
+
+  check(results, '全域項目位於置頂段（與置頂的 repo 同一側）',
+    await app.client.evaluate(`(() => {
+      const first = ${PINNED_UL}?.querySelector(':scope > li > div[role="button"]')
+      return first?.getAttribute('aria-label') === ${JSON.stringify(copy('rail.globalName'))}
+    })()`))
+
+  // 全域項目**不提供右鍵選單** —— 它既不可移除、置頂也不可切換，一個只有停用項目的選單正是
+  // `workspace-layout` 禁止的那種東西。
+  const globalAt = await app.client.evaluate(`(() => {
+    const r = ${GLOBAL_ROW}?.getBoundingClientRect()
+    return r ? { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) } : null
+  })()`)
+  await app.client.send('Input.dispatchMouseEvent', {
+    type: 'mousePressed', x: globalAt.x, y: globalAt.y, button: 'right', clickCount: 1, buttons: 2,
+  })
+  await app.client.send('Input.dispatchMouseEvent', {
+    type: 'mouseReleased', x: globalAt.x, y: globalAt.y, button: 'right', clickCount: 1, buttons: 0,
+  })
+  await sleep(400)
+  check(results, '全域項目不提供右鍵選單',
+    (await app.client.evaluate(`Boolean(document.querySelector('[role="menu"]'))`)) === false)
+
+  // ── workspace-layout：停用的控制項宣告自身的停用狀態
+  check(results, 'rail 上每一個停用的控制項都不可聚焦且附有說明',
+    await app.client.evaluate(`(() => {
+      const rail = document.querySelector('aside[aria-label="${copy('rail.label')}"]')
+      const disabled = [...rail.querySelectorAll('button:disabled')]
+      if (disabled.length === 0) return false
+      return disabled.every((el) => {
+        el.focus()
+        const focusable = document.activeElement === el
+        const title = el.getAttribute('title')
+        return !focusable && typeof title === 'string' && title.length > 0
+      })
+    })()`),
+    '停用的控制項：不可聚焦 + 有 title')
+
+  // ── rail-pinning：跨越分界的拖曳
+  //
+  // 此刻：置頂段 = [repo-missing, repo-plain]、其餘段 = [repo-openspec]，
+  // folder 清單順序 = repo-missing, repo-plain, repo-openspec。
+  const DIVIDER_RECT = `(() => {
+    const rail = document.querySelector('aside[aria-label="${copy('rail.label')}"]')
+    const el = [...rail.children].find((c) => c.getAttribute('aria-hidden') === 'true')
+    if (!el) return null
+    const r = el.getBoundingClientRect()
+    return { x: Math.round(r.x + r.width / 2), top: Math.round(r.top), bottom: Math.round(r.bottom) }
+  })()`
+
+  /**
+   * 拖曳中的插入指示線。
+   *
+   * 兩個落點相距不到 10px，因此**要分得出是哪一個**：分界之上的落點畫在分界自己的疊加元素上，
+   * 分界之下的落點畫在第一個未置頂列的上緣（`border-t-2`）。以 computed style 判定，不以 class
+   * （class 是樣式不是契約，而 hover 變體的字串也含同樣的片段）。
+   */
+  const DROP_INDICATOR = `(() => {
+    const rail = document.querySelector('aside[aria-label="${copy('rail.label')}"]')
+    const divider = [...rail.children].find((c) => c.getAttribute('aria-hidden') === 'true')
+    const dRect = divider?.getBoundingClientRect()
+    // 分界上的指示線以**幾何位置**分辨在它之上還是之下 —— 那正是這條要驗的「兩個落點可辨」。
+    const onDivider = [...(divider?.querySelectorAll('span') ?? [])]
+      .map((sp) => (sp.getBoundingClientRect().top < dRect.top ? 'above' : 'below'))
+    const onRows = [...rail.querySelectorAll('ul > li')]
+      .map((li, i) => ({ i, width: getComputedStyle(li).borderTopWidth }))
+      .filter((r) => r.width !== '0px')
+      .map((r) => r.i)
+    return { onDivider, onRows }
+  })()`
+
+  const holdDrag = async (from, to, steps = 6) => {
+    const base = { button: 'left', buttons: 1, clickCount: 1 }
+    await app.client.send('Input.dispatchMouseEvent', { type: 'mouseMoved', ...from, button: 'none', buttons: 0 })
+    await app.client.send('Input.dispatchMouseEvent', { type: 'mousePressed', ...from, ...base })
+    for (let step = 1; step <= steps; step++) {
+      await app.client.send('Input.dispatchMouseEvent', {
+        type: 'mouseMoved',
+        x: Math.round(from.x + ((to.x - from.x) * step) / steps),
+        y: Math.round(from.y + ((to.y - from.y) * step) / steps),
+        ...base,
+      })
+    }
+  }
+  const releaseAt = async (to) => {
+    await app.client.send('Input.dispatchMouseEvent', {
+      type: 'mouseReleased', ...to, button: 'left', buttons: 0, clickCount: 1,
+    })
+    await sleep(400)
+  }
+
+  // ── 指示線：分界的兩側各自到得了，且彼此可辨
+  {
+    const divider = await app.client.evaluate(DIVIDER_RECT)
+    const from = await app.client.evaluate(FOLDER_ROW_RECT(2)) // repo-openspec（唯一未置頂）
+
+    await holdDrag(from, { x: divider.x, y: divider.top - 3 })
+    const above = await app.client.evaluate(DROP_INDICATOR)
+    check(results, '拖到分界之上：指示線畫在分界**之上**（＝落在置頂段的最後一格）',
+      JSON.stringify(above?.onDivider) === JSON.stringify(['above']), JSON.stringify(above))
+    await releaseAt({ x: divider.x, y: divider.top - 3 })
+
+    // 放開之後它被置頂了 —— 換一個仍未置頂的來測另一側。
+    const back = await app.client.evaluate(SECTIONS)
+    check(results, '拖到分界之上放開 ⇒ 該 repo 被置頂',
+      back.pinned.includes('repo-openspec'), JSON.stringify(back))
+
+    // 還原：把它拖回分界之下。
+    const divider2 = await app.client.evaluate(DIVIDER_RECT)
+    const openspecIndex = (await app.client.evaluate(RAIL_ROWS)).findIndex((r) => r.name === 'repo-openspec')
+    const from2 = await app.client.evaluate(FOLDER_ROW_RECT(openspecIndex))
+    await holdDrag(from2, { x: divider2.x, y: divider2.bottom + 3 })
+    const below = await app.client.evaluate(DROP_INDICATOR)
+    // 此刻**所有 folder 都被置頂**（上一步把最後一個未置頂的也拖上去了），於是列空間的最後
+    // 一列就是分界本身 —— 指示線必須畫在分界**之下**。
+    // 這一格曾經完全沒有指示線：`dropAtEnd` 掛在「最後一個 folder」上，而那時沒有任何 folder
+    // 拿得到它，於是當下**唯一**的 unpin 手勢是看不見的。
+    check(results, '拖到分界之下：指示線畫在分界**之下**，與上一條的位置可辨',
+      JSON.stringify(below?.onDivider) === JSON.stringify(['below']) &&
+        Array.isArray(below?.onRows) && below.onRows.length === 0,
+      JSON.stringify(below))
+    await releaseAt({ x: divider2.x, y: divider2.bottom + 3 })
+
+    // 「拖到自己原本的位置 ⇒ 無操作，且**不呈現指示線**」——
+    // 一條說「放開會移動」的線，放開卻什麼都不動，是在騙人（`workspace-layout` 明載）。
+    // 這條此前**全 repo 沒有任何載體**（`grep border-t-accent scripts/*.mjs` 零命中），
+    // 而置頂讓指示線變成承重的。
+    const selfIndex = (await app.client.evaluate(RAIL_ROWS)).findIndex((r) => r.name === 'repo-openspec')
+    const selfFrom = await app.client.evaluate(FOLDER_ROW_RECT(selfIndex))
+    const selfBlock = await app.client.evaluate(FOLDER_BLOCK_RECT(selfIndex))
+    await holdDrag(selfFrom, { x: selfFrom.x, y: selfBlock.top + 3 })
+    const selfDrop = await app.client.evaluate(DROP_INDICATOR)
+    check(results, '拖到自己原本的位置：不呈現任何插入指示線',
+      Array.isArray(selfDrop?.onDivider) && selfDrop.onDivider.length === 0 &&
+        Array.isArray(selfDrop?.onRows) && selfDrop.onRows.length === 0,
+      JSON.stringify(selfDrop))
+    await releaseAt({ x: selfFrom.x, y: selfBlock.top + 3 })
+  }
+
+  // ── **只改變置頂狀態、序位不變**的拖曳不得被當成無操作
+  //
+  // 這是整條落點語意最要緊的性質：把置頂段的最後一個拖到分界之下，它在 folder 清單裡的序位
+  // **前後同值** —— 任何以 folder 序位判定「有沒有移動」的閘門（renderer 的、主行程的）都會
+  // 把它吞掉，而畫面上只是「拖了半天它沒有被取消置頂」。
+  {
+    const before = await app.client.evaluate(SECTIONS)
+    const orderBefore = (await app.client.evaluate(RAIL_ROWS)).map((r) => r.name).join(',')
+    const lastPinned = before.pinned[before.pinned.length - 1]
+    const lastPinnedIndex = (await app.client.evaluate(RAIL_ROWS)).findIndex((r) => r.name === lastPinned)
+    const divider = await app.client.evaluate(DIVIDER_RECT)
+    const from = await app.client.evaluate(FOLDER_ROW_RECT(lastPinnedIndex))
+
+    await dragMouse(app.client, from, { x: divider.x, y: divider.bottom + 3 })
+    const after = await pollUntil(app.client, SECTIONS, (v) => !v.pinned.includes(lastPinned), 4000)
+    const orderAfter = (await app.client.evaluate(RAIL_ROWS)).map((r) => r.name).join(',')
+
+    check(results, '置頂段最後一個拖到分界之下 ⇒ 取消置頂（且未被當成無操作）',
+      !after.pinned.includes(lastPinned) && after.rest[0] === lastPinned,
+      `${JSON.stringify(before)} → ${JSON.stringify(after)}`)
+    check(results, '該次拖曳的 folder 序位前後同值 —— 變的只有置頂狀態',
+      orderAfter === orderBefore, `${orderBefore} → ${orderAfter}`)
+  }
+
+  // ── 分界不使其餘段內的落點偏移
+  //
+  // 有置頂 folder 存在時，rail 的列空間比 folder 清單多**兩**列（全域項目 + 分界），而偏移量
+  // 隨置頂數變動。一個寫死的「加一」在「沒有任何 folder 被置頂」時完全正確 —— 這一段就是要在
+  // **有**置頂者的情況下再驗一次落點。
+  {
+    const sectionsNow = await app.client.evaluate(SECTIONS)
+    check(results, '前提 —— 此刻確實有置頂的 folder，其餘段也有兩個（否則這條沒有鑑別力）',
+      sectionsNow.pinned.length >= 1 && sectionsNow.rest.length === 2,
+      JSON.stringify(sectionsNow))
+
+    const restNames = () => app.client.evaluate(`${SECTIONS}.rest`)
+    const before = await restNames()
+    const firstRestIndex = (await app.client.evaluate(RAIL_ROWS)).findIndex((r) => r.name === before[0])
+    const secondRestIndex = (await app.client.evaluate(RAIL_ROWS)).findIndex((r) => r.name === before[1])
+    const target = await app.client.evaluate(FOLDER_BLOCK_RECT(secondRestIndex))
+    const from = await app.client.evaluate(FOLDER_ROW_RECT(firstRestIndex))
+
+    // 拖到第二個未置頂 repo 的**下半** ⇒ 落在它之後。
+    await dragMouse(app.client, from, { x: from.x, y: target.top + target.height - 3 })
+    const after = await pollUntil(app.client, `${SECTIONS}.rest`, (v) => v[0] === before[1], 4000)
+    check(results, '有置頂 folder 時，其餘段內的拖曳落點仍與指示線一致（分界不使它偏移）',
+      JSON.stringify(after) === JSON.stringify([before[1], before[0]]),
+      `${JSON.stringify(before)} → ${JSON.stringify(after)}`)
+    check(results, '其餘段內的拖曳不改變置頂段',
+      JSON.stringify((await app.client.evaluate(SECTIONS)).pinned) === JSON.stringify(sectionsNow.pinned),
+      JSON.stringify((await app.client.evaluate(SECTIONS)).pinned))
+  }
+
+  // ── 還原成「repo-missing, repo-plain 置頂；repo-openspec 未置頂」
+  //     下面的重啟斷言以這個狀態為期望值。
+  {
+    const want = ['repo-missing', 'repo-plain']
+    for (const name of want) {
+      const current = await app.client.evaluate(SECTIONS)
+      if (current.pinned.includes(name)) continue
+      await app.client.evaluate(`${PIN_BUTTON('%N%').replace('%N%', name)}.click()`)
+      await pollUntil(app.client, SECTIONS, (v) => v.pinned.includes(name), 4000)
+    }
+    const current = await app.client.evaluate(SECTIONS)
+    for (const name of current.pinned.filter((n) => !want.includes(n))) {
+      await app.client.evaluate(`${UNPIN_BUTTON('%N%').replace('%N%', name)}.click()`)
+      await pollUntil(app.client, SECTIONS, (v) => !v.pinned.includes(name), 4000)
+    }
+    // 置頂段內的順序也要是 want 的順序 —— 重啟斷言比對的是完整的清單。
+    const finalSections = await app.client.evaluate(SECTIONS)
+    check(results, '置頂段的最終狀態符合下游重啟斷言的前提',
+      JSON.stringify(finalSections) ===
+        JSON.stringify({ pinned: want, rest: ['repo-openspec'] }),
+      JSON.stringify(finalSections))
+  }
+
+  // ── 分界的位置（global-session）
+  const DIVIDER_BETWEEN = `(() => {
+    const rail = document.querySelector('aside[aria-label="${copy('rail.label')}"]')
+    const kids = [...rail.children]
+    const pinnedIndex = kids.indexOf(${PINNED_UL})
+    const restIndex = kids.indexOf(${REST_UL})
+    const dividerIndex = kids.findIndex((el) => el.getAttribute('aria-hidden') === 'true')
+    return { pinnedIndex, dividerIndex, restIndex }
+  })()`
+  const divider = await app.client.evaluate(DIVIDER_BETWEEN)
+  check(results, '分隔線劃在置頂段與其餘 folder 之間',
+    divider !== null && divider.pinnedIndex < divider.dividerIndex && divider.dividerIndex < divider.restIndex,
+    JSON.stringify(divider))
+
 
   // ── status-bar：主視窗底部的狀態列 ────────────────────────────────────────
   //
@@ -919,14 +1328,28 @@ try {
     const terminal = await pollUntil(app.client, TERMINAL_RECT, (v) => v !== null, 8000)
     check(results, '前提：全域 session 的終端在畫面上', terminal !== null)
     if (terminal) {
-      await realPressRelease(app.client, terminal)
-      await sleep(200)
-      await app.client.send('Input.insertText', { text: `cd ${fixture.withOpenSpec}` })
-      // Enter 必須是一次真的按鍵事件 —— 併進 insertText 的 `\r` 抵達得了 pty，但 shell
-      // **從未執行那一行**（xterm 的換行是在 keydown 上判讀的）。
-      const enter = { key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 }
-      await app.client.send('Input.dispatchKeyEvent', { type: 'keyDown', ...enter, text: '\r' })
-      await app.client.send('Input.dispatchKeyEvent', { type: 'keyUp', ...enter })
+      /*
+        **打字必須是可重試的動作，不能是一次性的。**
+
+        這個 session 是**剛剛才建立**的 —— 原本的作法是點一下終端、`sleep(200)`、然後直接把
+        `cd` 打進去。那個 200ms 沒有任何就緒判準：pty 若還沒走到 prompt（機器一忙就會），
+        那一行字就打進虛空，而其後 15 秒的輪詢只會等到逾時，紅燈上看到的是「狀態列沒有分支」
+        —— **與「產品沒有偵測分支」完全無法區分**。實測於 `test:e2e` 全跑時偶發過。
+
+        改走 `retryAction`：`cd` 到同一個目錄是冪等的，重打幾次無害，而判準（狀態列出現分支）
+        本來就是這條斷言要的東西。這也是這個 repo 的既有紀律 —— 帶副作用的等待走 `retryAction`，
+        不要手寫「送一次然後 sleep」。
+      */
+      const typeCd = async () => {
+        await realPressRelease(app.client, terminal)
+        await sleep(200)
+        await app.client.send('Input.insertText', { text: `cd ${fixture.withOpenSpec}` })
+        // Enter 必須是一次真的按鍵事件 —— 併進 insertText 的 `\r` 抵達得了 pty，但 shell
+        // **從未執行那一行**（xterm 的換行是在 keydown 上判讀的）。
+        const enter = { key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 }
+        await app.client.send('Input.dispatchKeyEvent', { type: 'keyDown', ...enter, text: '\r' })
+        await app.client.send('Input.dispatchKeyEvent', { type: 'keyUp', ...enter })
+      }
 
       /*
         **前置條件要自己建立：這個 fixture 此刻是 detached HEAD**（上一段的驗收把它切過去了），
@@ -940,13 +1363,52 @@ try {
       */
       git(fixture.withOpenSpec, ['checkout', '-q', 'master'])
       const branchNow = git(fixture.withOpenSpec, ['rev-parse', '--abbrev-ref', 'HEAD'])
-      // 狀態輪詢是 2 秒一次，`cd` 之後要等它下一輪。
-      const afterCd = await pollUntil(
-        app.client,
-        STATUS_BAR,
-        (v) => v !== null && v.text.includes(branchNow),
-        15_000,
-      )
+      // 狀態輪詢是 2 秒一次，`cd` 之後要等它下一輪；`act` 之間留足一輪的時間再重打。
+      /*
+        **診斷：這條紅的時候要分得出「字沒進 pty」與「進了但狀態列沒更新」。**
+
+        兩者的紅燈長得一模一樣（狀態列沒有分支），而處置完全相反。終端的可見文字是唯一能
+        區分它們的證據：`cd …` 有沒有被 shell 回顯、prompt 有沒有換行。
+      */
+      const TERMINAL_TEXT = `(() => {
+        const el = document.querySelector('section[aria-label="${copy('stage.terminal')}"]')
+        // xterm 在 xvfb 上走 DOM renderer，字住在 .xterm-rows；抓整個 section 會撈到它注入的
+        // <style>（實測現場拿到的是一整串 CSS，那不是終端內容）。
+        const screen = el?.querySelector('.xterm-rows') ?? el?.querySelector('.xterm-screen')
+        // 不要在這裡寫 regex literal：這段住在一個 template literal 裡，換行的跳脫序列會先
+        // 被解析成真正的換行，而 regex literal 不能跨行（實測 SyntaxError: missing /）。
+        // 這段註解本身也不得出現反引號 —— 它會把外層的 template literal 提前關掉。
+        const lines = (screen?.innerText ?? '').split(String.fromCharCode(10))
+        return lines.filter((l) => l.trim() !== '').slice(-6).join(' | ').slice(-300)
+      })()`
+
+      const afterCd = await retryAction({
+        act: typeCd,
+        read: () => app.client.evaluate(STATUS_BAR),
+        settled: (v) => v !== null && v.text.includes(branchNow),
+        attemptWindowMs: 8_000,
+        timeoutMs: 24_000,
+        label: `全域 session cd 進 ${fixture.withOpenSpec} 後狀態列呈現分支`,
+        evidence: async () => {
+          const screen = await app.client.evaluate(TERMINAL_TEXT)
+          // 「pty 還活著嗎」是這裡最要緊的一問：終端沒有任何輸出時，
+          // 「shell 沒被 spawn 起來」與「spawn 了但沒印 prompt」處置完全不同。
+          const session = await app.client.evaluate(`(() => {
+            const rows = [...document.querySelectorAll('aside[aria-label="${copy('rail.label')}"] ul li ul li div[role="button"]')]
+            return rows.map((r) => r.getAttribute('title')).slice(0, 6)
+          })()`)
+          const term = await app.client.evaluate(`(() => {
+            const el = document.querySelector('section[aria-label="${copy('stage.terminal')}"]')
+            const rows = el?.querySelector('.xterm-rows')
+            return {
+              hasXterm: Boolean(el?.querySelector('.xterm')),
+              rowCount: rows ? rows.children.length : null,
+              nonEmptyRows: rows ? [...rows.children].filter((r) => r.textContent.trim() !== '').length : null,
+            }
+          })()`)
+          return `終端文字=${JSON.stringify(screen)}；終端狀態=${JSON.stringify(term)}；session=${JSON.stringify(session)}`
+        },
+      })
       check(results, '全域 session cd 進 git repo 後，狀態列呈現該處的分支',
         afterCd !== null && afterCd.text.includes(branchNow),
         `分支=${branchNow} 狀態列=${afterCd?.text}`)
@@ -1121,11 +1583,34 @@ try {
   // 關閉改為等到行程確實結束之後（`quitAndWait`，issue #8 同族），若這條不再偶發變紅，
   // 上面那段歸因要回頭更正。
   const afterRestart = await pollUntil(app.client, RAIL_ROWS, (rows) => rows.length === 3, 10_000)
+  // 期望值來自上面「置頂」那一段的最終狀態：repo-missing 與 repo-plain 置頂（依序），
+  // repo-openspec 未置頂。置頂改變了 folder 清單的順序，因此這條的期望值也隨之改變。
   check(results, '清單與使用者排定的順序於重啟後一致',
-    afterRestart.map((r) => r.name).join(',') === 'repo-plain,repo-openspec,repo-missing',
+    afterRestart.map((r) => r.name).join(',') === 'repo-missing,repo-plain,repo-openspec',
     afterRestart.length === 0
       ? 'rail 一列都沒有 —— 列未及渲染，不是順序錯了'
       : afterRestart.map((r) => r.name).join(', '))
+
+  // ── rail-pinning：置頂狀態跨重啟存活
+  //
+  // **這條與上面那條是兩件事。** 順序對了不代表置頂狀態被保存 —— 一個把 `pinned` 寫進磁碟卻
+  // 在載入時丟掉的實作，順序照樣正確（前綴不變式使兩者恰好一致），而 rail 會把全部 folder
+  // 都畫在下半段。
+  const sectionsAfterRestart = await app.client.evaluate(`(() => {
+    const named = (ul) => [...(ul?.querySelectorAll(':scope > li > div[role="button"]') ?? [])]
+      .map((row) => row.getAttribute('aria-label'))
+    return {
+      pinned: named(document.querySelector('aside[aria-label="${copy('rail.label')}"] > ul[aria-label="${copy('rail.pinnedList')}"]')),
+      rest: named(document.querySelector('aside[aria-label="${copy('rail.label')}"] > ul[aria-label="${copy('rail.folderList')}"]')),
+    }
+  })()`)
+  check(results, '置頂狀態於重啟後還原',
+    JSON.stringify(sectionsAfterRestart) ===
+      JSON.stringify({
+        pinned: [copy('rail.globalName'), 'repo-missing', 'repo-plain'],
+        rest: ['repo-openspec'],
+      }),
+    JSON.stringify(sectionsAfterRestart))
 
   // ── terminal-preferences：字型偏好跨重啟還原 ──────────────────────────────
   const prefsAfterRestart = await app.client.evaluate('window.workspace.settings.get()')

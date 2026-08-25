@@ -133,7 +133,7 @@ describe('重排', () => {
     const { store, ids } = seeded()
     const before = store.list().find((folder) => folder.id === ids.gamma)
 
-    store.reorder(ids.gamma, 0)
+    store.reorder(ids.gamma, 0, false)
 
     assert.deepEqual(names(store), ['gamma', 'alpha', 'beta'])
     assert.deepEqual(store.list().find((folder) => folder.id === ids.gamma), before)
@@ -141,35 +141,35 @@ describe('重排', () => {
 
   it('未知的識別碼為無操作', () => {
     const { store } = seeded()
-    store.reorder('no-such-id', 0)
+    store.reorder('no-such-id', 0, false)
     assert.deepEqual(names(store), ['alpha', 'beta', 'gamma'])
   })
 
   it('越界的目標位置被夾制於清單範圍', () => {
     const { store, ids } = seeded()
 
-    store.reorder(ids.beta, 99)
+    store.reorder(ids.beta, 99, false)
     assert.deepEqual(names(store), ['alpha', 'gamma', 'beta'], '超出長度：移至最後')
 
-    store.reorder(ids.beta, -5)
+    store.reorder(ids.beta, -5, false)
     assert.deepEqual(names(store), ['beta', 'alpha', 'gamma'], '負數：移至最前')
   })
 
   it('非整數與 NaN 的目標位置不使清單損毀', () => {
     const { store, ids } = seeded()
 
-    store.reorder(ids.gamma, Number.NaN)
+    store.reorder(ids.gamma, Number.NaN, false)
     assert.deepEqual(names(store), ['alpha', 'beta', 'gamma'], 'NaN：無操作')
 
     // 位置是序位，不是量 —— 小數截斷即可，重點是**不得**算出 undefined 的插入點而弄丟 folder。
-    store.reorder(ids.gamma, 0.7)
+    store.reorder(ids.gamma, 0.7, false)
     assert.deepEqual(names(store), ['gamma', 'alpha', 'beta'])
     assert.equal(store.list().length, 3, '不得因為越界索引而弄丟任何 folder')
   })
 
   it('重排後的順序立即落盤', () => {
     const { store, ids } = seeded()
-    store.reorder(ids.gamma, 0)
+    store.reorder(ids.gamma, 0, false)
 
     const reopened = new WorkspaceStore(configPath)
     reopened.load()
@@ -370,5 +370,204 @@ describe('衍生狀態', () => {
     assert.equal(folders.length, 1, '不得靜默移除')
     assert.equal(folders[0].status, 'missing')
     assert.equal(folders[0].hasOpenSpec, false)
+  })
+})
+
+describe('置頂', () => {
+  function seeded(count = 4): { store: WorkspaceStore; ids: Record<string, string> } {
+    const store = new WorkspaceStore(configPath)
+    store.load()
+    const ids: Record<string, string> = {}
+    for (const name of ['alpha', 'beta', 'gamma', 'delta'].slice(0, count)) {
+      ids[name] = store.add(makeDir(name)).id
+    }
+    return { store, ids }
+  }
+
+  const names = (store: WorkspaceStore): string[] => store.list().map((folder) => folder.name)
+  const pins = (store: WorkspaceStore): boolean[] => store.list().map((folder) => folder.pinned)
+
+  /** 不變式：置頂者恆佔前綴 —— 一旦看到「未置頂之後又出現置頂」即為違反。 */
+  function assertPrefixInvariant(store: WorkspaceStore, hint = ''): void {
+    const flags = pins(store)
+    const firstUnpinned = flags.indexOf(false)
+    if (firstUnpinned === -1) return
+    assert.equal(
+      flags.slice(firstUnpinned).some(Boolean),
+      false,
+      `置頂者必須佔前綴${hint ? ` (${hint})` : ''}: ${JSON.stringify(flags)}`,
+    )
+  }
+
+  it('置頂落在置頂段末端，取消置頂落在其餘段首端', () => {
+    const { store, ids } = seeded()
+
+    store.setPinned(ids.gamma, true)
+    assert.deepEqual(names(store), ['gamma', 'alpha', 'beta', 'delta'])
+
+    store.setPinned(ids.delta, true)
+    assert.deepEqual(names(store), ['gamma', 'delta', 'alpha', 'beta'], '第二個置頂落在末端')
+    assert.deepEqual(pins(store), [true, true, false, false])
+
+    store.setPinned(ids.gamma, false)
+    assert.deepEqual(names(store), ['delta', 'gamma', 'alpha', 'beta'], '取消置頂落在其餘段首端')
+    assert.deepEqual(pins(store), [true, false, false, false])
+    assertPrefixInvariant(store)
+  })
+
+  it('置頂狀態立即落盤並於重啟後還原', () => {
+    const { store, ids } = seeded()
+    store.setPinned(ids.beta, true)
+
+    const reopened = new WorkspaceStore(configPath)
+    reopened.load()
+
+    assert.deepEqual(names(reopened), ['beta', 'alpha', 'gamma', 'delta'])
+    assert.deepEqual(pins(reopened), [true, false, false, false])
+  })
+
+  /**
+   * **這一條釘住的是三道閘門裡的兩道。**
+   *
+   * 跨越分界的移動其序位**前後同值**（置頂段的最後一個變成其餘段的第一個）。以「位置相同即
+   * 返回」為早退條件時，旗標不會寫入、`save()` 也不會發生 —— 而清單長度、順序、甚至
+   * `list()` 的其他欄位全都正確，症狀只有「它沒有被取消置頂」。
+   */
+  it('只改變置頂狀態、序位不變的重排仍會套用並落盤', () => {
+    const { store, ids } = seeded()
+    store.setPinned(ids.alpha, true)
+    assert.deepEqual(pins(store), [true, false, false, false])
+
+    // alpha 位於序位 0，取消置頂之後它仍在序位 0 —— to === from。
+    store.reorder(ids.alpha, 0, false)
+
+    assert.deepEqual(pins(store), [false, false, false, false], '置頂狀態必須改變')
+    const reopened = new WorkspaceStore(configPath)
+    reopened.load()
+    assert.deepEqual(pins(reopened), [false, false, false, false], '而且必須落盤')
+  })
+
+  it('重排跨越分界時一併改變置頂狀態', () => {
+    const { store, ids } = seeded()
+    store.setPinned(ids.alpha, true)
+    store.setPinned(ids.beta, true)
+
+    store.reorder(ids.gamma, 0, true)
+    assert.deepEqual(names(store), ['gamma', 'alpha', 'beta', 'delta'])
+    assert.deepEqual(pins(store), [true, true, true, false])
+    assertPrefixInvariant(store)
+  })
+
+  it('目標序位與置頂狀態牴觸時，夾制進該狀態允許的範圍', () => {
+    const { store, ids } = seeded()
+    store.setPinned(ids.alpha, true)
+
+    // 要求「未置頂、但放到序位 0」—— 序位 0 是置頂段的地盤，必須被夾到其餘段的首端。
+    store.reorder(ids.delta, 0, false)
+
+    assert.deepEqual(names(store), ['alpha', 'delta', 'beta', 'gamma'])
+    assertPrefixInvariant(store, '未置頂者被要求插進前綴')
+  })
+
+  it('移除一個置頂的 folder 之後不變式仍成立', () => {
+    const { store, ids } = seeded()
+    store.setPinned(ids.gamma, true)
+    store.setPinned(ids.delta, true)
+
+    store.remove(ids.gamma)
+
+    assert.deepEqual(names(store), ['delta', 'alpha', 'beta'])
+    assert.deepEqual(pins(store), [true, false, false])
+    assertPrefixInvariant(store)
+  })
+
+  it('新加入的 folder 為未置頂且落在最後', () => {
+    const { store, ids } = seeded(2)
+    store.setPinned(ids.alpha, true)
+    store.setPinned(ids.beta, true)
+
+    const added = store.add(makeDir('epsilon'))
+
+    assert.equal(added.pinned, false)
+    assert.deepEqual(names(store), ['alpha', 'beta', 'epsilon'])
+    assertPrefixInvariant(store, '全部都置頂時再加一個')
+  })
+
+  it('未置頂的 folder 不在設定檔裡留下 pinned 欄位', () => {
+    const { store, ids } = seeded(2)
+    store.setPinned(ids.alpha, true)
+
+    const raw = JSON.parse(fs.readFileSync(configPath, 'utf8')) as {
+      folders: Record<string, unknown>[]
+    }
+    assert.equal(raw.folders[0].pinned, true)
+    assert.equal('pinned' in raw.folders[1], false, '缺席即未置頂，不寫 false')
+  })
+})
+
+describe('置頂狀態的載入', () => {
+  const persisted = (folders: Record<string, unknown>[]): void => {
+    fs.mkdirSync(path.dirname(configPath), { recursive: true })
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({ version: WORKSPACE_VERSION, folders }, null, 2),
+      'utf8',
+    )
+  }
+
+  it('沒有 pinned 欄位的既有設定檔全數載入，且不被判為損毀', () => {
+    const a = makeDir('a')
+    const b = makeDir('b')
+    persisted([
+      { id: 'id-a', path: a, addedAt: '2026-01-01T00:00:00.000Z' },
+      { id: 'id-b', path: b, addedAt: '2026-01-02T00:00:00.000Z' },
+    ])
+
+    const store = new WorkspaceStore(configPath)
+    store.load()
+
+    // **鑑別力在這兩條**：數量與「沒有被隔離」。「皆為未置頂」是預設值，任何實作都會通過。
+    assert.equal(store.list().length, 2, '一個 folder 都不能少')
+    assert.equal(
+      fs.readdirSync(path.dirname(configPath)).some((name) => name.includes('.corrupt-')),
+      false,
+      '不得因為缺少新欄位而隔離設定檔',
+    )
+  })
+
+  it('置頂散落在中間的設定檔被穩定分割正規化，而非判為損毀', () => {
+    const dirs = ['p1', 'u1', 'p2', 'u2'].map((name) => makeDir(name))
+    persisted([
+      { id: 'p1', path: dirs[0], addedAt: '2026-01-01T00:00:00.000Z', pinned: true },
+      { id: 'u1', path: dirs[1], addedAt: '2026-01-02T00:00:00.000Z' },
+      { id: 'p2', path: dirs[2], addedAt: '2026-01-03T00:00:00.000Z', pinned: true },
+      { id: 'u2', path: dirs[3], addedAt: '2026-01-04T00:00:00.000Z' },
+    ])
+
+    const store = new WorkspaceStore(configPath)
+    store.load()
+
+    assert.deepEqual(
+      store.list().map((folder) => folder.id),
+      ['p1', 'p2', 'u1', 'u2'],
+      '置頂者提前，兩組各自的相對順序不變',
+    )
+    assert.equal(store.list().length, 4, '正規化不得弄丟 folder')
+  })
+
+  it('pinned 型別不符時比照其他欄位視為不可信任', () => {
+    persisted([
+      { id: 'id-a', path: makeDir('a'), addedAt: '2026-01-01T00:00:00.000Z', pinned: 'yes' },
+    ])
+
+    const store = new WorkspaceStore(configPath)
+    store.load()
+
+    assert.deepEqual(store.list(), [], '以空 workspace 啟動')
+    assert.equal(
+      fs.readdirSync(path.dirname(configPath)).some((name) => name.includes('.corrupt-')),
+      true,
+      '原始內容被保留下來',
+    )
   })
 })

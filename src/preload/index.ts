@@ -139,8 +139,17 @@ const workspaceApi = {
      * **以識別碼指定要移動的 folder，不以它此刻的位置** —— renderer 手上的清單是主行程推送的
      * 複本，隨時可能已經過期；以位置指定時，一個飛行中的索引可能已經指向另一個 folder。
      */
-    reorder: (id: string, toIndex: number): Promise<WorkspaceFolder[]> =>
-      ipcRenderer.invoke('workspace:folders:reorder', id, toIndex),
+    reorder: (id: string, toIndex: number, pinned: boolean): Promise<WorkspaceFolder[]> =>
+      ipcRenderer.invoke('workspace:folders:reorder', id, toIndex, pinned),
+    /**
+     * 切換置頂狀態，回傳更新後的清單。
+     *
+     * 與 `reorder` **互為表裡**：那邊是「使用者拖到／按到某個位置，置頂狀態由落點推導」，
+     * 這邊是「使用者按了圖釘，位置由狀態推導」（跨越分界的最小移動）。兩條路徑在主行程收斂
+     * 於同一個維持不變式的地方。
+     */
+    setPinned: (id: string, pinned: boolean): Promise<WorkspaceFolder[]> =>
+      ipcRenderer.invoke('workspace:folders:setPinned', id, pinned),
     /**
      * folder 清單的推送更新（目前唯一的來源是 git 分支變動 —— 使用者在 terminal 裡切 branch）。
      * 回傳取消訂閱的函式：renderer 拿不到 `ipcRenderer`，因此也無從自行解除其他監聽器。
