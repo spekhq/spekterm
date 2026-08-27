@@ -566,6 +566,12 @@ try {
       previewHasBoxDrawing: /[\u2500-\u257F\u2580-\u259F]/.test(
         d.querySelector('[aria-label="${copy('settings.preview')}"]')?.textContent ?? '',
       ),
+      // 這個介面已不只是終端偏好：agent 狀態橋接的開關住在這裡，本輪再加一段唯讀的建置身分。
+      // 條文已隨之改寫（terminal-preferences 的「偏好設定介面」），而標題也必須反映實際範圍
+      // —— 一個寫著 Terminal 卻內含應用程式版本的對話框，會讓使用者在找版本時不會打開它。
+      // （註解在 template literal 之內：**不能寫反引號**，它會把字串提前關掉。）
+      about: !!d.querySelector('[role="group"][aria-label="${copy('settings.about')}"]'),
+      title: d.getAttribute('aria-label'),
     }
   })()`
 
@@ -576,6 +582,10 @@ try {
     dialog?.family === true && dialog?.size === true && dialog?.lineHeight === true &&
       dialog?.gpu === true && dialog?.preview === true,
     JSON.stringify(dialog))
+
+  check(results, '設定介面涵蓋終端偏好以外的區段（唯讀的建置身分），且標題不侷限於終端',
+    dialog?.about === true && !/terminal/i.test(dialog?.title ?? ''),
+    `about=${dialog?.about} title="${dialog?.title}"`)
 
   check(results, '預覽的範例文字不含框線字元（那些字元在終端不經字型）',
     dialog?.previewHasBoxDrawing === false,

@@ -33,8 +33,9 @@ OpenSpec 結構的側欄，讓使用者不必另外開 IDE 就能一邊駕駛 ag
   座標（來源 repo／工作目錄／錨定的 change）是 **per-folder** 的，落盤於 `panel.json`。
 - **鍵盤** —— 見下文「快捷鍵」。
 
-**Linux 打包已可用**（`npm run dist:linux` → AppImage）。**尚未開始**：macOS／Windows 產物、
-自動更新與簽章（Phase 6 其餘）、handoff（Phase 7+）。
+**Linux 打包已可用**（`npm run dist:linux` → AppImage，`npm run install:desktop` 裝進應用程式
+選單）。**版號逐次遞增**且產物與執行中的 app 說得出同一個建置身分（Settings 的「About」段）。
+**尚未開始**：macOS／Windows 產物、自動更新與簽章（Phase 6 其餘）、handoff（Phase 7+）。
 **session 常駐**（讓 pty 活過 app 的生命）已排入路線圖但**刻意不做** —— 見 `docs/PRD.md` §11 的
 tmux 與自寫 daemon 取捨。**不要把「重建」誤當成「常駐」**：關掉 app，pty 一定會死（master fd
 必須有人持有），跑到一半的 build 或 dev server 救不回來。
@@ -70,7 +71,12 @@ npm run dev             # electron-vite dev（開發模式）
                         #   而它的 pty 還活著）。**只在 Linux 生效** —— macOS／Windows 上 Electron 不看
                         #   這個變數，屆時隔離會靜默失效。
 npm run build           # 建置至 out/
-npm run dist:linux      # 打包成 AppImage 至 release/（首次需要網路下載 Electron binary）
+npm run dist:linux      # 換版 → 建置 → 打包 AppImage → 清掉更舊的產物（首次需要網路下載 Electron binary）
+                        #   **第一步會 bump patch 版本並 commit**（`chore(release): <v>`，不打 tag）。
+                        #   `package.json` / `package-lock.json` 任一已被改過時它**拒絕執行** ——
+                        #   換版提交只能指名這兩個檔案，而遞增與你的編輯在同一個檔案裡。
+npm run install:desktop # 把產物裝進應用程式選單（~/.local/bin ＋ .desktop ＋ 圖示，尊重 XDG_*）
+npm run uninstall:desktop
 npm run typecheck       # tsc：main / preload（node）+ renderer（web）
 npm run lint            # eslint（**這個 repo 沒有 prettier** —— 別順手跑 npx prettier，
                         #   它會用預設值把無分號／單引號改成分號／雙引號）
@@ -133,9 +139,14 @@ PROBE_DISPLAY=physical npm run probe:terminal     # 逃生口：畫在實體螢�
 
 ```bash
 npm run probe:package   # 打包 → 啟動 AppImage → 產物可執行／脫離 repo／載入 renderer／
-                        #   production CSP／pty 建得起來且指令真的被執行
+                        #   production CSP／pty 建得起來且指令真的被執行／建置身分與檔名同版
 PROBE_PACKAGE_APPIMAGE=<path> node scripts/run-probe.mjs package   # 重用既有產物（迭代用）
 ```
+
+> **跑一次 `probe:package` 會產生一個 `chore(release)` commit** —— 它的入口就是
+> `npm run dist:linux`，而換版是那條指令的第一步。這是刻意的（一次打包＝一次換版），但**迭代時
+> 一定要走 `PROBE_PACKAGE_APPIMAGE`**，否則調一支 probe 會在 master 上堆出十幾個 commit。
+> 那些 commit 也會混進 `standup` 的輸出（它以 commit 作者過濾）。
 
 **啟動前會檢查兩個前置條件**（`scripts/lib/preflight.mjs`）：建置產物在不在、該支要用的 debugging
 port 通不通 —— 任一不成立就**立刻失敗並指出處置**，不進入那 30 秒的「等待 CDP target 逾時」。

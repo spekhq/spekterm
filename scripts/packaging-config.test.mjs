@@ -152,3 +152,59 @@ test('dev script 以環境變數隔離 userData', () => {
   assert.notEqual(match[1], '$HOME/.config')
   assert.notEqual(match[1], '~/.config')
 })
+
+/**
+ * build-identity：換版與清理必須真的掛在打包指令上。
+ *
+ * **這是那條「遞增不倚賴任何額外的人工步驟」唯一有鑑別力的守衛。** `probe:package` 那條斷言
+ * （最後一個 commit 為 `chore(release): <v>`）在 `release-bump` 被從 `dist:linux` 拿掉之後
+ * **仍會讀到上一輪的殘留而照樣綠**；走 `PROBE_PACKAGE_APPIMAGE` 時它更是完全沒跑到。
+ * 秒級的靜態守衛在這裡比十幾分鐘的探針強 —— 與上面那條 `dev` script 的 `XDG_CONFIG_HOME`
+ * 是同一個模式。
+ */
+test('dist:linux 掛上換版與產物清理', () => {
+  const dist = pkg.scripts?.['dist:linux'] ?? ''
+  assert.match(dist, /release-bump/, `dist:linux 未掛上換版：${dist}`)
+  assert.match(dist, /prune-release/, `dist:linux 未掛上產物清理：${dist}`)
+
+  // 順序是承重的：換版要在建置**之前**（產物內含的身分才與產物同源），清理要在
+  // electron-builder **之後**（不然沒有東西可清）。
+  assert.ok(dist.indexOf('release-bump') < dist.indexOf('electron-builder'), '換版必須在建置之前')
+  assert.ok(dist.indexOf('prune-release') > dist.indexOf('electron-builder'), '清理必須在打包之後')
+})
+
+/**
+ * 產物檔名帶版本 —— 這是「這個檔案是哪一版」的答案。
+ *
+ * electron-builder 的預設 `artifactName` 已含 `${version}`，所以現在**不設定**它就已滿足。
+ * 這條守的是「日後有人設定了它、卻漏掉版本」。
+ */
+test('artifactName 若被設定則含版本', () => {
+  const names = [pkg.build?.artifactName, pkg.build?.linux?.artifactName].filter(Boolean)
+  for (const name of names) {
+    assert.match(name, /\$\{version\}/, `artifactName 未含版本：${name}`)
+  }
+})
+
+/**
+ * 建置身分的注入 —— **`declare const` 讓型別檢查對「注入被拿掉」完全無感**
+ * （`src/renderer/src/build-info.ts`）。少了這條守衛，唯一的偵測時機是使用者啟動 app 然後看到
+ * 一個白畫面。
+ */
+test('renderer 的 define 注入建置身分', () => {
+  const config = readFileSync(join(repoRoot, 'electron.vite.config.ts'), 'utf8')
+  assert.match(config, /__BUILD_INFO__/, 'electron.vite.config.ts 未注入 __BUILD_INFO__')
+  assert.match(config, /define:/, 'electron.vite.config.ts 未宣告 define')
+})
+
+/**
+ * desktop-packaging：安裝與移除見於文件。
+ *
+ * 一個只有作者知道的指令等於不存在 —— 而這兩支腳本正是那兩條「SHALL 以自桌面環境啟動驗收」的
+ * requirement 的前提。
+ */
+test('README 記載桌面整合的安裝與移除', () => {
+  const readme = readFileSync(join(repoRoot, 'README.md'), 'utf8')
+  assert.match(readme, /install:desktop/, 'README 未記載安裝指令')
+  assert.match(readme, /uninstall:desktop/, 'README 未記載移除方式')
+})

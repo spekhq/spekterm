@@ -79,6 +79,16 @@ const marker = `spekterm-package-${process.pid}-${process.hrtime.bigint()}`
 
 // ── 產物 ────────────────────────────────────────────────────────────────────
 
+/**
+ * 挑出**當前宣告的版本**所對應的產物。
+ *
+ * **不用排序挑最後一個。** 版本逐次遞增之後 `release/` 會並存多份，而字典序不是版本序
+ * （`Spekterm-0.1.10` 排在 `Spekterm-0.1.9` **之前**）—— 依檔名排序會在第十次打包起挑錯。
+ * 更根本的是：規格在乎的不是「哪一個最近被寫」也不是「哪一個排在最後」，而是**哪一個對應
+ * 當前宣告的版本**。以版本建構檔名回答的正是那個問題。
+ *
+ * 找不到即回 `null`，由呼叫端明確失敗 —— 這裡不做任何退而求其次的猜測。
+ */
 function findAppImage() {
   const override = process.env.PROBE_PACKAGE_APPIMAGE
   if (override) return override
@@ -86,10 +96,9 @@ function findAppImage() {
   const releaseDir = join(repoRoot, 'release')
   if (!existsSync(releaseDir)) return null
 
-  const found = readdirSync(releaseDir)
-    .filter((name) => name.endsWith('.AppImage'))
-    .sort()
-  return found.length > 0 ? join(releaseDir, found.at(-1)) : null
+  const { version } = JSON.parse(readFileSync(join(repoRoot, 'package.json'), 'utf8'))
+  const expected = join(releaseDir, `Spekterm-${version}.AppImage`)
+  return existsSync(expected) ? expected : null
 }
 
 /**
@@ -153,6 +162,28 @@ const GLOBAL_NEW_SESSION_RECT = RECT_OF(
 )
 
 const TERMINAL_RECT = RECT_OF(`section[aria-label="${copy('stage.terminal')}"]`)
+
+const SETTINGS_RECT = RECT_OF(
+  `nav[aria-label="${copy('activityBar.label')}"] button[aria-label="${copy('activityBar.settings')}"]`,
+)
+
+/**
+ * 設定介面「關於」段呈現的建置身分（`build-identity`）。
+ *
+ * 讀的是**畫面上的文字**，不是任何內部狀態 —— 規格在乎的是「使用者看得到自己跑的是哪一版」。
+ */
+const BUILD_IDENTITY = `(() => {
+  const s = document.querySelector('[role="group"][aria-label="${copy('settings.about')}"]')
+  if (!s) return null
+  const text = s.textContent ?? ''
+  return {
+    text,
+    version: text.match(/\\d+\\.\\d+\\.\\d+/)?.[0] ?? null,
+    hasBuiltAt: text.includes('${copy('settings.aboutBuilt')}'),
+    hasCommit: text.includes('${copy('settings.aboutCommit')}'),
+    development: text.includes('${copy('settings.aboutDevelopment')}'),
+  }
+})()`
 
 const MENU_ITEM_RECT = (text) => `(() => {
   const menu = document.querySelector('[role="menu"]')
@@ -246,6 +277,36 @@ try {
   const mode = statSync(source).mode
   check(results, '打包指令產出可執行的 AppImage', (mode & 0o111) !== 0,
     `${source}（mode ${(mode & 0o777).toString(8)}）`)
+
+  /**
+   * build-identity：〈檔名含當次的版本〉。
+   *
+   * **以列舉判定，不以建構判定。** `findAppImage()` 是用宣告的版本**組出**期望檔名的 ——
+   * 拿它的回傳值去斷言「檔名含該版本」，被觀察值就是被建構值，**不可能紅**。
+   * 這裡改為列舉 `release/` 之下實際存在的產物，於是 `artifactName` 若被改成不含版本，
+   * 這條會失敗。
+   */
+  const declaredVersion = JSON.parse(readFileSync(join(repoRoot, 'package.json'), 'utf8')).version
+  const releaseNames = existsSync(join(repoRoot, 'release'))
+    ? readdirSync(join(repoRoot, 'release')).filter((name) => name.endsWith('.AppImage'))
+    : []
+  const versionedNames = releaseNames.filter((name) => name.includes(declaredVersion))
+  check(results, '產物的檔名帶有該次打包的版本', versionedNames.length > 0,
+    `宣告版本 ${declaredVersion}；release/ 之下的產物：${releaseNames.join(', ') || '（無）'}`)
+
+  /**
+   * build-identity：〈遞增不倚賴任何額外的人工步驟〉。
+   *
+   * **這條的上界要讀到**：走 `PROBE_PACKAGE_APPIMAGE` 時 `dist:linux` 根本沒跑，它會讀到上一輪
+   * 留下的狀態而照樣綠。真正擋住「`release-bump` 被從 `dist:linux` 拿掉」的是
+   * `scripts/packaging-config.test.mjs` 的秒級靜態守衛。
+   */
+  const headSubject = execFileSync('git', ['log', '-1', '--no-color', '--format=%s'], {
+    cwd: repoRoot, encoding: 'utf8', env: { ...process.env, LC_ALL: 'C' },
+  }).trim()
+  check(results, '打包指令自身遞增版本並提交（未依賴人工步驟）',
+    headSubject === `chore(release): ${declaredVersion}`,
+    `HEAD="${headSubject}"，package.json=${declaredVersion}`)
 
   /**
    * **複製到 repo 之外再執行** —— 這正是「與 repo 脫鉤」那條 requirement 的驗收方式。
@@ -348,6 +409,46 @@ try {
   const witnessOk = await pollDisk(witnessWritten, 15_000)
   check(results, '該 session 的 shell 執行了送進去的指令', witnessOk,
     witnessOk ? witness : '副作用未出現（pty 存在，但送進去的指令沒有被執行）')
+
+  /**
+   * build-identity：執行中的 app 說得出自己的建置身分。
+   *
+   * **包在自己的 try/catch 裡**（tasks 7.6a）—— 這支探針是單一 `try` 區塊、沒有段落隔離，
+   * 而這一段是需要開對話框的 UI 互動。一次 throw 會連帶帶走上面 pty 與 CSP 那兩條既有斷言。
+   */
+  try {
+    const settingsAt = await pollUntil(client, SETTINGS_RECT, (value) => value !== null, 6000)
+    if (settingsAt) await realClick(client, settingsAt)
+    const identity = await pollUntil(client, BUILD_IDENTITY, (value) => value !== null, 6000)
+
+    check(results, '設定介面呈現建置身分（版本／建置時刻／commit）',
+      identity?.version != null && identity.hasBuiltAt === true && identity.hasCommit === true,
+      JSON.stringify(identity))
+
+    /**
+     * **兩者一致是承重的。** 各自正確但彼此不同時，使用者依然無法確認手上跑的是不是剛才那份
+     * 產物 —— 那等於沒有回答任何問題。
+     *
+     * 比對的是 **`release/` 的來源檔名**，不是 `workDir` 裡那一份：上面把它複製成
+     * `Spekterm.AppImage`，版本已經被剝掉了。
+     */
+    check(results, '執行中的 app 呈現的版本與產物檔名的版本相同',
+      identity?.version != null && versionedNames.some((name) => name.includes(identity.version)),
+      `app=${identity?.version} 檔名=${versionedNames.join(', ')}`)
+
+    /**
+     * 〈產物脫離 repo 執行時建置身分仍完整〉—— 上面已把產物複製到 `workDir`（repo 之外）。
+     *
+     * **這條的鑑別力有限，要如實讀**：在「建置時注入」的設計之下，「執行時去問 git」根本表達
+     * 不出來，因此它接近恆真。它擋得住的是**日後有人把注入改成執行期推導**，而那正是這個設計
+     * 唯一真正的替代方案。
+     */
+    check(results, '產物脫離 repo 執行時建置身分仍完整',
+      identity?.hasCommit === true && identity.development === false,
+      `執行位置=${appImage}；${JSON.stringify(identity)}`)
+  } catch (error) {
+    check(results, '設定介面呈現建置身分（版本／建置時刻／commit）', false, error.message)
+  }
 
   client.close()
 } catch (error) {

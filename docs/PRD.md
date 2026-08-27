@@ -517,6 +517,16 @@ spekterm
   **macOS 與 Windows 未動**，且各自帶著未解的前置問題：macOS 的應用程式 menu 是系統層的、
   `Menu.setApplicationMenu(null)` 未實測；Windows 的檔案邊界在 `O_NOFOLLOW` 缺席下退為
   `lstat` 二次確認，從未實測。
+- **換版的辨識與桌面整合**，由 `appimage-version-and-desktop-entry` 交付（issue #13 / #15）：
+  - `dist:linux` 自身**遞增 patch 版本並提交**（`chore(release): <v>`，不打 tag），於是每一份
+    產物的檔名都不同、且對得回一個 commit。理由不是儀式：在此之前「修正沒生效」與「還在跑舊的」
+    在畫面上一模一樣，而兩者要用完全不同的方式處理。
+  - 新能力 **`build-identity`** —— 執行中的 app 於 Settings 的「About」段說出版本、建置時刻、
+    commit 與**建置當時工作副本乾不乾淨**，且與產物檔名同版。刻意**不放狀態列**
+    （`status-bar` 明文禁止恆定欄位，該裁決未被推翻）。
+  - `npm run install:desktop` / `uninstall:desktop` 把產物裝進應用程式選單。這同時讓
+    `desktop-packaging` 兩條「SHALL 以自桌面環境啟動驗收」的 requirement **首次具備可執行的前提**。
+  - **仍未解**：agent CLI 在 nvm 之下的解析（issue #20）、應用程式圖示仍是 placeholder（#14）。
 - 沿用 spek 深色主題（#0a0c0f / amber #f59e0b）、圖示、原生選單。
 - 持久化 layout（panel 尺寸）與最近工作區。
   **session 的持久化已由 `session-restore` 落地**（不屬於任何 Phase）—— session 清單、

@@ -1,7 +1,10 @@
+import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import { defineConfig, externalizeDepsPlugin } from 'electron-vite'
+import { buildIdentity, devIdentity } from './scripts/lib/build-info.mjs'
+import type { BuildIdentity, DevIdentity } from './scripts/lib/build-info.mjs'
 
 /** 字典住在 `src/shared`，main 與 renderer 都要解析得到它（見 `src/shared/i18n`）。 */
 const alias = { '@shared': fileURLToPath(new URL('src/shared', import.meta.url)) }
@@ -24,7 +27,28 @@ function chunkForModule(id: string): string | undefined {
   return 'monaco'
 }
 
-export default defineConfig({
+/**
+ * 建置身分的注入 —— 見 `build-identity`。
+ *
+ * **分岔依 vite 的 `command`，不是 `app.isPackaged`。** 後者是執行期的值，而身分必須在**建置
+ * 當下**就固定（規格：不隨執行環境改變）—— `command` 是唯一在正確時點就已知的判準。
+ * （這與 CSP 那條「依 `ELECTRON_RENDERER_URL` 而非 `app.isPackaged`」是同族，但理由不同：
+ * 那條怕誤判，這條是根本問不到。）
+ *
+ * **只注入 renderer。** `src/renderer/src/build-info.ts` 是唯一的消費點，而它**刻意沒有
+ * fallback**：注入沒生效就 `ReferenceError`，app 開不起來 —— 一個「注入失敗就顯示空白」的設計，
+ * 其失效方式正是這條能力要消滅的那一種。
+ *
+ * **`declare const` 讓型別檢查對「注入被拿掉」完全無感**，因此 `scripts/packaging-config.test.mjs`
+ * 有一道秒級守衛盯著這裡。
+ */
+function resolveBuildInfo(command: string): BuildIdentity | DevIdentity {
+  const root = fileURLToPath(new URL('.', import.meta.url))
+  const { version } = JSON.parse(readFileSync(fileURLToPath(new URL('package.json', import.meta.url)), 'utf8'))
+  return command === 'serve' ? devIdentity(version) : buildIdentity(root, version, new Date().toISOString())
+}
+
+export default defineConfig(({ command }) => ({
   // main / preload 執行於 Node 環境，依賴一律 external 而非 bundle：
   // native 模組（node-pty）無法被 bundler 處理。
   main: {
@@ -45,5 +69,8 @@ export default defineConfig({
         },
       },
     },
+    define: {
+      __BUILD_INFO__: JSON.stringify(resolveBuildInfo(command)),
+    },
   },
-})
+}))

@@ -86,7 +86,9 @@ core 邏輯與視覺化元件重用開源的
 npm install
 npm run dev             # 開發模式（userData 走 ~/.config/spekterm-dev —— 見下方「打包與安裝」）
 npm run build           # 建置至 out/
-npm run dist:linux      # 打包成 AppImage 至 release/
+npm run dist:linux      # 換版（bump + commit）→ 建置 → 打包成 AppImage → 清掉更舊的產物
+npm run install:desktop # 把產物裝進應用程式選單（見下方「打包與安裝」）
+npm run uninstall:desktop
 npm run typecheck       # 型別檢查
 npm run lint
 npm test                # 單元測試（fs 邊界、workspace store、watcher、pty 管理器、OpenSpec 供應層、
@@ -116,12 +118,27 @@ npm run probe:package   # 打包產物本身（會先跑一次完整打包 —�
 
 ```bash
 npm run dist:linux      # → release/Spekterm-<version>.AppImage
-chmod +x release/Spekterm-*.AppImage
-./release/Spekterm-0.1.0.AppImage
+npm run install:desktop # → ~/.local/bin/Spekterm.AppImage ＋ 應用程式選單項目
 ```
 
 產物是**單一可執行檔**，與 repo 工作副本完全脫鉤 —— 裝好之後不隨任何一次編輯而變動，直到你
-明確重新打包。換版就是覆蓋那一個檔案。
+明確重新打包。
+
+### 換版是兩步，而版號每次都會變
+
+`dist:linux` 的第一步是**遞增 patch 版本並提交**（`chore(release): <version>`，不打 tag）。
+這不是儀式 —— 在此之前檔名恆為 `Spekterm-0.1.0.AppImage`、app 內也不顯示版本，於是換版後行為
+若沒變，「**修正沒生效**」與「**根本還在跑舊的**」分不出來，而這兩者要用完全不同的方式處理。
+
+- **版號在哪裡看**：Settings 對話框的「About」段，含版號、建置時刻、commit，以及**建置當時
+  工作副本乾不乾淨**。最後那一項是承重的：帶著未提交的編輯打包時版號一樣會跳，但那份產物
+  **不對應任何 commit**，此時上面顯示的 commit 指的是最近一次提交而不是它。
+- **`package.json` 或 `package-lock.json` 已被改過時，`dist:linux` 會拒絕執行。** 換版提交只能
+  指名這兩個檔案，而遞增與你的編輯落在同一個檔案裡 —— 一次提交會把兩者一起帶走。先提交或還原
+  它們再打包。
+- **`release/` 只保留最近兩份產物**（當次與前一次）。換版後出問題時，退回上一份是第一個處置。
+- **`install:desktop` 可以重複跑**，包括在**目前正在執行**已安裝的那一份時（它走
+  「暫存檔 + rename」而不是就地覆寫）。移除用 `npm run uninstall:desktop`。
 
 **開發模式與產物的設定分家。** 產物用 `~/.config/Spekterm`（也就是你原本的設定，原封接手），
 `npm run dev` 走 `~/.config/spekterm-dev` —— 兩者同時開著時才不會互相覆蓋 session 清單。
@@ -138,15 +155,17 @@ chmod +x release/Spekterm-*.AppImage
   逃生口是不經 fuse 執行：
 
   ```bash
-  ./Spekterm-0.1.0.AppImage --appimage-extract-and-run
+  ./Spekterm-*.AppImage --appimage-extract-and-run
   ```
 
 - **首次打包需要網路** —— Electron 的官方 binary 會被下載到 `~/.cache/electron`（約 100 MB）。
   之後從快取取用。
 
-- **AppImage 不會自動出現在應用程式選單。** 需要的話手寫一份 `.desktop` 放進
-  `~/.local/share/applications/`（指向 AppImage 的絕對路徑），或裝 AppImageLauncher。
-  這是本機環境設定，刻意不納入打包流程。
+- **AppImage 本身不會自動註冊到桌面環境** —— 這是 `npm run install:desktop` 存在的理由。
+  它把產物複製到 `~/.local/bin/Spekterm.AppImage`（**檔名不帶版本**，於是桌面項目不必隨換版
+  重寫），並寫入 `.desktop` 與圖示。位置全部尊重 `XDG_DATA_HOME` / `XDG_BIN_HOME`。
+  **不要手寫一份指向 `release/` 的 `.desktop`** —— 那個目錄會被清除重建，而其中的檔名隨版本
+  改變，桌面項目會靜默失效（項目還在選單裡，點下去沒有反應）。
 
 - **`fs.inotify.max_user_watches` 過低的機器上，側欄與檔案樹會停止更新。** 每個被監看的目錄各佔
   一個 watch descriptor，而 app 監看的是每個 folder 與每個工作目錄的 `openspec/`（遞迴，

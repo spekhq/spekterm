@@ -316,6 +316,28 @@ const INPUT_AREA_READONLY = `(() => {
 /** side panel 內文，用來偵測衝突／過期橫幅之類的文字提示。 */
 const SIDE_PANEL_TEXT = `document.querySelector('section[aria-label="${copy('openspec.sidePanel')}"]')?.innerText ?? ''`
 
+/**
+ * build-identity：開發模式的建置身分。
+ *
+ * **這一條只能掛在這支探針上。** `probe:workspace` 只有一種啟動路徑（`electron .` 載入 build
+ * 產物），依 `electron.vite.config.ts` 它拿到的一律是**完整建置身分** —— 把「應標示為開發模式」
+ * 掛在那裡必為假綠。這支自己起 `electron-vite dev --rendererOnly`，renderer 來自 dev server，
+ * `command === 'serve'`，是唯一拿得到開發身分的地方（design D8）。
+ */
+const SETTINGS_EL = `document.querySelector('nav[aria-label="${copy('activityBar.label')}"] button[aria-label="${copy('activityBar.settings')}"]')`
+
+const BUILD_IDENTITY = `(() => {
+  const s = document.querySelector('[role="group"][aria-label="${copy('settings.about')}"]')
+  if (!s) return null
+  const text = s.textContent ?? ''
+  return {
+    text,
+    development: text.includes('${copy('settings.aboutDevelopment')}'),
+    // 開發模式**不得**呈現建置時刻 —— 放進行程啟動時刻就是冒充成打包產物。
+    hasBuiltAt: text.includes('${copy('settings.aboutBuilt')}'),
+  }
+})()`
+
 /** 某一列樹節點是否帶著未存變更的標記。 */
 const ROW_IS_DIRTY = (relPath) => `(() => {
   const row = [...document.querySelectorAll('[role="treeitem"]')].find((r) => r.getAttribute('title') === ${JSON.stringify(relPath)})
@@ -1166,6 +1188,14 @@ async function probeDev(fixture, profile) {
       devPolicy.match(/img-src[^;]*/)?.[0] ?? '(政策未捕捉)')
     check(results, '開發模式下遠端圖片未被 CSP 阻擋', (await app.client.evaluate(TRY_REMOTE_IMAGE)) === false,
       'img-src 違規應為 false')
+
+    // build-identity：〈開發模式的身分可與打包產物區分〉—— 見 BUILD_IDENTITY 的註解。
+    const settingsAt = await coordsOf(app.client, SETTINGS_EL)
+    if (settingsAt) await realMouse(app.client, settingsAt.x, settingsAt.y, 'left')
+    const identity = await pollUntil(app.client, BUILD_IDENTITY, (value) => value !== null, 4000)
+    check(results, '開發模式的建置身分標示為開發，且不冒充建置時刻',
+      identity?.development === true && identity.hasBuiltAt === false,
+      JSON.stringify(identity))
   } finally {
     if (app) await app.close()
     // 殺整個 process group（npx → node → vite），而非只殺 npx wrapper。負號 = 整組。

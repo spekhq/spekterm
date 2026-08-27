@@ -267,7 +267,7 @@
     "replaySeparator": "end of previous content · spekterm restarted"
   },
   "settings": {
-    "title": "Terminal",
+    "title": "Settings",
     "fontFamily": "Font family",
     "fontFamilyPlaceholder": "System default",
     "fontSize": "Font size",
@@ -281,7 +281,13 @@
     "reset": "Reset to default",
     "save": "Save",
     "agentStatus": "Show agent status in the status bar",
-    "agentStatusHint": "Asks claude to report its model, context usage and cost to spekterm. Your own status line keeps working. Applies to sessions started after this change."
+    "agentStatusHint": "Asks claude to report its model, context usage and cost to spekterm. Your own status line keeps working. Applies to sessions started after this change.",
+    "about": "About",
+    "aboutVersion": "Version",
+    "aboutBuilt": "Built",
+    "aboutCommit": "Commit",
+    "aboutDirty": "uncommitted changes",
+    "aboutDevelopment": "development build"
   },
   "statusBar": {
     "label": "Status bar",

@@ -42,7 +42,9 @@
   "scripts": {
     "dev": "XDG_CONFIG_HOME=$HOME/.config/spekterm-dev electron-vite dev",
     "build": "electron-vite build",
-    "dist:linux": "npm run build && electron-builder --linux",
+    "dist:linux": "node scripts/release-bump.mjs && npm run build && electron-builder --linux && node scripts/prune-release.mjs",
+    "install:desktop": "node scripts/install-desktop.mjs",
+    "uninstall:desktop": "node scripts/uninstall-desktop.mjs",
     "preview": "electron-vite preview",
     "probe:shell": "node scripts/run-probe.mjs shell",
     "probe:workspace": "node scripts/run-probe.mjs workspace",
