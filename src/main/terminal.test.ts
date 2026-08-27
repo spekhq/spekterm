@@ -73,19 +73,22 @@ afterEach(() => {
 })
 
 describe('TerminalService', () => {
-  it('拒絕未註冊的 folder', () => {
+  // **`create` 是 async，於是這些失敗是 rejection 而非同步 throw。** 跨越 IPC 的行為不變：
+  // `ipc/terminal.ts` 的 `toResult` 是 `await run()` 包在 try/catch 裡，兩者都被接住並轉成
+  // 帶 `code` 的結果物件。
+  it('拒絕未註冊的 folder', async () => {
     service = new TerminalService(lookup([]), sink())
-    assert.throws(
-      () => service?.create('nope', 'shell'),
+    await assert.rejects(
+      () => service!.create('nope', 'shell'),
       (error: unknown) => error instanceof TerminalError && error.code === 'UNKNOWN_FOLDER',
     )
     assert.equal(service.sessionCount, 0)
   })
 
-  it('拒絕路徑失效的 folder', () => {
+  it('拒絕路徑失效的 folder', async () => {
     service = new TerminalService(lookup([{ id: 'f1', path: repo, status: 'missing' }]), sink())
-    assert.throws(
-      () => service?.create('f1', 'shell'),
+    await assert.rejects(
+      () => service!.create('f1', 'shell'),
       (error: unknown) => error instanceof TerminalError && error.code === 'FOLDER_UNAVAILABLE',
     )
     assert.equal(service.sessionCount, 0)
@@ -93,7 +96,7 @@ describe('TerminalService', () => {
 
   it('雙向串流：輸入送達並被執行，cwd 為 folder 的根目錄', async () => {
     service = new TerminalService(lookup([{ id: 'f1', path: repo, status: 'ok' }]), sink())
-    const id = service.create('f1', 'shell').sessionId
+    const id = (await service.create('f1', 'shell')).sessionId
     assert.equal(service.sessionCount, 1)
 
     // tty 會回顯輸入行，因此不能只斷言「畫面上出現了我送的字」。回顯的是字面的
@@ -112,7 +115,7 @@ describe('TerminalService', () => {
 
   it('pty 結束後自集合移除（集合恆等於「還活著的 pty」）', async () => {
     service = new TerminalService(lookup([{ id: 'f1', path: repo, status: 'ok' }]), sink())
-    const id = service.create('f1', 'shell').sessionId
+    const id = (await service.create('f1', 'shell')).sessionId
 
     service.write(id, 'exit\r')
     await waitFor(() => exits.length === 1, { label: 'exit 事件' })
@@ -126,8 +129,8 @@ describe('TerminalService', () => {
 
   it('dispose 殺光所有 pty', async () => {
     service = new TerminalService(lookup([{ id: 'f1', path: repo, status: 'ok' }]), sink())
-    service.create('f1', 'shell')
-    service.create('f1', 'shell')
+    await service.create('f1', 'shell')
+    await service.create('f1', 'shell')
     assert.equal(service.sessionCount, 2)
 
     service.dispose()
@@ -139,8 +142,8 @@ describe('TerminalService', () => {
 
   it('kill 終止指定的 session，其餘不受影響', async () => {
     service = new TerminalService(lookup([{ id: 'f1', path: repo, status: 'ok' }]), sink())
-    const first = service.create('f1', 'shell').sessionId
-    service.create('f1', 'shell')
+    const first = (await service.create('f1', 'shell')).sessionId
+    await service.create('f1', 'shell')
 
     service.kill(first)
     assert.equal(service.sessionCount, 1)
@@ -154,21 +157,19 @@ describe('TerminalService', () => {
     process.env.SHELL = '/nonexistent/xyzshell'
     service = new TerminalService(lookup([{ id: 'f1', path: repo, status: 'ok' }]), sink())
 
-    let id = ''
-    assert.doesNotThrow(() => {
-      id = service?.create('f1', 'shell').sessionId ?? ''
-    })
-    assert.notEqual(id, '', 'create 仍應回傳 sessionId')
+    // 建立呼叫本身**不該**因為命令不存在而失敗（見下方的斷言：失敗改以非零結束呈現）。
+    const created = await service.create('f1', 'shell')
+    assert.notEqual(created.sessionId, '', 'create 仍應回傳 sessionId')
 
     await waitFor(() => exits.some((entry) => entry.exitCode !== 0), { label: '非零 exit' })
     assert.match(output(), /execvp/i)
   })
 
-  it('resize 對已結束或未知的 session 是 no-op', () => {
+  it('resize 對已結束或未知的 session 是 no-op', async () => {
     service = new TerminalService(lookup([{ id: 'f1', path: repo, status: 'ok' }]), sink())
     assert.doesNotThrow(() => service?.resize('unknown-session', 100, 40))
 
-    const id = service.create('f1', 'shell').sessionId
+    const id = (await service.create('f1', 'shell')).sessionId
     // 0 尺寸會讓 node-pty 拋錯，因此必須先被夾制。
     assert.doesNotThrow(() => service?.resize(id, 0, 0))
   })
@@ -256,7 +257,7 @@ describe('claude 目標的對話續接', () => {
     const stub = installStubClaude()
     service = new TerminalService(lookup([{ id: 'f1', path: repo, status: 'ok' }]), sink())
 
-    const result = service.create('f1', 'claude')
+    const result = await service.create('f1', 'claude')
 
     await waitFor(() => stub.calls().length === 1, { label: 'stub claude 被呼叫' })
     assert.ok(result.conversationId, '應該回報實際使用的對話識別碼')
@@ -270,7 +271,7 @@ describe('claude 目標的對話續接', () => {
     const conversation = '44444444-4444-4444-8444-444444444444'
     service = new TerminalService(lookup([{ id: 'f1', path: repo, status: 'ok' }]), sink())
 
-    const result = service.create('f1', 'claude', { resumeConversationId: conversation })
+    const result = await service.create('f1', 'claude', { resumeConversationId: conversation })
 
     await waitFor(() => stub.calls().length === 1, { label: 'stub claude 被呼叫' })
     assert.equal(stub.calls()[0], `--resume ${conversation}`)
@@ -285,7 +286,7 @@ describe('claude 目標的對話續接', () => {
 
     // 持久化檔案是磁碟上的檔案 —— 它是不受信任的輸入。這個值會走到 `$SHELL -l -c "claude …"`，
     // 一個字串命令。
-    const result = service.create('f1', 'claude', {
+    const result = await service.create('f1', 'claude', {
       resumeConversationId: `x; touch ${marker}`,
     })
 
@@ -303,7 +304,7 @@ describe('claude 目標的對話續接', () => {
     const stale = '55555555-5555-4555-8555-555555555555'
     service = new TerminalService(lookup([{ id: 'f1', path: repo, status: 'ok' }]), sink())
 
-    const { sessionId } = service.create('f1', 'claude', { resumeConversationId: stale })
+    const { sessionId } = await service.create('f1', 'claude', { resumeConversationId: stale })
 
     await waitFor(() => conversations.length === 1, { label: '自癒回報新的對話識別碼' })
     const healed = conversations[0].conversationId
@@ -346,7 +347,7 @@ describe('claude 目標的對話續接', () => {
     service = new TerminalService(lookup([{ id: 'f1', path: repo, status: 'ok' }]), sink())
 
     // 這個 session 開在一個（邊界外的）工作目錄裡，然後續接失敗。
-    const { sessionId } = service.create('f1', 'claude', {
+    const { sessionId } = await service.create('f1', 'claude', {
       resumeConversationId: stale,
       cwd: real,
       worktreeRoots: [real],
@@ -368,7 +369,7 @@ describe('claude 目標的對話續接', () => {
     const stale = '66666666-6666-4666-8666-666666666666'
     service = new TerminalService(lookup([{ id: 'f1', path: repo, status: 'ok' }]), sink())
 
-    const { sessionId } = service.create('f1', 'claude', { resumeConversationId: stale })
+    const { sessionId } = await service.create('f1', 'claude', { resumeConversationId: stale })
 
     await waitFor(() => exits.some((entry) => entry.sessionId === sessionId), {
       label: 'session 以結束呈現',
@@ -388,7 +389,7 @@ describe('重建的工作目錄', () => {
     fs.mkdirSync(sub, { recursive: true })
     service = new TerminalService(lookup([{ id: 'f1', path: repo, status: 'ok' }]), sink())
 
-    const { sessionId } = service.create('f1', 'shell', { cwd: sub })
+    const { sessionId } = await service.create('f1', 'shell', { cwd: sub })
 
     // 回顯不含答案：`$(pwd)` 在輸入行的回顯裡不會展開，只有真的執行了才會出現。
     service.write(sessionId, 'echo CWD=$(pwd)\n')
@@ -399,7 +400,7 @@ describe('重建的工作目錄', () => {
     service = new TerminalService(lookup([{ id: 'f1', path: repo, status: 'ok' }]), sink())
 
     // 使用者關掉 app 之前 `cd /tmp` 了 —— 重建不得把 pty 開在 workspace 之外。
-    const { sessionId } = service.create('f1', 'shell', { cwd: fs.realpathSync(tmpdir()) })
+    const { sessionId } = await service.create('f1', 'shell', { cwd: fs.realpathSync(tmpdir()) })
 
     service.write(sessionId, 'echo CWD=$(pwd)\n')
     await waitFor(() => output().includes(`CWD=${repo}`), { label: 'cwd 退回 folder 根目錄' })
@@ -408,7 +409,7 @@ describe('重建的工作目錄', () => {
   it('已不存在的工作目錄退回根目錄', async () => {
     service = new TerminalService(lookup([{ id: 'f1', path: repo, status: 'ok' }]), sink())
 
-    const { sessionId } = service.create('f1', 'shell', { cwd: path.join(repo, 'gone') })
+    const { sessionId } = await service.create('f1', 'shell', { cwd: path.join(repo, 'gone') })
 
     service.write(sessionId, 'echo CWD=$(pwd)\n')
     await waitFor(() => output().includes(`CWD=${repo}`), { label: 'cwd 退回 folder 根目錄' })
@@ -425,7 +426,7 @@ describe('重建的工作目錄', () => {
     const real = fs.realpathSync(outside)
     service = new TerminalService(lookup([{ id: 'f1', path: repo, status: 'ok' }]), sink())
 
-    const { sessionId } = service.create('f1', 'shell', {
+    const { sessionId } = await service.create('f1', 'shell', {
       cwd: real,
       worktreeRoots: [real],
     })
@@ -441,7 +442,7 @@ describe('重建的工作目錄', () => {
     service = new TerminalService(lookup([{ id: 'f1', path: repo, status: 'ok' }]), sink())
 
     // 合法根集合裡有一個工作目錄，但 cwd 不在它底下，也不在 folder 底下。
-    const { sessionId } = service.create('f1', 'shell', {
+    const { sessionId } = await service.create('f1', 'shell', {
       cwd: fs.realpathSync(outside),
       worktreeRoots: [fs.realpathSync(wt)],
     })
@@ -455,7 +456,7 @@ describe('重建的工作目錄', () => {
   it('工作目錄集合為空時行為與放寬前一致', async () => {
     service = new TerminalService(lookup([{ id: 'f1', path: repo, status: 'ok' }]), sink())
 
-    const { sessionId } = service.create('f1', 'shell', { cwd: fs.realpathSync(tmpdir()) })
+    const { sessionId } = await service.create('f1', 'shell', { cwd: fs.realpathSync(tmpdir()) })
 
     service.write(sessionId, 'echo CWD=$(pwd)\n')
     await waitFor(() => output().includes(`CWD=${repo}`), { label: 'cwd 退回 folder 根目錄' })
@@ -516,7 +517,7 @@ describe('全域 session：不隸屬任何 folder，位置為家目錄', () => {
   it('初始 cwd 為家目錄，且不需要任何 folder 存在', async () => {
     // **workspace 完全是空的** —— 全域 session 不查表，位置是主行程的常數。
     service = new TerminalService(lookup([]), sink())
-    const id = service.create(null, 'shell').sessionId
+    const id = (await service.create(null, 'shell')).sessionId
     assert.equal(service.sessionCount, 1)
 
     // `$(pwd)` 在回顯裡不會展開 —— 出現 `CWD=<家目錄>` 就一定是真的執行了。
@@ -535,7 +536,7 @@ describe('全域 session：不隸屬任何 folder，位置為家目錄', () => {
    */
   it('cd 到家目錄之外的位置後，該位置仍被記錄（不受路徑夾制）', async () => {
     service = new TerminalService(lookup([]), sink())
-    const id = service.create(null, 'shell').sessionId
+    const id = (await service.create(null, 'shell')).sessionId
 
     // `repo` 是測試自建的暫存目錄，必然落在家目錄之外。
     service.write(id, `cd ${repo}\r`)
@@ -555,7 +556,7 @@ describe('全域 session：不隸屬任何 folder，位置為家目錄', () => {
    */
   it('最後已知的工作目錄已不存在時，退回家目錄', async () => {
     service = new TerminalService(lookup([]), sink())
-    const id = service.create(null, 'shell', { cwd: path.join(repo, 'gone-for-good') }).sessionId
+    const id = (await service.create(null, 'shell', { cwd: path.join(repo, 'gone-for-good') })).sessionId
 
     service.write(id, 'echo CWD=$(pwd)\r')
     await waitFor(() => output().includes(`CWD=${os.homedir()}`), { label: '退回家目錄' })
@@ -563,7 +564,7 @@ describe('全域 session：不隸屬任何 folder，位置為家目錄', () => {
 
   it('關閉後不留下 pty', async () => {
     service = new TerminalService(lookup([]), sink())
-    const id = service.create(null, 'shell').sessionId
+    const id = (await service.create(null, 'shell')).sessionId
     service.kill(id)
     await waitFor(() => service.sessionCount === 0, { label: 'pty 已釋放' })
   })

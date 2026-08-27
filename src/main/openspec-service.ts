@@ -18,7 +18,7 @@ import { changeNodeSlug } from '@spekjs/core/graph-node-id'
 import type { FSWatcher } from 'chokidar'
 import { isWithin } from './fs-boundary'
 import { resolveCommonDir } from './git-branch'
-import { whenUserPathReady } from './user-path'
+import { whenUserEnvReady } from './user-env'
 import { createWatcher } from './watcher'
 import type { FolderLookup } from './workspace-store'
 
@@ -566,12 +566,16 @@ export class OpenSpecService {
 
     /*
       **只在這裡等，而且只是等。** `readChange` 會 spawn `openspec` 取得 schema 的權威順序，
-      而桌面環境啟動的產物 PATH 裡沒有它 —— 使用者 PATH 的解析與套用由 `user-path.ts` 負責，
+      而桌面環境啟動的產物 PATH 裡沒有它 —— 使用者環境的解析與套用由 `user-env.ts` 負責，
       這裡等的是「那件事做完了沒」。從未啟動過解析時（單元測試）立即完成。
 
       其餘 core 呼叫（掃描、關係圖）只 spawn `git`，不需要使用者 PATH，讓它們也等是白付延遲。
+
+      **取值範圍擴大成整份環境之後，這個裁決依然成立** —— `user-env.ts` 併進 `process.env` 的
+      **仍然只有 PATH**（其餘只交給 pty，理由見該檔檔頭）。於是主行程 spawn 的東西受影響的
+      也只有 PATH，判準沒有變。
     */
-    await whenUserPathReady()
+    await whenUserEnvReady()
 
     const detail = await this.#read(
       () => readChange(changeRoot, info.slug),

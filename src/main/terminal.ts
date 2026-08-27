@@ -5,6 +5,7 @@ import { type IPty, spawn } from 'node-pty'
 import { type AgentStatusInjection, clearAgentStatus, prepareInjection } from './agent-status'
 import { isWithin } from './fs-boundary'
 import { isUuid } from './session-store'
+import { getUserEnv, whenUserEnvReady } from './user-env'
 import type { FolderLookup } from './workspace-store'
 import { t } from '@shared/i18n'
 
@@ -98,8 +99,11 @@ function resolveShell(): string {
  * **絕不以 `CLAUDE*` 前綴一概剝除**：`CLAUDE_CODE_OAUTH_TOKEN` 是認證用的，剝掉它 claude 會登不進去。
  * 名單是明確列舉的，且不含任何帶 KEY／TOKEN 的名字。
  *
- * 副作用很小：使用者自己在 `~/.zshrc` 之類設定的變數**不受影響** —— 我們 spawn 的是 login shell，
- * 它會重新 source 那些檔案。這裡拿掉的只有「啟動 spekterm 的那個行程注入的」。
+ * **這組標記無論來自哪裡都要剝除**，包含使用者環境（見下方 `ptyEnv`）。此前這裡寫著「使用者自己
+ * 在 `~/.zshrc` 設定的變數不受影響 —— 我們 spawn 的是 login shell，它會重新 source 那些檔案」；
+ * 那句話對 **claude 目標從來就不成立**（它是非互動 shell，不讀 rc），而在使用者環境被合併進來
+ * 之後更會誤導：rc 若設了這裡面的名字，剝除之後**沒有東西會把它還原**。那是刻意的 —— 一個宣稱
+ * 自己隸屬於某個 Claude Code session 的 pty，對 spekterm 一律不成立。
  */
 const NESTED_CLAUDE_ENV = [
   'CLAUDECODE',
@@ -112,12 +116,23 @@ const NESTED_CLAUDE_ENV = [
 ] as const
 
 /**
- * pty 的環境。整份繼承主行程，但抹掉「巢狀 Claude Code」的標記（見上）。
+ * pty 的環境：主行程的環境 ＋ 使用者互動 shell 的環境，然後蓋回我們承重的兩件事。
+ *
+ * **合併順序就是優先順序，而使用者的值在中間是刻意的。** 「等同使用者的 shell 環境」就是這個
+ * 意思 —— 他在自己的終端機裡跑同一個東西時看到什麼，這裡就該是什麼。放在最後蓋回來的只有兩樣：
+ * `TERM`（我們決定終端模擬的能力集）與「巢狀 Claude Code」的標記剝除（見上）。
+ *
+ * **`PATH` 不在 `user` 裡**（`getUserEnv()` 已經把它拿掉）—— 它早就併進 `process.env.PATH` 了，
+ * 而那份是**超集**：使用者的項目前置、產物自身注入的在後。讓使用者的原始 `PATH` 在這裡覆蓋回去，
+ * 會把後者丟掉。
  *
  * 這對**兩種** spawn 目標都適用：使用者在 login shell session 裡手動打 `claude`，會踩到一模一樣的坑。
  */
-export function ptyEnv(source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = { ...source, TERM: 'xterm-256color' }
+export function ptyEnv(
+  source: NodeJS.ProcessEnv = process.env,
+  user: Readonly<Record<string, string>> = getUserEnv(),
+): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...source, ...user, TERM: 'xterm-256color' }
   for (const key of NESTED_CLAUDE_ENV) delete env[key]
   return env
 }
@@ -317,7 +332,25 @@ export class TerminalService {
    * 邊界內。renderer 呼叫得到的 IPC 從來沒有 cwd 這個參數（session-persistence 的
    * 「持久化不得把路徑詞彙交給 renderer」）。
    */
-  create(folderId: string | null, target: SpawnTarget, options: SpawnOptions = {}): SpawnResult {
+  /**
+   * **建立前先等使用者環境就緒**（`terminal-sessions` 的「啟動後立即建立的 session 同樣拿到完整
+   * 環境」）。解析於 module load 就開始，而使用者要看到視窗、點下建立入口才會走到這裡 ——
+   * 實測解析約 1.2 秒，通常早就跑完；最壞是 `user-env.ts` 的 5 秒逾時。
+   *
+   * **不變式與呼叫端是否 `await` 無關** —— `await` 在這裡面，漏掉 await 的呼叫端只是拿不到回傳值
+   * 的時序，環境該齊的一樣齊。（本 repo 的 eslint 沒有 type-checked 設定也沒有
+   * `no-floating-promises`，所以「型別會擋住漏掉的呼叫端」只對「會用到回傳值」的呼叫點成立。）
+   *
+   * 取得失敗或放棄時 `whenUserEnvReady()` 一樣會 resolve —— **session 照常建立**，只是環境不完整。
+   * 一個因為環境查不到而建不出來的 session，比一個環境不完整的 session 更糟。
+   */
+  async create(
+    folderId: string | null,
+    target: SpawnTarget,
+    options: SpawnOptions = {},
+  ): Promise<SpawnResult> {
+    await whenUserEnvReady()
+
     // **全域 session：位置是主行程的常數，renderer 什麼都選不了**（`global-session`）。
     // 於是可達的初始工作目錄集合恰好擴大一個元素，而它不由任何 renderer 送來的字串決定 ——
     // 這條路徑上沒有新的路徑詞彙、沒有新的識別碼空間、沒有新的查表。

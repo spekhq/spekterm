@@ -571,6 +571,21 @@ session 開得進 worktree 之後，邊界保證從「renderer 沒有路徑詞�
 續接功能悄悄失效而使用者拿到一個能用但永遠全新的對話、pty 一輩子停在 80×24、關一次視窗
 `sessions.json` 就被清空。
 
+留在這裡的只有一條，因為它跨到啟動流程、而且踩到它的方式是「順手加一行」：
+
+- **使用者的 shell 環境於啟動時取得一次，但只有 `PATH` 進 `process.env`** —— 其餘（API 憑證、
+  服務端點、工具鏈設定）由 `user-env.ts` 持有，只在 `ptyEnv()` 建構 pty 環境時合併。
+  **絕不要「順手」把它們也 `Object.assign` 進 `process.env`。** 主行程的環境決定應用程式自身的
+  行為，而 `app.getPath('userData')` 與 CSP 的 dev／production 判定都在 `whenReady` 內求值 ——
+  與使用者 rc 的執行速度形成競賽（實測窗口約 220ms，一個精簡的 `.zshrc` 只要 0.02–0.24s）。
+  一個被注入的 `XDG_CONFIG_HOME` 會換掉 userData 的落點：**所有 repo 與 session 消失，而它們的
+  pty 還活著**。
+  - **「只在原本不存在時才加入」這條規則救不了它** —— 實測桌面環境啟動的產物（49 個變數）中
+    `XDG_CONFIG_HOME`、`ELECTRON_*`、`NODE_OPTIONS` **都不存在**，於是那條規則對它們一律放行，
+    方向與直覺相反。一份黑名單則會遺漏尚未存在的變數。**不寫進去，這一整類問題才表達不出來。**
+  - **環境是啟動時的快照** —— 改了 `.zshrc` 要**重開 app** 才生效（開新 session 不夠）。
+    完整論證與量測見 `docs/lessons/terminal.md`。
+
 ## OpenSpec 側欄與 `@spekjs`
 
 元件重用的判準、`@spekjs/core` 的簽名與語意陷阱、worktree 聚合的三個讀取根、聚合圖的節點識別碼、

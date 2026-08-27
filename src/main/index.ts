@@ -19,7 +19,7 @@ import { configureAgentStatus } from './agent-status'
 import { PanelStore } from './panel-store'
 import { PreferencesStore } from './preferences-store'
 import { SessionStore } from './session-store'
-import { applyUserPathOnce } from './user-path'
+import { applyUserEnvOnce } from './user-env'
 import { WorkspaceStore } from './workspace-store'
 
 const currentDir = dirname(fileURLToPath(import.meta.url))
@@ -108,10 +108,10 @@ async function logScanSummary(): Promise<void> {
 /**
  * 使用者互動 shell 的 PATH —— 讓 core spawn 的 `openspec` 在桌面環境啟動時解析得到。
  *
- * **不 await**（實測互動 shell 約 1.3 秒，不該擋住視窗建立）。套用發生在 `user-path.ts` 內部
- * 那個唯一的時點；需要對齊時序的地方 `await whenUserPathReady()`，它們不負責套用。
+ * **不 await**（實測互動 shell 約 1.3 秒，不該擋住視窗建立）。套用發生在 `user-env.ts` 內部
+ * 那個唯一的時點；需要對齊時序的地方 `await whenUserEnvReady()`，它們不負責套用。
  */
-void applyUserPathOnce()
+void applyUserEnvOnce()
 
 void app.whenReady().then(() => {
   // workspace 設定隨使用者資料目錄走，因此 `--user-data-dir` 可指向暫存 profile，

@@ -30,7 +30,7 @@
     所以 **shell 目標沒問題，缺口只在 claude 目標**：`claude` 目前找得到純粹因為它裝在
     `~/.local/bin`（由 login rc 提供）。改用 `npm i -g` 裝到 nvm 底下就會踩到（issue #20）。
 - **主行程自己 spawn 的東西不受上面那道緩解保護** —— 那個機制作用於 pty。core 用來取得 schema
-  權威順序的 `openspec` 因此在打包產物裡一律 ENOENT，解法是 `src/main/user-path.ts`（啟動時以
+  權威順序的 `openspec` 因此在打包產物裡一律 ENOENT，解法是 `src/main/user-env.ts`（啟動時以
   **互動** shell 取一次 PATH）。兩個實測結論：
   - **必須前置（prepend），不能附加。** `openspec` 的 shebang 是 `#!/usr/bin/env node` —— 附加在後
     時它被解析到、卻用系統 node 執行而 `SyntaxError`，而 CLI 非零結束在 core 的 provider 眼中
@@ -69,7 +69,95 @@ claude 不寫 transcript**（實測：對話真的發生了，但 `~/.claude/pro
   `CLAUDE_CODE_ENTRYPOINT` 都無效。
 - **絕不以 `CLAUDE*` 前綴一概剝除** —— `CLAUDE_CODE_OAUTH_TOKEN` 是認證用的。`ptyEnv()` 的名單明確
   列舉，且不含任何帶 KEY／TOKEN 的名字。
-- login shell 讓副作用很小（使用者自己在 rc 裡設的會被 source 回來）。**兩種 spawn 目標都適用**。
+- **兩種 spawn 目標都適用。** 此前這裡寫著「login shell 讓副作用很小（使用者自己在 rc 裡設的會被
+  source 回來）」—— 那句話對 **claude 目標從來就不成立**（見下一節：它是非互動 shell，不讀 rc），
+  而在使用者環境被合併進 pty 之後更會誤導：rc 若設了名單裡的名字，剝除之後**沒有東西會還原它**。
+  那是刻意的 —— 一個宣稱自己隸屬於某個 Claude Code session 的 pty，對 spekterm 一律不成立。
+
+## 使用者的 shell 環境：兩個目標涵蓋範圍不同，而修法不在 pty 上
+
+**症狀**：agent session 裡的 MCP server 起不來、工具找不到憑證，而**同一個東西在使用者自己的
+終端機裡好好的**。終端裡不會有任何一句話指出環境是缺的。
+
+**成因**：`spawnArgs` 的兩個目標，其 shell 的互動性不同：
+
+| spawn 目標 | 參數 | 掛在 pty 上是什麼 | 讀不讀 `.zshrc` |
+|---|---|---|---|
+| login shell | `['-l']` | **互動** login shell | **讀** |
+| claude | `['-l', '-c', <命令>]` | **非互動** | **不讀** |
+
+真 pty 下的對照（受控 `HOME`，`.zprofile` 與 `.zshrc` 各一個哨兵）：
+
+```
+zsh -l -c      → PROF=from-zprofile  RC=無          node=/usr/bin/node（系統 v10）  openspec=無
+zsh -i -l -c   → PROF=from-zprofile  RC=from-zshrc  node=nvm 的 v22.22.0            openspec=有
+```
+
+### 為什麼**不**把 claude 目標改成 `-i -l -c`
+
+那是最直覺的修法，而且副作用比預期小得多 —— 以下每一條都與直覺相反，都實測過：
+
+- **真 pty 下沒有噪音。** `user-env.ts` 註解記載的 gitstatus 錯誤只出現在**非 tty**（`setopt monitor`
+  失敗的連帶）。pty 上 `zsh -i -l -c` 與 `bash -i -l -c` 的輸出乾乾淨淨。
+- **`HISTFILE` 不被寫入**（`-i` 配 `-c` 不記錄 history）。
+- **`Ctrl+C` 語意沒壞** —— 互動版中斷後 shell 以 exit 130 結束，不落回 prompt。
+- **`dash` / `sh` 對 `-i -l -c` 無害**，行為與 `-l -c` 相同。
+- **`COLUMNS` / `LINES` / `TERM` 沒有被汙染**（互動 zsh 不匯出它們）——「pty 一輩子停在 80×24」
+  這條在這裡**不成立**，曾經懷疑過，已否證。
+
+**否決它的唯一理由是啟動延遲**，而它大到吸收不掉（各量三次，數字穩定）：
+
+| | 命令開始執行的時間 |
+|---|---|
+| `zsh -l -c`（非互動） | **0.04s** / 0.04 / 0.04 |
+| `zsh -i -l -c`（互動） | **2.33s** / 2.32 / 2.37 |
+
+成本來自使用者的 rc（oh-my-zsh + powerlevel10k + compinit + nvm），**每個 agent session 都付一次**
+（含休眠 session 首次顯示時的重建），而 `claude --version` 只要 **0.01s** —— 它是原生 binary。
+
+> **這個否決有前提。** 若日後 per-session 的環境新鮮度變得比啟動延遲重要，這個裁決要重做。
+> 兩者不互斥，可以並存。
+
+### 於是：主行程取一次，但**只有 `PATH` 進 `process.env`**
+
+那 2.33 秒 `user-env.ts` **每次啟動已經在付**（它查 PATH 用的就是 `-i -l -c`），把取值範圍擴大到
+整份環境，邊際成本是零。
+
+**但取回的東西不能全部寫進 `process.env`** —— 這是本節最承重的一條：
+
+- `app.getPath('userData')`（決定 `workspace.json` / `sessions.json` / `preferences.json` /
+  `panel.json` 的落點）與 CSP 的 dev／production 判定（讀 `ELECTRON_RENDERER_URL`）都在
+  `whenReady` 內求值，而解析於 module load 觸發、**不被 await**。兩者之間是一個競賽窗口
+  （實測約 **220ms**；一個只有幾行 `export` 的 `.zshrc` 是 **0.02–0.24s**，本機的 oh-my-zsh
+  要 1.2s 所以贏不了 —— **但那是運氣**）。
+- 後果：注入的 `XDG_CONFIG_HOME` ⇒ **所有 repo 與 session 消失，而它們的 pty 還活著**；
+  注入的 `ELECTRON_RENDERER_URL` ⇒ 打包產物套用 dev CSP 並拿它去 `loadURL`。
+
+**「只在原本不存在時才加入」這條規則救不了它**（實測，桌面選單啟動的產物，49 個變數）：
+
+```
+DISPLAY  存在      XDG_CONFIG_HOME  **不存在**      ELECTRON_RENDERER_URL  **不存在**
+HOME     存在      NODE_OPTIONS     **不存在**      ELECTRON_RUN_AS_NODE   **不存在**
+```
+
+危險的那幾個**不在啟動環境裡**，於是那條規則對它們一律**放行** —— 方向與直覺相反。而一份
+「不可覆寫」的黑名單會遺漏尚未存在的變數（下一個 Electron 版本新增的那些），且遺漏是靜默的。
+**不寫進去，這一整類問題才表達不出來。**
+
+### 其餘幾條實測
+
+- **`bash -i -l -c` 走 login 路徑，不直接讀 `.bashrc`**（讀 `.bash_profile`；Debian/Ubuntu 的預設
+  `~/.profile` 會 source 它，自訂過的可能不會）。這與**使用者自己開 login shell session 時看到的
+  一模一樣** —— 我們要的等式是「agent session ＝ 同一個 app 裡的 login shell session」，
+  不是「＝ 某個外部終端機」。另外 Ubuntu 的互動 bash 會印兩行 sudo hint，那是系統 rc 的輸出。
+- **標記與分隔符用 NUL 是結構性保證**：`execve(2)` 讓環境變數的名字與值不可能含 NUL。此前的 `@@`
+  不具這個性質 —— 一個值為 `line1\nline2 with 'quote' and @@ mark` 的變數會在它身上截斷。
+- **驗證「`printf '\0'` 真的印得出 NUL」時不可經 `$(...)`** —— command substitution 會剝掉 NUL，
+  於是會量到「印不出來」這個**相反的結論**。要直接 pipe（`| od -c`）。
+- **環境是啟動時的快照** —— 改了 `.zshrc` 要**重開 app**，開新 session 不夠。
+- **缺口沒有全關**：使用者的 shell 不在可安全查詢名單上（fish 之屬）或平台為 Windows 時，取得
+  一律放棄，agent 目標的涵蓋範圍**退回只有 login rc**（issue #31 —— 真正會咬人的是 Windows，
+  Phase 6 排了 Windows 產物）。
 
 ## `claude` CLI 的實測結論（全部左右了設計）
 

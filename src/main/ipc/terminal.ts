@@ -210,7 +210,7 @@ export function registerTerminalHandlers(
         folderId,
         worktreeKey,
       )
-      const result = serviceFor(store, sessions, preferences, event.sender).create(folderId, target, {
+      const result = await serviceFor(store, sessions, preferences, event.sender).create(folderId, target, {
         cwd,
         worktreeRoots,
       })
@@ -247,7 +247,7 @@ export function registerTerminalHandlers(
       const cwd = persisted.spawnTarget === 'shell' ? (persisted.cwd ?? worktreeCwd) : worktreeCwd
 
       const service = serviceFor(store, sessions, preferences, event.sender)
-      const result = service.create(persisted.folderId, persisted.spawnTarget, {
+      const result = await service.create(persisted.folderId, persisted.spawnTarget, {
         sessionId: persisted.id,
         resumeConversationId: persisted.claudeSessionId,
         cwd,
