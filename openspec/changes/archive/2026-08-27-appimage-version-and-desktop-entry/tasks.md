@@ -178,7 +178,7 @@
       scripts/run-probe.mjs package` 繞過 `dist:linux`），以及那些 commit 會混進 `standup`
 - [x] 8.3 `docs/PRD.md` §11 的 Phase 6 清單：新增本 change 交付的能力與打包步驟
       （CLAUDE.md 明訂 PRD 是範圍的單一權威）
-- [ ] 8.4 dogfood 人工驗收：先提交本 change（D4 步驟 1 會擋住已被修改的 `package.json`）→
+- [x] 8.4 dogfood 人工驗收：先提交本 change（D4 步驟 1 會擋住已被修改的 `package.json`）→
       `dist:linux` → `install:desktop` → **清掉 `release/`** → 自應用程式選單啟動 → 開 Settings
       確認建置身分與檔名同版。這同時是 `desktop-packaging` 兩條「SHALL 以自桌面環境啟動驗收」
       首次具備可執行前提的證明

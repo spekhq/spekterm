@@ -514,6 +514,18 @@ instance 耗盡），三輪探針約 30 分鐘全花在懷疑產品 —— 而�
   `process.kill(-pid)`。**另外，面板留有未存變更時關閉會觸發原生對話框，它會擋住主行程訊息迴圈使
   SIGTERM 失效** —— 這也是必須連根拔除的理由。
   **`probe:files` 的每次失敗若伴隨「樹是空的」，先 `pgrep -f spekterm[-]files-profile` 檢查殭屍。**
+- **註解在 template literal 之內時，反引號會把字串提前關掉。** 探針的選擇器與 evaluate 表達式
+  幾乎都是 template literal，而在裡面寫中文註解是常態 —— 一個順手的 `` `build-identity` ``
+  就會讓整個檔案 parse 失敗，而 **`SyntaxError` 指的是那行註解**（`Unexpected identifier
+  'build'`），與真正的原因隔了一層。這與「`aria-label` 文案要避開單引號」是同一族（症狀都不在
+  你寫錯的那個地方），但機制不同：那條是 shell 引號咬到選擇器字串，這條是 JS 字面值提前終止。
+  **在 template literal 內的註解一律不用反引號。**
+- **新增 `scripts/*.mjs` 或 `scripts/lib/*.mjs` 就落進三道原始碼守衛的定義域**（`wait-source` /
+  `retry-source` / `check-detail`），**即使那支腳本與探針毫無關係**。實測咬過一次：一個比較
+  semver 的 `for (let i = 0; i < 3; i++) { if (…) return … }` 被 `retry-source` 判為手寫重試
+  ——它的判準是「純計數的界 ＋ 體內提早退出」，而那個形狀在非重試的程式碼裡一樣常見。
+  **訊息會說「重試一律走 retryAction」，指著一個根本不是重試的迴圈。** 處置是改寫成非計數形式
+  （`.map().find()` 之類），不是放寬守衛 —— 那個判準對它要防的東西是對的。
 - **環境串擾**：剛跑過 `npm run dev` 的 shell 會繼承 `ELECTRON_RENDERER_URL` 等變數，之後起的
   electron 一律讀到它 —— **CSP 的 build 模式會拿到 dev 政策**，看起來像產品 bug。
   `env -u ELECTRON_RENDERER_URL -u NODE_ENV_ELECTRON_VITE -u ELECTRON_MAJOR_VER -u ELECTRON_CLI_ARGS
