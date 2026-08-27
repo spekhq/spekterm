@@ -60,10 +60,21 @@ export function PanelSourceBar({
     setMenu({ x: rect.left, y: rect.bottom })
   }
 
-  const items: MenuItem[] = folders.map((folder) => ({
-    label: folder.name,
-    onSelect: () => onSelect(folder.id),
-  }))
+  /**
+   * 候選**依名稱排序，不沿用 rail 的順序**。
+   *
+   * 兩份順序服務兩件不同的事：rail 的順序由使用者拖曳而來，表達的是「哪些常用、放在上面」；
+   * 這份下拉是**查找**用的清單，使用者心裡已經有一個名字。以 rail 的順序呈現，等於要求他在
+   * 二十幾個 repo 中線性掃描一份只有他自己知道規則的排列（dogfood 回饋）。
+   *
+   * 排的是 `map` 產生的新陣列 —— `folders` 是 rail 的清單，就地排序會連帶改到 rail。
+   */
+  const items: MenuItem[] = folders
+    .map((folder) => ({
+      label: folder.name,
+      onSelect: () => onSelect(folder.id),
+    }))
+    .sort((a, b) => a.label.localeCompare(b.label, undefined, { sensitivity: 'base' }))
 
   /**
    * 「回到這個項目的預設座標」——**一顆按鈕，兩種項目各自的預設不同**。

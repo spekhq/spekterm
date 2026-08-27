@@ -708,6 +708,14 @@ session 開得進 worktree 之後，邊界保證從「renderer 沒有路徑詞�
 
 ### 版面與游標
 
+- **`react-resizable-panels` 的 px 尺寸是「掛載時換算出來的百分比」，不是一個會被維持的像素值。**
+  `groupResizeBehavior` 預設 `preserve-relative-size` —— 於是視窗一放大，每個 `Panel` 都等比長大
+  （`maxSize` 會夾住它，所以有上限，但 56px → 120px 已經是兩倍多）。**固定寬度的區域不該是
+  `Panel`**：活動列曾經是，症狀是「每次重啟再最大化，它就佔掉更多空間」，而版面根本沒有落盤、
+  每次都是重演。修法是把它移出 `Group`（結構上表達不出「被拖動」與「隨視窗長大」），不是用
+  min=max 去夾它。**驗收這件事要兩條前置**：viewport 真的變寬了（`window.innerWidth` 前後值）
+  **以及版面真的重算了**（一個 `preserve-relative-size` 的鄰居必須跟著變寬）—— 只驗前者的話，
+  「ResizeObserver 沒觸發」會讓「寬度不變」照樣全綠。
 - **一個 flex 容器裡，「誰吸收溢出」不是你以為的那一個 —— 而 `truncate` 會讓它悄悄被壓扁。**
   rail 的 `<aside>` 是 flex column，裡面有標題、兩段清單、底部的加入入口。內容過高時負的剩餘
   空間會分給**每一個收縮因子非零的項目**，而帶著 `truncate`（`overflow: hidden`）的元素其

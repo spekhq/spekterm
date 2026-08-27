@@ -16,6 +16,17 @@ const TABS: { id: OpenSpecTab; labelKey: 'openspec.tabChange' | 'openspec.tabBro
   { id: 'browse', labelKey: 'openspec.tabBrowse' },
 ]
 
+/**
+ * 呈現哪些視圖 —— **沒有可解析的 change 時，「本 change」連入口都不呈現**（`openspec-panel`）。
+ *
+ * 一個永遠只能顯示「你還沒有選 change」的視圖，佔著一個入口卻沒有內容；而選 change 的地方
+ * 本來就在瀏覽視圖裡。此前它是一個帶著「Pick one from Changes」按鈕的空狀態，dogfood 時使用者
+ * 看到的卻是一行 `unknown change slug: …`（落盤的錨定在該 change 被封存改名後永久失效）。
+ */
+function viewsFor(anchoredChange: string | null): typeof TABS {
+  return anchoredChange === null ? TABS.filter((tab) => tab.id !== 'change') : TABS
+}
+
 interface OpenSpecPanelProps {
   folder: WorkspaceFolder
   /** 當前 focused session 錨定的 change。沒有 session 或沒有錨定時為 null。 */
@@ -100,13 +111,23 @@ export function OpenSpecPanel({
     }
   }
 
+  /**
+   * 當前視圖是**衍生**出來的，不把 `tab` 這個 state 壓成 `browse`。
+   *
+   * **這是承重的**：啟動時 change 清單尚未載入 ⇒ `anchoredChange` 暫為 `null`。若此刻把 state
+   * 改掉，清單到達後 `tab` 已經是 `browse`，「本 change」**不會自己回來** —— 於是每次啟動都停在
+   * 瀏覽視圖。純衍生沒有這個入口：暫態過去，畫面自己回到 `tab` 說的那個視圖。
+   */
+  const views = viewsFor(anchoredChange)
+  const activeTab: OpenSpecTab = anchoredChange === null ? 'browse' : tab
+
   return (
     <section aria-label={t('openspec.label')} className="flex h-full flex-col overflow-hidden">
       <header className="flex items-center gap-2 border-b border-hairline px-3 py-2 text-sm">
         <nav aria-label={t('openspec.pathNav')} className="min-w-0 flex-1 truncate text-ink-faint">
           <span>{folder.name}</span>
           <span className="px-1">/</span>
-          <Crumb tab={tab} anchoredChange={anchoredChange} openSpec={openSpec} />
+          <Crumb tab={activeTab} anchoredChange={anchoredChange} openSpec={openSpec} />
         </nav>
       </header>
 
@@ -115,18 +136,18 @@ export function OpenSpecPanel({
         role="tablist"
         className="flex shrink-0 items-center gap-1 border-b border-hairline px-2 py-1"
       >
-        {TABS.map(({ id, labelKey }) => (
+        {views.map(({ id, labelKey }) => (
           <button
             key={id}
             type="button"
             role="tab"
-            aria-selected={tab === id}
+            aria-selected={activeTab === id}
             onClick={() => {
               setTab(id)
               if (id === 'browse') setOpenSpec(null)
             }}
             className={`rounded px-2 py-[3px] text-xs transition-colors ${
-              tab === id
+              activeTab === id
                 ? 'bg-accent-soft font-bold text-accent'
                 : 'text-ink-dim hover:bg-hover hover:text-ink'
             }`}
@@ -162,7 +183,11 @@ export function OpenSpecPanel({
       </nav>
 
       <div className="min-h-0 flex-1 overflow-auto">
-        {tab === 'change' && (
+        {/*
+          `activeTab === 'change'` 不會讓 TypeScript 知道 `anchoredChange` 非 null —— 兩者的
+          關聯在 `activeTab` 的推導裡，而編譯器看不見。明寫那個判斷。
+        */}
+        {activeTab === 'change' && anchoredChange !== null && (
           <ChangeView
             folderId={folder.id}
             slug={anchoredChange}
@@ -171,14 +196,10 @@ export function OpenSpecPanel({
             onContinue={onContinue}
             onOpenSessionHere={onOpenSessionHere}
             onOpenFile={onOpenFile}
-            onGoToChanges={() => {
-              setOpenSpec(null)
-              setTab('browse')
-            }}
           />
         )}
 
-        {tab === 'browse' &&
+        {activeTab === 'browse' &&
           (openSpec === null ? (
             <BrowseView
               folderId={folder.id}

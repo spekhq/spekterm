@@ -22,6 +22,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   realpathSync,
   rmSync,
   utimesSync,
@@ -168,7 +169,7 @@ function makeFixture() {
 
   // 有 openspec/、但**一個 active change 都沒有**（只有 archived）。
   // 這個 repo 才問得出「降級的層級對不對」：OpenSpec 身分仍應可用、Specs／Changes／Graph 三個
-  // 視圖仍應有內容，只有「本 change」視圖是空狀態（design D2）。
+  // 視圖仍應有內容，只有「本 change」的入口不呈現（design D2）。
   const archivedOnly = join(base, 'repo-archived-only')
   writeFile(join(archivedOnly, 'openspec/config.yaml'), 'schema: spec-driven\n')
   writeFile(join(archivedOnly, 'openspec/specs/legacy/spec.md'), SPEC('legacy'))
@@ -219,7 +220,7 @@ function makeFixture() {
   /**
    * **衍生預設動態性的專屬 fixture。**
    *
-   * 驗「active change 由 1 變 2 → 本 change 視圖讓位給空狀態」必須在磁碟上真的多出一個
+   * 驗「active change 由 1 變 2 → 本 change 視圖讓位」必須在磁碟上真的多出一個
    * change，而那種污染是走 UI 的還原助手救不回來的 —— 在 `repo-single` 上做，它的
    * `solo-change` 是其前後數十條斷言的前提（錨定的 slug、tasks 進度…），會波及一整片。
    * 於是它自己一個 repo，用完即可原地不管。
@@ -462,17 +463,26 @@ const VISIBLE_VIEWS = `[
   document.querySelector('section[aria-label="${copy('openspec.specs')}"]') ? 'browse' : null,
 ].filter(Boolean)`
 
-/** 「本 change」視圖顯示的 slug（空狀態時為 null）。 */
+/** 「本 change」視圖顯示的 slug（該視圖不呈現時為 null）。 */
 const ANCHORED_SLUG = `(() => {
   const h = document.querySelector('section[aria-label="${copy('openspec.label')}"] h2')
   return h ? h.innerText.trim() : null
 })()`
 
-const CHANGE_EMPTY_TEXT = `(() => {
+/**
+ * 「本 change」視圖**連入口都不呈現**（`openspec-panel`）—— 回傳當時的視圖清單供 detail 使用，
+ * 不成立時回 `null`。
+ *
+ * 此前這裡是 `CHANGE_EMPTY_TEXT`：比對空狀態的那句文案。那個空狀態已經整條移除 —— 落盤的錨定
+ * 在 change 被封存改名後永久失效，而使用者看到的是主行程的 `unknown change slug: …`。
+ */
+const CHANGE_VIEW_ABSENT = `(() => {
   const panel = document.querySelector('section[aria-label="${copy('openspec.label')}"]')
   if (!panel) return null
-  if (panel.querySelector('[role="tablist"][aria-label="${copy('openspec.changeArtifact')}"]')) return null
-  return panel.innerText.includes('${copy('openspec.noAnchoredChange')}') ? panel.innerText.trim() : null
+  const labels = [...panel.querySelectorAll('[role="tablist"][aria-label="${copy('openspec.views')}"] button[role="tab"]')]
+    .map((tab) => tab.innerText.trim())
+  if (labels.length === 0) return null
+  return labels.includes('${copy('openspec.tabChange')}') ? null : labels.join(',')
 })()`
 
 // ── 本 change：artifact 分頁 ────────────────────────────────────────────────
@@ -910,6 +920,18 @@ const MENU_ITEM_RECT = (label) => `(() => {
 })()`
 
 // ── 側欄來源指示器（side-panel-source）──────────────────────────────────────
+
+/** 當前開啟的選單裡，每一個項目的文字。 */
+const MENU_ITEM_LABELS = `(() => {
+  const menu = document.querySelector('[role="menu"]')
+  if (!menu) return null
+  return [...menu.querySelectorAll('button')].map((b) => b.innerText.trim())
+})()`
+
+/** rail 上每一列的名稱（依畫面順序）—— 用來證明下拉的排序與 rail 的順序是分開的。 */
+const RAIL_ROW_NAMES = `[...document.querySelectorAll('aside[aria-label="${copy('rail.label')}"] div[role="button"]')]
+  .map((row) => row.getAttribute('aria-label'))
+  .filter((name) => name !== null)`
 
 const PANEL_SOURCE_RECT = `(() => {
   const el = document.querySelector('[aria-label="${copy('panelSource.change')}"]')
@@ -1397,19 +1419,27 @@ async function runQuickOpenScope(app) {
 async function runPanelRestoreDegradation(label, { port, rendererUrl }) {
   console.log(`\n── ${label} ──`)
 
-  const { many, single } = makeFixture()
+  const { many, single, derived: derivedRepo } = makeFixture()
   // `f-ghost` 不在 folder 清單裡 —— 這就是「repoB 於應用程式未開啟期間被移出 workspace」
   // 之後，落盤座標裡殘留的那一筆（`PanelStore.load()` 刻意不修剪孤兒）。
+  //
+  // **兩筆失效的錨定是同一族的第二種**：`openspec archive` 會把 slug 改名為
+  // `<日期>-<slug>`，於是每個 change 一封存，落盤的錨定就永遠指向一個不存在的 slug
+  // （dogfood 時使用者看到的是主行程的 `unknown change slug: …` 被畫在側欄上）。
+  // 兩筆刻意落在**兩種不同的退路**上：`f-a`（repo-many，兩個 active）沒有衍生預設可退，
+  // `f-c`（repo-derived，恰一個 active）退得到那唯一的一個。
   const profile = seedProfile(
     [
       ['f-a', many],
       ['f-b', single],
+      ['f-c', derivedRepo],
     ],
     {
       version: 1,
       coordinates: {
-        'f-a': { sourceFolderId: 'f-ghost' },
+        'f-a': { sourceFolderId: 'f-ghost', anchoredChange: '2026-05-01-add-oauth' },
         'f-b': { sourceFolderId: 'f-a' },
+        'f-c': { anchoredChange: '2026-06-01-only-change' },
       },
     },
   )
@@ -1447,6 +1477,94 @@ async function runPanelRestoreDegradation(label, { port, rendererUrl }) {
     )
     check(results, '合法的來源跨啟動還原（repo-single 的座標指向 repo-many）',
       String(restored).includes('repo-many'), String(restored))
+
+    // ── 錨定的 change 已不存在於來源 repo（`openspec-panel` / `status-bar`）────
+    //
+    // 兩個半邊都要驗，因為它們是兩條不同的退路：
+    //
+    // - `repo-many`（兩個 active）：沒有衍生預設可退 ⇒ 本 change 的入口不呈現。
+    // - `repo-derived`（恰一個 active）：退到那唯一的一個 ⇒ 入口在，且呈現的是 `only-change`。
+    //
+    // **兩條都與修改前的行為相反**（修改前：入口在、內容是 `unknown change slug: …`），
+    // 於是它們對這個 change 都有鑑別力。
+    check(results, '（前置）選中錨定已失效、且無衍生預設可退的那一項',
+      (await pollUntil(app.client, SELECT_FOLDER('repo-many'), (ok) => ok === true, 8000)) === true)
+
+    const absent = await pollUntil(app.client, CHANGE_VIEW_ABSENT, (v) => v !== null, 10_000)
+    check(results, '錨定的 change 已不存在時，本 change 的入口不呈現',
+      absent !== null, `剩下的視圖：${String(absent)}`)
+
+    const panelText = await app.client.evaluate(
+      `document.querySelector('section[aria-label="${copy('openspec.label')}"]')?.innerText ?? ''`,
+    )
+    // 錯誤訊息以字面比對：`ErrorNote` 沒有 `role` 也沒有 `aria-label`，而那個字串刻意不在
+    // 字典裡（它是主行程的內部訊息，見 proposal 的 Impact）。
+    check(results, '失效的錨定不呈現為錯誤訊息',
+      !String(panelText).includes('unknown change slug'),
+      String(panelText).split('\n').filter(Boolean)[0])
+
+    check(results, '（前置）選中錨定已失效、但有衍生預設可退的那一項',
+      (await pollUntil(app.client, SELECT_FOLDER('repo-derived'), (ok) => ok === true, 8000)) === true)
+    const fellBack = await pollUntil(app.client, ANCHORED_SLUG, (v) => v !== null, 10_000)
+    check(results, '失效的錨定讓位給衍生預設（該 repo 恰有一個 active change）',
+      fellBack === 'only-change', String(fellBack))
+
+    // ── 狀態列與側欄不得各說各話（`status-bar`）──────────────────────────────
+    //
+    // 狀態列自己也解析一次錨定 —— 只在側欄加上查表的話，這裡會印出一個**已不存在的** slug，
+    // 而側欄那邊早已不呈現它。需要一個 focused session：狀態列在沒有 session 時整條為空狀態。
+    await createSession(app.client)
+    const barDerived = await pollUntil(
+      app.client,
+      STATUS_BAR_TEXT,
+      (v) => typeof v === 'string' && v.includes('only-change'),
+      10_000,
+    )
+    check(results, '狀態列與側欄呈現同一個 change', String(barDerived).includes('only-change'),
+      String(barDerived))
+
+    check(results, '（前置）回到沒有衍生預設可退的那一項',
+      (await pollUntil(app.client, SELECT_FOLDER('repo-many'), (ok) => ok === true, 8000)) === true)
+    await createSession(app.client)
+    // **等到狀態列真的有 session 脈絡再斷言。** 只等 `!== null` 的話，它會在「這個 repo 沒有
+    // session」那個空狀態上就 settle —— 於是「沒有 change 欄位」是因為整條列都是空的，
+    // 而不是因為失效的錨定被解析掉了。實測第一版正是綠在這個理由上。
+    const barMany = await pollUntil(
+      app.client,
+      STATUS_BAR_TEXT,
+      (v) => typeof v === 'string' && v.includes('repo-many'),
+      15_000,
+    )
+    check(results, '（前置）狀態列已呈現 repo-many 的 session 脈絡',
+      String(barMany).includes('repo-many'), String(barMany))
+    check(results, '錨定已不存在時狀態列不呈現該 slug，也不呈現任何 change 欄位',
+      !String(barMany).includes('add-oauth'),
+      String(barMany))
+
+    // ── 無法解析的錨定 SHALL NOT 被自動自落盤內容中清除 ──────────────────────
+    //
+    // **這條在修改前也是綠的**（今日沒有任何地方會清它），它是回歸護欄 —— 於是對照組就是
+    // 它全部的價值來源：同一份檔案裡，`f-c` 的錨定被使用者的動作改寫（證明程式確實在寫檔、
+    // 而讀到的不是我們自己種下去的那份），而 `f-a` 那筆失效的原封不動。
+    check(results, '（前置）回到 repo-derived',
+      (await pollUntil(app.client, SELECT_FOLDER('repo-derived'), (ok) => ok === true, 8000)) === true)
+    check(results, '（前置）於 repo-derived 明確錨定 only-change',
+      (await anchorChange(app.client, 'only-change')) === 'only-change')
+
+    const panelJson = join(profile, 'panel.json')
+    const persisted = await pollFor({
+      read: () => JSON.parse(readFileSync(panelJson, 'utf8')),
+      settled: (value) => value?.coordinates?.['f-c']?.anchoredChange === 'only-change',
+      timeoutMs: 10_000,
+      label: 'panel.json 反映使用者的錨定',
+      tolerateErrors: true,
+    })
+    check(results, '（對照組）使用者的錨定確實被寫進 panel.json',
+      persisted?.coordinates?.['f-c']?.anchoredChange === 'only-change',
+      JSON.stringify(persisted?.coordinates?.['f-c']))
+    check(results, '無法解析的錨定未被自落盤內容中清除',
+      persisted?.coordinates?.['f-a']?.anchoredChange === '2026-05-01-add-oauth',
+      JSON.stringify(persisted?.coordinates?.['f-a']))
   } finally {
     await app.close()
   }
@@ -1482,7 +1600,10 @@ async function runPanelBasics(label, { port, rendererUrl }) {
     const identity = await pollUntil(app.client, IDENTITY, (value) => value !== null, 8000)
     check(results, '預設身分為 OpenSpec', identity === 'openspec', String(identity))
 
-    const tabs = await pollUntil(app.client, VIEW_TABS, (list) => list.length > 0, 8000)
+    // **等到兩個視圖，不是「有就好」。** change 清單尚未載入時「本 change」的入口確實不在
+    // （`openspec-panel`：沒有可解析的 change 就不呈現該入口）—— `length > 0` 會在那一刻就
+    // settle，於是下一條斷言在啟動較慢時紅，而它是一個規格內的暫態，不是缺陷。
+    const tabs = await pollUntil(app.client, VIEW_TABS, (list) => list.length === 2, 8000)
     check(
       results,
       'OpenSpec 身分呈現「本 change」與「瀏覽」兩個視圖',
@@ -1542,13 +1663,30 @@ async function runPanelBasics(label, { port, rendererUrl }) {
       3000,
     )
     check(results, '尚無 session 時來源下拉開得起來', sourceMenuItem !== null)
+
+    // ── side-panel-source：下拉的候選依名稱排序 ────────────────────────────
+    //
+    // rail 的順序由使用者拖曳而來（「常用的放上面」），下拉則是一份**查找**用的清單 ——
+    // 二十幾個 repo 時，照 rail 的順序找一個名字是線性掃描（dogfood 回饋）。
+    const menuLabels = await pollUntil(app.client, MENU_ITEM_LABELS, (v) => v !== null, 5000)
+    const sorted = [...menuLabels].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }))
+    check(results, '來源下拉的候選依名稱由 a 至 z 排序',
+      menuLabels.join(',') === sorted.join(','), menuLabels.join(', '))
+
+    // **對照組：fixture 的 rail 順序本來就不是字母序** —— 少了這條，一份恰好已排好序的
+    // fixture 會讓上面那條在「完全沒有排序」的實作上照樣通過。
+    const railNames = await app.client.evaluate(RAIL_ROW_NAMES)
+    const railFolders = railNames.filter((name) => menuLabels.includes(name))
+    check(results, '（對照組）rail 的順序本來就不是字母序',
+      railFolders.join(',') !== menuLabels.join(','),
+      `rail: ${railFolders.join(', ')}`)
     // 下拉必須整個落在 viewport 內 —— 以選擇器直接觸發項目會跳過定位，那種測法看不出溢出。
     check(results, '下拉完整落在 viewport 內',
       (await app.client.evaluate(MENU_WITHIN_VIEWPORT)) === true)
     await realClick(app.client, sourceMenuItem)
 
     // **斷言側欄內容真的換了，不是只驗選單關掉。** repo-many 有兩個 active change，於是
-    // 「本 change」落入空狀態（衍生預設不在多個候選之間猜）—— 那本身就是內容換了的證據。
+    // 「本 change」的入口消失（衍生預設不在多個候選之間猜）—— 那本身就是內容換了的證據。
     const noSessionSource = await pollUntil(
       app.client,
       PANEL_SOURCE_LABEL,
@@ -1557,6 +1695,11 @@ async function runPanelBasics(label, { port, rendererUrl }) {
     )
     check(results, '尚無 session 也選得了另一個 repo 作為側欄來源',
       String(noSessionSource).includes('repo-many'), String(noSessionSource))
+
+    // 下拉的排序**不影響 rail** —— 兩份順序服務兩件不同的事，排一份不得動到另一份。
+    check(results, '下拉的排序不影響 rail 的順序',
+      (await app.client.evaluate(RAIL_ROW_NAMES)).join(',') === railNames.join(','),
+      railNames.join(', '))
 
     // Changes 樹住在「瀏覽」視圖 —— 不先切過去，下面的輪詢會對著一棵不存在的樹等到逾時。
     await app.client.evaluate(CLICK_VIEW(copy('openspec.tabBrowse')))
@@ -1601,7 +1744,8 @@ async function runPanelBasics(label, { port, rendererUrl }) {
     //
     // 「側欄來源恰有一個 active change 時就呈現它」是一個**衍生的預設值**，它隨 active change
     // 的數量重新解析，**不會於任何時刻被系統自行固化成明確的錨定**。於是第二個 active change
-    // 一出現，本 change 視圖就讓位給空狀態 —— 那是規格而非缺陷（系統不在多個候選之間猜），
+    // 一出現，本 change 視圖就讓位（連入口一併不呈現）—— 那是規格而非缺陷（系統不在多個候選
+    // 之間猜），
     // 寫成斷言是為了讓下一次 dogfood 不把它當 bug 修掉。
     //
     // **這一段用自己的 fixture repo**（`repo-derived`）：它要在磁碟上真的長出第二個 change，
@@ -1643,22 +1787,23 @@ async function runPanelBasics(label, { port, rendererUrl }) {
     check(results, '新增的 change 出現在樹上（agent 改檔 → 側欄自己更新）',
       (twoActive ?? []).length === 2, (twoActive ?? []).map((r) => r.slug).join(', '))
 
-    await app.client.evaluate(CLICK_VIEW(copy('openspec.tabChange')))
+    // **這裡不點「本 change」** —— 第二個 active change 一出現，可解析的 change 就沒有了，
+    // 那個入口本身就是要被驗證為「不呈現」的東西（點它只會回 false）。
     const wentEmpty = await pollUntil(
       app.client,
-      CHANGE_EMPTY_TEXT,
-      (v) => typeof v === 'string' && v.includes(copy('openspec.noAnchoredChange')),
+      CHANGE_VIEW_ABSENT,
+      (v) => v !== null,
       15_000,
     )
     check(
       results,
-      'active 由 1 變 2 後衍生預設讓位給空狀態（規格，非缺陷）',
-      typeof wentEmpty === 'string' && wentEmpty.includes(copy('openspec.noAnchoredChange')),
-      String(wentEmpty).split('\n').filter(Boolean)[0],
+      'active 由 1 變 2 後衍生預設讓位，本 change 的入口不再呈現（規格，非缺陷）',
+      wentEmpty !== null,
+      `剩下的視圖：${String(wentEmpty)}`,
     )
 
     // **成對的對照組**：明確的錨定不受 active 數量影響 —— 少了它，「衍生預設整個壞掉」
-    // （永遠回空狀態）也會讓上面那條通過。
+    // （永遠不呈現那個入口）也會讓上面那條通過。
     const explicit = await anchorChange(app.client, 'second-change')
     check(results, '明確錨定之後本 change 視圖呈現它', explicit === 'second-change', String(explicit))
 
@@ -2032,17 +2177,12 @@ async function runBrowseAndOverlays(label, config, { app }) {
     await pollUntil(app.client, IDENTITY, (value) => value === 'openspec', 8000)
     await createSession(app.client)
 
-    const emptyText = await pollUntil(app.client, CHANGE_EMPTY_TEXT, (value) => value !== null, 10_000)
+    const emptyText = await pollUntil(app.client, CHANGE_VIEW_ABSENT, (value) => value !== null, 10_000)
     check(
       results,
-      '多個 active change 時不自動錨定',
-      typeof emptyText === 'string' && emptyText.includes(copy('openspec.noAnchoredChange')),
-      String(emptyText).split('\n').filter(Boolean)[0],
-    )
-    check(
-      results,
-      '空狀態提供前往選擇 change 的引導',
-      String(emptyText).includes(copy('openspec.goToChanges')),
+      '多個 active change 時不自動錨定，本 change 的入口不呈現',
+      emptyText !== null,
+      `剩下的視圖：${String(emptyText)}`,
     )
 }
 
@@ -2075,6 +2215,13 @@ async function runAnchoringAndCoordinate(label, config, { app, single }) {
     check(results, '觸發一個 change 即錨定', (await app.client.evaluate(ACTIVATE_TREE_ROW('add-oauth'))) === true)
     const nowAnchored = await pollUntil(app.client, ANCHORED_SLUG, (value) => value === 'add-oauth', 8000)
     check(results, '錨定後切至本 change 視圖', nowAnchored === 'add-oauth')
+
+    // **入口由無到有** —— 上一段（同一個 repo-many）才剛驗過它不呈現：沒有可解析的 change 時
+    // 「本 change」連入口都沒有，使用者於 Changes 樹選一個之後它才出現（`openspec-panel`）。
+    const viewsAfterAnchor = await app.client.evaluate(VIEW_TABS)
+    check(results, '錨定之後本 change 的入口出現（前一段才剛驗過它不在）',
+      viewsAfterAnchor.some((tab) => tab.label === copy('openspec.tabChange')),
+      viewsAfterAnchor.map((tab) => tab.label).join(', '))
 
     await app.client.evaluate(CLICK_VIEW(copy('openspec.tabBrowse')))
     const marked = await pollUntil(
@@ -2175,19 +2322,19 @@ async function runAnchoringAndCoordinate(label, config, { app, single }) {
     check(results, '只有 archived change 時 OpenSpec 身分仍可用', archivedIdentity === 'openspec')
 
     await createSession(app.client)
-    const noAnchor = await pollUntil(app.client, CHANGE_EMPTY_TEXT, (value) => value !== null, 10_000)
+    const noAnchor = await pollUntil(app.client, CHANGE_VIEW_ABSENT, (value) => value !== null, 10_000)
     check(
       results,
-      '沒有 active change 時無錨定',
-      typeof noAnchor === 'string' && noAnchor.includes(copy('openspec.noAnchoredChange')),
-      String(noAnchor).split('\n').filter(Boolean)[0],
+      '沒有 active change 時無錨定，本 change 的入口不呈現',
+      noAnchor !== null,
+      `剩下的視圖：${String(noAnchor)}`,
     )
 
     await app.client.evaluate(CLICK_VIEW(copy('openspec.tabBrowse')))
     const legacyTopics = await pollUntil(app.client, SPEC_TREE_TOPICS, (list) => list.length > 0, 8000)
     check(
       results,
-      '空狀態不影響瀏覽視圖的 Specs 樹',
+      '本 change 入口不呈現時，瀏覽視圖的 Specs 樹仍可用',
       legacyTopics.some((t) => t.topic === 'legacy'),
       legacyTopics.map((t) => t.topic).join(', '),
     )
@@ -2195,7 +2342,7 @@ async function runAnchoringAndCoordinate(label, config, { app, single }) {
     const onlyArchived = await pollUntil(app.client, CHANGE_TREE_ROWS('Archived'), (list) => list.length > 0, 8000)
     check(
       results,
-      '空狀態不影響瀏覽視圖的 Changes 樹',
+      '本 change 入口不呈現時，瀏覽視圖的 Changes 樹仍可用',
       onlyArchived.length === 1 && onlyArchived[0].slug === '2026-01-01-done-change',
       onlyArchived.map((r) => r.slug).join(', '),
     )
@@ -2355,12 +2502,12 @@ async function runAnchoringAndCoordinate(label, config, { app, single }) {
     )
     check(results, '於來源下拉選取 folder 後選單關閉', menuGone === true)
 
-    // repo-many 有兩個 active change → 切來源後錨定重置 → 空狀態
-    const resetEmpty = await pollUntil(app.client, CHANGE_EMPTY_TEXT, (v) => v !== null, 10_000)
+    // repo-many 有兩個 active change → 切來源後錨定重置 → 沒有可解析的 change ⇒ 入口不呈現
+    const resetEmpty = await pollUntil(app.client, CHANGE_VIEW_ABSENT, (v) => v !== null, 10_000)
     check(
       results,
-      '切換側欄來源後錨定被重置（repo-many 無自動錨定 → 空狀態）',
-      typeof resetEmpty === 'string' && resetEmpty.includes(copy('openspec.noAnchoredChange')),
+      '切換側欄來源後錨定被重置（repo-many 無自動錨定 → 本 change 入口不呈現）',
+      resetEmpty !== null,
       String(resetEmpty).split('\n').filter(Boolean)[0],
     )
 
@@ -2426,7 +2573,7 @@ async function runAnchoringAndCoordinate(label, config, { app, single }) {
     await createSession(app.client)
     await realClick(app.client, await stableRect(app.client, PANEL_SOURCE_RECT))
     await realClick(app.client, await pollUntil(app.client, MENU_ITEM_RECT('repo-many'), (v) => v !== null, 3000))
-    await pollUntil(app.client, CHANGE_EMPTY_TEXT, (v) => v !== null, 10_000)
+    await pollUntil(app.client, CHANGE_VIEW_ABSENT, (v) => v !== null, 10_000)
 
     check(results, '切回第一個 session', (await app.client.evaluate(FOCUS_SESSION_TAB(0))) === true)
     const s1 = await pollUntil(app.client, PANEL_SOURCE_LABEL, (v) => String(v).includes('repo-many'), 8000)
@@ -2687,7 +2834,7 @@ async function runWorktreeAggregation(label, config, { app, worktree }) {
 
     // 邊界**內**的 worktree：relPath 翻得出來 ⇒ 檔案導覽入口在
     //
-    // **建立 session 會把側欄視圖帶回「本 change」**（新 session 尚無錨定 ⇒ 空狀態），
+    // **建立 session 會把側欄視圖帶回「本 change」**（尚無錨定時它連入口都沒有），
     // 所以要重新切回瀏覽視圖並等樹畫出來 —— 直接點是在賭（實測：build 模式點空，
     // 其後三條斷言全紅且看起來像「續寫入口壞了」）。
     const insideAnchored = await anchorChange(app.client, 'inside-change')
@@ -2739,7 +2886,7 @@ async function runWorktreeAggregation(label, config, { app, worktree }) {
       `之前 ${tabsBefore.length} 個、之後 ${tabsAfter?.length} 個`,
     )
 
-    // **新 session 必須錨定該 change** —— 否則側欄落入「尚無錨定」的空狀態，續寫入口連呈現的
+    // **新 session 必須錨定該 change** —— 否則側欄連「本 change」的入口都沒有，續寫入口連呈現的
     // 機會都沒有（衍生預設只在該 repo 恰有一個 active change 時成立，而這裡有三個）。
     const anchoredAfterOpen = await pollUntil(
       app.client,

@@ -17,14 +17,6 @@ export function ErrorNote({ message }: { message: string }): React.JSX.Element {
   return <p className="px-4 py-3 text-sm text-danger">{message}</p>
 }
 
-export function Empty({ children }: { children: React.ReactNode }): React.JSX.Element {
-  return (
-    <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center text-sm text-ink-faint">
-      {children}
-    </div>
-  )
-}
-
 export function SectionTitle({ children }: { children: React.ReactNode }): React.JSX.Element {
   return (
     <h3 className="mb-2 text-2xs font-bold uppercase tracking-wider text-ink-faint">

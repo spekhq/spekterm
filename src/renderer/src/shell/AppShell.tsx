@@ -52,13 +52,20 @@ export function AppShell(): React.JSX.Element {
               包進一個直向容器，並以 `min-h-0` 讓它把剩下的高度讓給狀態列。
             */}
             <div className="flex h-full w-full flex-col">
-            <Group orientation="horizontal" className="min-h-0 w-full flex-1">
-              <Panel defaultSize="56px" minSize="48px" maxSize="120px">
-                <ActivityBar />
-              </Panel>
+            {/*
+              **活動列不是 `Panel`，它在 `Group` 之外。** react-resizable-panels 的
+              `groupResizeBehavior` 預設為 `preserve-relative-size` —— px 尺寸於掛載時換算成容器
+              百分比，此後視窗一放大每個 panel 就等比長大（受 `maxSize` 夾制而有上限，但 56px →
+              120px 已是兩倍多）。而活動列是一列固定尺寸的圖示按鈕，**加寬不會多顯示任何東西**。
+              移出 `Group` 之後，「它被拖動」與「它隨視窗長大」兩件事在結構上表達不出來。
 
-              <Separator className={SEPARATOR_CLASS} />
+              這一層橫向容器需要 `min-h-0 flex-1`，`Group` 需要 `min-w-0 flex-1` ——
+              `ActivityBar` 的 `<nav>` 是 `h-full`，父層沒有確定高度時它會塌。
+            */}
+            <div className="flex min-h-0 w-full flex-1">
+              <ActivityBar />
 
+              <Group orientation="horizontal" className="min-w-0 flex-1">
               {/*
                 `min-w-0` 不是裝飾：flex item 的 `min-width` 預設是 `auto`，於是 Panel 會被它的
                 **內容**撐住，縮不到 `minSize` —— 宣告的最小寬度就兌現不了（spec 要求「拖動 SHALL
@@ -84,7 +91,8 @@ export function AppShell(): React.JSX.Element {
               <Panel minSize="360px">
                 <MainStage selection={selection} folders={folders} />
               </Panel>
-            </Group>
+              </Group>
+            </div>
 
             <StatusBar folders={folders} selection={selection} />
             </div>

@@ -188,7 +188,7 @@ Electron，目標產出 macOS / Windows / Linux 三平台安裝檔。
  ①活動列 ②workspace rail  ③主舞台(repo header + session 分頁 + 左 terminal│右 side panel)
 ```
 
-主舞台只屬於**當前選中的 repo**。分界（活動列｜rail、rail｜主舞台、terminal｜side panel）皆可拖動；side panel 可整個收合讓 terminal 佔滿。
+主舞台只屬於**當前選中的 repo**。分界（rail｜主舞台、terminal｜side panel）皆可拖動；side panel 可整個收合讓 terminal 佔滿。**活動列為固定寬度，不可拖動**——它是一列固定尺寸的圖示按鈕，加寬不會多顯示任何東西，而一個調不出任何差異的控制項比沒有這個控制項更糟（`dogfood-panel-affordances`）。
 
 ### 6.2 各區塊
 

@@ -163,8 +163,6 @@
     "noSpecs": "No specs yet.",
     "noChanges": "No changes yet.",
     "noHeadings": "No headings.",
-    "noAnchoredChange": "This session has no anchored change yet.",
-    "goToChanges": "Pick one from Changes",
     "noArtifacts": "This change has no artifacts yet.",
     "schemaOrderArchived": "Schema order isn't tracked for archived changes — showing default order.",
     "schemaOrderUnavailable": "Schema order unavailable — showing default spec-driven order.",

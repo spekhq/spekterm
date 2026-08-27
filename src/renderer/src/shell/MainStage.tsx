@@ -7,6 +7,7 @@ import {
   continuationCommand,
 } from './openspec/continuation'
 import { ROOT_PATH } from './files/paths'
+import { resolveAnchoredChange } from './openspec/anchor'
 import { useChanges, useWorktrees } from './openspec/data'
 import { VizOverlay, type VizKind } from './openspec/VizOverlay'
 import type { FileRequest, OpenSpecRequest, OpenSpecTarget } from './openspec/nav'
@@ -160,16 +161,9 @@ export function MainStage({ selection, folders }: MainStageProps): React.JSX.Ele
     if (displayed?.status === 'dormant' && !displayed.wakeError) wake(displayed.id)
   }, [displayed?.id, displayed?.status, displayed?.wakeError, wake])
 
-  // 側欄「本 change」的衍生預設：以 **panelFolder**（側欄來源）為準 —— 側欄來源恰有一個 active
-  // change 時就是它。
-  //
-  // **它是動態的，不會被固化為明確的錨定**（`openspec-panel`）：active change 變成兩個時，
-  // 這個預設就讓位給空狀態。此前「建立 session 的那一刻恰好只有一個」會把它固化進該 session，
-  // 而那個分界在座標改基為 per-folder 之後撐不住了 —— 開一個 terminal 為什麼要決定側欄看什麼？
-  // 統一為動態之後規則只有一條，也不需要「何時固化」那個沒有自明答案的額外裁決。
+  // 側欄「本 change」的候選集合：以 **panelFolder**（側欄來源）為準。解析規則本身在
+  // `resolveAnchoredChange`（狀態列共用同一份）。
   const { data: panelChanges } = useChanges(panelFolder?.hasOpenSpec ? panelFolder.id : null)
-  const soleActiveChangeForPanel =
-    panelChanges && panelChanges.active.length === 1 ? panelChanges.active[0].slug : undefined
 
   // 側欄來源的工作目錄清單 —— 跨身分導覽要靠它判定「這個檔案屬於哪個工作目錄」。
   //
@@ -201,18 +195,13 @@ export function MainStage({ selection, folders }: MainStageProps): React.JSX.Ele
   )
 
   /**
-   * 側欄「本 change」看的是哪個 change。兩層優先序：
+   * 側欄「本 change」看的是哪個 change —— 明確的錨定（**須存在於掃描結果中**）、否則衍生預設、
+   * 否則沒有。規則與其論證在 `resolveAnchoredChange`，**狀態列吃的是同一個函式**。
    *
-   * 1. **座標中明確的錨定**（使用者在 Changes 樹、Graph／Timeline 或開 session 入口選的那個）。
-   * 2. **側欄來源恰有一個 active change 時，就是它** —— 衍生的預設值，動態解析。
-   *
-   * 此前這裡是**三層**：有 session 走 session 的錨定，沒有 session 走一個 per-folder 的
-   * `viewing` map。那個 map 是「per-session 回答不了沒有 session」的具體化 —— 座標改基之後
-   * 它無事可做，已刪除。
+   * `null` 是一個正常的狀態，不是錯誤：此時「本 change」視圖與它的入口一併不呈現
+   *（`openspec-panel`），OpenSpec 身分停在瀏覽視圖。
    */
-  const explicitAnchor = coordinate.anchoredChange ?? null
-
-  const anchoredChange = explicitAnchor ?? soleActiveChangeForPanel ?? null
+  const anchoredChange = resolveAnchoredChange(coordinate.anchoredChange, panelChanges)
 
   const anchorChange = useCallback(
     (slug: string) => {

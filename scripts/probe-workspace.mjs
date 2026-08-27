@@ -99,13 +99,15 @@ function seedProfile(folders) {
  * 「掛載完成」不等於「可以操作」。視窗以 show:false 建立、待 ready-to-show 才顯示；
  * 在頁面仍是 hidden 的期間 Chromium 會節流 rAF，而版面元件的尺寸更新走 rAF /
  * ResizeObserver —— 此時送出的滑鼠事件會被接收，版面卻不會動。
- * 因此必須等到 visible 且三個分界都就位，才開始互動。
+ * 因此必須等到 visible 且兩個分界都就位，才開始互動。
  */
-// **這支額外要求兩件事**：三個分界器都在、rail 量得出寬度 —— 它驗的就是版面本身，
+// **這支額外要求兩件事**：兩個分界器都在、rail 量得出寬度 —— 它驗的就是版面本身，
 // 「掛載了但版面還沒成形」對它而言與沒掛載無異。
+//
+// **兩個，不是三個**：活動列已不是可調整的區域（`workspace-layout`），它與 rail 之間沒有分界。
 const MOUNTED = mountedExpression({
   extra: {
-    separators: `document.querySelectorAll('[role="separator"]').length === 3`,
+    separators: `document.querySelectorAll('[role="separator"]').length === 2`,
     railWidth: `document.querySelector('aside[aria-label="${copy('rail.label')}"]')?.getBoundingClientRect().width > 0`,
   },
 })
@@ -187,6 +189,10 @@ const LAYOUT = `(() => {
   return {
     separators,
     rail: width('aside[aria-label="${copy('rail.label')}"]'),
+    railMidY: (() => {
+      const r = document.querySelector('aside[aria-label="${copy('rail.label')}"]')?.getBoundingClientRect()
+      return r ? Math.round(r.y + r.height / 2) : -1
+    })(),
     activityBar: width('nav[aria-label="${copy('activityBar.label')}"]'),
     sidePanel: width('section[aria-label="${copy('openspec.sidePanel')}"]'),
     terminal: width('section[aria-label="${copy('stage.terminal')}"]'),
@@ -476,22 +482,25 @@ try {
   // ── workspace-layout：分界、夾制、鍵盤、收合 ─────────────────────────────
   console.log('\n版面：分界可拖動、受夾制、可鍵盤操作、side panel 可收合')
   const before = await app.client.evaluate(LAYOUT)
-  check(results, '三處分界皆存在且具 separator 角色', before.separators.length === 3,
+  // **兩處，不是三處** —— 活動列與 rail 之間 SHALL NOT 有分界（`workspace-layout`）。
+  // 這條同時是「活動列與 rail 之間不存在分界」那條 scenario 的載體。
+  check(results, '兩處分界皆存在且具 separator 角色（活動列與 rail 之間沒有）',
+    before.separators.length === 2,
     `${before.separators.length} 個 role="separator"`)
 
-  const railSeparator = before.separators[1]
+  const railSeparator = before.separators[0]
   await dragMouse(app.client, railSeparator, { x: railSeparator.x + 80, y: railSeparator.y })
   const widened = await layoutUntil(app.client, (l) => l.rail > before.rail + 60)
   check(results, '拖動分界改變兩側寬度', widened.rail > before.rail + 60,
     `rail ${Math.round(before.rail)}px → ${Math.round(widened.rail)}px`)
 
-  await dragMouse(app.client, widened.separators[1], { x: 0, y: railSeparator.y })
+  await dragMouse(app.client, widened.separators[0], { x: 0, y: railSeparator.y })
   const clamped = await layoutUntil(app.client, (l) => Math.abs(l.rail - 180) < 2)
   check(results, '拖過最小寬度時被夾制而不歸零', Math.abs(clamped.rail - 180) < 2,
     `rail = ${Math.round(clamped.rail)}px（minSize 180px）`)
 
   const focused = await app.client.evaluate(
-    `(() => { const s = document.querySelectorAll('[role="separator"]')[1]; s.focus(); return document.activeElement === s })()`,
+    `(() => { const s = document.querySelectorAll('[role="separator"]')[0]; s.focus(); return document.activeElement === s })()`,
   )
   check(results, '分界可取得鍵盤焦點', focused === true)
   for (let i = 0; i < 5; i++) await pressKey(app.client, 'ArrowRight')
@@ -500,7 +509,7 @@ try {
     `rail ${Math.round(clamped.rail)}px → ${Math.round(afterKeys.rail)}px`)
 
   // 先把 side panel 拖到一個明顯的寬度，才能證明展開後「還原的是收合前的寬度」
-  const inner = afterKeys.separators[2]
+  const inner = afterKeys.separators[1]
   const widthBeforeResize = afterKeys.sidePanel
   await dragMouse(app.client, inner, { x: inner.x - 70, y: inner.y })
   const sized = await layoutUntil(app.client, (l) => l.sidePanel > widthBeforeResize + 50)
@@ -540,6 +549,58 @@ try {
   check(results, 'Settings 入口為可用狀態（已實作，不再是 placeholder）',
     activity[3]?.disabled === false,
     `${activity[3]?.label}(disabled=${activity[3]?.disabled})`)
+
+  // ── workspace-layout：活動列為固定寬度，且不可調整 ───────────────────────
+  //
+  // **`before` 必須在初始 viewport（1280）量。** 若在放大後的視窗量，一個仍是
+  // `maxSize="120px"` 的 `Panel` 可能已經被夾在上限上 —— 「寬度不變」於是在**未修的程式碼上
+  // 照樣通過**，正是這個 repo 最常見的假綠形狀。此處的量測在任何 viewport 覆寫之前。
+  const beforeWiden = await app.client.evaluate(LAYOUT)
+  const innerBefore = await app.client.evaluate('window.innerWidth')
+
+  // **用 `Emulation.setDeviceMetricsOverride`，不是 `Browser.setWindowBounds`** —— 後者在
+  // Electron 實測無效且不報錯（見本檔下方狀態列那一段的註解）。
+  // **CDP 呼叫包 try/catch**：這支探針沒有段落隔離（`lib/sections.mjs` 只有 terminal /
+  // keyboard / openspec 三支使用），一次未捕捉的 throw 會帶走其後全部的斷言。
+  try {
+    await app.client.send('Emulation.setDeviceMetricsOverride', {
+      width: 2200, height: 800, deviceScaleFactor: 0, mobile: false,
+    })
+  } catch {
+    // 不支援就讓下面兩條前置斷言說話，不要在這裡吞掉。
+  }
+  const innerAfter = await pollUntil(app.client, 'window.innerWidth', (w) => w > innerBefore, 8000)
+  check(results, '（前置）viewport 確實變寬了', innerAfter > innerBefore,
+    `${innerBefore} → ${innerAfter}`)
+
+  // **第二條前置，而它才是真正的鑑別力來源**：`window.innerWidth` 變了只證明覆寫送到了，
+  // 不證明版面重算過（Group 的重算走 ResizeObserver）。rail 是 `preserve-relative-size` 的
+  // `Panel`，它**必須**跟著變寬 —— 少了這條，「活動列寬度不變」在「版面根本沒重算」時照樣全綠。
+  const wideLayout = await layoutUntil(app.client, (l) => l.rail > beforeWiden.rail + 20)
+  check(results, '（前置）版面確實重算了（rail 隨視窗等比變寬）',
+    wideLayout.rail > beforeWiden.rail + 20,
+    `rail ${Math.round(beforeWiden.rail)}px → ${Math.round(wideLayout.rail)}px`)
+
+  check(results, '視窗放大後活動列寬度不變',
+    Math.abs(wideLayout.activityBar - beforeWiden.activityBar) < 1,
+    `activityBar ${Math.round(beforeWiden.activityBar)}px → ${Math.round(wideLayout.activityBar)}px`)
+
+  try {
+    await app.client.send('Emulation.clearDeviceMetricsOverride')
+  } catch {
+    // 同上。
+  }
+  await pollUntil(app.client, 'window.innerWidth', (w) => w === innerBefore, 8000)
+
+  // 活動列的右緣拖不動它。**對照組就在同一支的上方**：`'拖動分界改變兩側寬度'` 已證明
+  // `dragMouse` 送得出真拖曳 —— 少了那句，「拖曳根本沒打中任何東西」也會讓這條通過。
+  const restored = await layoutUntil(app.client, (l) => Math.abs(l.rail - beforeWiden.rail) < 4)
+  const edge = { x: Math.round(restored.activityBar), y: Math.round(restored.railMidY) }
+  await dragMouse(app.client, edge, { x: edge.x + 60, y: edge.y })
+  const afterEdgeDrag = await app.client.evaluate(LAYOUT)
+  check(results, '活動列的寬度不可由使用者調整',
+    Math.abs(afterEdgeDrag.activityBar - beforeWiden.activityBar) < 1,
+    `activityBar ${Math.round(beforeWiden.activityBar)}px → ${Math.round(afterEdgeDrag.activityBar)}px`)
 
   // ── terminal-preferences：Settings 入口開啟終端字型設定介面
   //

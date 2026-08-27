@@ -86,7 +86,9 @@ export function ActivityBar(): React.JSX.Element {
   return (
     <nav
       aria-label={t('activityBar.label')}
-      className="flex h-full flex-col items-center gap-1 bg-shell px-2 py-3"
+      // 寬度是**版面契約**，不是一個可調整的值：52px 恰為按鈕的 `w-9`(36px) 加上 `px-2`(2×8px)。
+      // `shrink-0` 讓它不參與收縮 —— 它是這一列唯一固定寬度的區域（`workspace-layout`）。
+      className="flex h-full w-[52px] shrink-0 flex-col items-center gap-1 border-r border-hairline bg-shell px-2 py-3"
     >
       {ITEMS.map((item) => {
         const label = t(item.labelKey)

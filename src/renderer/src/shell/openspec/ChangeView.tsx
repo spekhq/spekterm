@@ -9,7 +9,6 @@ import { parseDelta } from './delta'
 import { type FallbackReason, fallbackReason } from './schema-order'
 import {
   DeltaBadge,
-  Empty,
   ErrorNote,
   Loading,
   ProgressBar,
@@ -21,8 +20,12 @@ import {
 
 interface ChangeViewProps {
   folderId: string
-  /** 當前 focused session 錨定的 change。null＝無錨定。 */
-  slug: string | null
+  /**
+   * 呈現哪一個 change。**不可為 `null`** —— 沒有可解析的 change 時，這個視圖與它的入口一併
+   * 不呈現（`openspec-panel`），於是「無錨定」在這裡表達不出來。型別收窄是那條規格唯一的
+   * 結構性保證：留著 `| null`，日後只會靜默地又長出一個沒有入口可去的空狀態。
+   */
+  slug: string
   /** 續寫入口不可用的原因；`null` ＝ 可用。 */
   continuationBlock: ContinuationBlock | null
   /**
@@ -35,7 +38,6 @@ interface ChangeViewProps {
   /** 於這個 change 的來源工作目錄開一個 claude session（並錨定它）。 */
   onOpenSessionHere: (worktreeKey: string) => void
   onOpenFile: (relPath: string) => void
-  onGoToChanges: () => void
 }
 
 /**
@@ -48,8 +50,9 @@ interface ChangeViewProps {
  * 要找一段內容得先想它在第幾個區塊、再捲過前面所有東西。**並排的分頁讓「找」變成一次點擊，
  * 而不是一次搜尋。**
  *
- * 它顯示的是**當前 focused session 錨定的那個 change**，而錨定由使用者建立、系統不猜
- *（design D3）。因此「沒有錨定」是個正常狀態，不是錯誤。
+ * 它顯示的是**側欄座標所錨定的那個 change**，而錨定由使用者建立、系統不猜（design D3）。
+ * **沒有可解析的 change 時，這個視圖根本不會被渲染**（連入口都不呈現，見 `OpenSpecPanel`）——
+ * 於是這裡不需要、也不該有「無錨定」的空狀態：那是一個到不了的畫面。
  */
 export function ChangeView({
   folderId,
@@ -59,27 +62,11 @@ export function ChangeView({
   onContinue,
   onOpenSessionHere,
   onOpenFile,
-  onGoToChanges,
 }: ChangeViewProps): React.JSX.Element {
   const { t } = useTranslation()
 
   const { data, loading, error } = useChange(folderId, slug)
   const [activeId, setActiveId] = useState<string | null>(null)
-
-  if (slug === null) {
-    return (
-      <Empty>
-        <p>{t('openspec.noAnchoredChange')}</p>
-        <button
-          type="button"
-          onClick={onGoToChanges}
-          className="rounded border border-hairline px-3 py-1 text-xs text-ink-dim hover:border-accent hover:text-accent"
-        >
-          {t('openspec.goToChanges')}
-        </button>
-      </Empty>
-    )
-  }
 
   if (error) return <ErrorNote message={error} />
   if (loading || !data) return <Loading />

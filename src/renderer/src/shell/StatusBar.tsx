@@ -1,5 +1,6 @@
 import { useTranslation } from 'react-i18next'
 import { useDirtyBuffers } from './files/dirty-buffers'
+import { resolveAnchoredChange } from './openspec/anchor'
 import { useChanges, useSpecs } from './openspec/data'
 import { useSessionStatus } from './useSessionStatus'
 import { usePanelCoordinate } from './panel-coordinate'
@@ -54,7 +55,10 @@ export function StatusBar({
     : null
 
   /**
-   * 錨定的 change 與其進度。解析方式與側欄一致（明確錨定 → 該 repo 恰有一個 active change）。
+   * 錨定的 change 與其進度。**解析走與側欄同一個函式**（`resolveAnchoredChange`）——
+   * 此前這裡自己又實作了一次同一條規則，而「兩邊一致」只靠這行註解維持。錨定跨重啟存活而
+   * slug 會被 `openspec archive` 改名，於是少了查表這一步，狀態列會印出一個**已不存在的**
+   * change，而側欄那邊早已不呈現它（`status-bar`：兩處 SHALL NOT 對同一個問題給出兩個答案）。
    *
    * **錨定隸屬於 rail 上選中的項目，不是該 session** —— 於是同一個 folder 的多個 session 在此
    * 呈現同一個 change。那不構成歧義：這條列的其餘欄位（標籤、執行狀態、工作目錄）本就逐
@@ -66,8 +70,9 @@ export function StatusBar({
    */
   const anchorSource = panelSource?.id ?? folder?.id ?? null
   const { data: changes } = useChanges(focused && anchorSource ? anchorSource : null)
-  const soleActive = changes?.active.length === 1 ? changes.active[0].slug : null
-  const anchored = (focused ? (coordinate.anchoredChange ?? null) : null) ?? soleActive
+  // `focused &&` 這一層留在呼叫端 —— 它是 `status-bar` 自己的 requirement（沒有 focused session
+  // 時整條脈絡為空狀態），不是錨定解析規則的一部分。
+  const anchored = focused ? resolveAnchoredChange(coordinate.anchoredChange, changes) : null
   const anchoredInfo = anchored ? changes?.active.find((c) => c.slug === anchored) : undefined
   const stats = anchoredInfo?.taskStats ?? null
 
