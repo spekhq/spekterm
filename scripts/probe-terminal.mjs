@@ -935,6 +935,25 @@ async function pressCtrlC(client) {
   await client.send('Input.dispatchKeyEvent', { type: 'keyUp', ...key })
 }
 
+/**
+ * `Ctrl+D`＝EOF。**用它而不是 `Ctrl+C` 來收掉一個把 stdout 導向檔案的程式。**
+ *
+ * stdout 是檔案時 stdio 是**全緩衝**的：`Ctrl+C` 讓它非正常結束，那幾十個位元組就跟著緩衝一起
+ * 消失，檔案是空的 —— 而「檔案是空的」正好等於我們想斷言的結論。實測踩過：以 `Ctrl+C` 收尾時，
+ * **缺陷還在的舊程式碼下那條斷言照樣綠**。EOF 讓它正常結束並 flush。
+ */
+async function pressCtrlD(client) {
+  const key = {
+    key: 'd',
+    code: 'KeyD',
+    windowsVirtualKeyCode: 68,
+    nativeVirtualKeyCode: 68,
+    modifiers: 2, // Ctrl
+  }
+  await client.send('Input.dispatchKeyEvent', { type: 'keyDown', ...key, text: '\x04' })
+  await client.send('Input.dispatchKeyEvent', { type: 'keyUp', ...key })
+}
+
 /** Enter 必須是一次真的按鍵事件（見 `typeLine` 的註解）。對話框的送出也走這裡。 */
 async function pressEnter(client) {
   const key = {
@@ -1500,35 +1519,125 @@ async function runMode(label, { port, rendererUrl }) {
     await realMouse(app.client, termAt.x, termAt.y, 'left')
     await sleep(150)
 
-    // ── terminal-sessions：右鍵 gate 在 mouse reporting ──────────────────────
+    // ── terminal-sessions：右鍵一律由終端擁有（不因 mouse reporting 而讓位）
     //
-    // pty 內的程式開了 mouse reporting 時（**claude 的常態**），右鍵 SHALL 讓位給它 —— 我們不開自己
-    // 的選單，讓程式自身的右鍵慣例（claude 的貼上）生效。上面那條「右鍵選單開得起來」驗的正是**未
-    // 開啟**的情況（login shell 不送 DECSET 1000）。
+    // **這一段此前驗的是相反的事**（「開了 mouse reporting 就讓位給程式」），而那條規則的前提
+    // 已被實測否證：`claude` 一啟動就送 `?1000h ?1002h ?1003h ?1006h`，於是 agent session 裡右鍵
+    // **永遠**被讓出去；而 pty 內的程式**讀不到系統剪貼簿**（xterm.js 未實作 OSC 52）—— 讓出去的
+    // 是一顆什麼都不做的鍵。觸控板又沒有中鍵，於是使用者完全失去滑鼠貼上。
     //
     // 以 shell 送 `DECSET 1000` 模擬「程式接管滑鼠」—— 那正是 claude 做的事，而且**不必真的跑
     // claude**（比照 OSC 標題改用 stub 的理由：動的是 pty 送出的序列，不是被出貨的程式碼）。
-    await typeLine(app.client, `printf '\\033[?1000h'`)
+    // **`?1006h` 不是裝飾，是這一段能不能觀測的前提。** 只送 `?1000h` 時滑鼠回報走 legacy 編碼，
+    // 而 xterm 把那種回報送到 `onBinary`（它可能不是 UTF-8 安全的）—— 我們的 wrapper 只訂閱
+    // `onData`，於是**一個位元組都不會進 pty**，「右鍵沒送達」就成了一盞恆綠的燈（實測：左鍵
+    // 的通道對照組也一樣是空的）。`claude` 實際送的是 `?1000h ?1002h ?1003h ?1006h`，其中
+    // `?1006h` 讓回報改用 SGR（純 ASCII，走 `onData`）—— 模擬它才模擬得到真實情況。
+    await typeLine(app.client, `printf '\\033[?1000h\\033[?1006h'`)
+    await sleep(400)
+
+    // **「事件沒有送達 pty」的判準是檔案內容，不是畫面。**
+    //
+    // 直覺的做法是「看 shell 的輸入行有沒有被塞進滑鼠序列」—— 那是**否定式斷言 ＋ 讀畫面**，
+    // 正是本檔廢除 `TERMINAL_TEXT` 時記載的假綠形狀（讀不到時回空字串，斷言照樣綠）；何況
+    // legacy mouse encoding（`ESC [ M …`）在 readline 裡顯示成什麼是環境相依的。
+    //
+    // `cat -v` 把收到的 `ESC` 印成 `^[` 並寫進檔案 —— 位元組有沒有到 pty 是事實，不是渲染。
+    //
+    // **兩個會讓這條變成假綠的細節，都實測踩過（在缺陷還在的舊程式碼下它照樣綠）：**
+    //
+    // 1. **tty 是行緩衝的（canonical mode）** —— 滑鼠序列不含換行，於是它停在 line discipline
+    //    的緩衝裡，`cat` 根本收不到。右鍵之後要按一次 Enter 把那一行送出去。
+    // 2. **`cat` 的 stdout 是檔案 ⇒ stdio 全緩衝** —— 用 `Ctrl+C` 收掉它，那幾個位元組跟著緩衝
+    //    一起消失。要用 `Ctrl+D`（EOF）讓它正常結束並 flush。
+    //
+    // 判準取 **`^[[<`**（SGR 編碼的開頭）而不是單純的 `^[`：關掉選單的那次 Escape
+    // 在**沒有選單可消費它**時會自己流進 pty，用 `^[` 當判準的話，紅燈會指向錯的成因。
+    const mouseBytesFile = join(out, 'right-click-bytes.txt')
+    const leftBytesFile = join(out, 'left-click-bytes.txt')
+
+    /** 收掉 `cat`：把 line discipline 的緩衝行送出去，再以 EOF 讓它正常結束並 flush。 */
+    const endCat = async () => {
+      await pressEnter(app.client)
+      await sleep(200)
+      await pressCtrlD(app.client)
+      await sleep(400)
+    }
+
+    // **通道的對照組：同樣的狀態下，左鍵必須抵達 pty。**
+    //
+    // 沒有它，下面那條「右鍵不抵達」就可能只是在驗「什麼都不會抵達」（`cat` 沒跑起來、行緩衝沒
+    // 送出、Ctrl+C 把 stdio 緩衝丟掉 —— 前兩者實測都發生過）。左鍵**不在**我們接管的範圍內，
+    // 它在 mouse reporting 開啟時本來就該被 xterm 轉發給程式（`docs/lessons/terminal.md`：
+    // 「claude 開了 mouse reporting，xterm 把左鍵轉發給程式」）。
+    await typeLine(app.client, `cat -v > ${leftBytesFile}`)
+    await sleep(400)
+    await realMouse(app.client, termAt.x, termAt.y, 'left')
+    await sleep(300)
+    await endCat()
+    const leftBytes = existsSync(leftBytesFile) ? readFileSync(leftBytesFile, 'utf8') : ''
+    check(
+      results,
+      `${label}：mouse reporting 開啟時左鍵抵達 pty（下一條的通道對照組）`,
+      leftBytes.includes('^[[<'),
+      `pty 收到 ${leftBytes.length} 位元組：${JSON.stringify(leftBytes.slice(0, 40))}` +
+        '（沒有 `^[[<` 就表示這個觀測通道量不到任何滑鼠序列，下一條因此沒有鑑別力）',
+    )
+
+    await typeLine(app.client, `cat -v > ${mouseBytesFile}`)
     await sleep(400)
 
     await realMouse(app.client, termAt.x, termAt.y, 'right')
-    await sleep(500)
-    const menuUnderMouseMode = await app.client.evaluate(MENU_IN_VIEWPORT)
+    const menuUnderMouseMode = await pollUntil(
+      app.client,
+      MENU_IN_VIEWPORT,
+      (value) => value !== null,
+      4000,
+    ).catch(() => null)
     check(
       results,
-      `${label}：mouse reporting 開啟時，右鍵讓位給 pty 內的程式（不開我們的選單）`,
-      menuUnderMouseMode === null,
-      menuUnderMouseMode ? '選單仍開啟 —— 右鍵未讓位' : '未開啟選單',
+      `${label}：mouse reporting 開啟時，右鍵仍開啟終端自己的選單`,
+      menuUnderMouseMode?.inside === true,
+      menuUnderMouseMode
+        ? `選單開啟 rect=${JSON.stringify(menuUnderMouseMode.rect)}`
+        : '選單未開啟 —— 右鍵仍被讓給 pty 內的程式',
     )
 
-    // **對照組**：關掉 mouse reporting，右鍵必須回到我們的選單。
-    // 少了它，上一條可能只是在驗「右鍵永遠不開選單」（例如座標點空），那就沒有鑑別力。
+    // 選單先關掉（Enter 否則會落在選單的第一個項目上），再把那一行送給 `cat`、以 EOF 收掉它。
+    // **選單必須確實關掉，否則接下來那次 Enter 會落在選單的項目上。**
     //
-    // mouse mode 開啟期間，剛才那次右鍵已被 xterm 轉成滑鼠序列送進 shell 的輸入行 —— 先 Ctrl+C
-    // 清掉那行垃圾，否則接下來的命令會被接在它後面而執行失敗。
-    await pressCtrlC(app.client)
-    await sleep(200)
-    await typeLine(app.client, `printf '\\033[?1000l'`)
+    // 沒有選取內容時「複製」是停用的，於是焦點落在**「貼上」**上 —— Enter 就把剪貼簿的內容送進
+    // pty。實測踩過：build 模式下 Escape 偶爾沒關掉選單，那次 Enter 於是貼上了剪貼簿裡的一整段
+    // 畫面逐字稿（770 位元組），而斷言**照樣綠**（它只看有沒有 `^[[<`）。帶副作用的重試走
+    // `retryAction`，關不掉就吵。
+    const menuAfterEscape = await retryAction({
+      act: () => pressKey(app.client, 'Escape'),
+      read: () => app.client.evaluate(MENU_IN_VIEWPORT),
+      settled: (value) => value === null,
+      attemptWindowMs: 1500,
+      interval: 200,
+      timeoutMs: 6000,
+      label: '關掉終端的右鍵選單（Escape）',
+      evidence: () => menuEvidence(app.client, {}),
+    })
+    if (menuAfterEscape !== null) {
+      throw new Error('右鍵選單關不掉（重試預算 6s 耗盡）—— 接下來的 Enter 會落在選單上，量到的不是 pty 收到什麼')
+    }
+    await endCat()
+    const mouseBytes = existsSync(mouseBytesFile) ? readFileSync(mouseBytesFile, 'utf8') : ''
+    check(
+      results,
+      `${label}：mouse reporting 開啟時，右鍵不轉發給 pty 內的程式`,
+      mouseBytes.length > 0 && !mouseBytes.includes('^[[<'),
+      `pty 收到 ${mouseBytes.length} 位元組：${JSON.stringify(mouseBytes.slice(0, 40))}` +
+        `（含 \`^[[<\` 表示 xterm 把滑鼠序列轉發過去了；0 位元組表示 cat 沒收到任何東西 ——` +
+        `那樣這條就沒有鑑別力，不可當成通過）`,
+    )
+
+    // **對照組**：關掉 mouse reporting，右鍵一樣要開得出選單。
+    // 少了它，上面那條可能只是在驗「右鍵永遠開選單」而與 mouse reporting 無關 —— 兩種狀態各驗
+    // 一次，「不受 pty 狀態影響」這件事才真的被觀察到。
+    await typeLine(app.client, `printf '\\033[?1000l\\033[?1006l'`)
     await sleep(400)
 
     await realMouse(app.client, termAt.x, termAt.y, 'right')
@@ -1540,12 +1649,15 @@ async function runMode(label, { port, rendererUrl }) {
     ).catch(() => null)
     check(
       results,
-      `${label}：mouse reporting 關閉後，右鍵恢復我們的選單（對照組）`,
+      `${label}：mouse reporting 關閉時，右鍵同樣開啟選單（對照組）`,
       menuAfterReset?.inside === true,
-      menuAfterReset ? '選單開啟' : '選單未開啟 —— 上一條因此沒有鑑別力',
+      menuAfterReset ? '選單開啟' : '選單未開啟',
     )
+    // **收乾淨再往下** —— 右鍵改由終端擁有之後，它的 `contextmenu` 不再冒到 window，於是
+    // 「開一個選單會順手關掉另一個」不再成立：兩個 `[role="menu"]` 可以並存，而
+    // `MENU_IN_VIEWPORT` 以 `querySelector` 只取第一個。等它真的關掉，別用固定睡眠賭。
     await pressKey(app.client, 'Escape')
-    await sleep(150)
+    await pollUntil(app.client, MENU_IN_VIEWPORT, (value) => value === null, 2000).catch(() => null)
     await pressCtrlC(app.client)
     await sleep(200)
 
@@ -1927,6 +2039,148 @@ async function runMode(label, { port, rendererUrl }) {
       backText.includes('OUT_42'),
       backText.replace(/\s+/g, ' ').slice(-60),
     )
+
+    // ── terminal-sessions：切走一個 session，不得改變它的尺寸，也不得動它的內容
+    //
+    // **上面那條斷言曾經在缺陷存在時全綠**（它讀的是畫面上看得到的部分，而那正是缺陷**沒有**
+    // 破壞的部分）。真正發生的事：切走時容器沒有版面盒子，`FitAddon.proposeDimensions()` 把
+    // 「沒有盒子」夾成 `{cols: 2, rows: 1}`，於是終端被重排成 2 欄（既有 scrollback 撞上 5000 行
+    // 上限而永久遺失）、pty 也真的收到 2 欄（agent 在隱藏期間以 2 欄排版）。實測：`36 68 → 1 2`。
+    //
+    // 兩條載體，機制一條、行為一條 —— **缺一不可**：機制壞掉不必然造成可見的資料損失（要撞上
+    // scrollback 上限才會），而只驗資料損失的話，「隱藏期間 agent 以 2 欄排版」驗不到。
+    //
+    // ## 尺寸的判準是 **pty 自己持有的 winsize**，不是畫面
+    //
+    // 畫面讀不出「pty 手上是什麼」，而那正是 agent 用來排版的東西。取樣一律**由 pty 內的 shell
+    // 自己做**（`< /dev/tty` 明確讀控制終端，不受背景工作 stdin 重導的影響），不從外部
+    // `stty -F /dev/pts/N`：後者開檔不帶 `O_NOCTTY`，有把該 pts 變成探針行程控制終端的風險。
+    //
+    // **隱藏期間的取樣**要排在切走之前：`sleep N; stty …` 是同一行的循序命令，**不是背景工作**
+    // —— 於是不會多出一個 argv 為 `/bin/sh` 的子行程去污染 `ptyPids()` 的清點。
+    const shownSizeFile = join(out, 'winsize-shown.txt')
+    const hiddenSizeFile = join(out, 'winsize-hidden.txt')
+    const backSizeFile = join(out, 'winsize-back.txt')
+    const sizeOf = (text) => text.trim().replace(/\s+/g, ' ')
+
+    await realClick(app.client, await app.client.evaluate(TERMINAL_RECT))
+    await typeLine(app.client, `stty size < /dev/tty > ${shownSizeFile}`)
+    const shownSize = sizeOf(
+      await waitForFile(shownSizeFile, (value) => /\d+\s+\d+/.test(value), 10_000),
+    )
+
+    await typeLine(app.client, `sleep 2; stty size < /dev/tty > ${hiddenSizeFile}`)
+    await realClick(app.client, await app.client.evaluate(TAB_RECT(1)))
+    const hiddenSize = sizeOf(
+      await waitForFile(hiddenSizeFile, (value) => /\d+\s+\d+/.test(value), 12_000),
+    )
+    check(
+      results,
+      `${label}：session 被切走時其 pty 的尺寸不變`,
+      hiddenSize === shownSize && !/^1 2$/.test(hiddenSize),
+      `顯示中=「${shownSize}」隱藏中=「${hiddenSize}」` +
+        '（「1 2」是 FitAddon 的 MINIMUM_ROWS/COLS —— 那表示「沒有盒子」被當成了一次合法的量測）',
+    )
+
+    await realClick(app.client, await app.client.evaluate(TAB_RECT(0)))
+    await sleep(600)
+    await realClick(app.client, await app.client.evaluate(TERMINAL_RECT))
+    await typeLine(app.client, `stty size < /dev/tty > ${backSizeFile}`)
+    const backSize = sizeOf(
+      await waitForFile(backSizeFile, (value) => /\d+\s+\d+/.test(value), 10_000),
+    )
+    check(
+      results,
+      `${label}：切回顯示後其 pty 的尺寸仍與可用尺寸相符`,
+      backSize === shownSize,
+      `顯示中=「${shownSize}」切回後=「${backSize}」`,
+    )
+
+    // ## 內容的判準是 **app 自己落盤的那份快照**
+    //
+    // 它就是 `serialize()` 出來的 buffer（含 scrollback），因此「最舊那一行還在不在」問得到，
+    // 而不必把畫面捲到頂（那要送數百個滾輪事件，且捲到底沒到頂時會給出假紅）。**這條路徑順帶
+    // 覆蓋了本缺陷唯一跨重啟存活的後果**：被重排成 2 欄的內容會被寫進磁碟，下次開 app 再重播。
+    //
+    // **劑量要有餘裕**：行寬取自剛才量到的欄數（不折行 ⇒ 一行一列），行數取 900（快照上限是
+    // 1000 列）。被重排成 2 欄時每行佔 `ceil(寬/2)` 列 —— 以 68 欄為例是 29 列 × 900 ＝ 26100 列，
+    // 是 5000 行上限的 5 倍。終端幾何會隨字級與分界拖曳浮動，餘裕不足時「缺陷還在但這一輪剛好
+    // 沒溢出」是可能的。
+    const cols = Number(shownSize.split(' ')[1]) || 80
+    const lineWidth = Math.max(20, cols - 12)
+    const lineCount = 900
+    const pad = 'x'.repeat(Math.max(0, lineWidth - 12))
+    const reflowRows = Math.ceil(lineWidth / 2) * lineCount
+    const snapshotDir = join(profile, 'sessions')
+    /** 含 `MARK_900` 的那一份快照 —— 也就是這個 session 的。 */
+    const markedSnapshot = () => {
+      let entries
+      try {
+        entries = readdirSync(snapshotDir)
+      } catch {
+        // 快照目錄要等第一次落盤才會出現。
+        return null
+      }
+      for (const entry of entries) {
+        if (!entry.endsWith('.scrollback')) continue
+        const text = readFileSync(join(snapshotDir, entry), 'utf8')
+        if (text.includes(`MARK_${lineCount} `)) return text
+      }
+      return null
+    }
+
+    await typeLine(
+      app.client,
+      `i=1; while [ $i -le ${lineCount} ]; do echo "MARK_$i ${pad}"; i=$((i+1)); done`,
+    )
+    await sleep(SNAPSHOT_SETTLE_MS)
+    const beforeSnapshot = await pollFor({
+      read: async () => markedSnapshot(),
+      settled: (value) => value !== null,
+      timeoutMs: 12_000,
+      label: '落盤快照（切走之前）',
+    })
+    // **對照組（觀測管道本身有沒有鑑別力）**：切走之前 `MARK_1` 必須在快照裡 —— 它不在的話，
+    // 下面那條「切回之後它還在」就只是在複述一個從一開始就不成立的前提。
+    check(
+      results,
+      `${label}：落盤的快照涵蓋得到最舊的一行（對照組）`,
+      beforeSnapshot !== null && beforeSnapshot.includes('MARK_1 '),
+      `快照${beforeSnapshot === null ? '找不到' : `長 ${beforeSnapshot.length} 位元組`}；` +
+        `行寬=${lineWidth} 行數=${lineCount}（重排成 2 欄約 ${reflowRows} 列 vs 上限 5000）`,
+    )
+
+    await realClick(app.client, await app.client.evaluate(TAB_RECT(1)))
+    await sleep(1500)
+    await realClick(app.client, await app.client.evaluate(TAB_RECT(0)))
+    await sleep(600)
+    await realClick(app.client, await app.client.evaluate(TERMINAL_RECT))
+    // 快照是 debounce 落盤的，要有新輸出才會再寫一份 —— 否則讀到的是切走之前那一份，
+    // 而那份是好的，斷言會恆綠。
+    await typeLine(app.client, 'echo TICK')
+    await sleep(SNAPSHOT_SETTLE_MS)
+    const afterSnapshot = await pollFor({
+      read: async () => markedSnapshot(),
+      settled: (value) => value !== null && value.includes('TICK'),
+      timeoutMs: 12_000,
+      label: '落盤快照（切回之後）',
+    })
+    check(
+      results,
+      `${label}：切走再切回之後最舊的一行仍在`,
+      afterSnapshot !== null && afterSnapshot.includes('MARK_1 '),
+      afterSnapshot === null
+        ? '切回後的快照找不到'
+        : `快照長 ${afterSnapshot.length} 位元組，最舊的標記=` +
+          `${(afterSnapshot.match(/MARK_(\d+) /) ?? [])[0] ?? '（一個都沒有）'}`,
+    )
+
+    // **把畫面上的已知內容補回來。** 上面那 900 行把 `OUT_42` 推進了 scrollback，而後面
+    // 「拖曳排序後切回 session，其終端內容仍在（未變空白）」讀的是**可見範圍**（`readTerminalText`
+    // 只讀得到當前畫面）。那條斷言問的是「拖曳有沒有讓終端變空白」，不是「歷史有多長」——
+    // 補一行回去，它問的東西不變，而它與本段的耦合是明寫的，不是巧合。
+    await typeLine(app.client, 'echo OUT_42')
+    await sleep(300)
 
     // ── rail 的 session 子列：點選即聚焦（此刻 focused 是第一個）
     const railSecond = await app.client.evaluate(RAIL_SESSION_RECT(1))

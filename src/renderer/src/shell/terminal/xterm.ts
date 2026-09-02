@@ -73,14 +73,6 @@ export interface XtermHandle {
   /** 把文字送進 pty。xterm 會處理 bracketed paste（程式若啟用了它）。 */
   paste(text: string): void
   /**
-   * pty 內的程式當下是否啟用了 mouse reporting（`CSI ? 1000 h` 等）。
-   *
-   * 為 true 時，右鍵與中鍵應**讓位給該程式**（xterm 會把滑鼠事件轉發給它，claude 的右鍵貼上
-   * 等慣例才成立）；為 false 時，終端才用自己的右鍵選單與中鍵貼上。**狀態在事件當下讀取** ——
-   * 程式會隨畫面進出動態開關（design D1）。
-   */
-  mouseTrackingActive(): boolean
-  /**
    * 套用終端字型偏好。`null` 代表該欄未設定 —— family 退回系統等寬字、size 退回字級尺度的預設、
    * lineHeight 退回預設行高。
    *
@@ -244,6 +236,16 @@ export function createXterm(options: XtermOptions): XtermHandle {
     // 接觸面收斂在本 wrapper 一處（renderer 其餘模組拿不到 `Terminal` 實例）；升級 xterm 時
     // 「寬度判定仍生效」已納入驗收，該 API 改變的話驗收會紅。
     allowProposedApi: true,
+    // **pty 的輸出不得自行改變行列數。**
+    //
+    // `CSI ? 3 h/l`（DECCOLM，80／132 欄切換）與 `CSI 8 ; rows ; cols t`（XTWINOPS）都能讓
+    // **pty 裡的程式**直接改寫終端的幾何，而兩者都 gate 在這個選項上。此前我們靠的是上游的
+    // 預設（全 false）—— 而「尺寸只由一次真實量測決定」這條不變式正是建立在它之上：
+    // `fit()` 的防護（見下）擋得住 renderer 這一側，擋不住 pty 那一側。
+    //
+    // 明寫它，是把一個**上游的預設值**變成一份**我們自己的宣告** —— 與 `fit()` 那道防護同一
+    // 條教訓：一個倚賴上游實作細節的不變式，不在我們的版控之內（`docs/lessons/terminal.md`）。
+    windowOptions: {},
     theme: { ...THEME },
     // OSC 8 escape-sequence 超連結由 xterm 核心的 OscLinkProvider 處理，走 `Terminal.linkHandler`
     // —— 與 WebLinksAddon（純文字 URL）是**兩套**機制。未設 linkHandler 會落入 xterm 內建預設：
@@ -371,8 +373,32 @@ export function createXterm(options: XtermOptions): XtermHandle {
       const fontSize = resolveSize()
       if (fontSize !== term.options.fontSize) term.options.fontSize = fontSize
 
-      // 容器為 display:none（未 focused 的 session）時尺寸為 0，proposeDimensions 會給出
-      // 無效值 —— 此時不該 fit，也不該拿 0 去打擾 pty。
+      // **容器沒有被排版出來時（未顯示的 session、尚未掛載），什麼都不做。**
+      //
+      // 判準是**容器自己的盒子**，不是 `proposeDimensions()` 的回傳值 —— 後者曾經是對的，
+      // 而它被一次純依賴升級靜默地變成錯的（實測，見 `docs/lessons/terminal.md`）：
+      //
+      // | addon-fit 0.11.0    | `parseInt('auto')` → NaN 一路傳到底 ⇒ `{cols: NaN, rows: NaN}` |
+      // | addon-fit 0.12.0-beta | 上游加了 `parseInt(...) \|\| 0` ⇒ 可用空間為負 ⇒ 夾到
+      // |                       | `MINIMUM_COLS=2` / `MINIMUM_ROWS=1` ⇒ **`{cols: 2, rows: 1}`** |
+      //
+      // 於是下面那三道防護（`!proposed`、`Number.isFinite`、`< 1`）**全部放行** ——
+      // 終端被重排成 2 欄（既有 scrollback 撞上上限而永久遺失），pty 也真的收到 2 欄
+      // （agent 在隱藏期間以 2 欄排版，那些輸出印出去就是壞的）。
+      //
+      // **不要改成「把 `< 1` 放寬成 `<= MINIMUM_COLS`」**：那是黑名單，而且綁在上游的內部
+      // 常數上（同一個成因換個位置重演）；它也分不出「真的只有 2 欄的窄終端」與「沒有盒子」
+      // —— 而那兩者的正確處置相反。`display:none` 的元素沒有 box、`clientWidth`／
+      // `clientHeight` **依定義為 0**，那是 DOM 的契約，不是某個套件的實作細節。
+      //
+      // 量的必須是 `term.element.parentElement` —— 也就是 `proposeDimensions()` 讀 computed
+      // style 的那同一個元素（`open(parent)` 的 host）。但**同一個盒子不等於同一個度量**：
+      // 它讀 content box 的 computed `width`（小數、`parseInt` 捨去），我們讀 padding box 的
+      // `clientWidth`（四捨五入成整數）。目前一致是因為 host 沒有 padding —— 日後若加上
+      // padding，這條等式就要重新檢查。
+      const host = term.element?.parentElement
+      if (!host || host.clientWidth === 0 || host.clientHeight === 0) return null
+
       const proposed = fitAddon.proposeDimensions()
       if (!proposed) return null
       if (!Number.isFinite(proposed.cols) || !Number.isFinite(proposed.rows)) return null
@@ -440,9 +466,6 @@ export function createXterm(options: XtermOptions): XtermHandle {
       // 原封不動送交 pty。xterm 會處理 bracketed paste（程式若啟用了它，shell 就知道
       // 這是「貼上」而非逐鍵輸入）。
       term.paste(text)
-    },
-    mouseTrackingActive() {
-      return term.modes.mouseTrackingMode !== 'none'
     },
     setFont(font) {
       fontOverride.family = font.family

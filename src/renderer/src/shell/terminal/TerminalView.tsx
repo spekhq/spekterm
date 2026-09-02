@@ -99,8 +99,13 @@ export function TerminalView({
     //
     // 一個從未被喚醒的休眠 shell session，它的 xterm 裡已經被 `replay()` 寫進了「歷史 + 分隔線」。
     // 若關窗時照樣序列化，那份**含分隔線**的內容就會被寫回快照檔 —— 下次開啟再重播一次、再追加
-    // 一條新的分隔線。使用者一路不碰它，**每重開一次就多一條「以上為上次的內容」**。而且隱藏中的
-    // 終端從未 `fit()` 過，它是以 80 欄重新序列化的，歷史每輪還會被重排一次。
+    // 一條新的分隔線。使用者一路不碰它，**每重開一次就多一條「以上為上次的內容」**。而且從未被
+    // 顯示過的終端沒有量到過尺寸，它是以 xterm 的預設 80 欄重新序列化的，歷史每輪還會被重排一次。
+    //
+    // （這裡原本寫「隱藏中的終端從未 `fit()` 過」——**曾經有一段時間那是錯的**：隱藏時
+    // `fit()` 會把它重排成 **2 欄**，於是落盤的快照本身就是壞的。修正見
+    // `docs/lessons/terminal.md` 的「隱藏的終端絕不可被 fit」。現在隱藏的終端保留最後一次真實
+    // 量測的尺寸，這條防護的理由回到「從未顯示過」那一種。）
     if (status !== 'running') return
 
     const flush = (): void => {
@@ -217,7 +222,35 @@ export function TerminalView({
     if (size) window.workspace.terminal.resize(sessionId, size.cols, size.rows)
   }, [status, sessionId])
 
-  // 中鍵貼上：**在 capture 階段完全接管中鍵**，只貼一次。
+  // 中鍵與右鍵：**在 capture 階段完全接管這兩顆鍵**（中鍵貼上一次，右鍵開我們的選單）。
+  //
+  // ## 右鍵為什麼也在這裡（而不是 `onContextMenu`）
+  //
+  // 右鍵此前 gate 在 mouse reporting：程式接管滑鼠時讓位給它，理由是「讓 claude 自己的右鍵貼上
+  // 生效」。**那個前提是錯的，兩端都已實測否證**：`claude` 一啟動就送 `?1000h ?1002h ?1003h
+  // ?1006h`（於是 agent session 裡右鍵**永遠**被讓出去），而 pty 內的程式**讀不到系統剪貼簿**
+  // —— 唯一的管道 OSC 52 xterm.js 未實作（且我們選擇不加）。讓出去的是一顆什麼都不做的鍵，
+  // 而觸控板沒有中鍵，於是使用者完全失去滑鼠貼上。右鍵因此與中鍵收斂為同一條歸屬規則。
+  //
+  // **選單自 `mousedown` 開，不依賴 `contextmenu` 事件**：後者由平台決定派送在 mousedown 還是
+  // mouseup（Linux/GTK 與 Windows 不同），依賴它就等於讓「選單會不會被自己開啟的那次事件關掉」
+  // 取決於平台 —— 而 `ContextMenu` 的「延一個 tick 才掛 dismiss」正是在賭這個時序。把整顆按鍵的
+  // 四個事件都攔在 host 之下，那個時序問題**表達不出來**（它們冒不到 window，dismiss 收不到）。
+  //
+  // **`contextmenu` 必須列進來**：`mousedown` 上的 `preventDefault()` 實測**不會**取消它，
+  // 不攔就會跳出瀏覽器的原生選單。（此前那件事由 React 的 `onContextMenu` 負責，而它在 capture
+  // 接管之後**永遠不會執行** —— React 19 的委派 listener 掛在 `#root`，是 host 的祖先，
+  // `stopPropagation` 之後事件既不再往下、也不再冒泡。那個 prop 因此整個移除，不留死碼。）
+  //
+  // 已知取捨：先在分頁上右鍵開了選單、再到終端右鍵，以前終端的 `contextmenu` 會冒到 window 把
+  // 分頁那個關掉，現在不會 —— 兩個 `[role="menu"]` 會並存到使用者左鍵點掉為止。接受它：另一條路
+  // （不攔 `contextmenu`）會把選單的存活重新交還給平台時序，而 Phase 6 要出 Windows。
+  //
+  // 攔掉右鍵對 xterm 的既有行為只關掉一件事：它綁在 `contextmenu` 上的
+  // `moveTextAreaUnderMouseCursor`（為了讓**原生**選單的貼上落在隱形 textarea 上）—— 我們本來
+  // 就擋掉原生選單、貼上走 `term.paste()`。**選取不受影響**：xterm 的選取只認左鍵。
+  //
+  // ## 中鍵的部分（原有的論證，未改變）
   //
   // 中鍵貼上是**終端的**慣例，不是 pty 內程式的慣例 —— 由我們擁有它、只貼一次，才是確定的行為。
   // dogfood 抓到：login shell（mouse off）與 claude（mouse on）中鍵**都貼兩次** —— 兇手是 Chromium 的
@@ -233,24 +266,45 @@ export function TerminalView({
   useEffect(() => {
     const host = hostRef.current
     if (!host) return
+
+    /** 我們擁有的兩顆鍵：1＝中鍵、2＝右鍵。左鍵不在此列（它是 pty 內程式的主要互動面）。 */
+    const owned = (button: number): boolean => button === 1 || button === 2
+
     const suppress = (event: MouseEvent): void => {
-      if (event.button !== 1) return
+      if (!owned(event.button)) return
+      event.preventDefault()
+      event.stopPropagation()
+    }
+    // `contextmenu` 沒有 `button` —— 它整個屬於右鍵這條路徑。
+    const suppressContextMenu = (event: MouseEvent): void => {
       event.preventDefault()
       event.stopPropagation()
     }
     const onDown = (event: MouseEvent): void => {
-      if (event.button !== 1) return
+      if (!owned(event.button)) return
       event.preventDefault()
       event.stopPropagation()
-      paste()
+      if (event.button === 1) {
+        paste()
+        return
+      }
+      // 選取狀態要在開啟選單的當下取樣 —— 選單一旦開啟，焦點就離開終端了。
+      setMenu({
+        x: event.clientX,
+        y: event.clientY,
+        hasSelection: handleRef.current?.hasSelection() ?? false,
+      })
     }
+
     host.addEventListener('mousedown', onDown, true)
     host.addEventListener('mouseup', suppress, true)
     host.addEventListener('auxclick', suppress, true)
+    host.addEventListener('contextmenu', suppressContextMenu, true)
     return () => {
       host.removeEventListener('mousedown', onDown, true)
       host.removeEventListener('mouseup', suppress, true)
       host.removeEventListener('auxclick', suppress, true)
+      host.removeEventListener('contextmenu', suppressContextMenu, true)
     }
   }, [paste])
 
@@ -329,21 +383,11 @@ export function TerminalView({
       // 也就是排在 React children **之後**。兩者都是 `z-index: auto` → 依 tree order 繪製 →
       // **xterm 蓋在提示上**，而 `.xterm-viewport` 的背景是不透明的。於是休眠的 claude 分頁
       // 看起來就是一塊空白終端 —— 正是 spec 明文禁止的那件事。提示因此必須明確拿到 z-index。
+      //
+      // **這裡沒有 `onContextMenu`，是刻意的。** 右鍵（連同原生選單的抑制）整個由上面那個
+      // capture 階段的 effect 擁有 —— React 的委派 listener 掛在 `#root`（host 的祖先），
+      // capture 一 `stopPropagation` 它就永遠不會執行。放一個在這裡只會是誤導人的死碼。
       className={active ? 'relative h-full w-full' : 'hidden'}
-      onContextMenu={(event) => {
-        // 原生選單一律擋掉。
-        event.preventDefault()
-        // **mouse reporting 開啟時（claude 接管滑鼠），右鍵讓位給程式** —— 不開我們的選單，
-        // 讓 claude 的右鍵貼上等慣例生效（xterm 已把 mousedown 轉發給它）。未接管時才用我們的
-        // 複製／貼上選單（design D1）。狀態在事件當下讀取 —— 程式會動態開關 mouse mode。
-        if (handleRef.current?.mouseTrackingActive()) return
-        // 選取狀態要在開啟選單的當下取樣 —— 選單一旦開啟，焦點就離開終端了。
-        setMenu({
-          x: event.clientX,
-          y: event.clientY,
-          hasSelection: handleRef.current?.hasSelection() ?? false,
-        })
-      }}
     >
       {/*
         休眠態的呈現。**休眠的 session 絕不能只是一塊空白的終端** —— 那看起來像壞掉。
@@ -379,7 +423,19 @@ export function TerminalView({
         ))}
 
       {menu && (
-        <ContextMenu x={menu.x} y={menu.y} items={items} onClose={() => setMenu(null)} />
+        <ContextMenu
+          x={menu.x}
+          y={menu.y}
+          items={items}
+          // **焦點要回到終端。** 右鍵的 mousedown 被 capture 攔下之後 xterm 不再取得焦點
+          //（此前它會），於是以 Escape 關掉選單時焦點會落在 `document.body` —— 使用者接著打字
+          // 什麼都不會發生，得再點一次終端。複製／貼上兩個項目本來就各自 `focus()` 過了，
+          // 這裡補的是「開了選單又不選任何項目」那條路徑。
+          onClose={() => {
+            setMenu(null)
+            handleRef.current?.focus()
+          }}
+        />
       )}
     </div>
   )

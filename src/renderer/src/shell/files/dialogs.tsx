@@ -187,17 +187,35 @@ export function ContextMenu({ x, y, items, onClose }: ContextMenuProps): React.J
     const onKey = (event: KeyboardEvent): void => {
       if (event.key === 'Escape') onClose()
     }
-    // **延一個 tick 才掛。** 開啟這個選單的那一次 click／contextmenu 會冒泡到 window，
+    /**
+     * **在 window 的 capture 階段收掉任何落在選單之外的按下 —— 這是「同時只有一個選單」的載體。**
+     *
+     * bubble 階段的 `click`／`contextmenu` 不夠：終端把右鍵整顆攔在自己 host 的 capture 階段
+     * （`TerminalView`，為了不把它轉發給 pty），那次事件**冒不到 window** —— 於是「在終端右鍵」
+     * 關不掉分頁上已經開著的那一個，兩個選單並存。**capture 由 window 往下傳，早於 host 的攔截**，
+     * 因此這條路徑攔不掉。
+     *
+     * 落在自己身上的按下要放行：否則按在選單項目上時，這裡會先把選單卸載，那次 `click` 就沒有
+     * 對象可以觸發了。
+     */
+    const onPointerDown = (event: MouseEvent): void => {
+      const target = event.target
+      if (target instanceof Node && menuRef.current?.contains(target)) return
+      onClose()
+    }
+    // **延一個 tick 才掛。** 開啟這個選單的那一次 click／contextmenu／mousedown 會傳到 window，
     // 若當下就掛上 dismiss，它會被自己開啟的事件立刻關掉 —— React 19 對 trusted 的
     // discrete 事件會同步 flush effect，因此 listener 會在同一次事件的傳遞途中就生效
     //（實測：右鍵完全開不起來，因為 contextmenu 未 stopPropagation 而冒泡到 window）。
     const timer = setTimeout(() => {
+      window.addEventListener('mousedown', onPointerDown, true)
       window.addEventListener('click', dismiss)
       window.addEventListener('contextmenu', dismiss)
       window.addEventListener('keydown', onKey)
     }, 0)
     return () => {
       clearTimeout(timer)
+      window.removeEventListener('mousedown', onPointerDown, true)
       window.removeEventListener('click', dismiss)
       window.removeEventListener('contextmenu', dismiss)
       window.removeEventListener('keydown', onKey)

@@ -46,8 +46,10 @@
   `SessionsProvider` 因此在任何一次 create 之前就掛好唯一的 `onData`，尚未 attach 的先進 backlog。
   （與 Phase 2 的「**先訂閱、再列目錄**」同源：那個窗口裡的變更會兩頭落空。）
 - **終端必須跨「切換 folder」常駐。** 只掛載當前 folder 的 session 的話，切走再切回時 xterm 實例已
-  被卸載，先前的 scrollback 就沒了。因此掛載全部、以 `display:none` 決定顯示 —— 代價是隱藏時
-  `FitAddon` 量到 0，由隱藏轉為顯示時必須重新 `fit()`。
+  被卸載，先前的 scrollback 就沒了。因此掛載全部、以 `display:none` 決定顯示 —— 代價是隱藏的終端
+  **量不到尺寸**，由隱藏轉為顯示時必須重新 `fit()`。
+  > **「隱藏時 `FitAddon` 量到 0」是舊的心智模型，而它會咬人** —— 它回的不是 0，是一個被夾到
+  > 下限的 `{cols: 2, rows: 1}`。見下面「隱藏的終端絕不可被 fit」。
 - **`disposed` 的 exit 不是 session 結束。** 關視窗與 reload 時我們自己殺光所有 pty，那些都會觸發
   `onExit`。「已結束的 session 不持久化」若直接寫成「收到 exit 就移除」——**關一次視窗，
   `sessions.json` 就被清空了**。`ExitReason` 因此區分 `self`／`killed`（真的結束）與 `disposed`
@@ -228,6 +230,47 @@ HOME     存在      NODE_OPTIONS     **不存在**      ELECTRON_RUN_AS_NODE   
   - **擋在 `sessions.tsx` 的 `setTitle()`，不是顯示層** —— 那是 OSC 標題進入狀態的唯一入口。
     只改顯示層的話，標籤是對了，但衍生的行為（當年的確認對話框）仍會被觸發。
 
+## 隱藏的終端絕不可被 fit —— 以及「守衛倚賴上游回傳值形狀」這一類
+
+**一道讀上游函式回傳值的守衛，其正確性不在我們的版控之內。** 純依賴升級不會改任何 `.ts`，於是
+型別、單元測試與既有探針**全部照樣綠**。這條的實例是本 repo 最貴的一個靜默缺陷：
+
+`xterm.ts` 的 `fit()` 曾以「`proposeDimensions()` 回傳的數字有沒有效」判斷容器可不可量。逐版比對：
+
+| `@xterm/addon-fit` | 容器 `display:none` 時 `proposeDimensions()` 回傳 |
+|---|---|
+| `0.11.0`（本 repo 至 2026-08-18） | `parseInt('auto')` → `NaN`（`Math.max(0, NaN)` 仍是 `NaN`）⇒ **`{cols: NaN, rows: NaN}`** ⇒ `Number.isFinite` 攔得下 |
+| `0.12.0-beta.299`（`bd9d0dd` 起） | 上游加了 `parseInt(...) \|\| 0` ⇒ 可用空間為負 ⇒ 夾到 `MINIMUM_COLS=2` / `MINIMUM_ROWS=1` ⇒ **`{cols: 2, rows: 1}`** ⇒ **三道防護全部放行** |
+
+**後果有三個，全部靜默：**
+
+1. `term.resize(2, 1)` 把 buffer **重排成 2 欄** —— 行數暴增、撞上 5000 行的 scrollback 上限，
+   最舊的內容**永久消失**（實測：900 行的輸出，切走一次就毀掉 567 行）。
+2. pty 真的收到 2 欄 ⇒ **agent 在隱藏期間以 2 欄排版**，那些輸出印進 scrollback 就是壞的
+   （dogfood 的徵狀：Write 工具的預覽每一行只剩開頭一個字）。
+3. **落盤的快照也是 2 欄的** —— 這是唯一跨重啟存活的損害，下次開 app 還會重播它。
+
+**已經損失的救不回來**：被擠掉的 scrollback、以及已經落盤的 2 欄快照（直到該 session 被關閉或
+快照被一次正確寬度的序列化覆寫）。
+
+**判準因此改成「容器有沒有被排版出來」**（`term.element.parentElement` 的 `clientWidth` /
+`clientHeight` 為 0 就不 fit）—— `display:none` 的元素沒有 box 是 **DOM 的契約**，不是某個套件的
+實作細節。**不要改成「把 `< 1` 放寬成 `<= MINIMUM_COLS`」**：那是黑名單、綁在上游的內部常數上
+（同一個成因換個位置重演），而且它分不出「真的很窄的終端」與「沒有盒子」—— 兩者的正確處置相反。
+
+**擋住它的是三道結構，不是「升級時記得小心」：**
+
+- `probe-terminal` 的 **winsize 斷言**（切走一個 session，讀它 pty 自己持有的 `stty size`）——
+  擋「上游又變了」。
+- `scripts/terminal-resize-source.test.mjs` —— 擋「我們自己在別處多開一條繞過 `fit()` 的路」
+  （咽喉點是 `@xterm/*` 的 import，不是 `fit()` 的呼叫）。
+- `xterm.ts` 明寫的 **`windowOptions: {}`** —— 擋「pty 裡的程式以 DECCOLM／XTWINOPS 自行改寫幾何」
+  （此前靠的也是上游預設）。
+
+**精確的觸發條件是「切走一個曾經顯示過的終端」**：`proposeDimensions()` 的第一道檢查是
+`dims.css.cell.width === 0 → return undefined`，從未排版過的終端走的是那一條。**驗收的前置因此
+是承重的** —— 載體必須先讓該終端真的顯示過。
+
 ## 複製、貼上、滑鼠
 
 - **不能靠瀏覽器原生的路徑。** xterm 的選取**不是 DOM selection**（它自己畫），原生的
@@ -235,8 +278,20 @@ HOME     存在      NODE_OPTIONS     **不存在**      ELECTRON_RUN_AS_NODE   
   `clipboard.readText()` + `term.paste()`。**不用 `navigator.clipboard`** —— 它的 `readText()` 在
   Electron 中受 `clipboard-read` 權限模型擺布，跨平台不一致。
 - **選單操作完要把焦點還給終端。** 實測：自右鍵選單貼上之後按 Enter **不會執行**（焦點還在選單）。
-- **右鍵 gate 在 mouse reporting**（`term.modes.mouseTrackingMode`）—— 程式接管滑鼠時右鍵**讓位給
-  它**（使 claude 的右鍵貼上生效），沒接管時才開我們的複製／貼上選單。
+- **右鍵一律由終端擁有，與 mouse reporting 無關。** 此前它 gate 在 `term.modes.mouseTrackingMode`
+  —— 程式接管滑鼠時右鍵讓位給它，「使 claude 的右鍵貼上生效」。**那個前提兩端都已實測否證**
+  （`terminal-right-click-and-hidden-fit`）：
+  - `claude` **一啟動就送 `?1000h ?1002h ?1003h ?1006h`**（以 node-pty spawn 抓序列）—— 於是
+    agent session 裡右鍵**永遠**被讓出去，而那正是這個 app 的主場。
+  - **pty 內的程式讀不到系統剪貼簿**：唯一的管道 OSC 52 xterm.js 未實作
+    （`InputHandler.ts` 明列 52 為未支援）。讓出去的是一顆什麼都不做的鍵。
+    > **但這是一個選擇，不是結構性不可能** —— `registerOscHandler` 是公開 API，要加隨時加得上。
+    > 右鍵歸屬真正的依據是「**今天沒有程式在這個終端裡用右鍵做出有用的事**」。日後若 claude
+    > 開始以右鍵做與剪貼簿無關的事，退路是 `Shift+右鍵` 轉發給程式。
+  - 觸控板沒有中鍵，於是那道 gate 讓使用者**完全失去滑鼠貼上**（dogfood 回報）。
+  右鍵因此與中鍵收斂為同一條歸屬規則：**capture 階段整顆接管，選單自 `mousedown` 開**
+  （不依賴 `contextmenu` —— 它由平台決定派送在 down 還是 up）。已知取捨：終端的 `contextmenu`
+  不再冒到 window，於是**兩個 `[role="menu"]` 可以並存**（分頁的選單開著時再對終端右鍵）。
 - **中鍵雙貼的兇手是 Chromium 原生的中鍵貼上。** `terminal-clipboard` D5 當年寫「X11 的中鍵貼的是
   PRIMARY，而瀏覽器拿不到它」—— **那個假設在 Electron 裡不成立**。React 的 `onMouseDown`（bubble）
   擋不掉它：其一 bubble 晚於 xterm 掛在 `.xterm-screen` 上的 listener；其二**原生貼上掛在

@@ -18,7 +18,9 @@ folder 的全域 session）使用者的家目錄**、與 renderer 雙向串流
 **cwd 的邊界只約束「初始」工作目錄，它不是沙箱。** session 一旦啟動即為真實 shell，pty 內執行
 的命令不受此邊界限制（使用者可以 `cd` 到任何地方 —— 那正是終端的用途）。這與 `filesystem-access`
 的「renderer 只能觸及 workspace」是**不同**的語意，不可據此推論。
+
 ## Requirements
+
 ### Requirement: 於選中的 folder 建立終端 session
 
 renderer SHALL 能在一個已加入且可用的 workspace folder 建立一個終端 session；建立成功時主行程 SHALL 回傳一個 session 識別碼。session 的 pty 初始工作目錄 SHALL 為該 folder 的根目錄，**或該 folder 所屬 repo 的某個工作目錄（git worktree）的根**；由 `session-persistence` **重建**的 session SHALL 為其最後已知的工作目錄，該目錄無法取得或不落在上述任一之下時 SHALL 退回該 folder 的根目錄。
@@ -125,19 +127,45 @@ focused session 的終端 SHALL 將使用者鍵入的資料送抵其 pty，並 S
 
 非 focused 的 session 其 pty SHALL 持續運作，其於未顯示期間產生的輸出 SHALL NOT 遺失。使用者切回該 session 時，SHALL 能看到期間累積的輸出。
 
+**切換本身 SHALL NOT 破壞既有的終端內容。** 一個 session 被切走再切回之後，其終端於切走**之前**已經產生的輸出 SHALL 仍然完整可取得（包含已進入 scrollback、需捲動才看得到的部分）。切換不是一個會改變終端幾何的動作 —— 任何因切換而重排既有內容的實作，都會在內容量大時使最舊的部分被擠出 scrollback 而永久遺失。
+
 #### Scenario: 背景 session 的輸出於切回後可見
 
 - **WHEN** 一個非 focused 的 session 的 pty 在未顯示期間產生輸出，使用者稍後切回該 session
 - **THEN** 期間累積的輸出可見於該 session 的終端
 
+#### Scenario: 切走再切回後最舊的輸出仍在
+
+- **WHEN** 一個 session 的終端已累積大量輸出（足以逼近 scrollback 上限），使用者切到另一個 session 後再切回
+- **THEN** 切走之前產生的**最舊**一行輸出仍可經捲動取得，與「全程停留在該 session」時所得相同
+
 ### Requirement: 終端尺寸變化時 pty 尺寸同步
 
 終端可用的顯示尺寸改變時，其 pty 的欄數與列數 SHALL 隨之更新，使 pty 內執行的程式以正確的寬度換行輸出。
+
+**同步的前提是量得到。** 終端的容器未被排版出來時（未顯示的 session、尚未掛載、或任何沒有版面盒子的狀態），系統 SHALL NOT 推導尺寸、SHALL NOT 更新該 pty 的欄列數、且該終端自身的行列數 SHALL NOT 改變。
+
+此條款是**否定式**的，且兩個子句都承重：
+
+- **不得推送尺寸給 pty** —— pty 內的程式以它為準排版；一個從未被真實量測過的值會讓 agent 以錯誤的寬度輸出，而那些輸出一旦印出就**永久留在終端歷史裡**，其後把尺寸改回來也救不回。
+- **不得改變終端自身的行列數** —— 改變行列數會重排既有內容（見「切換 session 保留各自的終端內容」）。
+
+尺寸的推導 SHALL 以「容器是否具有版面盒子」判定，SHALL NOT 以推導所得數值是否落在某個範圍內判定 —— 一個被夾到下限的值與一個真實的窄終端在數值上無法區分，而兩者的正確處置相反。
 
 #### Scenario: 尺寸改變後 pty 收到新的欄列數
 
 - **WHEN** 終端的可用尺寸改變
 - **THEN** 其 pty 的欄數與列數更新為與新尺寸相符的值
+
+#### Scenario: session 被切走時其 pty 的尺寸不變
+
+- **WHEN** 一個顯示中的 session 被切走（其終端不再具有版面盒子）
+- **THEN** 該 pty 持有的欄數與列數與切走之前相同
+
+#### Scenario: 切回顯示時尺寸仍然正確
+
+- **WHEN** 使用者切回一個先前被切走的 session
+- **THEN** 該 pty 持有的欄數與列數與該終端當下的可用尺寸相符
 
 ### Requirement: 終端的字元寬度與 pty 內程式所依據的寬度一致
 
@@ -462,32 +490,35 @@ pty 從未設定標題（或設定為空）時，標籤 SHALL 退回一個由 sp
 - **WHEN** 一個 spawn 目標為 `claude` 的 session，其 pty 設定了一個超出可呈現長度的標題
 - **THEN** 標籤以截斷後的形式呈現，且完整標題可自該元素的提示取得
 
-### Requirement: 終端支援複製與貼上
+### Requirement: 終端支援複製與貼上，且滑鼠路徑一律由終端擁有
 
 終端 SHALL 提供複製選取內容與貼上剪貼簿內容的能力，且 SHALL 同時提供**滑鼠**與**鍵盤**兩條路徑 —— 終端若不能複製貼上，等同不能使用。
 
+**滑鼠路徑的歸屬 SHALL NOT 取決於 pty 內程式的狀態。** 依據是**當下的能力事實**而非慣例：本終端未實作 OSC 52，因此 pty 內的程式讀不到系統剪貼簿 —— 「把滑鼠鍵讓位給程式，好讓它自己的貼上慣例生效」在本終端得不到任何東西，讓出去的結果只是那顆鍵什麼都不做。
+
 - **鍵盤**：SHALL 提供複製與貼上的快捷鍵。鍵盤路徑 SHALL NOT 受 pty 是否啟用 mouse reporting 影響。
-- **右鍵（gate 在 mouse reporting）**：pty 內的程式**未啟用** mouse reporting 時，右鍵 SHALL 開啟複製／貼上選單（無選取內容時複製 SHALL 為停用）；程式**已啟用** mouse reporting（例如 claude 接管滑鼠）時，右鍵 SHALL 交由該程式處理（由 xterm 轉發），終端 SHALL NOT 開啟自己的選單 —— 否則會與程式自身的右鍵慣例（如右鍵貼上）雙重作用。當下的 mouse reporting 狀態 SHALL 於事件發生時判定（程式會在執行期間動態開關）。原生瀏覽器選單 SHALL 一律不呈現。
+- **右鍵（一律由終端擁有）**：右鍵 SHALL 開啟複製／貼上選單（無選取內容時複製 SHALL 為停用），且 SHALL NOT 受 pty 是否啟用 mouse reporting 影響。終端 SHALL NOT 把右鍵轉發給 pty 內的程式 —— 否則選單與程式的處理會雙重作用。原生瀏覽器選單 SHALL 一律不呈現。
 - **中鍵（一律由終端擁有）**：中鍵貼上是終端的慣例，SHALL 一律由終端貼上剪貼簿的內容，且**恰好一次**，**與 mouse reporting 是否啟用無關**。終端 SHALL 擋掉瀏覽器原生的中鍵貼上、且 SHALL NOT 把中鍵轉發給 pty 內的程式 —— 否則原生貼上與程式的處理會疊加成多次貼上。
+- **左鍵不在此列**：左鍵是 pty 內程式的主要互動面，其行為（選取與轉發）不受本要求改變。
 
 **`Ctrl+C` SHALL 維持送出中斷訊號（SIGINT），SHALL NOT 被挪用為複製** —— 使用者中斷失控程式的能力，不得因畫面上剛好有一段選取而失靈。複製因此採用終端模擬器慣用的 `Ctrl+Shift+C`（macOS 的 `Cmd+C` 不與中斷訊號衝突，故於該平台使用 `Cmd+C`／`Cmd+V`）。
 
 貼上的內容 SHALL 原封不動地送交 pty，SHALL NOT 被過濾或轉換。
 
-#### Scenario: 未啟用 mouse reporting 時自右鍵選單複製與貼上
+#### Scenario: 自右鍵選單複製與貼上
 
-- **WHEN** pty 內的程式未啟用 mouse reporting，使用者於終端按下右鍵
+- **WHEN** 使用者於終端按下右鍵（pty 未啟用 mouse reporting）
 - **THEN** 出現包含複製與貼上的選單，且該選單完整落在可視範圍內
+
+#### Scenario: 啟用 mouse reporting 時右鍵仍由終端處理
+
+- **WHEN** pty 內的程式已啟用 mouse reporting，使用者於終端按下右鍵
+- **THEN** 終端開啟自己的複製／貼上選單，且該滑鼠事件 SHALL NOT 送達 pty 內的程式
 
 #### Scenario: 無選取內容時複製為停用
 
-- **WHEN** pty 未啟用 mouse reporting、終端中沒有任何選取內容，使用者開啟右鍵選單
+- **WHEN** 終端中沒有任何選取內容，使用者開啟右鍵選單
 - **THEN** 複製項目為停用狀態
-
-#### Scenario: 啟用 mouse reporting 時右鍵讓位給程式
-
-- **WHEN** pty 內的程式已啟用 mouse reporting，使用者於終端按下右鍵
-- **THEN** 終端 SHALL NOT 開啟自己的選單，該滑鼠事件交由 pty 內的程式處理
 
 #### Scenario: 中鍵貼上恰好一次
 
