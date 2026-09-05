@@ -54,6 +54,21 @@ export default defineConfig(({ command }) => ({
   main: {
     plugins: [externalizeDepsPlugin()],
     resolve: { alias },
+    build: {
+      rollupOptions: {
+        // **兩個進入點。** `insights-worker` 由 `utilityProcess.fork` 載入，因此它必須是產物裡
+        // 一支真的檔案，而不是被 bundle 進 `index`。
+        //
+        // 覆寫 `input` 就取代了 electron-vite 的預設值，於是 `index` 必須一起明列 ——
+        // 漏了它 app 根本開不起來（那個失效很吵，不會被漏看）。真正安靜的失效是反過來：
+        // 忘記加 worker，dev 可能因為路徑巧合而正常，**打包後才 `MODULE_NOT_FOUND`**，
+        // 而 `test:e2e` 的九支都不含 `probe:package`。
+        input: {
+          index: fileURLToPath(new URL('src/main/index.ts', import.meta.url)),
+          'insights-worker': fileURLToPath(new URL('src/main/insights-worker.ts', import.meta.url)),
+        },
+      },
+    },
   },
   preload: {
     plugins: [externalizeDepsPlugin()],
