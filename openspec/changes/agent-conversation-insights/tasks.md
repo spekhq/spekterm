@@ -2,7 +2,11 @@
 
 - [x] 1.1 **先驗 `utilityProcess.fork` 能不能載入 asar 內的檔案** —— **通過（2026-09-05）**。以獨立的最小 spike 驗證（自行 `asar pack` 一個含 `main.js` + `scan.js` 的目錄，`xvfb-run electron <app.asar>`），不動 repo 版本、不觸發換版：child 自 `<...>/app.asar/out/scan.js` 正常 spawn（回報 `inAsar: true`）、`postMessage` 往返正常、且讀得到 asar 之外的路徑（掃描器需要讀家目錄）。**不需要 `asarUnpack`**，第 5 組維持原作法。
   > **保留條件**：spike 跑在 `node_modules` 當下的 electron **43.4.1**，而 `package.json` 釘的是 43.1.0（見下方註記）。兩者的 `utilityProcess` 與 asar 支援無已知差異，但 11.5 的 `probe:package` 仍是這條的最終確認。
-- [ ] 1.2 建立 fixture 產生器：一份可控的 transcript 目錄，涵蓋 `isMeta`、`isCompactSummary`、`interruptedMessageId`、內文像中斷但無該欄位、slash 展開、`<bash-input>` 與 `<bash-stdout>`、**通篇只有 `<task-notification>`**、通知夾在真實訊息中、subagent 子目錄、**session 中途換 `cwd`**、跨數小時的兩個時段、一批短訊息 + 一則極長訊息、一個**不在 workspace folder 清單裡**的專案、本機時間 23:30（UTC 為前一日）的訊息、未知的記錄類型；以單元測試確認產生器輸出穩定且各形態的筆數符合預期
+- [x] 1.2 **fixture 產生器 —— 完成**（`src/main/transcript-fixture.testkit.ts` + `.test.ts`，14 條測試全綠）。涵蓋 `isMeta`（3 種形態）、`isCompactSummary`、`interruptedMessageId`、**內文像中斷但不帶該欄位的反例**、slash 展開、`<bash-input>` / `<bash-stdout>`、純通知、通知夾雜、subagent 子目錄、中途換 `cwd`、跨時段 session、極長訊息、不在 workspace 的專案、跨 UTC 日期的深夜訊息、未知記錄類型。
+  - 產生器**自己宣告 `facts`**，測試不得寫死數字；自檢測試**獨立重讀檔案再數一遍**，不重用產生器的計數邏輯（兩邊共用就會一起錯而照樣全綠）。
+  - **自檢當場抓到產生器五個錯**：宣告的工具數 8／實際 7、用量列 8／實際 7、最後一個 `cwd` 恰好等於專案根（於是「取最後一個」的錯誤實作也會通過）、極長訊息不夠長（平均只有中位數 4.4 倍，拉不開對照）、以及**時區那一筆沒有鑑別力** —— 固定取當地 23:30 對東半球無效（UTC+8 的 23:30 是同一天的 UTC 15:30），改為依時區方向取凌晨或深夜。
+  - `timezoneShape` 於機器跑在 UTC 時回報 `'no-offset'`，該條驗收應**略過而非通過**（比照 `polling-mount.testkit.ts` 的對照組自檢）。
+- [x] 1.2b **CJK 守衛豁免 `*.testkit.ts`，並把它的前提變成結構保證** —— 豁免的理由是「不出貨」，而那件事此前沒有被檢查。新增「產品原始碼不得 import testkit」一條（`copy-language.test.mjs`），連同兩個對照組；實測把一支產品原始碼改成 import testkit 後該條確實變紅。少了它，一份中文 UI 文案只要搬進 `*.testkit.ts` 就能繞過整道守衛。
 - [ ] 1.3 於 `scripts/lib/ports.mjs` 登記新 probe 的 debugging port；`npm test` 的重複與衍生檢查通過
 - [ ] 1.4 新增 `scripts/probe-insights.mjs`（**以 `scripts/lib/sections.mjs` 組織為段落**，宣告段落依賴、支援 `PROBE_ONLY`）與 `npm run probe:insights`，並納入 `scripts/run-probes.mjs`；單獨執行通過
 - [ ] 1.5 probe 啟動時斷言它掃的是 fixture 而非開發者本機的真實資料：以 fixture 的**已知數值**斷言（訊息數恰為 N、某 skill 名恰好出現 M 次），而非只斷言視圖存在。缺這條時探針會去掃 490 個真實檔案、把開發者的 prompt 全文寫進探針的 userData，而存在性斷言照樣全綠
