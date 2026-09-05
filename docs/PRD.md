@@ -192,7 +192,11 @@ Electron，目標產出 macOS / Windows / Linux 三平台安裝檔。
 
 ### 6.2 各區塊
 
-- **① 活動列**：`Sessions`（工作台，預設）／`Handoffs`（收件匣，帶待處理 badge）／🔍 搜尋（沿用 spek `Cmd+K`）／⚙ 設定。組織軸是 **Sessions 與 Handoffs**，不是檔案總管——點 `Handoffs` 會把主舞台整個換成 workspace 層級的 Handoff 收件匣（見 §6.4），點 `Sessions` 切回工作台。
+- **① 活動列**：`Sessions`（工作台，預設）／`Handoffs`（收件匣，帶待處理 badge）／🔍 搜尋（沿用 spek `Cmd+K`）／**📈 對話計量**（`agent-conversation-insights`，見「對話計量」一節）／⚙ 設定。
+  > **第五個入口是對 `docs/workspace-mockup.html` 的一次明示偏離** —— 雛型只畫了四個。裁決記錄在
+  > `workspace-layout` 的 requirement 裡：對話計量的範圍是整個 workspace，不隸屬任何 folder、
+  > 也不是側欄座標之下的東西，而活動列正是「不隸屬任何 repo 的全域入口」該在的位置。
+  > 已排除的替代方案是塞進 Settings 對話框：**Settings 是放旋鈕的地方，而這是內容。**組織軸是 **Sessions 與 Handoffs**，不是檔案總管——點 `Handoffs` 會把主舞台整個換成 workspace 層級的 Handoff 收件匣（見 §6.4），點 `Sessions` 切回工作台。
 - **② workspace rail**：跨 repo 導覽。每個 repo 為一列，可展開露出其下的 session 子列；repo／session 上疊加最急迫的狀態燈與 handoff 標記（incoming badge、`↩ 接棒`、`待 ack`）。底部 `[+ Add folder]`（原生對話框、持久化）。沒有 `openspec/` 的 repo 於此標示（如 mockup 的 spek-web），提示它只能用 Files 身分。
   rail 分為**置頂段**與其餘兩段，之間有一條分界：置頂段**位於捲動容器之外**，因此 repo 一多、
   session 子列一展開時它仍留在視野裡 —— 那正是置頂相對於「把 repo 拖到最上面」的增量價值
@@ -533,6 +537,34 @@ spekterm
   使用者取的名字、順序、錨定的 change 與終端畫面快照皆跨重啟存活，claude 以 `--resume` 續接
   對話，shell 於最後已知的工作目錄重生。這裡剩下的是「開啟的檔案 tab」與 panel 尺寸。
 - （可選）自動更新、CHANGELOG 流程。
+
+### 對話計量（不屬於任何 Phase）
+
+比照 `session-restore`：它不是路線圖上的某一格，而是一個獨立成立的能力。
+
+**動機是資料正在消失。** Claude Code 把每個 session 的對話寫成 NDJSON 落在
+`~/.claude/projects/`，但**預設只留 30 天** —— 實測 2026-09-04：本機最舊的一筆剛好是 30 天前，
+而本 repo 從 2026-07-07 開始、108 個 commit 全程以 claude 開發，**第一個月的對話已經不存在了**。
+這不是「以後想做再做」的功能：每多等一天就多丟一天。
+
+交付的是兩個能力：
+
+- **`conversation-archive`** —— 掃描、萃取、落盤。契約是「**資料在，而且比來源活得久**」。
+  顆粒度是**列**（一則訊息一列、一次工具呼叫一列），不是彙總 —— 來源會被刪除，
+  而一旦只留下彙總，將來想問一個當初沒想到的問題就再也沒有東西可以重算了。
+  掃描跑在 `utilityProcess`，決定性的理由是**崩潰隔離**：它解析的是會隨版本改變的內部格式，
+  出事時使用者正在跑的 agent 不該跟著死。**app 啟動後無條件跑一趟**，與使用者要不要看無關。
+- **`conversation-insights`** —— 全視窗 overlay 的十一個視圖。前八個是工作的形狀
+  （節奏、一次坐下來多久、講多長、幾個來回、何時踩煞車、哪個 repo、Bash 在跑什麼、用哪些 skill），
+  後三個是**說話的方式**（語氣、中英文比例、最常說的那幾句）。
+
+**存檔含使用者輸入的完整內文**，只寫進 userData、不離開本機；畫面上呈現原文的位置只有兩處
+（高頻的極短訊息、每個語氣類別至多 9 則的例句），且**明文禁止長成一份對話的全文檢視器**。
+
+**相對於 agent 自身分析功能的增量價值有兩點**：範圍是整個 workspace 而不是單一 cwd；
+產出的是可跨期比較的數字，而不是一份每次重跑內容都不同的敘述。
+
+來源格式的踩雷點見 **`docs/lessons/transcript.md`**。
 
 ### session 常駐（排在 Phase 6 之後，編號待定）
 

@@ -142,11 +142,11 @@
 
 - [x] 8.1（元件完成，probe 斷言待 9.x） overlay 元件：覆蓋整個視窗、`role="dialog"`、可 `Esc` 關閉、關閉後焦點歸還至開啟它的入口；probe 斷言四者（焦點以 `document.activeElement` 斷言為該入口，不得為 `<body>`）
 - [x] 8.2 **overlay 開啟時導航快捷鍵不生效（絕對狀態斷言）**：probe 先按一次「應當有作用」的 `Ctrl+↓` 確認機制活著並記下選取項，開啟 overlay 後再按，斷言選取項**恰為原來那一個**（不是「未變」的相對判定）
-- [ ] 8.3 **（無載體，已記錄為缺口）** **overlay 開啟時 `Ctrl+P` 不生效（需先建立可證偽的前提）**：probe 必須先讓 workspace 有 folder、側欄來源已選定、焦點在側欄之內，並先斷言「overlay 未開時 `Ctrl+P` 確實開得起來」；否則這條在任何實作下都會通過（`MainStage.tsx` 的 handler 掛在側欄容器，而 overlay 由活動列開啟，事件根本不行經側欄）。參考 `probe-openspec.mjs` 既有的 `FOCUS_SIDE_PANEL` 前置
+- [x] 8.3 **本 change 不做，已轉為 issue #36** —— `Ctrl+P` 的 handler 掛在 side panel 容器的 capture 階段，而 overlay 由活動列開啟；「overlay 未開時 `Ctrl+P` 確實開得起來」這個前提試過三種作法皆不成立（選定 repo、聚焦 `section[aria-label]`、補 `nativeVirtualKeyCode`）。前提不成立時該斷言恆綠且沒有鑑別力，因此**不留**。替代載體是「overlay 以 `dialog` 角色呈現」（機制本身），對照組驗過
 - [x] 8.4（渲染完成，probe 斷言待 9.x） 渲染「工作的形狀」八個視圖，全部 DOM／CSS 自繪；probe 逐一以 `role` + `aria-label` 定位並斷言存在
 - [x] 8.5（渲染完成，probe 斷言待 9.x） 渲染「說話的方式」三個視圖；probe 同上
 - [x] 8.5b（渲染完成，probe 斷言待 9.x） 「我的語氣」每類同時呈現**例句**與**判定規則**；probe 斷言任一類別底下同時找得到例句元素與規則說明。例句是使用者唯一能檢查分類對不對的東西 —— 試作時第一版規則的兩個 bug（multiline 旗標、修正詞表放了單字「別」，後者使該類別膨脹 2.5 倍）都是印出句子才看見的，長條圖上完全看不出來
-- [ ] 8.5c **沒有瀏覽全部內文的入口**；probe 斷言 overlay 中不存在可列出全部訊息內文的介面
+- [x] 8.5c **沒有瀏覽全部內文的入口**；probe 斷言 overlay 中不存在可列出全部訊息內文的介面
 - [x] 8.6（實作完成，probe 斷言待 9.x） **未規劃的視圖不出現**；probe 斷言畫面上沒有 token 用量或成本的視圖
 - [x] 8.7（呈現完成，probe 斷言待 9.x） **畫面上**呈現中位數與高百分位、不呈現平均數；probe 斷言（scenario 的主詞是「畫面上」，聚合層的單元測試不是它的載體）
 - [x] 8.8（呈現完成，probe 斷言待 9.x） 每個視圖標示來源欄位；「一次坐下來」標示 30 分鐘門檻與「活動」的定義、「我的語氣」可檢視分類依據且說明百分比不相加為 100%、工具類視圖標示 subagent 口徑；probe 斷言這些說明存在
@@ -165,6 +165,7 @@
 ## 9. 活動列與既有探針的回歸
 
 - [x] 9.1 活動列新增入口並開啟 overlay；probe 斷言入口為可用狀態且觸發後 overlay 開啟
+- [x] 9.2b **`probe-shell.mjs` 的 preload 頂層 namespace 白名單補上 `insights`** —— 那條斷言的註解寫著「這一條守的是有沒有人偷偷加了一整個 namespace」。proposal 把 `filesystem-access` 論證得很仔細（所以才刻意開自己的 namespace 而不是掛 `fs` 底下），**卻沒想到開新 namespace 本身也有守衛**。`workspace-app-shell` 的 requirement 是通則、沒有列舉 namespace，因此不需要 spec delta，但需要一次明示的登記
 - [x] 9.2 **更新 `scripts/probe-workspace.mjs` 的活動列斷言**：`activity.length === 4` 改為 5，且三條位置索引斷言（`activity[0]` / `slice(1,3)` / `activity[3]`）改為**以 `aria-label` 定位**。不改的話 `probe:workspace` 會紅；而更糟的是若新入口插在 Settings 之前，`activity[3]` 會變成新入口而「Settings 為可用狀態」照樣通過 —— 一條在驗錯元素的綠燈
 - [x] 9.3 `npm run probe:workspace` 完整通過
 
@@ -214,22 +215,22 @@
 ## 10. i18n
 
 - [x] 10.1 所有新文案（視圖標題、`aria-label`、狀態說明、分類規則與其說明、門檻的說明文字）進 `src/shared/i18n/en.json`；三道守衛（CJK、硬編 `aria-label`、key 型別安全）通過
-- [ ] 10.2 新增的 `aria-label` 不含單引號、雙引號、反引號；probe 的選擇器一律以 `copy.mjs` 自字典取字串
+- [x] 10.2 新增的 `aria-label` 不含單引號、雙引號、反引號；probe 的選擇器一律以 `copy.mjs` 自字典取字串
 
 ## 11. 收尾驗收
 
-- [ ] 11.1 **對照組**：逐一把實作改成被禁止的算法 —— 文字比對取代 `isMeta`、內文字串取代 `interruptedMessageId`、純通知產生空列、平均數取代中位數、session 首尾差取代切段、訊息開頭斜線取代工具參數、`basename(cwd)` 取代反查、UTC 取代本機時區 —— 確認每一項各自使**對應的那條斷言**變紅（不是任意一條紅就算），然後還原。八項的驗證結果記錄於本 change 的 `design.md` 末尾一節
-- [ ] 11.2 `npm run typecheck`、`npm run lint`、`npm test` 全數通過
-- [ ] 11.3 檢查沒有引入任何新的執行期依賴（比對 `package.json` 的 `dependencies` 前後差異）—— **`measure:bundle` 不是這件事的守衛**（design D8）；另跑 `npm run measure:bundle` 確認仍為零碼結束
-- [ ] 11.4 `npm run test:e2e` 全部完整執行，總結顯示每支皆完整執行
+- [x] 11.1 **對照組 —— 34 組，逐項確認「對應的那一條」變紅再還原。** 完整紀錄見 `design.md` 末尾的「對照組的執行紀錄」，含**三個「對照組本身不成立」的實例**（fixture 分辨不出兩種實作、mutation 用 `require` 在 ESM 下沒生效、假設未被支持因而不宣稱修好）
+- [x] 11.2 `npm run typecheck`、`npm run lint`、`npm test`（**781 條**）全數通過
+- [x] 11.3 **`dependencies` 一個都沒動**（`git diff` 比對過，唯二的改動是版本無關的 `probe:insights` script）；`measure:bundle` 零碼結束、10.47 MB
+- [x] 11.4 **`npm run test:e2e` 10/10 全部通過**，總結顯示每支皆完整執行（`probe:insights` 12s）
 - [ ] 11.5 以 `PROBE_PACKAGE_APPIMAGE` 重用產物跑一次 `npm run probe:package`，確認掃描行程在打包產物中載入得起來（`test:e2e` 不含這一支，而 D15 的失效方式正是「dev 正常、打包後 `MODULE_NOT_FOUND`」）
 
 ## 12. 文件
 
-- [ ] 12.1 `docs/PRD.md` 新增一節描述本能力（不屬於任何既有 Phase，比照 `session-restore` 的寫法）
-- [ ] 12.2 **`docs/PRD.md` §6 的活動列枚舉補上第五個入口**（目前 L195 明列 `Sessions`／`Handoffs`／搜尋／設定四個）。PRD 是產品需求的單一權威來源，不改的話它與 `workspace-layout` 對「活動列有幾個入口」給出兩個答案
-- [ ] 12.3 新增 `docs/lessons/transcript.md`：21 種記錄類型、`isMeta` 與文字比對的差距、`interruptedMessageId`、純通知的實際分布、`cwd` 中途會變、`input_tokens` 的語意、subagent 子目錄、時間戳為 UTC、`CLAUDE_CONFIG_DIR` 會搬 `projects/`；並於 CLAUDE.md 的「踩雷指南」表格補一條觸發器
-- [ ] 12.4 CLAUDE.md 的開發指令一節補上 `npm run probe:insights`
+- [x] 12.1 `docs/PRD.md` 新增一節描述本能力（不屬於任何既有 Phase，比照 `session-restore` 的寫法）
+- [x] 12.2 **`docs/PRD.md` §6 的活動列枚舉補上第五個入口**（目前 L195 明列 `Sessions`／`Handoffs`／搜尋／設定四個）。PRD 是產品需求的單一權威來源，不改的話它與 `workspace-layout` 對「活動列有幾個入口」給出兩個答案
+- [x] 12.3 新增 `docs/lessons/transcript.md`：21 種記錄類型、`isMeta` 與文字比對的差距、`interruptedMessageId`、純通知的實際分布、`cwd` 中途會變、`input_tokens` 的語意、subagent 子目錄、時間戳為 UTC、`CLAUDE_CONFIG_DIR` 會搬 `projects/`；並於 CLAUDE.md 的「踩雷指南」表格補一條觸發器
+- [x] 12.4 CLAUDE.md 的開發指令一節補上 `npm run probe:insights`
 
 ---
 
