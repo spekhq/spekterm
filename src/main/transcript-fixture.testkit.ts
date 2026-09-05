@@ -27,10 +27,10 @@ import path from 'node:path'
 
 type Rec = Record<string, unknown>
 
-/** 來源目錄名的生成規則：cwd 的每個非 ASCII 英數字元換成 `-`。與 Claude Code 一致。 */
-export function encodeProjectDir(cwd: string): string {
-  return [...cwd].map((ch) => (/[0-9A-Za-z]/.test(ch) ? ch : '-')).join('')
-}
+// 編碼規則由產品原始碼持有並在此 re-export —— fixture 若自己實作一份，
+// 產品那份改了規則之後 fixture 仍以舊規則造目錄，而反查的測試會**繼續是綠的**。
+export { encodeProjectDir } from './transcript-project'
+import { encodeProjectDir } from './transcript-project'
 
 export interface FixtureProject {
   /** `projects/` 底下的目錄名（cwd 編碼後的樣子）。 */
