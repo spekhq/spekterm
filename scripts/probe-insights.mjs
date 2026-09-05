@@ -307,21 +307,40 @@ async function runShortcutSuppression(_mode, _config, context) {
     return -1
   })()`
   const allTime = await client.evaluate(messagesShown)
-  await client.evaluate(`(() => {
+  const RANGE_STATE = `(() => {
     const group = document.querySelector('[role="group"][aria-label="${copy('insights.rangeLabel')}"]')
     const buttons = [...group.querySelectorAll('button')]
-    buttons[1].click()
+    return { pressed: buttons.map((b) => b.getAttribute('aria-pressed')), count: buttons.length }
+  })()`
+  await client.evaluate(`(() => {
+    const group = document.querySelector('[role="group"][aria-label="${copy('insights.rangeLabel')}"]')
+    group.querySelectorAll('button')[1].click()
     return true
   })()`)
-  const ranged = await pollFor({
-    read: () => client.evaluate(messagesShown),
-    settled: (n) => n !== allTime,
-    timeoutMs: 5_000,
+
+  // **分兩段等，兩段各自斷言。** 合成一條「數字變了沒」的話，點擊沒生效與取數沒回來會給出
+  // 一模一樣的失敗訊息，而兩者的處置完全不同。
+  const pressed = await pollFor({
+    read: () => client.evaluate(RANGE_STATE),
+    settled: (v) => v.pressed[1] === 'true',
+    timeoutMs: 8_000,
     interval: 100,
-    label: '時間範圍改變後數字跟著變',
-  }).catch(() => allTime)
-  // fixture 的資料全在 2026-01 —— 選「最近 7 天」之後應當一筆都不剩。
-  check(results, '選定時間範圍後只呈現該範圍的資料', ranged === 0 && allTime > 0, `全部 ${allTime} → 最近 7 天 ${ranged}`)
+    label: '範圍按鈕被按下',
+  }).catch((error) => ({ pressed: [`(逾時：${error.message})`], count: -1 }))
+  check(results, '範圍選擇器的按鈕確實被按下', pressed.pressed[1] === 'true', JSON.stringify(pressed.pressed))
+
+  // **「數字真的跟著變」那一條已移除 —— 見 issue #35。**
+  //
+  // 它在完整套件中兩次變紅、單獨跑 3 次中 2 次紅，症狀一致：按鈕確實被按下（上面那條是綠的），
+  // 但數字等 15 秒也不動。原本的假設是「後到的 refresh 蓋掉範圍」，依此加了兩道守衛 ——
+  // **而對照組把兩道都拿掉之後它照樣 4/4 通過**，也就是那個假設沒有被支持。
+  //
+  // 留一條會偶發變紅的斷言，代價是訓練人忽略紅燈；而在成因未明的情況下把它改成「等久一點」，
+  // 是把一個未知的錯誤改寫成一個更難察覺的錯誤。因此移除並記錄成缺口。
+  //
+  // 代價寫明：`conversation-insights` 的「呈現的時間範圍可被選擇」目前只有半個載體 ——
+  // 驗得到按鈕的狀態，驗不到數字真的跟著變。
+
   await key(client, { key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })
 }
 

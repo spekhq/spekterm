@@ -174,11 +174,26 @@ const PROBE_EXPRESSION = `(async () => {
     //
     // panel 於 panel-coordinate-per-folder 引入（side-panel-source 規格）：側欄座標的讀取與
     // 落盤。介面上沒有任何路徑詞彙 —— 工作目錄以不可逆識別碼表示，且驗證在主行程的寫入入口。
+    //
+    // insights 於 agent-conversation-insights 引入（conversation-archive / conversation-insights
+    // 規格）：對話計量的彙總與掃描狀態。**刻意開自己的 namespace 而不是掛在 fs 之下** ——
+    // filesystem-access 有一條 scenario 逐一列舉了 fs 上允許存在的成員，而「掃描器讀檔案」
+    // 很容易讓人直覺往那裡放。介面上沒有任何路徑詞彙：專案以不可逆雜湊識別，
+    // 錯誤是碼不是句子，訊息原文只在兩個各有上限的位置出現。
     surplusApiKeys: Object.keys(api ?? {}).filter(
       (key) =>
-        !['fs', 'openspec', 'folders', 'terminal', 'settings', 'clipboard', 'app', 'shell', 'panel'].includes(
-          key,
-        ),
+        ![
+          'fs',
+          'openspec',
+          'folders',
+          'terminal',
+          'settings',
+          'clipboard',
+          'app',
+          'shell',
+          'panel',
+          'insights',
+        ].includes(key),
     ),
     surplusPanelKeys: Object.keys(api?.panel ?? {}).filter((key) => !['get', 'persist'].includes(key)),
     // symlink 絕不可出現在白名單上。

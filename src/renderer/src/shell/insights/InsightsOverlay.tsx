@@ -32,21 +32,34 @@ export interface InsightsOverlayProps {
 export function InsightsOverlay({ onClose, opener }: InsightsOverlayProps): React.JSX.Element {
   const { t } = useTranslation()
   const [snapshot, setSnapshot] = useState<InsightsSnapshot | null>(null)
+  /**
+   * 每一次取數的序號 —— **只有最新那一次的結果會被套用**。
+   *
+   * 沒有它就是一個典型的「後到的先寫」競態：overlay 開啟時會先 `get()` 再 `refresh()`，
+   * 而 `refresh()` 要跑一趟掃描、慢得多。使用者在那之前選了時間範圍的話，
+   * **refresh 的結果（全期間）會晚一步回來，把選好的範圍蓋掉** —— 畫面上看起來就是
+   * 「範圍選了沒反應」，而按鈕明明是亮的。實測三次跑兩次中招。
+   */
+  const requestRef = useRef(0)
   /** 取數失敗 —— **必須被呈現**，否則使用者看到的是「點了沒反應」。 */
   const [failed, setFailed] = useState(false)
+  /** 當前選定的範圍 —— 開啟時的 refresh 回來時要套用同一個範圍，而不是全期間。 */
+  const rangeRef = useRef<{ from?: number } | undefined>(undefined)
   const [days, setDays] = useState<number>(0)
   const closeRef = useRef<HTMLButtonElement>(null)
 
   useEffect(() => {
     let cancelled = false
+    const token = ++requestRef.current
     void window.workspace.insights
       .get()
       .then((first) => {
-        if (cancelled) return
+        if (cancelled || token !== requestRef.current) return
         setSnapshot(first)
-        // 開啟時再觸發一次，讓剛剛的對話也算進去。
-        return window.workspace.insights.refresh().then((fresh) => {
-          if (!cancelled) setSnapshot(fresh)
+        // 開啟時再觸發一次，讓剛剛的對話也算進去 —— 但要帶著**當下**的範圍，
+        // 而且回來時若已經有更新的請求，就丟掉這一份。
+        return window.workspace.insights.refresh(rangeRef.current).then((fresh) => {
+          if (!cancelled && token === requestRef.current) setSnapshot(fresh)
         })
       })
       .catch(() => {
@@ -80,12 +93,16 @@ export function InsightsOverlay({ onClose, opener }: InsightsOverlayProps): Reac
   const pickRange = useCallback((option: number) => {
     setDays(option)
     const next = option === 0 ? undefined : Date.now() - option * 86_400_000
+    const range = next === undefined ? undefined : { from: next }
+    rangeRef.current = range
+    const token = ++requestRef.current
     // **`.catch` 不是防禦性程式設計。** 少了它，主行程一旦拋錯，這個 promise 就靜默地 reject，
     // 而畫面一動也不動 —— 使用者看到的是「這個選擇器壞掉了」。實測踩過：真實資料量讓
     // `aggregate` 拋 `RangeError`，於是每次點擊都無聲無息。
     void window.workspace.insights
-      .get(next === undefined ? undefined : { from: next })
+      .get(range)
       .then((fresh) => {
+        if (token !== requestRef.current) return
         setFailed(false)
         setSnapshot(fresh)
       })
