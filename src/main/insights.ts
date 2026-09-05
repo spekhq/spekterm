@@ -26,6 +26,12 @@ export interface InsightsDeps {
   projectsDir: () => string
   archiveRoot: () => string
   /**
+   * 要排除的專案目錄名後綴。**與委派的工作目錄同一個來源**
+   * （`insights-source.ts` 的 `delegateDirSuffix()`）—— 兩者各寫一份字串就會漂移，
+   * 而漂移的徵狀是數字慢慢變得不對，沒有任何東西會紅。
+   */
+  excludeDirSuffix: () => string
+  /**
    * 怎麼起一個掃描行程。**這一層刻意不知道 `utilityProcess` 的存在** ——
    * 它管的是「一個會送訊息、會結束的東西」，而 `electron` 在單元測試裡 import 不起來。
    * 產品的實作在 `ipc/insights.ts`。
@@ -66,7 +72,11 @@ export function createInsightsService(deps: InsightsDeps) {
   }
 
   const refresh = async (range?: { from?: number; to?: number }): Promise<InsightsSnapshot> => {
-    const outcome = await runner.run({ projectsDir: deps.projectsDir(), archiveRoot: deps.archiveRoot() })
+    const outcome = await runner.run({
+      projectsDir: deps.projectsDir(),
+      archiveRoot: deps.archiveRoot(),
+      excludeDirSuffix: deps.excludeDirSuffix(),
+    })
     if (outcome.ok && outcome.result) sourceAvailable = outcome.result.status === 'ok'
     return snapshot(range)
   }

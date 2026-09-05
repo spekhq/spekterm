@@ -196,6 +196,11 @@ const PROBE_EXPRESSION = `(async () => {
         ].includes(key),
     ),
     surplusPanelKeys: Object.keys(api?.panel ?? {}).filter((key) => !['get', 'persist'].includes(key)),
+    // **insights 底下也要逐成員列舉。** 只在頂層 namespace 清單裡登記的話，
+    // 底下再加幾個方法這支探針一聲都不會響 —— 而讀後感往這裡加了四個會送出使用者訊息的入口。
+    surplusInsightsKeys: Object.keys(api?.insights ?? {}).filter(
+      (key) => !['get', 'refresh', 'reportPreview', 'reportList', 'reportRead', 'reportGenerate'].includes(key),
+    ),
     // symlink 絕不可出現在白名單上。
     //
     // 寫入邊界的 TOCTOU 論證（file-editing-and-crud 的 design D3）整個建立在「renderer 既造不出、
@@ -281,6 +286,9 @@ try {
   check(results, 'panel 介面只暴露已定義邊界要求的能力',
     r?.surplusPanelKeys?.length === 0,
     r?.surplusPanelKeys?.length ? `多出：${r.surplusPanelKeys.join(', ')}` : '無多餘能力')
+  check(results, 'insights 介面只暴露已定義邊界要求的能力',
+    r?.surplusInsightsKeys?.length === 0,
+    r?.surplusInsightsKeys?.length ? `多出：${r.surplusInsightsKeys.join(', ')}` : '無多餘能力')
   // 這一條守的是「有沒有人偷偷加了一整個 namespace」—— 其餘 surplus* 全都只看既有 namespace
   // 的內部，加一個新的它們一聲都不會響。
   check(results, 'preload 未暴露任何未經定義的頂層 namespace',

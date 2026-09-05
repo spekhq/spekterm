@@ -146,3 +146,48 @@ Math.min(...times)   // times 有六十幾萬筆 → RangeError: Maximum call st
 
 24 秒放在主行程上就是 24 秒的 IPC 停擺。**跑在 `utilityProcess`，而決定性的理由是崩潰隔離
 不是效能** —— 這個模組解析的是會隨版本改變的內部格式，它出事時使用者正在跑的 agent 不該跟著死。
+
+## 十一、`claude -p` 會寫進 transcript，而那則記錄**沒有** `isMeta`
+
+實測 2026-09-05（`claude` 2.1.261）：非互動模式下，`-p` 的指令與標準輸入**被串成同一則**
+`type: "user"` 記錄，`isMeta` 欄位不存在，`cwd` 是委派的工作目錄。
+
+```
+$ printf 'ALPHA BRAVO\nCHARLIE DELTA\n' | claude -p '回覆第二個字' --output-format json
+$ # → ~/.claude/projects/<cwd 編碼>/<session-id>.jsonl
+$ #   {"type":"user","message":{"role":"user","content":"回覆第二個字\nALPHA BRAVO\nCHARLIE DELTA\n"}}
+```
+
+意思是：**任何「委派 `claude` 去分析這份資料」的功能，都會逐次污染它自己分析的資料。**
+一趟讀後感的語料是 200 KB，那就是一則 200 KB 的「使用者訊息」——
+正是本文件 §一 記錄的「最長 92 萬字元的 prompt 其實不存在」，只是這次是我們自己製造的。
+
+處置有三層，缺一不可（見 `conversation-archive` 的規格）：
+
+1. 委派跑在 userData 之下一個**專屬空目錄**（順帶擋掉 repo 的 `CLAUDE.md` 與 skill 滲進分析）。
+2. **掃描與呈現都排除它** —— 只擋來源迴圈救不了已經落地的存檔，因為呈現走 `readArchive()`
+   而孤兒政策是原地保留。掃描要**主動刪除**符合排除條件的既有存檔。
+3. 排除的判定是「編碼形態**以固定 basename 結尾**」，**不綁單一絕對路徑** ——
+   dev 與打包產物的 userData 分家（`spekterm-dev` 對 `Spekterm`）而來源根共用，
+   綁路徑的話在 dev 按一次讀後感就會弄髒正式產物的數字，而以「同一個安裝內」為前提的驗收必綠。
+
+**不能用 `CLAUDE_CONFIG_DIR` 把它整個導去別處**（那才是最徹底的隔離）—— 見 §「這份資料是什麼」：
+換掉設定目錄會連認證一起換掉。
+
+> **順帶一個獨立的坑**：`content` 可以是**字串**而不是 block 陣列，而真實的 `claude -p`
+> 寫出來的正是字串型。產品的 `transcript-extract.ts` 有處理，但
+> `transcript-fixture.test.ts` 那份「獨立重算」原本只認陣列 —— 於是任何字串型的使用者記錄
+> 都會被它靜默漏掉。**一份漏算的獨立重算比沒有更糟**，它會讓 fixture 的宣告值看起來被驗證過。
+
+## 十二、委派的回覆只依賴少數幾個 JSON 欄位
+
+`--output-format json` 實測有這些可用（同上版本）：`result`（回覆本體）、`is_error` /
+`subtype`（成敗）、`session_id`（算出要刪除的紀錄路徑）、`total_cost_usd`、
+`permission_denials`（**工具有沒有真的被關掉唯一的偵測訊號**）。
+
+**模型不在清單裡** —— 報告記錄的是「本應用程式請求的模型」，那是我們自己傳出去的值。
+實際生效的可能因回退而不同，把推測寫成事實正是要避免的。
+
+**不要依賴 stderr 的文字**：它會隨版本與語言環境改變，而且可能含絕對路徑或帳號資訊 ——
+那些會被畫到畫面上。
+

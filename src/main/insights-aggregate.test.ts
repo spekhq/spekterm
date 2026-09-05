@@ -7,14 +7,17 @@ import { after, describe, it } from 'node:test'
 import {
   aggregate,
   classifyLanguage,
-  classifyTone,
-  DEFAULT_TONE_RULES,
+  classifyCues,
+  DEFAULT_CUE_RULES,
   percentile,
-  type ToneRules,
+  type CueRules,
 } from './insights-aggregate'
 import { readArchive, scanTranscripts } from './transcript-archive'
 import type { ArchiveRow } from './transcript-extract'
 import { writeTranscriptFixture, type TranscriptFixtureFacts } from './transcript-fixture.testkit'
+import { delegateDirSuffix } from './insights-source'
+
+const DELEGATE_SUFFIX = delegateDirSuffix()
 
 const roots: string[] = []
 after(() => {
@@ -26,7 +29,7 @@ function scanned(): { facts: TranscriptFixtureFacts; rows: ArchiveRow[]; project
   roots.push(root)
   const facts = writeTranscriptFixture(path.join(root, 'source'))
   const archiveRoot = path.join(root, 'archive')
-  scanTranscripts({ projectsDir: facts.projectsDir, archiveRoot })
+  scanTranscripts({ projectsDir: facts.projectsDir, archiveRoot, excludeDirSuffix: DELEGATE_SUFFIX })
   const entries = readArchive(archiveRoot)
   const byProject = new Map<string, string[]>()
   for (const e of entries) {
@@ -63,7 +66,7 @@ describe('聚合與語言分類', () => {
     assert.equal(view.projects.length, facts.projects.length)
     assert.ok(view.bash.length > 0)
     assert.deepEqual(view.skills.map((s) => s.name), Object.keys(facts.skills))
-    assert.equal(view.tone.length, DEFAULT_TONE_RULES.categories.length)
+    assert.equal(view.cues.length, DEFAULT_CUE_RULES.categories.length)
     assert.equal(view.language.zh + view.language.en, facts.userMessages)
     assert.ok(Array.isArray(view.phrases))
   })
@@ -141,22 +144,41 @@ describe('聚合與語言分類', () => {
     assert.deepEqual(view.skills, [{ name: 'opsx:continue', n: 1 }])
   })
 
-  it('6.7 語氣可複選，判定依據與比對用的是同一份詞表', () => {
-    assert.deepEqual(classifyTone('你可以幫我看一下嗎？').sort(), ['polite', 'question'])
-    assert.deepEqual(classifyTone('好'), ['ack'])
-    assert.deepEqual(classifyTone('繼續 spec'), ['imperative'])
-    assert.deepEqual(classifyTone('看起來沒問題'), [], '排除詞要生效')
-    assert.deepEqual(classifyTone('分別是客廳次臥'), [], '單字「別」不得命中糾錯')
-    assert.deepEqual(classifyTone('不對，應該是另一個'), ['correction'])
+  it('6.7 字面線索可複選，判定依據與比對用的是同一份詞表', () => {
+    assert.deepEqual(classifyCues('你可以幫我看一下嗎？').sort(), ['politeTerm', 'questionMark'])
+    assert.deepEqual(classifyCues('好'), ['ackOnly'])
+    assert.deepEqual(classifyCues('繼續 spec'), ['imperativeOpener'])
+    assert.deepEqual(classifyCues('看起來沒問題'), [], '排除詞要生效')
+    assert.deepEqual(classifyCues('分別是客廳次臥'), [], '單字「別」不得命中糾錯')
+    assert.deepEqual(classifyCues('不對，應該是另一個'), ['correctionTerm'])
 
     const view = aggregate([msg(1, '你可以幫我看一下嗎？')])
-    const keys = view.tone.filter((t) => t.n > 0).map((t) => t.key).sort()
-    assert.deepEqual(keys, ['polite', 'question'])
+    const keys = view.cues.filter((t) => t.n > 0).map((t) => t.key).sort()
+    assert.deepEqual(keys, ['politeTerm', 'questionMark'])
     // 每一類都帶著它的詞表 —— 畫面直接列這一份，因此說明不可能與比對分歧。
-    for (const category of view.tone) {
+    for (const category of view.cues) {
       assert.ok(category.clauses.length > 0)
       for (const clause of category.clauses) assert.ok(clause.terms.length > 0)
     }
+  })
+
+  it('6.7b 有命中的相異訊息數 ＋ 都沒中 ＝ 使用者訊息總數', () => {
+    // **這條守的是分母。** 六類各自獨立累加，一則都沒中的訊息原本不知去向 ——
+    // 畫面上六根長條看起來就是全部，而每一類的份量都被靜默地誇大。
+    const rows = [
+      msg(1, '你可以幫我看一下嗎？'), // 兩類（複選）
+      msg(2, '好'), //                   一類
+      msg(3, '看起來沒問題'), //          零類（排除詞生效）
+      msg(4, '分別是客廳次臥'), //        零類
+      msg(5, 'the quick brown fox'), //  零類
+    ]
+    const view = aggregate(rows)
+    const matched = rows.filter((r) => classifyCues(r.k === 'msg' ? r.text : '').length > 0).length
+    assert.equal(matched + view.cuesNone, view.totals.messages)
+    assert.equal(view.cuesNone, 3)
+    // 六類的計數之和大於有命中的則數 —— 因為第一則同時落入兩類。
+    const sum = view.cues.reduce((acc, c) => acc + c.n, 0)
+    assert.ok(sum > matched, `複選未生效：sum=${sum} matched=${matched}`)
   })
 
   it('6.7 中英文互斥且相加為 100%，夾雜另計', () => {
@@ -184,26 +206,26 @@ describe('聚合與語言分類', () => {
     const rows = [...Array(30)].map((_, i) => msg(1000 + i, `這樣可以嗎？第 ${i} 個問題`))
     rows.push(msg(9999, `這樣可以嗎？${'長'.repeat(60)}`))
     const view = aggregate(rows)
-    const question = view.tone.find((t) => t.key === 'question')
+    const question = view.cues.find((t) => t.key === 'questionMark')
     assert.ok(question)
     assert.ok(question.examples.length <= 9, `例句 ${question.examples.length} 則`)
     for (const ex of question.examples) {
       assert.ok(ex.length <= 46, `例句過長：${ex.length}`)
-      assert.ok(classifyTone(ex).includes('question'), `例句不屬於該類：${ex}`)
+      assert.ok(classifyCues(ex).includes('questionMark'), `例句不屬於該類：${ex}`)
     }
   })
 
   it('6.9 換一組規則對同一份資料重跑，全部期間一併重算', () => {
     const { rows, projects } = scanned()
     const before = aggregate(rows, { projects })
-    const custom: ToneRules = {
+    const custom: CueRules = {
       version: 1,
       categories: [{ key: 'shout', clauses: [{ kind: 'contains', terms: ['改'] }] }],
     }
     const after = aggregate(rows, { projects, rules: custom })
-    assert.equal(after.tone.length, 1)
-    assert.equal(after.tone[0].key, 'shout')
-    assert.notDeepEqual(before.tone.map((t) => t.key), after.tone.map((t) => t.key))
+    assert.equal(after.cues.length, 1)
+    assert.equal(after.cues[0].key, 'shout')
+    assert.notDeepEqual(before.cues.map((t) => t.key), after.cues.map((t) => t.key))
     // 其他視圖不受影響 —— 規則只影響語氣。
     assert.equal(after.totals.messages, before.totals.messages)
   })

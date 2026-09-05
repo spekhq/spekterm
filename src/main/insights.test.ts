@@ -8,6 +8,7 @@ import { handleWorkerMessage } from './insights-worker'
 import type { WorkerHandle } from './insights-service'
 import { writeTranscriptFixture, type TranscriptFixtureFacts } from './transcript-fixture.testkit'
 import { createInsightsService } from './insights'
+import { delegateDirSuffix } from './insights-source'
 
 const roots: string[] = []
 after(() => {
@@ -40,6 +41,7 @@ function bed(): { facts: TranscriptFixtureFacts; service: ReturnType<typeof crea
   const service = createInsightsService({
     projectsDir: () => facts.projectsDir,
     archiveRoot: () => path.join(root, 'archive'),
+    excludeDirSuffix: () => delegateDirSuffix(),
     spawn: inlineWorker,
   })
   return { facts, service, root }
@@ -81,7 +83,7 @@ describe('對話計量的 IPC', () => {
     assert.ok(!(snapshot.insights?.phrases ?? []).some((p) => p.n < 3))
     // 出現的原文只可能來自兩個受限的位置，且各自守著上限。
     for (const phrase of snapshot.insights?.phrases ?? []) assert.ok(phrase.name.length <= 20)
-    for (const category of snapshot.insights?.tone ?? []) {
+    for (const category of snapshot.insights?.cues ?? []) {
       assert.ok(category.examples.length <= 9)
       for (const ex of category.examples) assert.ok(ex.length <= 46)
     }
@@ -95,6 +97,7 @@ describe('對話計量的 IPC', () => {
       projectsDir: () => facts.projectsDir,
       // 指向一個檔案，使建立存檔目錄必定失敗。
       archiveRoot: () => path.join(facts.projectsDir, facts.projects[0].dirName, 'session-1.jsonl'),
+      excludeDirSuffix: () => delegateDirSuffix(),
       spawn: inlineWorker,
     })
     const snapshot = await service.refresh()
@@ -109,6 +112,7 @@ describe('對話計量的 IPC', () => {
     const missing = createInsightsService({
       projectsDir: () => path.join(root, 'nope', 'projects'),
       archiveRoot: () => path.join(root, 'archive'),
+      excludeDirSuffix: () => delegateDirSuffix(),
       spawn: inlineWorker,
     })
     const a = await missing.refresh()
@@ -122,6 +126,7 @@ describe('對話計量的 IPC', () => {
     const empty = createInsightsService({
       projectsDir: () => projectsDir,
       archiveRoot: () => path.join(emptyRoot, 'archive'),
+      excludeDirSuffix: () => delegateDirSuffix(),
       spawn: inlineWorker,
     })
     const c = await empty.refresh()

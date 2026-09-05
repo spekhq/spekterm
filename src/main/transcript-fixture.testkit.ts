@@ -86,6 +86,17 @@ export interface TranscriptFixtureFacts {
   longestMessageChars: number
 
   /**
+   * 磁碟上實際寫出的使用者訊息數 —— **含**委派目錄裡那一則。
+   *
+   * 與 `userMessages` 分成兩個值是刻意的：`userMessages` 是「掃描**應該**看到的」。
+   * 合成一個的話，一個「排除完全沒生效」的實作照樣讓兩邊相等，
+   * 而那正是這個 fixture 要有鑑別力的地方。
+   */
+  userMessagesOnDisk: number
+  /** 委派留下的專案目錄名（應被排除）。省略 `delegateCwd` 時為 `null`。 */
+  delegateDirName: string | null
+
+  /**
    * 時區形態的可用性。`'available'` 時，`timezoneLocalHour` 那筆記錄的本機日期與 UTC 日期不同；
    * `'no-offset'` 表示機器跑在 UTC，造不出對比 —— 該條驗收應當略過。
    */
@@ -210,7 +221,12 @@ function localCrossDayTimestamp(): { timestamp: string; localHour: number } | nu
  *
  * `root` 即掃描器該收到的設定目錄（`CLAUDE_CONFIG_DIR`），transcript 落在 `<root>/projects/`。
  */
-export function writeTranscriptFixture(root: string): TranscriptFixtureFacts {
+/**
+ * @param delegateCwd 本應用程式委派的工作目錄。給了就額外寫出一個「編碼後等於它」的專案目錄，
+ *   內含一則**與真的使用者訊息完全無法區分**的記錄 —— 排除規則的鑑別力全靠它。
+ *   省略時不寫（給不需要驗排除的呼叫端用）。
+ */
+export function writeTranscriptFixture(root: string, delegateCwd?: string): TranscriptFixtureFacts {
   uuidSeq = 0
   const projectsDir = path.join(root, 'projects')
   const dirA = path.join(projectsDir, encodeProjectDir(PROJ_A))
@@ -336,9 +352,30 @@ export function writeTranscriptFixture(root: string): TranscriptFixtureFacts {
   const s2UserMessages = 2
   const s3UserMessages = 1
 
+  // 委派留下的紀錄：內容看起來就是一句普通的使用者訊息。
+  // **判定必須看目錄，不能看內容** —— 這一則就是那個對照。
+  let delegateDirName: string | null = null
+  if (delegateCwd) {
+    delegateDirName = encodeProjectDir(delegateCwd)
+    const delegateDir = path.join(projectsDir, delegateDirName)
+    mkdirSync(delegateDir, { recursive: true })
+    writeFileSync(
+      path.join(delegateDir, 'dddddddd-0000-4000-8000-000000000000.jsonl'),
+      JSON.stringify({
+        type: 'user',
+        uuid: 'dddddddd-0000-4000-8000-000000000001',
+        timestamp: iso(0),
+        cwd: delegateCwd,
+        message: { role: 'user', content: '幫我看看我最近都怎麼跟 agent 說話' },
+      }) + '\n',
+    )
+  }
+
   return {
     configDir: root,
     projectsDir,
+    delegateDirName,
+    userMessagesOnDisk: s1UserMessages + s2UserMessages + s3UserMessages + (delegateCwd ? 1 : 0),
     projects: [
       { dirName: encodeProjectDir(PROJ_A), cwd: PROJ_A, label: 'proj-a', userMessages: s1UserMessages + s2UserMessages },
       { dirName: encodeProjectDir(PROJ_B), cwd: PROJ_B, label: 'proj-b', userMessages: s3UserMessages },

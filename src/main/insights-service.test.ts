@@ -7,6 +7,9 @@ import { after, describe, it } from 'node:test'
 import { ScanRunner, type WorkerHandle } from './insights-service'
 import { handleWorkerMessage } from './insights-worker'
 import { writeTranscriptFixture } from './transcript-fixture.testkit'
+import { delegateDirSuffix } from './insights-source'
+
+const DELEGATE_SUFFIX = delegateDirSuffix()
 
 const roots: string[] = []
 after(() => {
@@ -41,7 +44,7 @@ interface Fake {
   received: unknown[]
 }
 
-const REQ = { projectsDir: '/nowhere/projects', archiveRoot: '/nowhere/archive' }
+const REQ = { projectsDir: '/nowhere/projects', archiveRoot: '/nowhere/archive', excludeDirSuffix: DELEGATE_SUFFIX }
 
 describe('掃描行程的生命週期', () => {
   it('5.1 收到 ready 後才送出掃描請求，並回報結果', async () => {
@@ -75,7 +78,7 @@ describe('掃描行程的生命週期', () => {
     roots.push(root)
     const facts = writeTranscriptFixture(path.join(root, 'source'))
     const archiveRoot = path.join(facts.projectsDir, facts.projects[0].dirName, 'session-1.jsonl')
-    const out = handleWorkerMessage({ type: 'scan', request: { projectsDir: facts.projectsDir, archiveRoot } })
+    const out = handleWorkerMessage({ type: 'scan', request: { projectsDir: facts.projectsDir, archiveRoot, excludeDirSuffix: DELEGATE_SUFFIX } })
     assert.ok(out)
     assert.equal(out.type, 'error')
     assert.ok(!JSON.stringify(out).includes(root), '錯誤不得含絕對路徑')
@@ -164,13 +167,24 @@ describe('掃描行程的生命週期', () => {
     assert.equal(runner.status().error, null)
   })
 
+  it('2.5 少了排除值即拒絕 —— 不得讓 undefined 靜默穿過去', () => {
+    // **這一行漏掉的後果是靜默的**：`undefined` 進去，排除整個失效，
+    // 而掃描照樣回一個看起來完全正常的結果，然後委派的偽訊息被當成使用者輸入永久寫進存檔。
+    const missing = handleWorkerMessage({ type: 'scan', request: { projectsDir: '/a', archiveRoot: '/b' } })
+    assert.deepEqual(missing, { type: 'error', code: 'scanFailed' })
+    const empty = handleWorkerMessage({ type: 'scan', request: { projectsDir: '/a', archiveRoot: '/b', excludeDirSuffix: '' } })
+    assert.deepEqual(empty, { type: 'error', code: 'scanFailed' }, '空字串會匹配每一個目錄名，比漏掉更糟')
+    const wrongType = handleWorkerMessage({ type: 'scan', request: { projectsDir: '/a', archiveRoot: '/b', excludeDirSuffix: 3 } })
+    assert.deepEqual(wrongType, { type: 'error', code: 'scanFailed' })
+  })
+
   it('掃描行程走真實的存檔路徑：訊息進、結果出', () => {
     const root = mkdtempSync(path.join(tmpdir(), 'spekterm-worker-ok-'))
     roots.push(root)
     const facts = writeTranscriptFixture(path.join(root, 'source'))
     const out = handleWorkerMessage({
       type: 'scan',
-      request: { projectsDir: facts.projectsDir, archiveRoot: path.join(root, 'archive') },
+      request: { projectsDir: facts.projectsDir, archiveRoot: path.join(root, 'archive'), excludeDirSuffix: DELEGATE_SUFFIX },
     })
     assert.ok(out && out.type === 'done')
     assert.equal(out.result.status, 'ok')

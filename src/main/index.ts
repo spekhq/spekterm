@@ -7,7 +7,7 @@ import { registerAppHandlers } from './ipc/app'
 import { registerClipboardHandlers } from './ipc/clipboard'
 import { registerFsHandlers } from './ipc/fs'
 import { registerFolderHandlers } from './ipc/folders'
-import { registerInsightsHandlers, spawnScanWorker } from './ipc/insights'
+import { registerInsightsHandlers, spawnReportDelegate, spawnScanWorker } from './ipc/insights'
 import { registerOpenSpecHandlers } from './ipc/openspec'
 import { registerPanelHandlers } from './ipc/panel'
 import { registerSettingsHandlers } from './ipc/settings'
@@ -21,7 +21,11 @@ import { PanelStore } from './panel-store'
 import { PreferencesStore } from './preferences-store'
 import { SessionStore } from './session-store'
 import { createInsightsService } from './insights'
-import { resolveArchiveRoot, resolveProjectsDir } from './insights-source'
+import { delegateDirSuffix, resolveArchiveRoot, resolveConfigDir, resolveDelegateCwd, resolveProjectsDir } from './insights-source'
+import { createReportService, reportsRoot } from './report'
+
+/** 讀後感請求的模型。報告記錄的是**這個值** —— 實際生效的可能因回退而不同。 */
+const REPORT_MODEL = 'claude-sonnet-5'
 import { applyUserEnvOnce } from './user-env'
 import { WorkspaceStore } from './workspace-store'
 
@@ -170,9 +174,18 @@ void app.whenReady().then(() => {
   const insights = createInsightsService({
     projectsDir: () => resolveProjectsDir(),
     archiveRoot: () => resolveArchiveRoot(app.getPath('userData')),
+    excludeDirSuffix: () => delegateDirSuffix(),
     spawn: spawnScanWorker,
   })
-  registerInsightsHandlers(insights)
+  const reports = createReportService({
+    archiveRoot: () => resolveArchiveRoot(app.getPath('userData')),
+    configDir: () => resolveConfigDir(),
+    delegateCwd: () => resolveDelegateCwd(app.getPath('userData')),
+    reportsDir: () => reportsRoot(app.getPath('userData')),
+    requestedModel: () => REPORT_MODEL,
+    spawn: () => spawnReportDelegate({ cwd: resolveDelegateCwd(app.getPath('userData')), model: REPORT_MODEL }),
+  })
+  registerInsightsHandlers(insights, reports)
 
   createWindow(dirty)
 

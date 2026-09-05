@@ -1,6 +1,6 @@
 import type { ArchiveRow, MessageRow, ToolRow } from './transcript-extract'
 import { identifyProjects, type ProjectInput } from './transcript-project'
-import toneRules from '@shared/insights/tone-rules.json' with { type: 'json' }
+import cueRules from '@shared/insights/cue-rules.json' with { type: 'json' }
 
 /**
  * 把存檔的列聚合成畫面要的數字。
@@ -25,23 +25,23 @@ import toneRules from '@shared/insights/tone-rules.json' with { type: 'json' }
 const SITDOWN_GAP_MINUTES = 30
 const PHRASE_MAX_CHARS = 20
 const PHRASE_MIN_COUNT = 3
-const TONE_EXAMPLE_MAX = 9
-const TONE_EXAMPLE_MAX_CHARS = 46
+const CUE_EXAMPLE_MAX = 9
+const CUE_EXAMPLE_MAX_CHARS = 46
 
-export interface ToneClause {
+export interface CueClause {
   kind: 'contains' | 'startsWith' | 'endsWith' | 'wholeIs'
   terms: string[]
 }
 
-export interface ToneCategoryRule {
+export interface CueCategoryRule {
   key: string
-  clauses: ToneClause[]
+  clauses: CueClause[]
   exclude?: string[]
 }
 
-export interface ToneRules {
+export interface CueRules {
   version: number
-  categories: ToneCategoryRule[]
+  categories: CueCategoryRule[]
 }
 
 /**
@@ -54,12 +54,12 @@ export interface ToneRules {
  * 詞表放在 `.json` 而非 `.ts`：本 repo 的 CJK 守衛禁止產品原始碼出現含中文的字串字面值，
  * 而語氣分類必然要比對中文（見 design D13）。
  */
-export const DEFAULT_TONE_RULES = toneRules as ToneRules
+export const DEFAULT_CUE_RULES = cueRules as CueRules
 
 /** 尾隨的標點，判定「整則訊息就只有這個詞」時忽略。 */
 const TRAILING_PUNCT = /[\s，。!！?？~、]+$/
 
-function matchesClause(text: string, clause: ToneClause): boolean {
+function matchesClause(text: string, clause: CueClause): boolean {
   switch (clause.kind) {
     case 'contains':
       return clause.terms.some((t) => text.includes(t))
@@ -79,7 +79,7 @@ function matchesClause(text: string, clause: ToneClause): boolean {
 }
 
 /** 一則訊息可以同時落入多個類別 —— 因此回傳陣列，而各類的百分比相加不等於 100%。 */
-export function classifyTone(text: string, rules: ToneRules = DEFAULT_TONE_RULES): string[] {
+export function classifyCues(text: string, rules: CueRules = DEFAULT_CUE_RULES): string[] {
   const trimmed = text.trim()
   const out: string[] = []
   for (const category of rules.categories) {
@@ -157,11 +157,11 @@ export interface ProjectCount {
   tools: number
 }
 
-export interface ToneCategoryView {
+export interface CueCategoryView {
   key: string
   n: number
   /** 判定依據 —— 與比對用的是同一份詞表，因此不可能分歧。 */
-  clauses: ToneClause[]
+  clauses: CueClause[]
   exclude: string[]
   examples: string[]
 }
@@ -186,7 +186,9 @@ export interface Insights {
   bash: Counted[]
   skills: Counted[]
   agents: Counted[]
-  tone: ToneCategoryView[]
+  cues: CueCategoryView[]
+  /** 六類都沒命中的訊息則數。少了它，畫面上六根長條的分母是隱形的。 */
+  cuesNone: number
   language: { zh: number; en: number; mixed: number }
   phrases: Counted[]
   phraseLimits: { maxChars: number; minCount: number }
@@ -198,7 +200,7 @@ export interface AggregateOptions {
   /** 只納入這段期間（epoch ms，含端點）。省略即全部。 */
   from?: number
   to?: number
-  rules?: ToneRules
+  rules?: CueRules
   /** 專案的 cwd 清單，用來反查顯示名稱。 */
   projects?: readonly ProjectInput[]
   stats?: { userTextBlocks: number; nonUserInput: number }
@@ -257,7 +259,7 @@ function sitDownSegments(events: { t: number; isMessage: boolean }[]): { minutes
 }
 
 export function aggregate(rows: readonly ArchiveRow[], options: AggregateOptions = {}): Insights {
-  const { from = -Infinity, to = Infinity, rules = DEFAULT_TONE_RULES } = options
+  const { from = -Infinity, to = Infinity, rules = DEFAULT_CUE_RULES } = options
   const inRange = rows.filter((r) => r.t >= from && r.t <= to)
 
   const messages = inRange.filter((r): r is MessageRow => r.k === 'msg')
@@ -311,19 +313,24 @@ export function aggregate(rows: readonly ArchiveRow[], options: AggregateOptions
     .sort((a, b) => b.messages - a.messages)
 
   // ---- 說話的方式 -------------------------------------------------------
-  const toneCounts = new Map<string, number>()
-  const toneExamples = new Map<string, string[]>()
+  const cueCounts = new Map<string, number>()
+  const cueExamples = new Map<string, string[]>()
   const language = { zh: 0, en: 0, mixed: 0 }
   const phraseCounts = new Map<string, number>()
 
+  let cuesNone = 0
   for (const m of messages) {
-    for (const key of classifyTone(m.text, rules)) {
-      toneCounts.set(key, (toneCounts.get(key) ?? 0) + 1)
+    const matched = classifyCues(m.text, rules)
+    // **六類各自獨立累加，於是一則都沒中的訊息會不知去向。** 六根長條看起來就是全部，
+    // 而分母是隱形的 —— 這個計數就是那個分母，少了它畫面會靜默地誇大每一類的份量。
+    if (matched.length === 0) cuesNone += 1
+    for (const key of matched) {
+      cueCounts.set(key, (cueCounts.get(key) ?? 0) + 1)
       const single = m.text.replace(/\s+/g, ' ').trim()
-      if (single.length <= TONE_EXAMPLE_MAX_CHARS) {
-        const list = toneExamples.get(key) ?? []
+      if (single.length <= CUE_EXAMPLE_MAX_CHARS) {
+        const list = cueExamples.get(key) ?? []
         if (!list.includes(single)) list.push(single)
-        toneExamples.set(key, list)
+        cueExamples.set(key, list)
       }
     }
     const lang = classifyLanguage(m.text)
@@ -334,17 +341,17 @@ export function aggregate(rows: readonly ArchiveRow[], options: AggregateOptions
     if (phrase.length <= PHRASE_MAX_CHARS) phraseCounts.set(phrase, (phraseCounts.get(phrase) ?? 0) + 1)
   }
 
-  const tone: ToneCategoryView[] = rules.categories.map((category) => {
-    const pool = toneExamples.get(category.key) ?? []
+  const cues: CueCategoryView[] = rules.categories.map((category) => {
+    const pool = cueExamples.get(category.key) ?? []
     // 取長度分布均勻的一批，避免整欄都是最短的那幾句。
     const unique = [...pool].sort((a, b) => a.length - b.length)
     const picked =
-      unique.length <= TONE_EXAMPLE_MAX
+      unique.length <= CUE_EXAMPLE_MAX
         ? unique
-        : Array.from({ length: TONE_EXAMPLE_MAX }, (_, i) => unique[Math.round((i * (unique.length - 1)) / (TONE_EXAMPLE_MAX - 1))])
+        : Array.from({ length: CUE_EXAMPLE_MAX }, (_, i) => unique[Math.round((i * (unique.length - 1)) / (CUE_EXAMPLE_MAX - 1))])
     return {
       key: category.key,
-      n: toneCounts.get(category.key) ?? 0,
+      n: cueCounts.get(category.key) ?? 0,
       clauses: category.clauses,
       exclude: category.exclude ?? [],
       examples: [...new Set(picked)],
@@ -393,7 +400,8 @@ export function aggregate(rows: readonly ArchiveRow[], options: AggregateOptions
     bash: countBy(tools.filter((t) => t.n === 'Bash'), (t) => t.a),
     skills: countBy(tools.filter((t) => t.n === 'Skill'), (t) => t.a),
     agents: countBy(tools.filter((t) => t.n === 'Agent'), (t) => t.a),
-    tone,
+    cues,
+    cuesNone,
     language,
     phrases,
     phraseLimits: { maxChars: PHRASE_MAX_CHARS, minCount: PHRASE_MIN_COUNT },

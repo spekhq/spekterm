@@ -23,6 +23,8 @@ export type ScanErrorCode = 'scanFailed'
 export interface ScanRequest {
   projectsDir: string
   archiveRoot: string
+  /** 要排除的專案目錄名後綴 —— 本應用程式委派留下的紀錄。 */
+  excludeDirSuffix: string
 }
 
 export type WorkerOutbound =
@@ -38,7 +40,16 @@ export function handleWorkerMessage(message: unknown): WorkerOutbound | null {
   const msg = message as Partial<WorkerInbound>
   if (msg.type !== 'scan') return null
   const request = msg.request
-  if (!request || typeof request.projectsDir !== 'string' || typeof request.archiveRoot !== 'string') {
+  // **每個欄位都要驗。** 漏掉 `excludeDirSuffix` 的後果是 `undefined` 傳進去、
+  // `endsWith(undefined)` 在執行期拋錯或恆為 false —— 排除整個失效，而掃描照樣回一個
+  // 看起來完全正常的結果，然後委派的偽訊息被當成使用者輸入永久寫進存檔。
+  if (
+    !request ||
+    typeof request.projectsDir !== 'string' ||
+    typeof request.archiveRoot !== 'string' ||
+    typeof request.excludeDirSuffix !== 'string' ||
+    request.excludeDirSuffix === ''
+  ) {
     return { type: 'error', code: 'scanFailed' }
   }
   try {

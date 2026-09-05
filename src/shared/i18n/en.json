@@ -400,9 +400,9 @@
       "source": "tool input skill / subagent type (type=tool_use)",
       "agents": "Subagent types"
     },
-    "tone": {
-      "title": "My tone",
-      "blurb": "The six categories overlap: one message can be a question and a request at once, so the percentages do not add up to 100%.",
+    "cues": {
+      "title": "Literal cues",
+      "blurb": "Six literal patterns in what I typed — not a reading of tone. One message can match more than one, so the percentages do not add up to 100%. \"Matched nothing\" is everything the six patterns missed.",
       "source": "message text matched against the rule below (applied at read time)",
       "rule": "Matches when",
       "examples": "Examples",
@@ -413,13 +413,14 @@
         "wholeIs": "the whole message is only"
       },
       "exclude": "except when it starts with",
+      "none": "Matched nothing",
       "category": {
-        "question": "Question",
-        "imperative": "Command",
-        "correction": "Correction",
-        "tentative": "Thinking out loud",
-        "polite": "Request",
-        "ack": "Just go ahead"
+        "questionMark": "Ends with a question",
+        "imperativeOpener": "Opens with a command word",
+        "correctionTerm": "Contains a correction word",
+        "tentativeTerm": "Contains a hedging word",
+        "politeTerm": "Contains a polite word",
+        "ackOnly": "Nothing but an acknowledgement"
       }
     },
     "language": {
@@ -438,6 +439,63 @@
     "meta": {
       "title": "Records not counted as mine",
       "ratio": "{{percent}}% of user-role records were harness-injected and excluded."
+    },
+    "tabs": {
+      "label": "Insights view",
+      "numbers": "Numbers",
+      "report": "Reading"
+    },
+    "report": {
+      "label": "Qualitative reading",
+      "blurb": "A reading of how you talk to your agent, written by your own claude CLI. Every observation carries a quote taken verbatim from something you actually typed; observations whose quote cannot be found are discarded before you see them.",
+      "empty": "No readings yet. Generating one sends your own messages to Anthropic, so it only ever runs when you ask for it.",
+      "generate": "Generate a reading",
+      "generating": "Reading your messages. This takes a few minutes.",
+      "listLabel": "Saved readings",
+      "open": "Open this reading",
+      "back": "Back to the list",
+      "rangeNote": "This reading covers {{period}}, which is not the range selected on the Numbers tab.",
+      "authorize": {
+        "title": "Send these messages to Anthropic?",
+        "blurb": "What leaves this machine is the text you typed to your agent. It does not include tool output, file contents from your repositories, or anything your agent wrote. This authorises one run only.",
+        "period": "Period",
+        "projects": "Projects",
+        "messages": "Messages",
+        "chars": "Characters",
+        "model": "Model requested",
+        "truncated": "The range you asked for is larger than one run can carry, so the oldest part has been dropped. The numbers above are what will actually be sent.",
+        "confirm": "Send and generate",
+        "cancel": "Cancel"
+      },
+      "meta": {
+        "generatedAt": "Generated",
+        "period": "Covers",
+        "model": "Model requested",
+        "corpus": "Corpus",
+        "corpusValue": "{{messages}} messages, {{chars}} characters",
+        "discarded": "Discarded",
+        "discardedValue_one": "{{count}} observation had no verifiable quote",
+        "discardedValue_other": "{{count}} observations had no verifiable quote",
+        "discardedNone": "every observation carried a verifiable quote",
+        "cost": "Cost",
+        "delegateRecord": "Delegate transcript",
+        "delegateDeleted": "deleted",
+        "delegateKept": "could not be deleted",
+        "truncated": "truncated to fit one run"
+      },
+      "occurrences_one": "said once",
+      "occurrences_other": "said {{count}} times",
+      "error": {
+        "cliMissing": "The claude command could not be started. It has to be on the PATH your shell uses.",
+        "delegateFailed": "The claude command returned an error. Running claude once in a terminal will show whether it needs you to log in.",
+        "delegateTimeout": "The reading did not finish in time and was stopped.",
+        "unparsableReply": "The reply could not be read as a reading. Nothing was saved.",
+        "allClaimsDiscarded": "Every observation in this run failed verification, so nothing was saved. This is not an empty reading; none of it could be traced back to something you actually typed.",
+        "toolUseAttempted": "The run tried to use tools, which it is not allowed to do. Nothing was saved.",
+        "notAuthorized": "Nothing was sent.",
+        "busy": "A reading is already running.",
+        "noData": "There are no messages in this range to read."
+      }
     }
   }
 }

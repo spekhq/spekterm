@@ -2,9 +2,10 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useTranslation } from 'react-i18next'
 
-import type { Insights, ToneCategoryView, ToneClause } from '../../../../main/insights-aggregate'
+import type { Insights, CueCategoryView, CueClause } from '../../../../main/insights-aggregate'
 import type { InsightsSnapshot } from '../../../../main/insights'
 import { Bars, Heatmap, Histogram, Marks, Proportion, type BarDatum } from './charts'
+import { ReportTab } from './ReportTab'
 
 /**
  * 對話計量的全視窗 overlay。
@@ -46,6 +47,13 @@ export function InsightsOverlay({ onClose, opener }: InsightsOverlayProps): Reac
   /** 當前選定的範圍 —— 開啟時的 refresh 回來時要套用同一個範圍，而不是全期間。 */
   const rangeRef = useRef<{ from?: number } | undefined>(undefined)
   const [days, setDays] = useState<number>(0)
+  /** 與 `rangeRef` 同步的一份 state —— 渲染期間讀 ref 是不合法的（`react-hooks/refs`）。 */
+  const [range, setRange] = useState<{ from?: number } | undefined>(undefined)
+  /**
+   * 分頁。**兩者不同時呈現是刻意的** —— 相鄰會讓散文被當成跟旁邊的長條圖一樣新，
+   * 而報告是某天針對某段期間跑的一份，它不會隨資料更新。
+   */
+  const [tab, setTab] = useState<'numbers' | 'report'>('numbers')
   const closeRef = useRef<HTMLButtonElement>(null)
 
   useEffect(() => {
@@ -93,14 +101,15 @@ export function InsightsOverlay({ onClose, opener }: InsightsOverlayProps): Reac
   const pickRange = useCallback((option: number) => {
     setDays(option)
     const next = option === 0 ? undefined : Date.now() - option * 86_400_000
-    const range = next === undefined ? undefined : { from: next }
-    rangeRef.current = range
+    const nextRange = next === undefined ? undefined : { from: next }
+    rangeRef.current = nextRange
+    setRange(nextRange)
     const token = ++requestRef.current
     // **`.catch` 不是防禦性程式設計。** 少了它，主行程一旦拋錯，這個 promise 就靜默地 reject，
     // 而畫面一動也不動 —— 使用者看到的是「這個選擇器壞掉了」。實測踩過：真實資料量讓
     // `aggregate` 拋 `RangeError`，於是每次點擊都無聲無息。
     void window.workspace.insights
-      .get(range)
+      .get(nextRange)
       .then((fresh) => {
         if (token !== requestRef.current) return
         setFailed(false)
@@ -118,7 +127,8 @@ export function InsightsOverlay({ onClose, opener }: InsightsOverlayProps): Reac
     >
       <header className="sticky top-0 z-10 flex shrink-0 items-center gap-3 border-b border-hairline bg-stage px-4 py-2">
         <h2 className="text-sm font-bold text-ink">{t('insights.label')}</h2>
-        <RangePicker days={days} onChange={pickRange} />
+        <TabPicker tab={tab} onChange={setTab} />
+        {tab === 'numbers' ? <RangePicker days={days} onChange={pickRange} /> : null}
         <span className="flex-1" />
         {snapshot?.phase === 'running' ? (
           <span className="text-2xs text-ink-faint">{t('insights.scanning')}</span>
@@ -136,7 +146,9 @@ export function InsightsOverlay({ onClose, opener }: InsightsOverlayProps): Reac
       </header>
 
       <div className="flex-1 px-4 pb-16 pt-3">
-        {failed ? (
+        {tab === 'report' ? (
+          <ReportTab range={range} />
+        ) : failed ? (
           <Note text={t('insights.error')} />
         ) : snapshot === null ? (
           <Note text={t('insights.scanning')} />
@@ -148,6 +160,40 @@ export function InsightsOverlay({ onClose, opener }: InsightsOverlayProps): Reac
       </div>
     </div>,
     document.body,
+  )
+}
+
+/**
+ * 分頁切換。**切換本身不觸發任何委派** —— 一趟委派會產生實際費用。
+ *
+ * `role="tablist"` 在這個 app 裡已經是第五、六個，因此選取時一律連 `aria-label` 一起指名。
+ */
+function TabPicker({
+  tab,
+  onChange,
+}: {
+  tab: 'numbers' | 'report'
+  onChange: (tab: 'numbers' | 'report') => void
+}): React.JSX.Element {
+  const { t } = useTranslation()
+  return (
+    <div role="tablist" aria-label={t('insights.tabs.label')} className="flex gap-1">
+      {(['numbers', 'report'] as const).map((key) => (
+        <button
+          key={key}
+          type="button"
+          role="tab"
+          aria-selected={tab === key}
+          aria-label={t(`insights.tabs.${key}` as 'insights.tabs.numbers')}
+          onClick={() => onChange(key)}
+          className={`rounded px-2 py-[2px] text-2xs transition-colors ${
+            tab === key ? 'bg-accent-soft font-bold text-accent' : 'text-ink-dim hover:bg-hover hover:text-ink'
+          }`}
+        >
+          {t(`insights.tabs.${key}` as 'insights.tabs.numbers')}
+        </button>
+      ))}
+    </div>
   )
 }
 
@@ -276,8 +322,8 @@ function Views({ insights }: { insights: Insights }): React.JSX.Element {
       </Section>
 
       <Section title={t('insights.section.speech')} note={t('insights.section.speechNote')}>
-        <View title={t('insights.tone.title')} blurb={t('insights.tone.blurb')} source={t('insights.tone.source')}>
-          <ToneList tone={view.tone} total={view.totals.messages} />
+        <View title={t('insights.cues.title')} blurb={t('insights.cues.blurb')} source={t('insights.cues.source')}>
+          <CueList cues={view.cues} none={view.cuesNone} total={view.totals.messages} />
         </View>
         <View title={t('insights.language.title')} blurb={t('insights.language.blurb')} source={t('insights.language.source')}>
           <Proportion
@@ -363,16 +409,16 @@ function Totals({ insights }: { insights: Insights }): React.JSX.Element {
   )
 }
 
-function ToneList({ tone, total }: { tone: ToneCategoryView[]; total: number }): React.JSX.Element {
+function CueList({ cues, none, total }: { cues: CueCategoryView[]; none: number; total: number }): React.JSX.Element {
   const { t } = useTranslation()
-  const max = Math.max(...tone.map((c) => c.n), 1)
+  const max = Math.max(...cues.map((c) => c.n), none, 1)
   return (
     <ul className="flex flex-col">
-      {[...tone].sort((a, b) => b.n - a.n).map((category) => (
+      {[...cues].sort((a, b) => b.n - a.n).map((category) => (
         <li key={category.key} className="border-b border-hairline py-3 last:border-b-0 last:pb-0">
           <div className="grid grid-cols-[minmax(6rem,9rem)_1fr_minmax(4rem,auto)] items-center gap-2">
             <span className="text-right text-xs font-bold text-ink">
-              {t(`insights.tone.category.${category.key}` as 'insights.tone.category.question')}
+              {t(`insights.cues.category.${category.key}` as 'insights.cues.category.questionMark')}
             </span>
             <span className="h-3 bg-hover">
               <span className="block h-full bg-accent" style={{ width: `${(category.n / max) * 100}%` }} />
@@ -381,7 +427,7 @@ function ToneList({ tone, total }: { tone: ToneCategoryView[]; total: number }):
               {category.n} · {Math.round((category.n / Math.max(total, 1)) * 100)}%
             </span>
           </div>
-          <ToneRule clauses={category.clauses} exclude={category.exclude} />
+          <CueRule clauses={category.clauses} exclude={category.exclude} />
           {category.examples.length > 0 ? (
             <ul className="mt-2 flex flex-wrap gap-1">
               {category.examples.map((example) => (
@@ -393,6 +439,19 @@ function ToneList({ tone, total }: { tone: ToneCategoryView[]; total: number }):
           ) : null}
         </li>
       ))}
+      {/* **「都沒中」那一列與六類同樣重要** —— 它是那六根長條的分母。少了它，
+          畫面看起來就像六類涵蓋了全部訊息，而每一類的份量都被靜默地誇大。 */}
+      <li className="border-t border-hairline pt-3">
+        <div className="grid grid-cols-[minmax(6rem,9rem)_1fr_minmax(4rem,auto)] items-center gap-2">
+          <span className="text-right text-xs font-bold text-ink-dim">{t('insights.cues.none')}</span>
+          <span className="h-3 bg-hover">
+            <span className="block h-full bg-ink-faint" style={{ width: `${(none / max) * 100}%` }} />
+          </span>
+          <span className="text-right font-mono text-2xs text-ink-faint">
+            {none} · {Math.round((none / Math.max(total, 1)) * 100)}%
+          </span>
+        </div>
+      </li>
     </ul>
   )
 }
@@ -401,22 +460,22 @@ function ToneList({ tone, total }: { tone: ToneCategoryView[]; total: number }):
  * 判定依據。**列的是比對用的那一份詞表本身**，不是另外寫一句說明 ——
  * 兩份東西會在某一次調整規則時失去同步，而使用者看到的說明變成謊話，沒有任何東西會紅。
  */
-function ToneRule({ clauses, exclude }: { clauses: ToneClause[]; exclude: string[] }): React.JSX.Element {
+function CueRule({ clauses, exclude }: { clauses: CueClause[]; exclude: string[] }): React.JSX.Element {
   const { t } = useTranslation()
   return (
     <p className="mt-2 text-2xs text-ink-faint">
-      <span className="mr-1 text-ink-dim">{t('insights.tone.rule')}</span>
+      <span className="mr-1 text-ink-dim">{t('insights.cues.rule')}</span>
       {clauses.map((clause, i) => (
         <span key={clause.kind}>
           {i > 0 ? ' / ' : ''}
-          {t(`insights.tone.kind.${clause.kind}` as 'insights.tone.kind.contains')}{' '}
+          {t(`insights.cues.kind.${clause.kind}` as 'insights.cues.kind.contains')}{' '}
           <span className="font-mono text-ink-dim">{clause.terms.join('、')}</span>
         </span>
       ))}
       {exclude.length > 0 ? (
         <span>
           {' — '}
-          {t('insights.tone.exclude')} <span className="font-mono text-ink-dim">{exclude.join('、')}</span>
+          {t('insights.cues.exclude')} <span className="font-mono text-ink-dim">{exclude.join('、')}</span>
         </span>
       ) : null}
     </p>

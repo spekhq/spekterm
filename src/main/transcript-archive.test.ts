@@ -6,6 +6,9 @@ import { after, describe, it } from 'node:test'
 
 import { archivePathFor, readArchive, readArchiveFile, scanTranscripts } from './transcript-archive'
 import { writeTranscriptFixture, type TranscriptFixtureFacts } from './transcript-fixture.testkit'
+import { delegateDirSuffix } from './insights-source'
+
+const DELEGATE_SUFFIX = delegateDirSuffix()
 
 const roots: string[] = []
 after(() => {
@@ -26,7 +29,7 @@ function bed(): Bed {
   return {
     facts,
     archiveRoot,
-    scan: () => scanTranscripts({ projectsDir: facts.projectsDir, archiveRoot }),
+    scan: () => scanTranscripts({ projectsDir: facts.projectsDir, archiveRoot, excludeDirSuffix: DELEGATE_SUFFIX }),
   }
 }
 
@@ -142,7 +145,7 @@ describe('transcript 存檔與增量掃描', () => {
 
     // 全掃：對同一份來源，從空的存檔掃一次。
     const freshRoot = path.join(path.dirname(b.archiveRoot), 'archive-fresh')
-    scanTranscripts({ projectsDir: b.facts.projectsDir, archiveRoot: freshRoot })
+    scanTranscripts({ projectsDir: b.facts.projectsDir, archiveRoot: freshRoot, excludeDirSuffix: DELEGATE_SUFFIX })
     const full = readArchive(freshRoot)
 
     const norm = (entries: ReturnType<typeof readArchive>) =>
@@ -210,12 +213,64 @@ describe('transcript 存檔與增量掃描', () => {
     assert.deepEqual(repaired.rows, healthy.rows)
   })
 
+  it('2.3 委派留下的紀錄不被讀入，也不進存檔', () => {
+    const b = bed()
+    const before = b.scan()
+
+    // 造一個「編碼後以委派目錄名結尾」的來源專案目錄，內容是一則普通的 user 記錄 ——
+    // **它與真的使用者訊息在內容上完全無法區分**，這正是必須看目錄而不是看內容的理由。
+    const delegateDir = path.join(b.facts.projectsDir, `-home-someone--config-Spekterm${DELEGATE_SUFFIX}`)
+    mkdirSync(delegateDir, { recursive: true })
+    writeFileSync(
+      path.join(delegateDir, 'ffffffff-0000-0000-0000-000000000000.jsonl'),
+      JSON.stringify({
+        type: 'user',
+        timestamp: '2026-09-05T00:00:00.000Z',
+        cwd: '/home/someone/.config/Spekterm/spekterm-report-delegate',
+        message: { role: 'user', content: '幫我看看我最近都怎麼跟 agent 說話' },
+      }) + '\n',
+    )
+
+    const after2 = b.scan()
+    assert.equal(after2.rows, before.rows, '委派的列不得進入存檔')
+    assert.equal(after2.scanned, 0, '委派的檔案不得被掃描')
+    assert.ok(
+      !listArchiveFiles(b.archiveRoot).some((f) => f.includes(DELEGATE_SUFFIX)),
+      '存檔中不得出現委派的專案目錄',
+    )
+  })
+
+  it('2.4 已經落地的委派存檔會被刪除，不是留成永久孤兒', () => {
+    const b = bed()
+    b.scan()
+
+    // 模擬「排除生效之前就落地的一份存檔」：直接寫進 rows/ 底下。
+    // **只擋來源迴圈救不了它** —— 呈現走 readArchive()，而孤兒政策是原地保留。
+    const dirName = `-home-someone--config-spekterm-dev${DELEGATE_SUFFIX}`
+    const stale = path.join(b.archiveRoot, 'rows', dirName, 'stale.ndjson')
+    mkdirSync(path.dirname(stale), { recursive: true })
+    writeFileSync(
+      stale,
+      [
+        JSON.stringify({ v: 1, src: `${dirName}/stale.jsonl`, p: dirName, s: 'stale', cwds: [], size: 1, mtime: 1, stats: { userTextBlocks: 1, nonUserInput: 0, malformed: 0 } }),
+        JSON.stringify({ k: 'msg', t: 1, s: 'stale', p: dirName, text: '這一則不該被算成我說的話' }),
+      ].join('\n') + '\n',
+    )
+    assert.ok(allRows(b.archiveRoot).some((r) => r.p === dirName), '前置：那份存檔確實在')
+
+    const r = b.scan()
+    assert.equal(r.purged, 1, '應被刪除的既有存檔數')
+    assert.ok(!allRows(b.archiveRoot).some((r2) => r2.p === dirName), '刪除後不得再出現在存檔裡')
+    assert.equal(r.orphaned, 0, '被刪除的不得同時被計為孤兒')
+  })
+
   it('4.9 來源目錄不存在：掃描完成，狀態指出來源不可用', () => {
     const root = mkdtempSync(path.join(tmpdir(), 'spekterm-archive-none-'))
     roots.push(root)
     const r = scanTranscripts({
       projectsDir: path.join(root, 'does-not-exist', 'projects'),
       archiveRoot: path.join(root, 'archive'),
+      excludeDirSuffix: DELEGATE_SUFFIX,
     })
     assert.equal(r.status, 'source-unavailable')
     assert.equal(r.rows, 0)
@@ -226,7 +281,7 @@ describe('transcript 存檔與增量掃描', () => {
     roots.push(root)
     const projectsDir = path.join(root, 'source', 'projects')
     mkdirSync(projectsDir, { recursive: true })
-    const r = scanTranscripts({ projectsDir, archiveRoot: path.join(root, 'archive') })
+    const r = scanTranscripts({ projectsDir, archiveRoot: path.join(root, 'archive'), excludeDirSuffix: DELEGATE_SUFFIX })
     assert.equal(r.status, 'ok', '空目錄不是「不可用」—— 兩者的處置完全不同')
     assert.equal(r.rows, 0)
     assert.equal(r.scanned, 0)

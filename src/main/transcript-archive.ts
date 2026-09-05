@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync, type Dirent } from 'node:fs'
+import { mkdirSync, readFileSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync, type Dirent } from 'node:fs'
 import path from 'node:path'
 
 import { extractRows, type ArchiveRow, type ExtractStats } from './transcript-extract'
@@ -73,6 +73,8 @@ export interface ScanResult {
   unreadable: number
   /** 存檔中存在、但來源已消失的檔案數 —— 它們原地保留。 */
   orphaned: number
+  /** 因符合排除規則而被刪除的既有存檔檔案數（本應用程式委派留下的）。 */
+  purged: number
   /** 存檔中的列總數（含來源已消失者）。 */
   rows: number
   stats: ExtractStats
@@ -197,6 +199,14 @@ export interface ScanOptions {
   projectsDir: string
   /** 存檔根，位於 userData 之下。 */
   archiveRoot: string
+  /**
+   * 要排除的專案目錄名後綴 —— 本應用程式的委派留下的紀錄（見 `insights-source.ts` 的
+   * `delegateDirSuffix()`）。
+   *
+   * **必填，不給預設值。** 給了預設值就等於允許一個呼叫端忘記傳，而忘記傳的後果是
+   * 委派的偽訊息被當成使用者輸入永久寫進存檔 —— 那筆的來源會被 30 天輪替刪掉，無法重算。
+   */
+  excludeDirSuffix: string
 }
 
 /**
@@ -206,15 +216,30 @@ export interface ScanOptions {
  * 完全一樣（整份重新萃取、整份覆寫），差別只在跳過哪些。
  */
 export function scanTranscripts(options: ScanOptions): ScanResult {
-  const { projectsDir, archiveRoot } = options
+  const { projectsDir, archiveRoot, excludeDirSuffix } = options
   const result: ScanResult = {
     status: 'ok',
     scanned: 0,
     skipped: 0,
     unreadable: 0,
     orphaned: 0,
+    purged: 0,
     rows: 0,
     stats: emptyStats(),
+  }
+
+  // **排除必須先清掉已經落地的存檔，不能只擋來源迴圈。**
+  // 呈現走的是 `readArchive()` 而非掃描結果，而存檔對「來源已消失」的政策是原地保留 ——
+  // 於是任何一份在排除生效之前落地的存檔會就地變成一個**永久**孤兒：掃描報告說「已排除」，
+  // 而畫面上的數字是髒的，且來源早被 30 天輪替刪掉，永遠無法重算。
+  for (const rel of listFiles(path.join(archiveRoot, ROWS_DIR), ARCHIVE_EXT)) {
+    if (!rel.split(path.sep)[0].endsWith(excludeDirSuffix)) continue
+    try {
+      unlinkSync(path.join(archiveRoot, ROWS_DIR, rel))
+      result.purged += 1
+    } catch {
+      // 刪不掉就下一輪再試 —— 但來源迴圈與孤兒迴圈都會跳過它，數字不會因此變髒。
+    }
   }
 
   let sourceAvailable: boolean
@@ -242,6 +267,9 @@ export function scanTranscripts(options: ScanOptions): ScanResult {
   const seen = new Set<string>()
 
   for (const rel of sourceFiles) {
+    // 本應用程式的委派留下的紀錄：不讀入、不寫存檔、不計入任何統計。
+    if (rel.split(path.sep)[0].endsWith(excludeDirSuffix)) continue
+
     const archiveRel = archivePathFor(rel)
     seen.add(archiveRel)
 
@@ -311,6 +339,7 @@ export function scanTranscripts(options: ScanOptions): ScanResult {
   // 而不是一條「記得不要刪」的規則。
   for (const rel of listFiles(path.join(archiveRoot, ROWS_DIR), ARCHIVE_EXT)) {
     if (seen.has(rel)) continue
+    if (rel.split(path.sep)[0].endsWith(excludeDirSuffix)) continue
     const entry = readArchiveFile(archiveRoot, rel)
     if (!entry) continue
     result.orphaned += 1

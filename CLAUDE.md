@@ -60,7 +60,7 @@ tmux 與自寫 daemon 取捨。**不要把「重建」誤當成「常駐」**：
 | 任何一支 `scripts/probe-*.mjs`、`scripts/lib/` 的儀器（`instrument` / `cdp` / `mounted`）、加一條驗收斷言或一種等待、追一個 flaky | **`docs/lessons/probes.md`** |
 | pty、`src/renderer/src/shell/terminal/`、session 持久化與重建 | **`docs/lessons/terminal.md`** |
 | `src/renderer/src/side-panel/`、`@spekjs/core` 或 `@spekjs/ui` 升級 | **`docs/lessons/side-panel.md`** |
-| `src/main/transcript-*`、`src/main/insights*`、`scripts/probe-insights.mjs`，或任何會讀 `~/.claude/projects` 的東西 | **`docs/lessons/transcript.md`** |
+| `src/main/transcript-*`、`src/main/insights*`、**`src/main/report-*`**、`scripts/probe-insights.mjs`，或任何會讀 `~/.claude/projects` **或委派 `claude` CLI** 的東西 | **`docs/lessons/transcript.md`** |
 
 ## 開發指令
 
@@ -122,10 +122,13 @@ npm run probe:keyboard  # keyboard-navigation（切換、排序、按鍵不進 p
                         #   **零 folder 的 workspace**（`checkEmptyWorkspace` —— 五條以「沒有任何
                         #   folder」為前提的 scenario 唯一的載體，橫跨 global-session／status-bar／
                         #   file-explorer；種有 folder 的環境對它們一律假綠）
-npm run probe:insights  # conversation-archive / conversation-insights（對話計量的 overlay 與掃描；
+npm run probe:insights  # conversation-archive / conversation-insights / conversation-report
+                        #   （對話計量的 overlay 與掃描、讀後感分頁與授權畫面；
                         #   fixture 由產品的 testkit 產生，第一段先以已知數值釘住「掃的是 fixture
                         #   而非開發者本機的真實 transcript」—— 少了它，`CLAUDE_CONFIG_DIR` 沒傳
-                        #   進去時每一條存在性斷言照樣全綠）
+                        #   進去時每一條存在性斷言照樣全綠。**真實委派刻意不在裡面** ——
+                        #   要網路、會花錢、回覆不可重現；產生路徑以注入的替身驗，
+                        #   真實那段由 dogfood 認定，這條缺口寫在規格裡）
 npm run probe:openspec  # openspec-data-access / openspec-panel / worktree 聚合 / side-panel-source
 npm run probe:native    # native-module-toolchain（主行程載入 node-pty + spawn pty）
 npm run probe:core      # spek-core-integration（主行程掃描 OpenSpec，且不開 TCP 埠）

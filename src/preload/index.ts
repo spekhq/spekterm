@@ -2,6 +2,8 @@ import type { GraphData } from '@spekjs/core'
 import { type IpcRendererEvent, contextBridge, ipcRenderer } from 'electron'
 import type { DirtyEntry } from '../main/dirty-state'
 import type { InsightsSnapshot } from '../main/insights'
+import type { GenerateResult, ReportPreview } from '../main/report'
+import type { Report, ReportMeta } from '../main/report-store'
 import type { FsResult, WriteResponse } from '../main/ipc/fs'
 import type { PanelSnapshot } from '../main/panel-store'
 import type { RestoredSession } from '../main/ipc/terminal'
@@ -368,6 +370,20 @@ const workspaceApi = {
     /** 觸發一次增量掃描，完成後回傳新的彙總。已在掃的話直接回傳當下狀態。 */
     refresh: (range?: { from?: number; to?: number }): Promise<InsightsSnapshot> =>
       ipcRenderer.invoke('workspace:insights:refresh', range),
+
+    /**
+     * 讀後感（`conversation-report`）。
+     *
+     * `reportPreview` 回的是**實際將送出**的那一份的數字（截斷之後），授權畫面用它。
+     * `reportGenerate` 的 `authorized` 代表「使用者剛剛按下了那一次的同意」——
+     * 它不是一個記住的設定，每一趟都要重新取得。
+     */
+    reportPreview: (range?: { from?: number; to?: number }): Promise<ReportPreview> =>
+      ipcRenderer.invoke('workspace:insights:reportPreview', range),
+    reportList: (): Promise<ReportMeta[]> => ipcRenderer.invoke('workspace:insights:reportList'),
+    reportRead: (name: string): Promise<Report | null> => ipcRenderer.invoke('workspace:insights:reportRead', name),
+    reportGenerate: (request: { from?: number; to?: number; authorized: boolean }): Promise<GenerateResult> =>
+      ipcRenderer.invoke('workspace:insights:reportGenerate', request),
   },
 } as const
 

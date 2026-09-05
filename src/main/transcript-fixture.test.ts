@@ -44,6 +44,10 @@ function readAll(projectsDir: string): { file: string; rows: Row[] }[] {
             const raw = JSON.parse(l) as Record<string, unknown>
             const msg = raw.message as Record<string, unknown> | undefined
             const content = msg?.content
+            // 字串型 content 要正規化成一個 text block —— 產品的萃取器就是這樣做的
+            // （`transcript-extract.ts`），而**真實的 `claude -p` 寫出來的正是字串型**。
+            // 少了這一行，任何字串型的使用者記錄都會被這份「獨立重算」靜默漏掉。
+            if (typeof content === 'string') return { raw, blocks: [{ type: 'text', text: content }] }
             return { raw, blocks: Array.isArray(content) ? (content as Record<string, unknown>[]) : [] }
           })
         out.push({ file: path.relative(projectsDir, full), rows })
@@ -90,6 +94,17 @@ describe('transcript fixture 產生器', () => {
   it('使用者訊息數與宣告一致（獨立重算）', () => {
     const { facts } = makeFixture()
     assert.equal(countUserMessages(readAll(facts.projectsDir)), facts.userMessages)
+  })
+
+  it('2.7 給了委派工作目錄時，磁碟上的則數比「應被掃到的」多一則', () => {
+    const root = mkdtempSync(path.join(tmpdir(), 'spekterm-fixture-delegate-'))
+    roots.push(root)
+    const facts = writeTranscriptFixture(root, '/home/me/.config/Spekterm/spekterm-report-delegate')
+    // **兩個值必須不同，否則這個 fixture 對排除規則沒有鑑別力** ——
+    // 一個「排除完全沒生效」的實作會讓掃描結果等於磁碟上的數，而那時斷言照樣全綠。
+    assert.equal(facts.userMessagesOnDisk, facts.userMessages + 1)
+    assert.equal(countUserMessages(readAll(facts.projectsDir)), facts.userMessagesOnDisk)
+    assert.ok(facts.delegateDirName && facts.delegateDirName.endsWith('-spekterm-report-delegate'))
   })
 
   it('工具呼叫的總數與各別次數與宣告一致（含 subagent）', () => {
