@@ -1,6 +1,7 @@
 import type { GraphData } from '@spekjs/core'
 import { type IpcRendererEvent, contextBridge, ipcRenderer } from 'electron'
 import type { DirtyEntry } from '../main/dirty-state'
+import type { InsightsSnapshot } from '../main/insights'
 import type { FsResult, WriteResponse } from '../main/ipc/fs'
 import type { PanelSnapshot } from '../main/panel-store'
 import type { RestoredSession } from '../main/ipc/terminal'
@@ -352,6 +353,19 @@ const workspaceApi = {
     persist: (snapshot: PanelSnapshot): void => {
       ipcRenderer.send('workspace:panel:persist', snapshot)
     },
+  },
+  /**
+   * 對話計量。**刻意不掛在 `fs` 之下** —— `filesystem-access` 有一條 scenario 逐一列舉了
+   * `fs` 上允許存在的成員，多一個就違反它、且有探針斷言。而「掃描器讀檔案」很容易讓人
+   * 直覺往 `fs` 裡放。
+   *
+   * 這裡送回 renderer 的只有彙總結果：沒有列、沒有路徑、沒有訊息內文的完整清單。
+   */
+  insights: {
+    /** 取當下的彙總與掃描狀態。不觸發掃描。 */
+    get: (): Promise<InsightsSnapshot> => ipcRenderer.invoke('workspace:insights:get'),
+    /** 觸發一次增量掃描，完成後回傳新的彙總。已在掃的話直接回傳當下狀態。 */
+    refresh: (): Promise<InsightsSnapshot> => ipcRenderer.invoke('workspace:insights:refresh'),
   },
 } as const
 

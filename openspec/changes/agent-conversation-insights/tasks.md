@@ -122,10 +122,21 @@
 
 ## 7. IPC 與主行程整合
 
-- [ ] 7.1 新增 `insights` preload namespace（**不掛在 `fs` 之下** —— design D16）與取得彙總結果／掃描狀態的 IPC；`npm run probe:files` 的 `filesystem-access` 白名單斷言仍通過
-- [ ] 7.2 送往 renderer 的**任何內容**（彙總結果、狀態、錯誤訊息）皆不含絕對路徑、也不含訊息內文的完整清單；單元測試對三種輸出各掃一次
-- [ ] 7.3 來源根解析順序為 `getUserEnv()` → `process.env` → `~/.claude`（design D9）；單元測試以「只有 user-env 有該變數」的情形斷言採用了它
-- [ ] 7.4 觸發時機：app 啟動後延遲觸發一次增量掃描，開啟 overlay 時再觸發一次；probe 斷言**未開啟 overlay 時掃描仍已發生**
+- [x] 7.1 新增 `insights` preload namespace（**不掛在 `fs` 之下** —— design D16）與取得彙總結果／掃描狀態的 IPC；`npm run probe:files` 的 `filesystem-access` 白名單斷言仍通過
+- [x] 7.2 送往 renderer 的**任何內容**（彙總結果、狀態、錯誤訊息）皆不含絕對路徑、也不含訊息內文的完整清單；單元測試對三種輸出各掃一次
+- [x] 7.3 來源根解析順序為 `getUserEnv()` → `process.env` → `~/.claude`（design D9）；單元測試以「只有 user-env 有該變數」的情形斷言採用了它
+- [x] 7.4 （接線完成，probe 斷言待第 8 組）觸發時機：app 啟動後延遲觸發一次增量掃描，開啟 overlay 時再觸發一次；probe 斷言**未開啟 overlay 時掃描仍已發生**
+
+> **第 7 組的三個對照組已跑過**：把來源目錄名一起送出 → 7.2、來源不可用時也回報 true → 7.1 的
+> 可區分那條、來源消失時彙總跟著變空 → 7.1 的孤兒那條。
+>
+> **服務層與 IPC 層拆開了。** `ipc/insights.ts` 只做兩件需要 Electron 的事（起 `utilityProcess`、
+> 註冊 handler），其餘在 `src/main/insights.ts`。理由是 **`electron` 在 node:test 裡 import 不起來**
+> —— 而這一層的每一條規格（來源可不可用、錯誤是碼不是句子、送出的東西不含路徑）都值得用單元
+> 測試釘住，不該只靠 probe。既有的 `ipc/*.ts` 全部沒有單元測試，正是因為它們都 import 了 electron。
+>
+> 7.4 的接線已完成（`index.ts` 於 `whenReady` 後延遲 5 秒觸發一次），但「未開啟 overlay 時掃描仍
+> 已發生」那條斷言要 probe，等第 8 組。
 
 ## 8. overlay
 

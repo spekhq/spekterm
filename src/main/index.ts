@@ -7,6 +7,7 @@ import { registerAppHandlers } from './ipc/app'
 import { registerClipboardHandlers } from './ipc/clipboard'
 import { registerFsHandlers } from './ipc/fs'
 import { registerFolderHandlers } from './ipc/folders'
+import { registerInsightsHandlers, spawnScanWorker } from './ipc/insights'
 import { registerOpenSpecHandlers } from './ipc/openspec'
 import { registerPanelHandlers } from './ipc/panel'
 import { registerSettingsHandlers } from './ipc/settings'
@@ -19,10 +20,15 @@ import { configureAgentStatus } from './agent-status'
 import { PanelStore } from './panel-store'
 import { PreferencesStore } from './preferences-store'
 import { SessionStore } from './session-store'
+import { createInsightsService } from './insights'
+import { resolveArchiveRoot, resolveProjectsDir } from './insights-source'
 import { applyUserEnvOnce } from './user-env'
 import { WorkspaceStore } from './workspace-store'
 
 const currentDir = dirname(fileURLToPath(import.meta.url))
+
+/** 啟動後多久觸發第一次掃描。夠晚以免與視窗建立搶資源，夠早以免使用者關掉 app 時還沒跑到。 */
+const STARTUP_SCAN_DELAY_MS = 5_000
 
 /**
  * PRD §12 的信任模型。明確寫出而非依賴 Electron 預設值 —— 預設值會隨版本改變，
@@ -161,7 +167,28 @@ void app.whenReady().then(() => {
   registerSettingsHandlers(preferencesStore)
   registerPanelHandlers(panelStore)
 
+  const insights = createInsightsService({
+    projectsDir: () => resolveProjectsDir(),
+    archiveRoot: () => resolveArchiveRoot(app.getPath('userData')),
+    spawn: spawnScanWorker,
+  })
+  registerInsightsHandlers(insights)
+
   createWindow(dirty)
+
+  /**
+   * 啟動後跑一趟增量掃描 —— **與使用者要不要看無關**。
+   *
+   * 來源的保留期是 30 天。只在使用者開啟呈現介面時掃的話，他一個月沒開過，那一個月的來源就
+   * 已經被刪掉了，而存檔裡永遠不會有它 —— **那正是這個能力要解決的問題本身**。
+   *
+   * 延遲觸發是為了不與啟動搶資源；掃描本身跑在獨立行程裡，不影響互動。
+   */
+  setTimeout(() => {
+    void insights.refresh().catch(() => {
+      // 失敗的狀態由 service 自己記著（renderer 問得到）。這裡不需要也不該有文案。
+    })
+  }, STARTUP_SCAN_DELAY_MS)
 
   // 未打包的執行一律視為開發模式（`electron-vite dev` 與直接 `electron .` 皆涵蓋）。
   if (!app.isPackaged) {
