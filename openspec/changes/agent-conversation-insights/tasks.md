@@ -140,30 +140,37 @@
 
 ## 8. overlay
 
-- [ ] 8.1 overlay 元件：覆蓋整個視窗、`role="dialog"`、可 `Esc` 關閉、關閉後焦點歸還至開啟它的入口；probe 斷言四者（焦點以 `document.activeElement` 斷言為該入口，不得為 `<body>`）
+- [ ] 8.1（元件完成，probe 斷言待 9.x） overlay 元件：覆蓋整個視窗、`role="dialog"`、可 `Esc` 關閉、關閉後焦點歸還至開啟它的入口；probe 斷言四者（焦點以 `document.activeElement` 斷言為該入口，不得為 `<body>`）
 - [ ] 8.2 **overlay 開啟時導航快捷鍵不生效（絕對狀態斷言）**：probe 先按一次「應當有作用」的 `Ctrl+↓` 確認機制活著並記下選取項，開啟 overlay 後再按，斷言選取項**恰為原來那一個**（不是「未變」的相對判定）
 - [ ] 8.3 **overlay 開啟時 `Ctrl+P` 不生效（需先建立可證偽的前提）**：probe 必須先讓 workspace 有 folder、側欄來源已選定、焦點在側欄之內，並先斷言「overlay 未開時 `Ctrl+P` 確實開得起來」；否則這條在任何實作下都會通過（`MainStage.tsx` 的 handler 掛在側欄容器，而 overlay 由活動列開啟，事件根本不行經側欄）。參考 `probe-openspec.mjs` 既有的 `FOCUS_SIDE_PANEL` 前置
-- [ ] 8.4 渲染「工作的形狀」八個視圖，全部 DOM／CSS 自繪；probe 逐一以 `role` + `aria-label` 定位並斷言存在
-- [ ] 8.5 渲染「說話的方式」三個視圖；probe 同上
-- [ ] 8.5b 「我的語氣」每類同時呈現**例句**與**判定規則**；probe 斷言任一類別底下同時找得到例句元素與規則說明。例句是使用者唯一能檢查分類對不對的東西 —— 試作時第一版規則的兩個 bug（multiline 旗標、修正詞表放了單字「別」，後者使該類別膨脹 2.5 倍）都是印出句子才看見的，長條圖上完全看不出來
+- [ ] 8.4（渲染完成，probe 斷言待 9.x） 渲染「工作的形狀」八個視圖，全部 DOM／CSS 自繪；probe 逐一以 `role` + `aria-label` 定位並斷言存在
+- [ ] 8.5（渲染完成，probe 斷言待 9.x） 渲染「說話的方式」三個視圖；probe 同上
+- [ ] 8.5b（渲染完成，probe 斷言待 9.x） 「我的語氣」每類同時呈現**例句**與**判定規則**；probe 斷言任一類別底下同時找得到例句元素與規則說明。例句是使用者唯一能檢查分類對不對的東西 —— 試作時第一版規則的兩個 bug（multiline 旗標、修正詞表放了單字「別」，後者使該類別膨脹 2.5 倍）都是印出句子才看見的，長條圖上完全看不出來
 - [ ] 8.5c **沒有瀏覽全部內文的入口**；probe 斷言 overlay 中不存在可列出全部訊息內文的介面
-- [ ] 8.6 **未規劃的視圖不出現**；probe 斷言畫面上沒有 token 用量或成本的視圖
-- [ ] 8.7 **畫面上**呈現中位數與高百分位、不呈現平均數；probe 斷言（scenario 的主詞是「畫面上」，聚合層的單元測試不是它的載體）
-- [ ] 8.8 每個視圖標示來源欄位；「一次坐下來」標示 30 分鐘門檻與「活動」的定義、「我的語氣」可檢視分類依據且說明百分比不相加為 100%、工具類視圖標示 subagent 口徑；probe 斷言這些說明存在
-- [ ] 8.9 時間範圍選擇器與跨期比較的呈現；probe 斷言選定範圍後視圖只含該範圍
-- [ ] 8.10 三種狀態（就緒／掃描中／存檔為空，空時再分來源不可用與無資料）；probe 以空 fixture 與不存在的來源各驗一次
-- [ ] 8.11 呈現範圍不受 rail 選取影響，且**涵蓋不在 workspace folder 清單裡的專案**；probe 於 overlay 開啟中切換 rail 斷言不變，並斷言 fixture 裡那個不在清單中的專案有出現
+- [ ] 8.6（實作完成，probe 斷言待 9.x） **未規劃的視圖不出現**；probe 斷言畫面上沒有 token 用量或成本的視圖
+- [ ] 8.7（呈現完成，probe 斷言待 9.x） **畫面上**呈現中位數與高百分位、不呈現平均數；probe 斷言（scenario 的主詞是「畫面上」，聚合層的單元測試不是它的載體）
+- [ ] 8.8（呈現完成，probe 斷言待 9.x） 每個視圖標示來源欄位；「一次坐下來」標示 30 分鐘門檻與「活動」的定義、「我的語氣」可檢視分類依據且說明百分比不相加為 100%、工具類視圖標示 subagent 口徑；probe 斷言這些說明存在
+- [ ] 8.9（實作完成，probe 斷言待 9.x） 時間範圍選擇器與跨期比較的呈現；probe 斷言選定範圍後視圖只含該範圍
+- [ ] 8.10（實作完成，probe 斷言待 9.x） 三種狀態（就緒／掃描中／存檔為空，空時再分來源不可用與無資料）；probe 以空 fixture 與不存在的來源各驗一次
+- [ ] 8.11（實作完成，probe 斷言待 9.x） 呈現範圍不受 rail 選取影響，且**涵蓋不在 workspace folder 清單裡的專案**；probe 於 overlay 開啟中切換 rail 斷言不變，並斷言 fixture 裡那個不在清單中的專案有出現
 - [ ] 8.12 字級全部引用 `--text-*` token、顏色走既有主題 token；`typography.test.mjs` 通過。24×7 熱圖若撞到 `2xs`（13px）的地板，開 `typography-scale` 的 delta，**不得**寫死字級或用 inline `style`
+
+> **第 8 組的元件已全部寫完並接上活動列**（overlay、十一個視圖、三種狀態、時間範圍、焦點歸還、
+> `role="dialog"`），`npm run probe:workspace` **128/128 通過**。**尚未打勾的是那些 task 裡
+> 「probe 斷言」的那一半** —— 專屬的 `probe:insights` 尚未建立（第 1 組的 1.3–1.5）。
+>
+> 實作時修掉兩個 lint 擋下來的問題：時間範圍原本在 render 期間呼叫 `Date.now()`
+> （不純 —— 同一份資料在兩次重繪之間會得到不同的範圍），改成在點擊時算好；以及一個全形空白。
 
 ## 9. 活動列與既有探針的回歸
 
 - [ ] 9.1 活動列新增入口並開啟 overlay；probe 斷言入口為可用狀態且觸發後 overlay 開啟
-- [ ] 9.2 **更新 `scripts/probe-workspace.mjs` 的活動列斷言**：`activity.length === 4` 改為 5，且三條位置索引斷言（`activity[0]` / `slice(1,3)` / `activity[3]`）改為**以 `aria-label` 定位**。不改的話 `probe:workspace` 會紅；而更糟的是若新入口插在 Settings 之前，`activity[3]` 會變成新入口而「Settings 為可用狀態」照樣通過 —— 一條在驗錯元素的綠燈
-- [ ] 9.3 `npm run probe:workspace` 完整通過
+- [x] 9.2 **更新 `scripts/probe-workspace.mjs` 的活動列斷言**：`activity.length === 4` 改為 5，且三條位置索引斷言（`activity[0]` / `slice(1,3)` / `activity[3]`）改為**以 `aria-label` 定位**。不改的話 `probe:workspace` 會紅；而更糟的是若新入口插在 Settings 之前，`activity[3]` 會變成新入口而「Settings 為可用狀態」照樣通過 —— 一條在驗錯元素的綠燈
+- [x] 9.3 `npm run probe:workspace` 完整通過
 
 ## 10. i18n
 
-- [ ] 10.1 所有新文案（視圖標題、`aria-label`、狀態說明、分類規則與其說明、門檻的說明文字）進 `src/shared/i18n/en.json`；三道守衛（CJK、硬編 `aria-label`、key 型別安全）通過
+- [x] 10.1 所有新文案（視圖標題、`aria-label`、狀態說明、分類規則與其說明、門檻的說明文字）進 `src/shared/i18n/en.json`；三道守衛（CJK、硬編 `aria-label`、key 型別安全）通過
 - [ ] 10.2 新增的 `aria-label` 不含單引號、雙引號、反引號；probe 的選擇器一律以 `copy.mjs` 自字典取字串
 
 ## 11. 收尾驗收

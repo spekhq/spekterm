@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { InsightsOverlay } from './insights/InsightsOverlay'
 import { TerminalFontDialog } from './settings/TerminalFontDialog'
 
 const ICON_PROPS = {
@@ -13,7 +14,12 @@ const ICON_PROPS = {
 interface ActivityItem {
   id: string
   /** 文案在渲染時才自字典取出 —— 這是模組層級的常數，那時 `t` 尚未初始化。 */
-  labelKey: 'activityBar.sessions' | 'activityBar.handoffs' | 'activityBar.search' | 'activityBar.settings'
+  labelKey:
+    | 'activityBar.sessions'
+    | 'activityBar.handoffs'
+    | 'activityBar.search'
+    | 'insights.label'
+    | 'activityBar.settings'
   enabled: boolean
   icon: React.JSX.Element
   atBottom?: boolean
@@ -60,6 +66,25 @@ const ITEMS: ActivityItem[] = [
     ),
   },
   {
+    // **第五個入口，而雛型只畫了四個。** 這是對 `docs/workspace-mockup.html` 的一次明示偏離
+    // （裁決見 `workspace-layout` 的 requirement）：對話計量的範圍是整個 workspace，
+    // 不隸屬任何 folder、也不是側欄座標之下的東西 —— 活動列正是「不隸屬任何 repo 的全域入口」
+    // 該在的位置。已排除的替代方案是塞進 Settings 對話框：**Settings 是放旋鈕的地方，
+    // 而這是內容**，混在一起會讓 Settings 逐漸變成雜物間。
+    id: 'insights',
+    labelKey: 'insights.label',
+    enabled: true,
+    icon: (
+      <svg {...ICON_PROPS}>
+        <path d="M3 3v18h18" />
+        <path d="M7 15v2" />
+        <path d="M11 11v6" />
+        <path d="M15 7v10" />
+        <path d="M19 13v4" />
+      </svg>
+    ),
+  },
+  {
     id: 'settings',
     labelKey: 'activityBar.settings',
     enabled: true,
@@ -76,11 +101,14 @@ const ITEMS: ActivityItem[] = [
 export function ActivityBar(): React.JSX.Element {
   const { t } = useTranslation()
   const [settingsOpen, setSettingsOpen] = useState(false)
+  // 開啟 overlay 的那個按鈕 —— 關閉時焦點要還給它，否則落回 `<body>`，下一次按鍵什麼都不發生。
+  const [insightsOpener, setInsightsOpener] = useState<HTMLElement | null>(null)
 
-  // 目前只有 Settings 入口有動作（開終端字型設定）。Sessions 恆為當前 view，其餘仍是停用的
-  // placeholder（`workspace-layout`：尚未實作的入口為停用狀態）。
-  const activate = (id: string): void => {
+  // Sessions 恆為當前 view；Handoffs 與 Search 仍是停用的 placeholder
+  //（`workspace-layout`：尚未實作的入口為停用狀態）。
+  const activate = (id: string, element: HTMLElement): void => {
     if (id === 'settings') setSettingsOpen(true)
+    if (id === 'insights') setInsightsOpener(element)
   }
 
   return (
@@ -101,7 +129,7 @@ export function ActivityBar(): React.JSX.Element {
               // `aria-label` 同時是探針的選擇器（自字典取字串，不硬編）—— 見「aria-label 是選擇器」。
               aria-label={label}
               aria-current={item.enabled ? 'page' : undefined}
-              onClick={item.enabled ? () => activate(item.id) : undefined}
+              onClick={item.enabled ? (event) => activate(item.id, event.currentTarget) : undefined}
               title={item.enabled ? label : t('activityBar.comingSoon', { label })}
               className={
                 'flex h-9 w-9 items-center justify-center rounded-md transition-colors ' +
@@ -117,6 +145,9 @@ export function ActivityBar(): React.JSX.Element {
       })}
 
       {settingsOpen && <TerminalFontDialog onClose={() => setSettingsOpen(false)} />}
+      {insightsOpener && (
+        <InsightsOverlay opener={insightsOpener} onClose={() => setInsightsOpener(null)} />
+      )}
     </nav>
   )
 }

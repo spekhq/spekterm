@@ -535,20 +535,26 @@ try {
   // ── workspace-layout：活動列 ─────────────────────────────────────────────
   console.log('\n活動列')
   const activity = await app.client.evaluate(ACTIVITY_BAR)
-  check(results, '呈現雛型的全部入口', activity.length === 4, `${activity.length} 個`)
+  // **以 `aria-label` 定位，不用位置索引。** 舊版用 `activity[0]` / `slice(1,3)` / `activity[3]`
+  // 去指名四個入口；新增第五個之後那不只會紅，更糟的是**會在驗錯的元素上變綠** ——
+  // 新入口若插在 Settings 之前，`activity[3]` 就變成新入口，而「Settings 為可用狀態」照樣通過。
+  const byLabel = (key) => activity.find((item) => item.label === copy(key))
+  check(results, '呈現雛型的全部入口＋對話計量', activity.length === 5, `${activity.length} 個`)
   check(results, 'Sessions 可用且預設選取',
-    activity[0]?.disabled === false && activity[0]?.current === 'page', activity[0]?.label)
+    byLabel('activityBar.sessions')?.disabled === false && byLabel('activityBar.sessions')?.current === 'page',
+    JSON.stringify(byLabel('activityBar.sessions')))
   // **尚未實作的入口自 `terminal-rendering-and-preferences` 起只剩 Handoffs 與 Search** —— Settings
-  // 已實作（開啟終端字型設定介面），因此不再是停用的 placeholder（`workspace-layout` 的 MODIFIED
-  // requirement）。斷言隨規格走：只檢查中間那兩個。
-  const pending = activity.slice(1, 3)
+  // 已實作（開啟終端字型設定介面），對話計量亦然，因此兩者都不是停用的 placeholder。
+  const pending = ['activityBar.handoffs', 'activityBar.search'].map((key) => byLabel(key))
   check(results, '尚未實作的入口停用且附提示',
-    pending.length === 2 &&
-      pending.every((item) => item.disabled && item.title.includes(suffixOf('activityBar.comingSoon'))),
-    pending.map((i) => `${i.label}(disabled=${i.disabled})`).join(', '))
+    pending.every((item) => item?.disabled && item.title.includes(suffixOf('activityBar.comingSoon'))),
+    pending.map((i) => `${i?.label}(disabled=${i?.disabled})`).join(', '))
   check(results, 'Settings 入口為可用狀態（已實作，不再是 placeholder）',
-    activity[3]?.disabled === false,
-    `${activity[3]?.label}(disabled=${activity[3]?.disabled})`)
+    byLabel('activityBar.settings')?.disabled === false,
+    `${byLabel('activityBar.settings')?.label}(disabled=${byLabel('activityBar.settings')?.disabled})`)
+  check(results, '對話計量入口為可用狀態',
+    byLabel('insights.label')?.disabled === false,
+    `${byLabel('insights.label')?.label}(disabled=${byLabel('insights.label')?.disabled})`)
 
   // ── workspace-layout：活動列為固定寬度，且不可調整 ───────────────────────
   //

@@ -308,5 +308,136 @@
     "results": "Matching files",
     "noMatch": "No matching files",
     "failed": "Could not list the files in this working directory"
+  },
+  "insights": {
+    "label": "Conversation metrics",
+    "close": "Close conversation metrics",
+    "closeTooltip": "Close (Esc)",
+    "refresh": "Rescan",
+    "scanning": "Scanning transcripts…",
+    "sourceUnavailable": "No transcript source found. Claude Code writes session transcripts under its config directory; set CLAUDE_CONFIG_DIR in your shell if you keep it elsewhere.",
+    "noData": "The transcript source is readable but has nothing in it yet.",
+    "error": "The last scan failed. Try Rescan.",
+    "sourceLabel": "source",
+    "range": "{{from}} to {{to}}",
+    "rangeAll": "All time",
+    "rangeLabel": "Time range",
+    "rangeDays": "Last {{count}} days",
+    "compareHint": "Pick two ranges to put the same number side by side.",
+    "section": {
+      "rhythm": "Rhythm",
+      "rhythmNote": "When, and at what density",
+      "habits": "Habits",
+      "habitsNote": "How the back-and-forth goes",
+      "speech": "How I talk",
+      "speechNote": "The same data, asked differently",
+      "doing": "What I work on",
+      "doingNote": "Which projects, which tools"
+    },
+    "totals": {
+      "messages": "Messages I sent",
+      "sessions": "Sessions",
+      "sitDowns": "Work stretches",
+      "tools": "Tool calls",
+      "interrupts": "Interruptions",
+      "days": "Active days"
+    },
+    "stat": {
+      "median": "median",
+      "p75": "p75",
+      "p90": "p90",
+      "max": "longest",
+      "count": "count",
+      "noMean": "Distributions show the median, never the mean — the tail here is far longer than the centre."
+    },
+    "weekHeat": {
+      "title": "Rhythm of the week",
+      "blurb": "Messages per weekday and hour, in your local time zone.",
+      "source": "timestamp (weekday × hour, local time zone)",
+      "legendLow": "fewer",
+      "legendHigh": "more",
+      "busiest": "busiest cell: {{count}}"
+    },
+    "sitDown": {
+      "title": "How long I sit down for",
+      "blurb": "Each session split wherever nothing happened for over {{minutes}} minutes.",
+      "activity": "An activity is a message I sent or a tool the agent called — not token usage. When the agent runs tools for forty minutes straight, I am still sitting there.",
+      "source": "timestamp (split at gaps over {{minutes}} minutes; activity = messages + tool calls)",
+      "perSitDown": "messages per stretch",
+      "minutes": "{{count}} min",
+      "hours": "{{count}} h"
+    },
+    "length": {
+      "title": "How long I talk",
+      "blurb": "Characters per message.",
+      "source": "message text (role=user, after dropping harness-injected turns)"
+    },
+    "rounds": {
+      "title": "Turns per conversation",
+      "blurb": "How many times I spoke in one session.",
+      "source": "message text (role=user), counted per session"
+    },
+    "interrupts": {
+      "title": "When I hit the brakes",
+      "blurb": "Times I stopped the agent mid-run, by day.",
+      "source": "interruptedMessageId on the record (not a text match)"
+    },
+    "projects": {
+      "title": "Which project takes my words",
+      "blurb": "Project names are resolved from the transcript's working directory, not from its last value — that one wanders into temp folders.",
+      "source": "project directory, resolved back to the project root",
+      "unnamed": "(unnamed)",
+      "tools": "{{count}} tool calls"
+    },
+    "bash": {
+      "title": "What Bash actually runs",
+      "blurb": "First word of every Bash command, including the ones subagents ran.",
+      "source": "tool input command, first token (type=tool_use, name=Bash)"
+    },
+    "skills": {
+      "title": "Skills I actually use",
+      "blurb": "Taken from the Skill tool's arguments, not from messages that start with a slash — that count misses almost all of them.",
+      "source": "tool input skill / subagent type (type=tool_use)",
+      "agents": "Subagent types"
+    },
+    "tone": {
+      "title": "My tone",
+      "blurb": "The six categories overlap: one message can be a question and a request at once, so the percentages do not add up to 100%.",
+      "source": "message text matched against the rule below (applied at read time)",
+      "rule": "Matches when",
+      "examples": "Examples",
+      "kind": {
+        "contains": "the message contains",
+        "startsWith": "the message starts with",
+        "endsWith": "the message ends with",
+        "wholeIs": "the whole message is only"
+      },
+      "exclude": "except when it starts with",
+      "category": {
+        "question": "Question",
+        "imperative": "Command",
+        "correction": "Correction",
+        "tentative": "Thinking out loud",
+        "polite": "Request",
+        "ack": "Just go ahead"
+      }
+    },
+    "language": {
+      "title": "Chinese and English",
+      "blurb": "Decided per message by comparing CJK characters against Latin letters. Messages that use both are counted again on the right.",
+      "source": "character classes in the message text",
+      "zh": "Mostly Chinese",
+      "en": "Mostly English",
+      "mixed": "Uses both"
+    },
+    "phrases": {
+      "title": "The things I say most",
+      "blurb": "Only messages of {{maxChars}} characters or fewer that appear at least {{minCount}} times. This is the one place raw messages appear, and the limits are deliberate.",
+      "source": "message text (length under the cap, repeated at least the minimum)"
+    },
+    "meta": {
+      "title": "Records not counted as mine",
+      "ratio": "{{percent}}% of user-role records were harness-injected and excluded."
+    }
   }
 }
