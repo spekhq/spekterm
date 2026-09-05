@@ -241,6 +241,13 @@ export function writeTranscriptFixture(root: string): TranscriptFixtureFacts {
   s1.push(userRecord({ cwd: PROJ_A, minutes: 4, meta: true, text: 'Another Claude session sent a message:\n<cross-session-message/>' }))
   // isMeta：圖片佔位。
   s1.push(userRecord({ cwd: PROJ_A, minutes: 5, meta: true, text: '[Image: original 100x200, displayed at 50x100.]' }))
+  // isMeta：**內文與一般的使用者訊息完全無法區分**。
+  //
+  // 這一筆是「判定必須看結構旗標」那條 requirement 的載體。少了它，fixture 對
+  // 「看 isMeta」與「比對內文開頭長什麼樣」兩種實作會給出**相同的結果** —— 實測過：把判定換成
+  // 文字比對之後全部測試照樣通過。真實資料裡 skill 的內文可以長成任何樣子，
+  // 而**看起來正常的那一筆才是會被漏掉的那一筆**。
+  s1.push(userRecord({ cwd: PROJ_A, minutes: 5.5, meta: true, text: '把 C 也順便改一下' }))
 
   // 中斷：帶結構欄位。
   s1.push(userRecord({
@@ -337,7 +344,7 @@ export function writeTranscriptFixture(root: string): TranscriptFixtureFacts {
       { dirName: encodeProjectDir(PROJ_B), cwd: PROJ_B, label: 'proj-b', userMessages: s3UserMessages },
     ],
     userMessages: s1UserMessages + s2UserMessages + s3UserMessages,
-    metaRecords: 3,
+    metaRecords: 4,
     compactRecords: 1,
     interrupts: 1,
     fakeInterrupts: 1,
