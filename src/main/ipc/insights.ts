@@ -37,6 +37,6 @@ export function spawnScanWorker(): WorkerHandle {
 }
 
 export function registerInsightsHandlers(service: InsightsService): void {
-  ipcMain.handle(INSIGHTS_CHANNELS.get, () => service.snapshot())
-  ipcMain.handle(INSIGHTS_CHANNELS.refresh, () => service.refresh())
+  ipcMain.handle(INSIGHTS_CHANNELS.get, (_event, range?: { from?: number; to?: number }) => service.snapshot(range))
+  ipcMain.handle(INSIGHTS_CHANNELS.refresh, (_event, range?: { from?: number; to?: number }) => service.refresh(range))
 }

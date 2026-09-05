@@ -142,16 +142,14 @@ const openOverlay = async (client) => {
   })
 }
 
-const key = (client, { key: k, code, ctrl = false, windowsVirtualKeyCode }) =>
-  client.send('Input.dispatchKeyEvent', {
-    type: 'rawKeyDown',
-    key: k,
-    code,
-    windowsVirtualKeyCode,
-    modifiers: ctrl ? 2 : 0,
-  }).then(() =>
-    client.send('Input.dispatchKeyEvent', { type: 'keyUp', key: k, code, windowsVirtualKeyCode, modifiers: ctrl ? 2 : 0 }),
-  )
+const key = (client, { key: k, code, ctrl = false, windowsVirtualKeyCode }) => {
+  // `nativeVirtualKeyCode` 與 `windowsVirtualKeyCode` 都要給 —— 比照 `probe-openspec.mjs`
+  // 既有的 `pressCtrlP`。少了前者，Chromium 在某些鍵上收不到修飾鍵組合。
+  const payload = { key: k, code, windowsVirtualKeyCode, nativeVirtualKeyCode: windowsVirtualKeyCode, modifiers: ctrl ? 2 : 0 }
+  return client
+    .send('Input.dispatchKeyEvent', { type: 'rawKeyDown', ...payload })
+    .then(() => client.send('Input.dispatchKeyEvent', { type: 'keyUp', ...payload }))
+}
 
 // ── 段落 ────────────────────────────────────────────────────────────────────
 
@@ -281,7 +279,85 @@ async function runShortcutSuppression(_mode, _config, context) {
   )
   const stillOpen = await client.evaluate(`!!document.querySelector('[role="dialog"][aria-label="${copy('insights.label')}"]')`)
   check(results, 'overlay 維持開啟', stillOpen === true, String(stillOpen))
+
+  // ---- `role="dialog"` 這個機制本身 --------------------------------------
+  //
+  // 導航快捷鍵與 `Ctrl+P` 的抑制都建立在「文件中存在 `[role="dialog"]`」上。上面那條 `Ctrl+↓`
+  // 已經驗到抑制確實生效；這裡另外把**機制的載體**釘住 —— 角色被拿掉時它會紅，
+  // 而那正是 spec 裡「拿掉這個角色不會有任何測試變紅」那句自我宣稱要兌現的地方。
+  //
+  // 同一個 `aria-label` 有兩個持有者（活動列的按鈕與 overlay），因此列出全部的角色再判斷 ——
+  // `querySelector` 只會拿到文件順序上的第一個，也就是那顆按鈕。
+  //
+  // **`Ctrl+P` 在 overlay 之下的那一條沒有載體，這是一個記錄在案的缺口**（見 tasks.md）：
+  // 它的 handler 掛在側欄容器的 capture 階段，而「overlay 未開時它確實開得起來」這個前提
+  // 本探針建不出來（試過選定 repo、聚焦 side panel、補 nativeVirtualKeyCode，皆不成立）。
+  // 前提不成立時那條斷言**恆綠而沒有任何鑑別力** —— 留一條假綠比留一個記下來的缺口更糟。
+  const roles = await client.evaluate(`[...document.querySelectorAll('[aria-label="${copy('insights.label')}"]')].map((el) => el.getAttribute('role') ?? '(none)')`)
+  check(results, 'overlay 以 dialog 角色呈現（快捷鍵抑制的機制載體）', roles.includes('dialog'), `角色：${roles.join(' / ')}`)
+
+  // ---- 8.9 時間範圍 -------------------------------------------------------
+  const messagesShown = `(() => {
+    const dialog = document.querySelector('[role="dialog"][aria-label="${copy('insights.label')}"]')
+    for (const item of dialog.querySelectorAll('dl > div')) {
+      if (item.querySelector('dt')?.textContent?.trim() === '${copy('insights.totals.messages')}') {
+        return Number((item.querySelector('dd')?.textContent ?? '').replace(/,/g, ''))
+      }
+    }
+    return -1
+  })()`
+  const allTime = await client.evaluate(messagesShown)
+  await client.evaluate(`(() => {
+    const group = document.querySelector('[role="group"][aria-label="${copy('insights.rangeLabel')}"]')
+    const buttons = [...group.querySelectorAll('button')]
+    buttons[1].click()
+    return true
+  })()`)
+  const ranged = await pollFor({
+    read: () => client.evaluate(messagesShown),
+    settled: (n) => n !== allTime,
+    timeoutMs: 5_000,
+    interval: 100,
+    label: '時間範圍改變後數字跟著變',
+  }).catch(() => allTime)
+  // fixture 的資料全在 2026-01 —— 選「最近 7 天」之後應當一筆都不剩。
+  check(results, '選定時間範圍後只呈現該範圍的資料', ranged === 0 && allTime > 0, `全部 ${allTime} → 最近 7 天 ${ranged}`)
   await key(client, { key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })
+}
+
+/**
+ * 掃描的生命週期：啟動後自己跑過一趟、掃描行程不留孤兒、掃描期間 renderer 仍可用。
+ */
+async function runScanLifecycle() {
+  const configDir = mkTemp('spekterm-insights-life-')
+  writeFixture(configDir)
+  const { profile } = seedProfile('spekterm-insights-life-profile-')
+  const app = await launch({ configDir, profile, port: EMPTY_PORT })
+  try {
+    // **完全不開 overlay** —— 啟動後那一趟是本能力的保命動作，與使用者要不要看無關。
+    const scanned = await pollFor({
+      read: () => app.client.evaluate(`window.workspace.insights.get().then((s) => s.sourceAvailable)`, { awaitPromise: true }),
+      settled: (v) => v !== null,
+      timeoutMs: 30_000,
+      interval: 500,
+      label: '啟動後自動掃描',
+    })
+    check(results, '未開啟 overlay，掃描仍已自動發生', scanned === true, `sourceAvailable=${scanned}`)
+
+    // 掃描期間 renderer 仍可用：再觸發一次，並在它跑的時候操作介面。
+    await app.client.evaluate('window.workspace.insights.refresh(); true')
+    const responsive = await app.client.evaluate(`(() => {
+      const rail = document.querySelector('[aria-label]')
+      return !!rail && document.readyState === 'complete'
+    })()`)
+    check(results, '掃描期間 renderer 仍可回應', responsive === true, String(responsive))
+  } finally {
+    await app.close()
+  }
+
+  // 收屍：app 結束後不得留下掃描行程。
+  const strays = execFileSync('bash', ['-lc', `pgrep -fa 'insights-worker' | grep -v pgrep | wc -l`], { encoding: 'utf8' }).trim()
+  check(results, 'app 結束後不留下掃描行程', strays === '0', `殘留 ${strays} 個`)
 }
 
 /** 空存檔的兩種狀態：來源不可用 vs 來源可用但沒有資料。 */
@@ -339,6 +415,7 @@ const SECTIONS = [
   { name: 'runOverlayContract', run: runOverlayContract, deps: ['runFixtureEvidence'] },
   { name: 'runShortcutSuppression', run: runShortcutSuppression, deps: ['runOverlayContract'] },
   { name: 'runEmptyStates', run: runEmptyStates },
+  { name: 'runScanLifecycle', run: runScanLifecycle },
 ]
 
 const outcome = await runSections({

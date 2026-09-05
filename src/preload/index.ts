@@ -362,10 +362,12 @@ const workspaceApi = {
    * 這裡送回 renderer 的只有彙總結果：沒有列、沒有路徑、沒有訊息內文的完整清單。
    */
   insights: {
-    /** 取當下的彙總與掃描狀態。不觸發掃描。 */
-    get: (): Promise<InsightsSnapshot> => ipcRenderer.invoke('workspace:insights:get'),
+    /** 取當下的彙總與掃描狀態。不觸發掃描。`range` 省略即全部期間。 */
+    get: (range?: { from?: number; to?: number }): Promise<InsightsSnapshot> =>
+      ipcRenderer.invoke('workspace:insights:get', range),
     /** 觸發一次增量掃描，完成後回傳新的彙總。已在掃的話直接回傳當下狀態。 */
-    refresh: (): Promise<InsightsSnapshot> => ipcRenderer.invoke('workspace:insights:refresh'),
+    refresh: (range?: { from?: number; to?: number }): Promise<InsightsSnapshot> =>
+      ipcRenderer.invoke('workspace:insights:refresh', range),
   },
 } as const
 

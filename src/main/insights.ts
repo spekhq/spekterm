@@ -37,7 +37,7 @@ export function createInsightsService(deps: InsightsDeps) {
   const runner = new ScanRunner({ spawn: deps.spawn })
   let sourceAvailable: boolean | null = null
 
-  const snapshot = (): InsightsSnapshot => {
+  const snapshot = (range?: { from?: number; to?: number }): InsightsSnapshot => {
     const status = runner.status()
     const entries = readArchive(deps.archiveRoot())
     const rows = entries.flatMap((e) => e.rows)
@@ -55,15 +55,20 @@ export function createInsightsService(deps: InsightsDeps) {
       sourceAvailable,
       error: status.error,
       insights: rows.length
-        ? aggregate(rows, { projects: [...projects].map(([dirName, cwds]) => ({ dirName, cwds })), stats })
+        ? aggregate(rows, {
+            projects: [...projects].map(([dirName, cwds]) => ({ dirName, cwds })),
+            stats,
+            from: range?.from,
+            to: range?.to,
+          })
         : null,
     }
   }
 
-  const refresh = async (): Promise<InsightsSnapshot> => {
+  const refresh = async (range?: { from?: number; to?: number }): Promise<InsightsSnapshot> => {
     const outcome = await runner.run({ projectsDir: deps.projectsDir(), archiveRoot: deps.archiveRoot() })
     if (outcome.ok && outcome.result) sourceAvailable = outcome.result.status === 'ok'
-    return snapshot()
+    return snapshot(range)
   }
 
   return { snapshot, refresh, status: () => runner.status() }

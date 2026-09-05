@@ -32,19 +32,26 @@ export interface InsightsOverlayProps {
 export function InsightsOverlay({ onClose, opener }: InsightsOverlayProps): React.JSX.Element {
   const { t } = useTranslation()
   const [snapshot, setSnapshot] = useState<InsightsSnapshot | null>(null)
+  /** 取數失敗 —— **必須被呈現**，否則使用者看到的是「點了沒反應」。 */
+  const [failed, setFailed] = useState(false)
   const [days, setDays] = useState<number>(0)
   const closeRef = useRef<HTMLButtonElement>(null)
 
   useEffect(() => {
     let cancelled = false
-    void window.workspace.insights.get().then((first) => {
-      if (cancelled) return
-      setSnapshot(first)
-      // 開啟時再觸發一次，讓剛剛的對話也算進去。
-      void window.workspace.insights.refresh().then((fresh) => {
-        if (!cancelled) setSnapshot(fresh)
+    void window.workspace.insights
+      .get()
+      .then((first) => {
+        if (cancelled) return
+        setSnapshot(first)
+        // 開啟時再觸發一次，讓剛剛的對話也算進去。
+        return window.workspace.insights.refresh().then((fresh) => {
+          if (!cancelled) setSnapshot(fresh)
+        })
       })
-    })
+      .catch(() => {
+        if (!cancelled) setFailed(true)
+      })
     return () => {
       cancelled = true
     }
@@ -68,10 +75,21 @@ export function InsightsOverlay({ onClose, opener }: InsightsOverlayProps): Reac
   const insights = snapshot?.insights ?? null
   // **`from` 在點擊時就算好，不在 render 期間算。** `Date.now()` 是不純的：放在 render 裡
   // 會讓同一份資料在兩次重繪之間得到不同的範圍，而 lint 也擋著（`no-impure-function-in-render`）。
-  const [from, setFrom] = useState<number | undefined>(undefined)
+  // **聚合在主行程，因此範圍要送過去才算數。** 第一版只把 `from` 留在 renderer 手上而沒有用它 ——
+  // 選擇器點得動、按鈕會亮，但每個數字都不變。probe 是這樣抓到的：全部 12 → 最近 7 天 12。
   const pickRange = useCallback((option: number) => {
     setDays(option)
-    setFrom(option === 0 ? undefined : Date.now() - option * 86_400_000)
+    const next = option === 0 ? undefined : Date.now() - option * 86_400_000
+    // **`.catch` 不是防禦性程式設計。** 少了它，主行程一旦拋錯，這個 promise 就靜默地 reject，
+    // 而畫面一動也不動 —— 使用者看到的是「這個選擇器壞掉了」。實測踩過：真實資料量讓
+    // `aggregate` 拋 `RangeError`，於是每次點擊都無聲無息。
+    void window.workspace.insights
+      .get(next === undefined ? undefined : { from: next })
+      .then((fresh) => {
+        setFailed(false)
+        setSnapshot(fresh)
+      })
+      .catch(() => setFailed(true))
   }, [])
 
   return createPortal(
@@ -101,12 +119,14 @@ export function InsightsOverlay({ onClose, opener }: InsightsOverlayProps): Reac
       </header>
 
       <div className="flex-1 px-4 pb-16 pt-3">
-        {snapshot === null ? (
+        {failed ? (
+          <Note text={t('insights.error')} />
+        ) : snapshot === null ? (
           <Note text={t('insights.scanning')} />
         ) : insights === null ? (
           <EmptyState snapshot={snapshot} />
         ) : (
-          <Views insights={insights} from={from} />
+          <Views insights={insights} />
         )}
       </div>
     </div>,
@@ -183,10 +203,9 @@ const ROUND_LABELS = ['1', '2–4', '5–9', '10–19', '20–49', '50–99', '1
 const SIT_LABELS = ['<5m', '5–15', '15–30', '30–60', '1–2h', '2–4h', '4h+']
 const PER_SIT_LABELS = ['0', '1', '2', '3–5', '6–10', '11–20', '21+']
 
-function Views({ insights, from }: { insights: Insights; from?: number }): React.JSX.Element {
+function Views({ insights }: { insights: Insights }): React.JSX.Element {
   const { t } = useTranslation()
   const view = insights
-  void from
 
   const stat = (d: { median: number; p75: number; p90: number; max: number }, unit?: (n: number) => string) => {
     const fmt = unit ?? ((n: number) => String(n))

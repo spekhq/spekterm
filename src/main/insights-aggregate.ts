@@ -356,10 +356,22 @@ export function aggregate(rows: readonly ArchiveRow[], options: AggregateOptions
     .map(([name, n]) => ({ name, n }))
     .sort((a, b) => b.n - a.n || a.name.localeCompare(b.name))
 
-  const times = inRange.map((r) => r.t).filter((t) => t > 0)
+  // **不用 `Math.min(...times)`。** 展開一個大陣列會把每一筆變成一個函式參數，
+  // 而參數個數有上限：實測在真實資料（六十幾萬列）上直接
+  // `RangeError: Maximum call stack size exceeded`，而 fixture 只有二十列，完全看不出來。
+  // 這是 dogfood 抓到的 —— 單元測試與探針的資料量都太小。
+  let earliest = Number.POSITIVE_INFINITY
+  let latest = Number.NEGATIVE_INFINITY
+  let timed = 0
+  for (const row of inRange) {
+    if (row.t <= 0) continue
+    timed += 1
+    if (row.t < earliest) earliest = row.t
+    if (row.t > latest) latest = row.t
+  }
   const stats = options.stats
   return {
-    range: times.length ? { from: Math.min(...times), to: Math.max(...times) } : null,
+    range: timed > 0 ? { from: earliest, to: latest } : null,
     totals: {
       messages: messages.length,
       sessions: roundsBySession.size,

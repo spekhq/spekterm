@@ -228,6 +228,15 @@ describe('聚合與語言分類', () => {
     assert.equal(aggregate([msg(1, 'x')]).nonUserInputRatio, 0)
   })
 
+  it('資料量大時不炸 —— 不得以展開運算子求 min/max', () => {
+    // 真實資料是六十幾萬列。展開一個那麼大的陣列會 `RangeError: Maximum call stack size
+    // exceeded`，而 fixture 只有二十列，完全看不出來 —— 這條是 dogfood 抓到的，補一個上界守衛。
+    const many: ArchiveRow[] = Array.from({ length: 300_000 }, (_, i) => msg(1_000_000 + i, 'x'))
+    const view = aggregate(many)
+    assert.equal(view.totals.messages, 300_000)
+    assert.deepEqual(view.range, { from: 1_000_000, to: 1_299_999 })
+  })
+
   it('percentile 對空陣列不炸', () => {
     assert.equal(percentile([], 0.5), 0)
     assert.equal(percentile([1, 2, 3, 4], 0.5), 3)
