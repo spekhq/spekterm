@@ -391,6 +391,29 @@ try {
   check(results, '打包產物中建立的 session 產生了一個真實 pty', pids.length === 1,
     `pty 行程數 = ${pids.length}${pids.length === 0 ? '（native 模組載入失敗、或 pty 配置失敗時就是這個徵狀）' : ''}`)
 
+  /**
+   * **掃描行程要在打包產物裡 fork 得起來。**
+   *
+   * `utilityProcess.fork` 載入的是 `out/main/insights-worker.js`，而打包後它在 **asar 之內**。
+   * 這條的失效方式正是 `agent-conversation-insights` 的 design D15 記著的那一種：
+   * **dev 正常、打包後 `MODULE_NOT_FOUND`** —— 而 app 照樣開得起來、視窗照樣有、pty 照樣能建，
+   * 上面那十一條**一條都不會紅**。`test:e2e` 又不含這一支，於是那個失效沒有任何載體。
+   *
+   * 判準是「掃描跑完了，而且不是因為行程死掉」：`workerExited` 正是 fork 失敗的回報。
+   * 來源目錄在這個環境裡通常不存在（探針換過 HOME），那會回報 `source-unavailable` ——
+   * **那是成功的一種**：它代表行程起得來、跑完了、把結果送回來了。
+   */
+  const scan = await pollFor({
+    read: () => client.evaluate('window.workspace.insights.refresh().then((s) => ({ phase: s.phase, error: s.error, source: s.sourceAvailable }))', { awaitPromise: true }),
+    settled: (value) => value?.phase !== 'running',
+    timeoutMs: 30_000,
+    interval: 500,
+    label: '打包產物中的掃描行程回報結果',
+  }).catch((error) => ({ phase: 'timeout', error: error.message, source: null }))
+  check(results, '打包產物中的掃描行程 fork 得起來並回報結果',
+    scan.phase === 'idle' && scan.error === null,
+    `${JSON.stringify(scan)}${scan.error === 'workerExited' ? '（workerExited 正是 asar 內載入失敗的徵狀 —— 比照 node-pty 加進 asarUnpack）' : ''}`)
+
   // **先把焦點交給終端** —— 剛才點的是選單，`insertText` 會送到那裡去。
   const terminal = await pollUntil(client, TERMINAL_RECT, (value) => value !== null, 6000)
   if (terminal) await realClick(client, terminal)

@@ -223,7 +223,9 @@
 - [x] 11.2 `npm run typecheck`、`npm run lint`、`npm test`（**781 條**）全數通過
 - [x] 11.3 **`dependencies` 一個都沒動**（`git diff` 比對過，唯二的改動是版本無關的 `probe:insights` script）；`measure:bundle` 零碼結束、10.47 MB
 - [x] 11.4 **`npm run test:e2e` 10/10 全部通過**，總結顯示每支皆完整執行（`probe:insights` 12s）
-- [ ] 11.5 以 `PROBE_PACKAGE_APPIMAGE` 重用產物跑一次 `npm run probe:package`，確認掃描行程在打包產物中載入得起來（`test:e2e` 不含這一支，而 D15 的失效方式正是「dev 正常、打包後 `MODULE_NOT_FOUND`」）
+- [x] 11.5 **`probe:package` 12/12 通過，掃描行程在打包產物中 fork 得起來**：`{"phase":"idle","error":null,"source":true}`。
+  - **原本那 11 條沒有一條在驗這件事** —— app 就算 `utilityProcess.fork` 失敗也照樣開得起來、視窗照樣有、pty 照樣能建。因此在 `probe-package.mjs` 新增一條常駐斷言，判準是「掃描跑完了，而且不是因為行程死掉」（`workerExited` 正是 asar 內載入失敗的徵狀）。D15 的那個失效方式從此有了載體。
+  - **踩到 CLAUDE.md 已經寫過的坑**：`PROBE_PACKAGE_APPIMAGE` 要配 `node scripts/run-probe.mjs package`，而我打了 `npm run probe:package` —— 那個 npm script 本身就是 `npm run dist:linux && …`，於是照樣打包、**master 上多了一個 `chore(release): 0.1.6`**。
 
 ## 12. 文件
 
