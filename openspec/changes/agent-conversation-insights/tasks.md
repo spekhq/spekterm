@@ -1,6 +1,7 @@
 ## 1. 驗收基礎建設（先做 —— 第 2–6 組的每一條都依賴它）
 
-- [ ] 1.1 **先驗 `utilityProcess.fork` 能不能載入 asar 內的檔案**：寫一支最小的 spike，打包一次以真正的 AppImage 執行；不行就比照 node-pty 加進 `asarUnpack`。這條不成立的話第 5 組整組要換作法，所以排在最前面
+- [x] 1.1 **先驗 `utilityProcess.fork` 能不能載入 asar 內的檔案** —— **通過（2026-09-05）**。以獨立的最小 spike 驗證（自行 `asar pack` 一個含 `main.js` + `scan.js` 的目錄，`xvfb-run electron <app.asar>`），不動 repo 版本、不觸發換版：child 自 `<...>/app.asar/out/scan.js` 正常 spawn（回報 `inAsar: true`）、`postMessage` 往返正常、且讀得到 asar 之外的路徑（掃描器需要讀家目錄）。**不需要 `asarUnpack`**，第 5 組維持原作法。
+  > **保留條件**：spike 跑在 `node_modules` 當下的 electron **43.4.1**，而 `package.json` 釘的是 43.1.0（見下方註記）。兩者的 `utilityProcess` 與 asar 支援無已知差異，但 11.5 的 `probe:package` 仍是這條的最終確認。
 - [ ] 1.2 建立 fixture 產生器：一份可控的 transcript 目錄，涵蓋 `isMeta`、`isCompactSummary`、`interruptedMessageId`、內文像中斷但無該欄位、slash 展開、`<bash-input>` 與 `<bash-stdout>`、**通篇只有 `<task-notification>`**、通知夾在真實訊息中、subagent 子目錄、**session 中途換 `cwd`**、跨數小時的兩個時段、一批短訊息 + 一則極長訊息、一個**不在 workspace folder 清單裡**的專案、本機時間 23:30（UTC 為前一日）的訊息、未知的記錄類型；以單元測試確認產生器輸出穩定且各形態的筆數符合預期
 - [ ] 1.3 於 `scripts/lib/ports.mjs` 登記新 probe 的 debugging port；`npm test` 的重複與衍生檢查通過
 - [ ] 1.4 新增 `scripts/probe-insights.mjs`（**以 `scripts/lib/sections.mjs` 組織為段落**，宣告段落依賴、支援 `PROBE_ONLY`）與 `npm run probe:insights`，並納入 `scripts/run-probes.mjs`；單獨執行通過
@@ -59,6 +60,7 @@
 - [ ] 6.6 skill 統計自工具參數取得；以「對應訊息不以斜線開頭」的 Skill 呼叫斷言它被計入
 - [ ] 6.7 語氣分類（六類**可複選**）與中英文分類（兩類互斥 + 另計「兩者皆出現」）；規則表與其說明文字放進 `src/shared/i18n/en.json`（design D13）；單元測試每類至少一筆，並斷言中英文兩類相加為 100%
 - [ ] 6.8 「我最常說的那幾句」：長度上限 20 字元、次數下限 3 次；單元測試斷言只出現一次的短訊息與超過上限的長訊息都不輸出
+- [ ] 6.8b 每個語氣類別輸出至多 9 則、每則 ≤ 46 字元的例句；單元測試斷言數量與長度兩個上限都被遵守，且例句確實屬於該類別（不是隨機取樣）
 - [ ] 6.9 **換一組分類規則對同一份存檔重跑**，斷言全部期間（含來源已刪除的期間）都以新規則呈現
 - [ ] 6.10 時間範圍的篩選與跨期比較的資料輸出；單元測試斷言指定範圍後只含該範圍的資料，且兩段期間的同一指標可並列取得
 
@@ -76,6 +78,8 @@
 - [ ] 8.3 **overlay 開啟時 `Ctrl+P` 不生效（需先建立可證偽的前提）**：probe 必須先讓 workspace 有 folder、側欄來源已選定、焦點在側欄之內，並先斷言「overlay 未開時 `Ctrl+P` 確實開得起來」；否則這條在任何實作下都會通過（`MainStage.tsx` 的 handler 掛在側欄容器，而 overlay 由活動列開啟，事件根本不行經側欄）。參考 `probe-openspec.mjs` 既有的 `FOCUS_SIDE_PANEL` 前置
 - [ ] 8.4 渲染「工作的形狀」八個視圖，全部 DOM／CSS 自繪；probe 逐一以 `role` + `aria-label` 定位並斷言存在
 - [ ] 8.5 渲染「說話的方式」三個視圖；probe 同上
+- [ ] 8.5b 「我的語氣」每類同時呈現**例句**與**判定規則**；probe 斷言任一類別底下同時找得到例句元素與規則說明。例句是使用者唯一能檢查分類對不對的東西 —— 試作時第一版規則的兩個 bug（multiline 旗標、修正詞表放了單字「別」，後者使該類別膨脹 2.5 倍）都是印出句子才看見的，長條圖上完全看不出來
+- [ ] 8.5c **沒有瀏覽全部內文的入口**；probe 斷言 overlay 中不存在可列出全部訊息內文的介面
 - [ ] 8.6 **未規劃的視圖不出現**；probe 斷言畫面上沒有 token 用量或成本的視圖
 - [ ] 8.7 **畫面上**呈現中位數與高百分位、不呈現平均數；probe 斷言（scenario 的主詞是「畫面上」，聚合層的單元測試不是它的載體）
 - [ ] 8.8 每個視圖標示來源欄位；「一次坐下來」標示 30 分鐘門檻與「活動」的定義、「我的語氣」可檢視分類依據且說明百分比不相加為 100%、工具類視圖標示 subagent 口徑；probe 斷言這些說明存在
@@ -112,6 +116,13 @@
 
 ---
 
-> **本清單已對 spec 的 56 條 scenario 逐條核對過載體**（不是憑印象填「既有」）。核對時抓到兩條
-> 零覆蓋：「使用者訊息的內文被保存」與「工具輸出不進存檔」，已補為 2.9 與 2.10。
+> **開工時發現的既有問題（不屬於本 change，未處理）**：`node_modules` 的 electron 是 **43.4.1**，
+> 而 `package.json` 與 `package-lock.json` 都釘 **43.1.0** —— `npm ls electron` 直接回報
+> `invalid`。也就是說「釘死」目前在本機並未生效，dogfood 與探針跑的是 43.4.1，
+> 而 `dist:linux` 打出來的產物也會是它。處置（`npm ci`）需要另外裁決，因為它會換掉正在使用的
+> Electron。
+
+> **本清單已對 spec 的 scenario 逐條核對過載體**（不是憑印象填「既有」）。第一次核對（56 條）
+> 抓到兩條零覆蓋：「使用者訊息的內文被保存」與「工具輸出不進存檔」，已補為 2.9 與 2.10。
+> 「我的語氣要呈現例句」這項需求加入後 scenario 增為 58 條，已補 6.8b / 8.5b / 8.5c。
 > 若後續有 scenario 增減，**這份核對要重做**，因為它的價值全部來自逐條這件事本身。
