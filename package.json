@@ -64,6 +64,7 @@
     "probe:terminal": "node scripts/run-probe.mjs terminal",
     "probe:keyboard": "node scripts/run-probe.mjs keyboard",
     "probe:openspec": "node scripts/run-probe.mjs openspec",
+    "probe:insights": "node scripts/run-probe.mjs insights",
     "probe:package": "npm run dist:linux && node scripts/run-probe.mjs package"
   },
   "devDependencies": {

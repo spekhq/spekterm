@@ -139,7 +139,10 @@ function EmptyState({ snapshot }: { snapshot: InsightsSnapshot }): React.JSX.Ele
   const { t } = useTranslation()
   if (snapshot.phase === 'running') return <Note text={t('insights.scanning')} />
   if (snapshot.error) return <Note text={t('insights.error')} />
-  // 「來源不可用」與「來源可用但沒有資料」的處置完全不同 —— 前者是設定問題。
+  // **還沒掃過時「來源可不可用」是未知，不是「沒有資料」。**
+  // 少了這一支，開啟的瞬間就會斷言「來源可用但沒有資料」—— 而那句話在來源根本不存在時是錯的，
+  // 且它與掃完之後的正確狀態長得一模一樣，只差幾百毫秒。probe 就是這樣抓到它的。
+  if (snapshot.sourceAvailable === null) return <Note text={t('insights.scanning')} />
   if (snapshot.sourceAvailable === false) return <Note text={t('insights.sourceUnavailable')} />
   return <Note text={t('insights.noData')} />
 }

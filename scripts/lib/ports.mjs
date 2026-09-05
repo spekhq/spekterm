@@ -37,6 +37,14 @@ export const PROBE_PORTS = {
   keyboard: { build: 9234, dev: 9235 },
   /** 兩次啟動：預設環境，以及帶 `XDG_CONFIG_HOME` 的那一次。**號碼刻意不相鄰**（見檔頭）。 */
   identity: { default: 9221, xdgHome: 9231 },
+  /**
+   * 兩次啟動：帶 fixture 的那一個，以及驗空狀態的那一個。
+   *
+   * **第二個 port 不是可有可無的。** 空狀態的段落會在共用的 app 還活著時另起一個 app ——
+   * 同一個 port 上 `connectToApp` 會連到**先起來的那一個**，於是「空來源」的斷言讀到的是
+   * fixture 的資料。實測踩過：畫面上明明白白寫著 12 則訊息。
+   */
+  insights: { main: 9236, empty: 9237 },
   package: { main: 9240 },
 }
 

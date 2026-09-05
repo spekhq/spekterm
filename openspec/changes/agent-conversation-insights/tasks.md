@@ -7,9 +7,9 @@
   - **自檢當場抓到產生器五個錯**：宣告的工具數 8／實際 7、用量列 8／實際 7、最後一個 `cwd` 恰好等於專案根（於是「取最後一個」的錯誤實作也會通過）、極長訊息不夠長（平均只有中位數 4.4 倍，拉不開對照）、以及**時區那一筆沒有鑑別力** —— 固定取當地 23:30 對東半球無效（UTC+8 的 23:30 是同一天的 UTC 15:30），改為依時區方向取凌晨或深夜。
   - `timezoneShape` 於機器跑在 UTC 時回報 `'no-offset'`，該條驗收應**略過而非通過**（比照 `polling-mount.testkit.ts` 的對照組自檢）。
 - [x] 1.2b **CJK 守衛豁免 `*.testkit.ts`，並把它的前提變成結構保證** —— 豁免的理由是「不出貨」，而那件事此前沒有被檢查。新增「產品原始碼不得 import testkit」一條（`copy-language.test.mjs`），連同兩個對照組；實測把一支產品原始碼改成 import testkit 後該條確實變紅。少了它，一份中文 UI 文案只要搬進 `*.testkit.ts` 就能繞過整道守衛。
-- [ ] 1.3 於 `scripts/lib/ports.mjs` 登記新 probe 的 debugging port；`npm test` 的重複與衍生檢查通過
-- [ ] 1.4 新增 `scripts/probe-insights.mjs`（**以 `scripts/lib/sections.mjs` 組織為段落**，宣告段落依賴、支援 `PROBE_ONLY`）與 `npm run probe:insights`，並納入 `scripts/run-probes.mjs`；單獨執行通過
-- [ ] 1.5 probe 啟動時斷言它掃的是 fixture 而非開發者本機的真實資料：以 fixture 的**已知數值**斷言（訊息數恰為 N、某 skill 名恰好出現 M 次），而非只斷言視圖存在。缺這條時探針會去掃 490 個真實檔案、把開發者的 prompt 全文寫進探針的 userData，而存在性斷言照樣全綠
+- [x] 1.3 於 `scripts/lib/ports.mjs` 登記新 probe 的 debugging port；`npm test` 的重複與衍生檢查通過
+- [x] 1.4 新增 `scripts/probe-insights.mjs`（**以 `scripts/lib/sections.mjs` 組織為段落**，宣告段落依賴、支援 `PROBE_ONLY`）與 `npm run probe:insights`，並納入 `scripts/run-probes.mjs`；單獨執行通過
+- [x] 1.5 probe 啟動時斷言它掃的是 fixture 而非開發者本機的真實資料：以 fixture 的**已知數值**斷言（訊息數恰為 N、某 skill 名恰好出現 M 次），而非只斷言視圖存在。缺這條時探針會去掃 490 個真實檔案、把開發者的 prompt 全文寫進探針的 userData，而存在性斷言照樣全綠
 
 ## 2. 萃取：把一行 transcript 變成列
 
@@ -80,7 +80,7 @@
 - [x] 5.1 新增 main 的第二個建置進入點（`electron.vite.config.ts` 的 `rollupOptions.input`），以 `utilityProcess` 建立掃描行程並定義訊息協定（開始／進度／完成／失敗）；`npm run build` 後確認 `out/` 有該檔案
 - [x] 5.2 掃描行程一律回傳**結構化錯誤碼**，不回傳文案（design D14）；單元測試斷言錯誤物件不含自然語言字串
 - [x] 5.3 單一併發與逾時：重複觸發回報「進行中」而非排隊，卡住時回報「掃描失敗」而非永遠進行中；兩者各一條單元測試
-- [ ] 5.4 （待 probe 骨架）生命週期：關閉視窗、reload、結束 app 三條路徑皆不留孤兒行程；probe 於三條路徑後各斷言行程已消失
+- [x] 5.4 （待 probe 骨架）生命週期：關閉視窗、reload、結束 app 三條路徑皆不留孤兒行程；probe 於三條路徑後各斷言行程已消失
 - [ ] 5.5 （待 probe 骨架）崩潰隔離：probe 令掃描行程異常結束，斷言主行程存活、既有 pty 仍可輸入輸出、掃描狀態為失敗
 - [ ] 5.6 （待 probe 骨架）掃描期間 renderer 維持可用：probe 於掃描進行中操作 session 與側欄，並斷言終端輸出持續流動
 
@@ -140,20 +140,20 @@
 
 ## 8. overlay
 
-- [ ] 8.1（元件完成，probe 斷言待 9.x） overlay 元件：覆蓋整個視窗、`role="dialog"`、可 `Esc` 關閉、關閉後焦點歸還至開啟它的入口；probe 斷言四者（焦點以 `document.activeElement` 斷言為該入口，不得為 `<body>`）
+- [x] 8.1（元件完成，probe 斷言待 9.x） overlay 元件：覆蓋整個視窗、`role="dialog"`、可 `Esc` 關閉、關閉後焦點歸還至開啟它的入口；probe 斷言四者（焦點以 `document.activeElement` 斷言為該入口，不得為 `<body>`）
 - [ ] 8.2 **overlay 開啟時導航快捷鍵不生效（絕對狀態斷言）**：probe 先按一次「應當有作用」的 `Ctrl+↓` 確認機制活著並記下選取項，開啟 overlay 後再按，斷言選取項**恰為原來那一個**（不是「未變」的相對判定）
 - [ ] 8.3 **overlay 開啟時 `Ctrl+P` 不生效（需先建立可證偽的前提）**：probe 必須先讓 workspace 有 folder、側欄來源已選定、焦點在側欄之內，並先斷言「overlay 未開時 `Ctrl+P` 確實開得起來」；否則這條在任何實作下都會通過（`MainStage.tsx` 的 handler 掛在側欄容器，而 overlay 由活動列開啟，事件根本不行經側欄）。參考 `probe-openspec.mjs` 既有的 `FOCUS_SIDE_PANEL` 前置
-- [ ] 8.4（渲染完成，probe 斷言待 9.x） 渲染「工作的形狀」八個視圖，全部 DOM／CSS 自繪；probe 逐一以 `role` + `aria-label` 定位並斷言存在
-- [ ] 8.5（渲染完成，probe 斷言待 9.x） 渲染「說話的方式」三個視圖；probe 同上
-- [ ] 8.5b（渲染完成，probe 斷言待 9.x） 「我的語氣」每類同時呈現**例句**與**判定規則**；probe 斷言任一類別底下同時找得到例句元素與規則說明。例句是使用者唯一能檢查分類對不對的東西 —— 試作時第一版規則的兩個 bug（multiline 旗標、修正詞表放了單字「別」，後者使該類別膨脹 2.5 倍）都是印出句子才看見的，長條圖上完全看不出來
+- [x] 8.4（渲染完成，probe 斷言待 9.x） 渲染「工作的形狀」八個視圖，全部 DOM／CSS 自繪；probe 逐一以 `role` + `aria-label` 定位並斷言存在
+- [x] 8.5（渲染完成，probe 斷言待 9.x） 渲染「說話的方式」三個視圖；probe 同上
+- [x] 8.5b（渲染完成，probe 斷言待 9.x） 「我的語氣」每類同時呈現**例句**與**判定規則**；probe 斷言任一類別底下同時找得到例句元素與規則說明。例句是使用者唯一能檢查分類對不對的東西 —— 試作時第一版規則的兩個 bug（multiline 旗標、修正詞表放了單字「別」，後者使該類別膨脹 2.5 倍）都是印出句子才看見的，長條圖上完全看不出來
 - [ ] 8.5c **沒有瀏覽全部內文的入口**；probe 斷言 overlay 中不存在可列出全部訊息內文的介面
-- [ ] 8.6（實作完成，probe 斷言待 9.x） **未規劃的視圖不出現**；probe 斷言畫面上沒有 token 用量或成本的視圖
-- [ ] 8.7（呈現完成，probe 斷言待 9.x） **畫面上**呈現中位數與高百分位、不呈現平均數；probe 斷言（scenario 的主詞是「畫面上」，聚合層的單元測試不是它的載體）
-- [ ] 8.8（呈現完成，probe 斷言待 9.x） 每個視圖標示來源欄位；「一次坐下來」標示 30 分鐘門檻與「活動」的定義、「我的語氣」可檢視分類依據且說明百分比不相加為 100%、工具類視圖標示 subagent 口徑；probe 斷言這些說明存在
+- [x] 8.6（實作完成，probe 斷言待 9.x） **未規劃的視圖不出現**；probe 斷言畫面上沒有 token 用量或成本的視圖
+- [x] 8.7（呈現完成，probe 斷言待 9.x） **畫面上**呈現中位數與高百分位、不呈現平均數；probe 斷言（scenario 的主詞是「畫面上」，聚合層的單元測試不是它的載體）
+- [x] 8.8（呈現完成，probe 斷言待 9.x） 每個視圖標示來源欄位；「一次坐下來」標示 30 分鐘門檻與「活動」的定義、「我的語氣」可檢視分類依據且說明百分比不相加為 100%、工具類視圖標示 subagent 口徑；probe 斷言這些說明存在
 - [ ] 8.9（實作完成，probe 斷言待 9.x） 時間範圍選擇器與跨期比較的呈現；probe 斷言選定範圍後視圖只含該範圍
-- [ ] 8.10（實作完成，probe 斷言待 9.x） 三種狀態（就緒／掃描中／存檔為空，空時再分來源不可用與無資料）；probe 以空 fixture 與不存在的來源各驗一次
-- [ ] 8.11（實作完成，probe 斷言待 9.x） 呈現範圍不受 rail 選取影響，且**涵蓋不在 workspace folder 清單裡的專案**；probe 於 overlay 開啟中切換 rail 斷言不變，並斷言 fixture 裡那個不在清單中的專案有出現
-- [ ] 8.12 字級全部引用 `--text-*` token、顏色走既有主題 token；`typography.test.mjs` 通過。24×7 熱圖若撞到 `2xs`（13px）的地板，開 `typography-scale` 的 delta，**不得**寫死字級或用 inline `style`
+- [x] 8.10（實作完成，probe 斷言待 9.x） 三種狀態（就緒／掃描中／存檔為空，空時再分來源不可用與無資料）；probe 以空 fixture 與不存在的來源各驗一次
+- [x] 8.11（實作完成，probe 斷言待 9.x） 呈現範圍不受 rail 選取影響，且**涵蓋不在 workspace folder 清單裡的專案**；probe 於 overlay 開啟中切換 rail 斷言不變，並斷言 fixture 裡那個不在清單中的專案有出現
+- [x] 8.12 字級全部引用 `--text-*` token、顏色走既有主題 token；`typography.test.mjs` 通過。24×7 熱圖若撞到 `2xs`（13px）的地板，開 `typography-scale` 的 delta，**不得**寫死字級或用 inline `style`
 
 > **第 8 組的元件已全部寫完並接上活動列**（overlay、十一個視圖、三種狀態、時間範圍、焦點歸還、
 > `role="dialog"`），`npm run probe:workspace` **128/128 通過**。**尚未打勾的是那些 task 裡
@@ -164,9 +164,26 @@
 
 ## 9. 活動列與既有探針的回歸
 
-- [ ] 9.1 活動列新增入口並開啟 overlay；probe 斷言入口為可用狀態且觸發後 overlay 開啟
+- [x] 9.1 活動列新增入口並開啟 overlay；probe 斷言入口為可用狀態且觸發後 overlay 開啟
 - [x] 9.2 **更新 `scripts/probe-workspace.mjs` 的活動列斷言**：`activity.length === 4` 改為 5，且三條位置索引斷言（`activity[0]` / `slice(1,3)` / `activity[3]`）改為**以 `aria-label` 定位**。不改的話 `probe:workspace` 會紅；而更糟的是若新入口插在 Settings 之前，`activity[3]` 會變成新入口而「Settings 為可用狀態」照樣通過 —— 一條在驗錯元素的綠燈
 - [x] 9.3 `npm run probe:workspace` 完整通過
+
+> **`probe:insights` 建立完成，18/18 通過（約 5 秒）**，已納入 `test:e2e`。
+> 兩個對照組都有鑑別力：不傳 `CLAUDE_CONFIG_DIR` → 四條斷言全紅（那正是 1.5 要防的假綠）；
+> 拿掉 `role="dialog"` → 選擇器整個選不到，段落拋例外。
+>
+> **實作 probe 時抓到三件事：**
+> 1. **`sourceAvailable === null` 被誤當成「沒有資料」** —— 開啟的瞬間就斷言「來源可用但沒有
+>    資料」，而那句話在來源根本不存在時是錯的，且它與掃完之後的正確狀態長得一模一樣，只差幾百
+>    毫秒。**這是 probe 抓到的產品 bug，不是測試問題。**
+> 2. **空狀態的段落與共用的 app 搶同一個 debugging port** —— `connectToApp` 連到的是先起來的
+>    那一個，於是「空來源」的斷言讀到 fixture 的資料（畫面上明明白白寫著 12 則訊息）。
+>    改為第二個 port（`ports.mjs` 的設計本來就是「一支探針一組 port」）。
+> 3. **「畫面不得出現 scratchpad」這條斷言在正確實作下也會紅** —— fixture 裡有一則使用者訊息
+>    就叫「看一下 scratchpad」，它會出現在語氣例句裡。改成只看專案那張圖的列。
+>
+> 尚未做的：5.5（崩潰隔離）、5.6（掃描期間 renderer 可用）、7.4（未開 overlay 時掃描仍已發生）、
+> 8.2／8.3 的完整前置（`Ctrl+P` 需側欄焦點）、8.9（時間範圍）。
 
 ## 10. i18n
 
