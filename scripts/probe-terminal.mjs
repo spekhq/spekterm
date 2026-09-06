@@ -36,6 +36,7 @@ import {
 } from './lib/cdp.mjs'
 import { menuEvidence } from './lib/menu-evidence.mjs'
 import { copy, prefixOf } from './lib/copy.mjs'
+import { RENDER_PATH_PRELUDE } from './lib/render-path.mjs'
 import { sectionConsole } from './lib/instrument.mjs'
 import { MOUNTED, awaitMounted, describeMounted } from './lib/mounted.mjs'
 import { electronExtraArgs } from './lib/display.mjs'
@@ -494,19 +495,6 @@ const TABS = `[...document.querySelectorAll('[aria-label="${copy('sessions.tabs'
  * **也不要改成「數 canvas 但排除 `_tmpCanvas`」**（例如以尺寸或 `display:none` 過濾）——
  * 那是把判準綁在 xterm 的內部實作細節上，且它會**靜默地**隨 xterm 版本失效。
  */
-const RENDER_PATH_PRELUDE = `
-  const hostsOf = () => [...document.querySelectorAll('section[aria-label="${copy('stage.terminal')}"] > div')]
-  const renderPathOf = (host) => {
-    const link = !!host.querySelector('canvas.xterm-link-layer')
-    const rows = !!host.querySelector('.xterm-rows')
-    if (link && !rows) return 'programmatic'
-    if (rows && !link) return 'glyph'
-    return 'unknown(link=' + link + ',rows=' + rows + ')'
-  }
-  /** 共用暫存畫布的所在 —— 只用於 detail，**不得**進入任何判準。 */
-  const strayCanvasesIn = (host) =>
-    [...host.querySelectorAll('canvas')].filter((c) => !c.classList.contains('xterm-link-layer')).length
-`
 
 /** rail 的 session 子列（第 n 個，自 0 起）。 */
 const RAIL_SESSION_RECT = (index) => `(() => {
@@ -3129,6 +3117,34 @@ async function runRestore(label, { port, rendererUrl }) {
       `分頁=${JSON.stringify(labelsAgain)}`,
     )
 
+    /*
+      **「存在」與「仍為休眠」是兩件事，而上一條只驗了前者。**
+
+      分頁標籤相同只證明它沒有消失 —— 一個「重建時把全部 session 都喚醒」的實作在那條斷言下
+      **照樣全綠**，而那正是「開啟應用程式至多啟動一個 session」要防的事。
+
+      這裡在點擊之前先量一次 pty 數：只有被顯示的那一個該有 pty。緊接其後的等待是
+      `pids.length === 2`，若它們早就都醒了，那個等待會**立刻收斂** —— 於是連下一條也一起假綠。
+    */
+    // **先等被顯示的那一個醒來，再問「還有沒有別的也醒了」。** 喚醒是非同步的：量得太早會
+    // 讀到 0，而 0 與「一個都沒醒」在數值上相同 —— 那樣這條斷言會在產品正確時變紅。
+    await pollFor({
+      read: () => ptySessionPids(marker),
+      settled: (pids) => pids.length >= 1,
+      timeoutMs: 10_000,
+      label: '被顯示的那一個 session 醒來',
+    })
+    // 沉澱一下，讓「其他 session 也被喚醒」的實作有機會露出來 —— 少了這段等待，
+    // 一個「全部喚醒」的實作可能只是還沒完成第二個，於是照樣量到 1。
+    await sleep(800)
+    const dormantPids = ptySessionPids(marker)
+    check(
+      results,
+      `${label}：再次重啟後只有被顯示的那一個醒來，其餘仍為休眠`,
+      dormantPids.length === 1,
+      `pty 數=${dormantPids.length}（分頁 ${labelsAgain.length} 個，只有被顯示的那一個該有）`,
+    )
+
     // ── 切到 shell session：它才被喚醒（首次被顯示時 spawn）
     await realClick(app.client, await app.client.evaluate(TAB_RECT(1)))
     const woken = await pollFor({
@@ -3708,9 +3724,24 @@ async function runAgentStatus(label, { port, rendererUrl }) {
       () => stub.calls().length > before,
       10_000,
     ).then(() => stub.calls())
-    check(results, '關閉偏好後，其後建立的 session 不再注入',
-      after.length > before && !after[after.length - 1].includes('--settings'),
-      after[after.length - 1] ?? '(無)')
+    /*
+      **判準是「設定裡沒有狀態列命令」，不是「命令列上沒有 `--settings`」。**
+
+      `agent-transcript-view` 起，同一個接縫有兩個功能在用（狀態回報與事件回報），而規格明文
+      要求兩者的啟用狀態**彼此獨立**：關掉狀態列 SHALL NOT 連帶關掉事件回報。於是關掉偏好之後
+      `--settings` 仍然在，只是那份設定裡**沒有 `statusLine`**。
+
+      此前這條斷言以 argv 判定，於是它把「沒有狀態列」與「沒有那個旗標」混為一談 ——
+      **一旦第二個功能接上同一個接縫，它就會紅，而產品其實是對的。**
+      改以設定檔的內容判定，同時也是更強的斷言：它驗的是注入的東西本身。
+    */
+    const disabledSettingsPath = (after[after.length - 1]?.match(/--settings (\S+)/) ?? [])[1]
+    const disabledSettings = disabledSettingsPath
+      ? JSON.parse(readFileSync(disabledSettingsPath, 'utf8'))
+      : {}
+    check(results, '關閉偏好後，其後建立的 session 不再被注入狀態列命令',
+      after.length > before && !('statusLine' in disabledSettings),
+      `注入的設定含有：${Object.keys(disabledSettings).join(', ') || '(無)'}`)
   } finally {
     if (app) await app.destroy()
   }

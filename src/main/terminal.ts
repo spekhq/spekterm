@@ -2,7 +2,9 @@ import { randomUUID } from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import { type IPty, spawn } from 'node-pty'
-import { type AgentStatusInjection, clearAgentStatus, prepareInjection } from './agent-status'
+import { clearAgentStatus, prepareInjection } from './agent-status'
+import { clearAgentEvents, prepareEventInjection } from './agent-events'
+import { type Injection, composeInjection } from './agent-injection'
 import { isWithin } from './fs-boundary'
 import { isUuid } from './session-store'
 import { getUserEnv, whenUserEnvReady } from './user-env'
@@ -149,7 +151,7 @@ export function ptyEnv(
 function spawnArgs(
   target: SpawnTarget,
   conversation: ClaudeConversation | undefined,
-  injection: AgentStatusInjection | null,
+  injection: Injection | null,
 ): string[] {
   // claude 目標**恆有**一個對話（`create()` 不是續接就是新建）—— 沒有「不帶 id 的 claude」。
   if (target !== 'claude' || !conversation) return ['-l']
@@ -305,6 +307,13 @@ export class TerminalService {
      * 而注入是每個 session 各自決定的。切換偏好只影響其後建立或重建的 session，這是誠實的限制。
      */
     private readonly agentStatusEnabled: () => boolean = () => false,
+    /**
+     * 是否啟用與 agent 的事件橋接。**與狀態橋接各自獨立求值** —— 關掉其中一個 SHALL NOT
+     * 使另一個失效（`claude-status-bridge` 的合成條款）。
+     */
+    private readonly agentEventsEnabled: () => boolean = () => false,
+    /** 合成後的設定檔落點。兩個功能共用同一份（接縫只有一個）。 */
+    private readonly settingsFile: () => string = () => '',
   ) {}
 
   /**
@@ -317,6 +326,20 @@ export class TerminalService {
   liveCwdOf(sessionId: string): string | undefined {
     const session = this.#sessions.get(sessionId)
     return session ? readPtyCwd(session.pty.pid) : undefined
+  }
+
+  /**
+   * agent session 的紀錄來源座標：pty **誕生時**的工作目錄與當下的對話識別碼。
+   *
+   * **誕生時的 cwd，不是當下的** —— agent 的紀錄落點由它啟動那一刻的工作目錄決定，其後即使
+   * 使用者 `cd` 走也不會換檔（實測）。用 `liveCwdOf()` 會在 shell 目標混用時算出一個不存在的位置。
+   *
+   * 非 agent 目標回 `null`：shell session 沒有紀錄可跟。
+   */
+  agentSourceOf(sessionId: string): { cwd: string; conversationId: string } | null {
+    const session = this.#sessions.get(sessionId)
+    if (!session || session.target !== 'claude' || !session.conversation) return null
+    return { cwd: session.cwd, conversationId: session.conversation.id }
   }
 
   /** 還活著的 pty 數量。驗收「關閉／dispose 後確實清理」用得上。 */
@@ -438,9 +461,15 @@ export class TerminalService {
     },
   ): void {
     const { cwd, cols, rows, healed, global } = options
-    // 注入只對 claude 目標有意義（statusLine 是它的概念）。
+    // 注入只對 agent 目標有意義。**兩個功能合成為單一份設定** —— 接縫只有一個，
+    // 各寫各的會讓後寫的蓋掉先寫的，而兩者都會回報自己已啟用（`agent-injection`）。
     const injection =
-      target === 'claude' ? prepareInjection(sessionId, this.agentStatusEnabled()) : null
+      target === 'claude'
+        ? composeInjection(this.settingsFile(), [
+            prepareInjection(sessionId, this.agentStatusEnabled()),
+            prepareEventInjection(sessionId, this.agentEventsEnabled()),
+          ])
+        : null
     let pty: IPty
     try {
       pty = spawn(resolveShell(), spawnArgs(target, conversation, injection), {
@@ -603,6 +632,9 @@ export class TerminalService {
     this.#reasons.set(session.pty, 'killed')
     // 不留下一份沒有主人的狀態 —— 否則同一個 id 日後若被重建，會先看到一份過期的資料。
     clearAgentStatus(sessionId)
+    // **只由 pty 的結束觸發。** agent 回報的「對話結束」不是這個訊號（實測 `/clear` 就會發它，
+    // 而 pty 還活著）—— 接上去的話，使用者清一次對話，等待狀態就此永遠停在未知。
+    clearAgentEvents(sessionId)
     try {
       session.pty.kill()
     } catch {

@@ -193,7 +193,19 @@ const PROBE_EXPRESSION = `(async () => {
           'shell',
           'panel',
           'insights',
+          'conversation',
         ].includes(key),
+    ),
+    // conversation 於 agent-transcript-view 引入（agent-transcript-stream / agent-input-bridge
+    // 規格）：對話 view 的內容訂閱、等待狀態、以及送出。**無路徑詞彙** —— 送出的是 sessionId，收回的事件由主行程以白名單組出，
+    // 不含任何絕對路徑（該規格明文，且有帶對照組的單元測試）。
+    // **送出的閘在主行程**：介面上有這個能力不構成許可 —— 未知或等待選擇時主行程一律拒絕，
+    // 與 fs 邊界同哲學（preload 與 renderer 同屬一個行程樹，在那裡檢查等同沒有檢查）。
+    // （本區塊在一個模板字串之內 —— 註解裡不可出現反引號，它會把字串提前結束。）
+    // **刻意不掛在 terminal 之下**：那個 namespace 的每一個成員都對應一顆 pty，而這裡一個位元組
+    // 都不寫進 pty；混在一起會讓 terminal-sessions 那條逐一列舉的 scenario 失去意義。
+    surplusConversationKeys: Object.keys(api?.conversation ?? {}).filter(
+      (key) => !['watch', 'onUpdate', 'onWait', 'send'].includes(key),
     ),
     surplusPanelKeys: Object.keys(api?.panel ?? {}).filter((key) => !['get', 'persist'].includes(key)),
     // **insights 底下也要逐成員列舉。** 只在頂層 namespace 清單裡登記的話，
@@ -289,6 +301,9 @@ try {
   check(results, 'insights 介面只暴露已定義邊界要求的能力',
     r?.surplusInsightsKeys?.length === 0,
     r?.surplusInsightsKeys?.length ? `多出：${r.surplusInsightsKeys.join(', ')}` : '無多餘能力')
+  check(results, 'conversation 介面只暴露已定義邊界要求的能力',
+    r?.surplusConversationKeys?.length === 0,
+    r?.surplusConversationKeys?.length ? `多出：${r.surplusConversationKeys.join(', ')}` : '無多餘能力')
   // 這一條守的是「有沒有人偷偷加了一整個 namespace」—— 其餘 surplus* 全都只看既有 namespace
   // 的內部，加一個新的它們一聲都不會響。
   check(results, 'preload 未暴露任何未經定義的頂層 namespace',

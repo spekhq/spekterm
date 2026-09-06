@@ -6,6 +6,11 @@ import type { GenerateResult, ReportPreview } from '../main/report'
 import type { Report, ReportMeta } from '../main/report-store'
 import type { FsResult, WriteResponse } from '../main/ipc/fs'
 import type { PanelSnapshot } from '../main/panel-store'
+import type { FollowUpdate as ConversationUpdate } from '../main/transcript-follow-service'
+import type { DrainResult, WaitState } from '../main/agent-events'
+
+/** 等待選擇時「正在被問什麼」。**沒有選項** —— 作答一律回終端 view。 */
+type PendingRequest = DrainResult['pending']
 import type { RestoredSession } from '../main/ipc/terminal'
 import type { DirEntry, FileContent } from '../main/fs-service'
 import type { TerminalPreferences } from '../main/preferences-store'
@@ -252,6 +257,51 @@ const workspaceApi = {
    * 邊界限制（使用者可以 `cd` 到任何地方 —— 那正是終端的用途）。這與 `fs` 白名單的沙箱
    * 語意**不同**，不要把它當成沙箱來推論。
    */
+  /**
+   * 對話 view 的內容。**與 `terminal` 分家是刻意的** —— 它們是同一個 session 的兩種呈現，
+   * 但資料來源完全不同：終端來自 pty 的位元組，對話來自 agent 自己寫下的結構化紀錄。
+   */
+  conversation: {
+    /** 告訴主行程「對話 view 現在盯著哪個 session」（`null` ＝ 不盯）。 */
+    watch: (sessionId: string | null): void => {
+      ipcRenderer.send('workspace:conversation:watch', sessionId)
+    },
+    /** 內容更新的推送。回傳取消訂閱的函式。 */
+    onUpdate: (listener: (update: ConversationUpdate) => void): (() => void) => {
+      const handler = (_event: IpcRendererEvent, update: ConversationUpdate): void => {
+        listener(update)
+      }
+      ipcRenderer.on('workspace:conversation:update', handler)
+      return () => {
+        ipcRenderer.off('workspace:conversation:update', handler)
+      }
+    },
+    /** 等待狀態的推送（能不能送）。回傳取消訂閱的函式。 */
+    onWait: (
+      listener: (sessionId: string, state: WaitState, pending: PendingRequest) => void,
+    ): (() => void) => {
+      const handler = (
+        _event: IpcRendererEvent,
+        sessionId: string,
+        state: WaitState,
+        pending: PendingRequest,
+      ): void => {
+        listener(sessionId, state, pending)
+      }
+      ipcRenderer.on('workspace:conversation:wait', handler)
+      return () => {
+        ipcRenderer.off('workspace:conversation:wait', handler)
+      }
+    },
+    /**
+     * 送出一則訊息。
+     *
+     * **閘在主行程** —— renderer 這側的停用只是 UI 提示，不是把關者（與 fs 邊界同哲學）。
+     * 被拒絕時回傳當下的等待狀態，好讓畫面說得出原因。
+     */
+    send: (sessionId: string, text: string): Promise<{ ok: boolean; reason?: WaitState }> =>
+      ipcRenderer.invoke('workspace:conversation:send', sessionId, text),
+  },
   terminal: {
     /**
      * 建立一個 session。`worktreeKey` 指定它開在哪個工作目錄（git worktree），省略＝ folder 根。

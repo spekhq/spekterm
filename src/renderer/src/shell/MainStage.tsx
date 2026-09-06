@@ -16,6 +16,7 @@ import { QuickOpen } from './quick-open/QuickOpen'
 import { PanelSwitch } from './side-panel/PanelSwitch'
 import { SidePanel } from './side-panel/SidePanel'
 import { SessionTabs } from './terminal/SessionTabs'
+import { ConversationView } from './terminal/ConversationView'
 import { TerminalView } from './terminal/TerminalView'
 import { useSessions } from './terminal/sessions'
 import { folderSelection } from './types'
@@ -38,6 +39,15 @@ interface MainStageProps {
   selection: RailSelection | null
   /** workspace 的所有 folder —— 來源指示器的下拉清單。 */
   folders: WorkspaceFolder[]
+}
+
+/**
+ * 這個 session 當下的呈現方式。**缺席即終端** —— 既有 session 與 shell 目標的自然值，
+ * 因此不需要任何遷移。終端也是預設：本 change 不改變既有使用者第一眼看到的東西。
+ */
+function sessionViewOf(session: { spawnTarget: string; view?: 'terminal' | 'conversation' }): 'terminal' | 'conversation' {
+  if (session.spawnTarget !== 'claude') return 'terminal'
+  return session.view === 'conversation' ? 'conversation' : 'terminal'
 }
 
 export function MainStage({ selection, folders }: MainStageProps): React.JSX.Element {
@@ -429,6 +439,7 @@ export function MainStage({ selection, folders }: MainStageProps): React.JSX.Ele
           onCreate={createSession}
           onRename={sessions.rename}
           onReorder={(fromIndex, toIndex) => sessions.reorder(itemKey, fromIndex, toIndex)}
+          onSetView={sessions.setView}
           error={sessionError}
         />
       )}
@@ -466,7 +477,36 @@ export function MainStage({ selection, folders }: MainStageProps): React.JSX.Ele
                   active={
                     selection !== null && session.folderId === itemKey && session.id === focusedId
                   }
+                  /*
+                    **對話 view 在上層時終端仍然 active** —— `active` 決定的是「有沒有版面盒子」，
+                    而 `terminal-sessions` 的尺寸同步正是以此為判準，並明文禁止在沒有盒子時推導
+                    尺寸。少了它，pty 會停在那個從未被量測過的初始值，agent 以錯誤的寬度輸出，
+                    **而那些輸出一旦印出就永久留在終端歷史裡** —— 使用者切回終端才看得到，
+                    屆時已無法補救。
+                    `covered` 另外表達「使用者看不看得見」，那是渲染資源與焦點的判準。
+                  */
+                  covered={
+                    session.id === focusedId && sessionViewOf(session) === 'conversation'
+                  }
                 />
+              ))}
+
+            {/*
+              對話 view 是終端 host 的**兄弟節點，不是後代**。兩個理由都在 `TerminalView` 的
+              註解裡記著：(a) `.xterm` 由 effect 掛上去，排在 React children 之後 ⇒ 依 tree order
+              會蓋在它上面；(b) host 上有 capture 階段的滑鼠接管（中鍵貼上進 pty、右鍵開終端的
+              選單），在它之下的元素會拿到錯的行為。
+            */}
+            {folderSessions
+              .filter((session) => session.id === focusedId && sessionViewOf(session) === 'conversation')
+              .map((session) => (
+                <div key={session.id} className="absolute inset-0 z-10 bg-shell">
+                  <ConversationView
+                    sessionId={session.id}
+                    active
+                    dormant={session.status === 'dormant'}
+                  />
+                </div>
               ))}
 
             {!focusedId && (

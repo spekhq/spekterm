@@ -238,6 +238,10 @@ OpenSpec 身分的入口 SHALL 於**側欄來源已選定、且該來源 repo �
 
 分頁列僅呈現當前選中 repo 的 session —— 主舞台只屬於當前選中的 repo。
 
+一個 session **可能有一種以上的呈現方式**（見 `agent-conversation-view`）。分頁列 SHALL 為每個
+session 呈現**單一一項**，SHALL NOT 因 view 的種類而分裂為多項 —— view 是同一個 session 的兩種
+呈現，不是兩個 session。
+
 #### Scenario: 呈現當前 repo 的多個 session
 
 - **WHEN** 當前選中的 repo 有多個 session
@@ -246,7 +250,7 @@ OpenSpec 身分的入口 SHALL 於**側欄來源已選定、且該來源 repo �
 #### Scenario: 切換 focused session
 
 - **WHEN** 使用者於分頁列點選另一個 session
-- **THEN** focused session 切換為該 session，終端顯示其內容
+- **THEN** focused session 切換為該 session，該 session 的當前 view 顯示其內容
 
 #### Scenario: 建立新 session 可選 spawn 目標
 

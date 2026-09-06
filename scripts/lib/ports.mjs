@@ -45,6 +45,13 @@ export const PROBE_PORTS = {
    * fixture 的資料。實測踩過：畫面上明明白白寫著 12 則訊息。
    */
   insights: { main: 9236, empty: 9237 },
+  /**
+   * 兩次啟動：第一次建立並操作，第二次**以同一份 profile 重建**。
+   *
+   * 第二個 port 不是可有可無的：重建那一段必須在第一個 app 完全收掉之後另起一個，而同一個 port
+   * 上 `connectToApp` 會連到先起來的那一個 —— 比照 `insights` 的兩個 port 學到的同一件事。
+   */
+  agentView: { main: 9238, restore: 9239 },
   package: { main: 9240 },
 }
 

@@ -1,0 +1,318 @@
+import assert from 'node:assert/strict'
+import { spawnSync } from 'node:child_process'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+import test from 'node:test'
+
+import {
+  clearAgentEvents,
+  configureAgentEvents,
+  drainEvents,
+  encodeInput,
+  EVENT_COMMAND,
+  nextWaitState,
+  parseEvent,
+  prepareEventInjection,
+  type AgentEvent,
+} from './agent-events'
+import { composeInjection } from './agent-injection'
+
+function tmp(): string {
+  return fs.mkdtempSync(path.join(os.tmpdir(), 'spekterm-events-'))
+}
+
+const ev = (name: string, extra: Partial<AgentEvent> = {}): AgentEvent => ({
+  name,
+  transcriptPath: null,
+  notificationType: null,
+  toolName: null,
+  toolArg: null,
+  ...extra,
+})
+
+test('許可請求是等待選擇的權威訊號', () => {
+  assert.equal(nextWaitState(ev('PermissionRequest', { toolName: 'Write' })), 'awaiting-choice')
+  // 計畫核准走同一個 hook（實測 `ExitPlanMode` 同樣觸發）—— 不需要維護一張工具清單。
+  assert.equal(nextWaitState(ev('PermissionRequest', { toolName: 'ExitPlanMode' })), 'awaiting-choice')
+})
+
+test('Notification 依 notification_type 分派（本模組最承重的一條）', () => {
+  // **對照組**：把分派拿掉、一律回 ready，這一條必須變紅 —— 而那正是「許可提示被讀成就緒」。
+  assert.equal(nextWaitState(ev('Notification', { notificationType: 'permission_prompt' })), 'awaiting-choice')
+  assert.equal(nextWaitState(ev('Notification', { notificationType: 'idle_prompt' })), 'ready')
+})
+
+test('認得 hook 但不認得它的種類 ⇒ 未知，不是就緒也不是忙碌', () => {
+  assert.equal(nextWaitState(ev('Notification', { notificationType: 'something_new' })), 'unknown')
+  assert.equal(nextWaitState(ev('Notification')), 'unknown')
+})
+
+test('不認得的事件形狀 ⇒ 未知，且不沿用前一個狀態', () => {
+  assert.equal(nextWaitState(ev('SomeFutureHook')), 'unknown')
+})
+
+test('工具結束是離開等待選擇的訊號', () => {
+  assert.equal(nextWaitState(ev('PostToolUse')), 'busy')
+  assert.equal(nextWaitState(ev('Stop')), 'ready')
+})
+
+test('對話結束 ⇒ 未知（它不代表 session 結束）', () => {
+  assert.equal(nextWaitState(ev('SessionEnd')), 'unknown')
+  assert.equal(nextWaitState(ev('SessionStart')), 'ready')
+})
+
+test('payload 以白名單取欄位，絕對路徑不外流（transcript_path 除外，它不送 renderer）', () => {
+  const parsed = parseEvent({
+    hook_event_name: 'PreToolUse',
+    session_id: 's1',
+    transcript_path: '/home/u/.claude/projects/x/y.jsonl',
+    cwd: '/home/u/secret',
+    scratchpad_dir: '/tmp/scratch/abc',
+    permission_mode: 'default',
+    tool_name: 'Write',
+    tool_input: { file_path: '/home/u/secret/file.ts' },
+  })
+  assert.ok(parsed)
+  assert.deepEqual(Object.keys(parsed).sort(), ['name', 'notificationType', 'toolArg', 'toolName', 'transcriptPath'])
+  // `toolArg` 是**單一辨識參數**，其值本身可能是路徑 —— 那是刻意的（使用者要看得出 agent 在動
+  // 哪個檔）。真正必須不外流的是**其餘一切**：工作目錄、暫存目錄、以及參數裡的其他欄位。
+  assert.equal(parsed.toolArg, '/home/u/secret/file.ts')
+  const serialized = JSON.stringify({ ...parsed, transcriptPath: undefined, toolArg: undefined })
+  assert.ok(!serialized.includes('/home/u/secret'), serialized)
+  assert.ok(!serialized.includes('/tmp/scratch'), serialized)
+})
+
+test('沒有 hook_event_name 的東西不是事件', () => {
+  assert.equal(parseEvent({ foo: 1 }), null)
+  assert.equal(parseEvent(null), null)
+  assert.equal(parseEvent('x'), null)
+})
+
+test('未啟用時完全不注入，也不建立落點', () => {
+  const root = tmp()
+  configureAgentEvents(root)
+  assert.equal(prepareEventInjection('s1', false), null)
+  assert.equal(fs.existsSync(path.join(root, 'agent-events', 's1')), false)
+})
+
+test('啟用時注入 hooks 並以環境變數指定落點', () => {
+  const root = tmp()
+  configureAgentEvents(root)
+  const part = prepareEventInjection('s1', true)
+  assert.ok(part)
+  assert.ok('hooks' in part.settings)
+  assert.ok(part.env.SPEKTERM_EVENT_DIR.endsWith(path.join('agent-events', 's1')))
+  assert.equal(fs.existsSync(part.env.SPEKTERM_EVENT_DIR), true)
+})
+
+test('新 session 不繼承上一輪的殘留', () => {
+  const root = tmp()
+  configureAgentEvents(root)
+  const first = prepareEventInjection('s1', true)!
+  fs.writeFileSync(path.join(first.env.SPEKTERM_EVENT_DIR, '1-1.json'), '{"hook_event_name":"Stop"}')
+  // 重新 spawn 同一個 id ⇒ 落點必須是乾淨的，否則等待狀態會先呈現一份過期的值。
+  prepareEventInjection('s1', true)
+  assert.deepEqual(fs.readdirSync(first.env.SPEKTERM_EVENT_DIR), [])
+})
+
+test('連續多筆事件全部被讀到、各只處理一次，順序即發生順序', () => {
+  const root = tmp()
+  configureAgentEvents(root)
+  const dir = prepareEventInjection('s1', true)!.env.SPEKTERM_EVENT_DIR
+  fs.writeFileSync(path.join(dir, '100-1.json'), '{"hook_event_name":"PreToolUse"}')
+  fs.writeFileSync(path.join(dir, '200-1.json'), '{"hook_event_name":"PermissionRequest"}')
+  fs.writeFileSync(path.join(dir, '300-1.json'), '{"hook_event_name":"PostToolUse"}')
+
+  const first = drainEvents('s1', 'unknown')
+  assert.equal(first.count, 3)
+  assert.equal(first.state, 'busy')
+  // 讀完即刪 ⇒ 去重由結構保證。
+  const second = drainEvents('s1', first.state)
+  assert.equal(second.count, 0)
+  assert.equal(second.state, 'busy')
+})
+
+test('損毀的單筆被忽略，其餘照常處理', () => {
+  const root = tmp()
+  configureAgentEvents(root)
+  const dir = prepareEventInjection('s1', true)!.env.SPEKTERM_EVENT_DIR
+  fs.writeFileSync(path.join(dir, '100-1.json'), '{"hook_event_na')
+  fs.writeFileSync(path.join(dir, '200-1.json'), '{"hook_event_name":"Stop"}')
+  const result = drainEvents('s1', 'unknown')
+  assert.equal(result.count, 1)
+  assert.equal(result.state, 'ready')
+})
+
+test('事件帶來的紀錄位置被回報出來（定位的權威來源）', () => {
+  const root = tmp()
+  configureAgentEvents(root)
+  const dir = prepareEventInjection('s1', true)!.env.SPEKTERM_EVENT_DIR
+  fs.writeFileSync(
+    path.join(dir, '100-1.json'),
+    JSON.stringify({ hook_event_name: 'SessionStart', transcript_path: '/p/new.jsonl' }),
+  )
+  assert.equal(drainEvents('s1', 'unknown').transcriptPath, '/p/new.jsonl')
+})
+
+test('未注入時等待狀態不變（呼叫端的初始值本來就是未知）', () => {
+  const root = tmp()
+  configureAgentEvents(root)
+  assert.equal(drainEvents('never-injected', 'unknown').state, 'unknown')
+})
+
+test('session 結束後落點被清除', () => {
+  const root = tmp()
+  configureAgentEvents(root)
+  const dir = prepareEventInjection('s1', true)!.env.SPEKTERM_EVENT_DIR
+  clearAgentEvents('s1')
+  assert.equal(fs.existsSync(dir), false)
+})
+
+test('合成器：兩者皆參與 ⇒ 一份設定含兩者', () => {
+  const file = path.join(tmp(), 'settings.json')
+  const injection = composeInjection(file, [
+    { settings: { statusLine: { type: 'command', command: 'a' } }, env: { A: '1' } },
+    { settings: { hooks: { Stop: [] } }, env: { B: '2' } },
+  ])
+  assert.ok(injection)
+  const written = JSON.parse(fs.readFileSync(file, 'utf8'))
+  assert.ok('statusLine' in written)
+  assert.ok('hooks' in written)
+  assert.deepEqual(injection.env, { A: '1', B: '2' })
+})
+
+test('合成器：其一不參與時另一者仍注入（啟用狀態彼此獨立）', () => {
+  const file = path.join(tmp(), 'settings.json')
+  const injection = composeInjection(file, [null, { settings: { hooks: {} }, env: { B: '2' } }])
+  assert.ok(injection)
+  const written = JSON.parse(fs.readFileSync(file, 'utf8'))
+  assert.deepEqual(Object.keys(written), ['hooks'])
+})
+
+test('合成器：全部不參與 ⇒ 完全不注入', () => {
+  const file = path.join(tmp(), 'settings.json')
+  assert.equal(composeInjection(file, [null, null]), null)
+  assert.equal(fs.existsSync(file), false)
+})
+
+test('送出的編碼：換行保留、其餘控制位元組移除、結尾為送出鍵', () => {
+  // `\n` 是訊息內的換行（實測：得到恰好一則訊息且換行保留）。
+  assert.equal(encodeInput('one\ntwo'), 'one\ntwo\r')
+  // 其餘控制位元組**必須移除** —— 實測它們會讓整則訊息無聲消失（紀錄檔根本沒被建立）。
+  // **對照組**：拿掉過濾，這一條必須變紅。
+  assert.equal(encodeInput('abc\td'), 'abcd\r')
+  assert.equal(encodeInput('x[200~y'), 'x[200~y\r')
+  assert.ok(!encodeInput('a\rb').slice(0, -1).includes('\r'))
+})
+
+/**
+ * **這一條真的把注入的命令跑一次。**
+ *
+ * 它的存在是因為一個實際發生過的失敗：命令被拆成陣列的多個元素再以 `'; '` 相接，於是 `then`
+ * 後面多了一個分號，shell 語法錯誤，hook **每一次都失敗** —— 而**失效完全靜默**：agent 不會
+ * 抱怨一個寫壞的 hook，我們只看到一個空的事件目錄、一個永遠「未知」的等待狀態、一個永遠停用
+ * 的輸入框，沒有任何訊息指向真正的原因。
+ *
+ * 一條只斷言「命令字串包含某些片段」的測試擋不住它。**唯一擋得住的是執行它。**
+ */
+test('注入的 hook 命令真的跑得起來，且把 payload 原子地寫成一個檔', () => {
+  const dir = tmp()
+  const payload = JSON.stringify({ hook_event_name: 'Stop', transcript_path: '/p/a.jsonl' })
+  const result = spawnSync('sh', ['-c', EVENT_COMMAND], {
+    input: payload,
+    env: { ...process.env, SPEKTERM_EVENT_DIR: dir },
+    encoding: 'utf8',
+  })
+  assert.equal(result.status, 0, `stderr: ${result.stderr}`)
+  assert.equal(result.stderr, '')
+
+  const written = fs.readdirSync(dir)
+  assert.equal(written.length, 1, `寫出的檔案：${written.join(', ')}`)
+  assert.ok(written[0].endsWith('.json'), written[0])
+  // 暫存檔不得留下 —— 讀取端只認 `.json`，殘留的 `.tmp` 代表更名沒有發生。
+  assert.equal(written.filter((name) => name.endsWith('.tmp')).length, 0)
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(dir, written[0]), 'utf8')), JSON.parse(payload))
+})
+
+test('未設定落點時 hook 命令是無操作，不報錯', () => {
+  const result = spawnSync('sh', ['-c', EVENT_COMMAND], {
+    input: '{"hook_event_name":"Stop"}',
+    env: { ...process.env, SPEKTERM_EVENT_DIR: '' },
+    encoding: 'utf8',
+  })
+  assert.equal(result.status, 0, `stderr: ${result.stderr}`)
+})
+
+test('等待選擇時回報「正在被問什麼」，離開後清掉', () => {
+  const root = tmp()
+  configureAgentEvents(root)
+  const dir = prepareEventInjection('s1', true)!.env.SPEKTERM_EVENT_DIR
+  fs.writeFileSync(
+    path.join(dir, '100-1.json'),
+    JSON.stringify({
+      hook_event_name: 'PermissionRequest',
+      tool_name: 'Write',
+      tool_input: { file_path: '/x/y.ts', other: '/private/should-not-leak' },
+    }),
+  )
+  const asked = drainEvents('s1', 'unknown')
+  assert.equal(asked.state, 'awaiting-choice')
+  assert.deepEqual(asked.pending, { tool: 'Write', arg: '/x/y.ts' })
+  // **只有辨識參數**，其餘參數不外流。
+  assert.ok(!JSON.stringify(asked.pending).includes('should-not-leak'))
+
+  // 離開等待選擇時必須清掉 —— 否則畫面會留著一個已經被回答完的請求。
+  fs.writeFileSync(path.join(dir, '200-1.json'), '{"hook_event_name":"PostToolUse"}')
+  const after = drainEvents('s1', asked.state)
+  assert.equal(after.state, 'busy')
+  assert.equal(after.pending, null)
+})
+
+test('許可提示出現中不得歸為忙碌或就緒（本 change 最承重的一條）', () => {
+  const root = tmp()
+  configureAgentEvents(root)
+  const dir = prepareEventInjection('s1', true)!.env.SPEKTERM_EVENT_DIR
+  // 真實時序（實測）：工具即將執行 → 許可請求 → （6 秒後才有 Notification）。
+  fs.writeFileSync(path.join(dir, '100-1.json'), '{"hook_event_name":"PreToolUse","tool_name":"Write"}')
+  fs.writeFileSync(path.join(dir, '200-1.json'), '{"hook_event_name":"PermissionRequest","tool_name":"Write"}')
+  const result = drainEvents('s1', 'unknown')
+  assert.equal(result.state, 'awaiting-choice')
+  // **對照組**：把 `PermissionRequest` 的處理拿掉（退回只看 `Notification`），狀態會停在
+  // `busy` —— 而忙碌是允許送出的。那正是 proposal 立論要防的災難。
+  assert.notEqual(result.state, 'busy')
+  assert.notEqual(result.state, 'ready')
+})
+
+test('延遲六秒才到的 Notification 不會把已經是等待選擇的狀態拉回就緒', () => {
+  const root = tmp()
+  configureAgentEvents(root)
+  const dir = prepareEventInjection('s1', true)!.env.SPEKTERM_EVENT_DIR
+  fs.writeFileSync(path.join(dir, '100-1.json'), '{"hook_event_name":"PermissionRequest","tool_name":"Write"}')
+  fs.writeFileSync(
+    path.join(dir, '200-1.json'),
+    '{"hook_event_name":"Notification","notification_type":"permission_prompt"}',
+  )
+  assert.equal(drainEvents('s1', 'unknown').state, 'awaiting-choice')
+})
+
+test('對話結束後接著開始的新對話，其位置被回報且狀態為就緒', () => {
+  const root = tmp()
+  configureAgentEvents(root)
+  const dir = prepareEventInjection('s1', true)!.env.SPEKTERM_EVENT_DIR
+  // 實測 `/clear` 的形狀：`SessionEnd`（舊路徑）＋ 59ms 後 `SessionStart`（新路徑）。
+  fs.writeFileSync(
+    path.join(dir, '100-1.json'),
+    JSON.stringify({ hook_event_name: 'SessionEnd', transcript_path: '/p/old.jsonl' }),
+  )
+  fs.writeFileSync(
+    path.join(dir, '200-1.json'),
+    JSON.stringify({ hook_event_name: 'SessionStart', transcript_path: '/p/new.jsonl' }),
+  )
+  const result = drainEvents('s1', 'ready')
+  // **`SessionEnd` 不是「session 結束」** —— 它之後跟著的是一份新的紀錄，不是拆除。
+  assert.equal(result.transcriptPath, '/p/new.jsonl')
+  assert.equal(result.state, 'ready')
+  // 落點仍在：清除只由 session 自身的結束觸發。
+  assert.equal(fs.existsSync(dir), true)
+})

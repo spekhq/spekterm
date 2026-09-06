@@ -84,7 +84,9 @@ SHALL NOT 一次啟動所有 session。**選中的 rail 項目不被持久化，
 而那會使冷啟動立刻喚醒一個 session，本條的保證即失效）。使用者選一個項目之後，該項目的 focused
 session 才醒過來。
 
-休眠狀態 SHALL 被明確地呈現，SHALL NOT 呈現為一個空白的終端。
+休眠狀態 SHALL 被明確地呈現，SHALL NOT 呈現為一個空白的畫面 —— **無論當下是哪一種 view**。
+終端 view 之下是一個空白的終端，對話 view 之下是一份空白的對話，兩者是同一個錯誤的兩種長相：
+**它與「這個 session 真的還沒講話」無法區分**，而兩者的正確處置不同。
 
 未被喚醒的休眠 session SHALL 維持持久化 —— 使用者一路未喚醒它便再次關閉應用程式時，它 SHALL 於
 下次開啟時仍然存在。
@@ -108,6 +110,11 @@ session 才醒過來。
 
 - **WHEN** 使用者檢視一個尚未被喚醒的休眠 session
 - **THEN** 該 session 明確地呈現其休眠狀態，而非一個沒有內容的終端
+
+#### Scenario: 休眠的 session 於對話 view 不呈現為空白對話
+
+- **WHEN** 使用者檢視一個尚未被喚醒的休眠 session，且其當前 view 為對話
+- **THEN** 該 session 明確地呈現其休眠狀態，而非一份沒有內容的對話
 
 #### Scenario: 未喚醒的休眠 session 於再次重啟後仍存在
 

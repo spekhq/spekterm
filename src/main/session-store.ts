@@ -64,6 +64,13 @@ export interface PersistedSession {
   folderId: string | null
   spawnTarget: SpawnTarget
   ordinal: number
+  /**
+   * 這個 session 當下以哪一種方式呈現（`agent-conversation-view`）。
+   *
+   * **per-session，不是全域偏好** —— 使用者完全可能一邊以對話 view 看 agent、一邊以終端 view
+   * 用 shell。缺席即終端（既有 session 與 shell 目標的自然值），因此不需要遷移。
+   */
+  view?: 'terminal' | 'conversation'
   /** 使用者親自取的名字（＝永久接管命名權）。 */
   customTitle?: string
   /**
@@ -153,6 +160,10 @@ export function parseSessionEntry(entry: unknown): PersistedSession | null {
     customTitle: optionalString(raw.customTitle),
     title: optionalString(raw.title),
     worktreeKey,
+    // **這是第三處逐欄位的白名單**（另外兩處是 `replace()` 的落盤與 renderer 的 restore 對應）。
+    // 三處全部命中才會讓一個新欄位真的跨重啟存活 —— 漏掉這一處的徵狀是「落盤看得到那個值，
+    // 重開之後它就不見了」，而型別檢查一句話都不會說（回傳型別上它是 optional）。
+    view: raw.view === 'conversation' ? 'conversation' : undefined,
     claudeSessionId,
     // 絕對路徑才有意義；相對路徑無從解讀，丟棄後退回 folder 根目錄。
     cwd: typeof raw.cwd === 'string' && path.isAbsolute(raw.cwd) ? raw.cwd : undefined,
@@ -322,6 +333,7 @@ export class SessionStore {
         folderId: folderId.value,
         spawnTarget: entry.spawnTarget,
         ordinal: entry.ordinal,
+        view: entry.view === 'conversation' ? 'conversation' : undefined,
         customTitle: entry.customTitle,
         title: entry.title,
         worktreeKey: entry.worktreeKey,

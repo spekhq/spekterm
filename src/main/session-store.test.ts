@@ -380,3 +380,23 @@ describe('session 的歸屬：全域以明確標記表示，缺席不是全域',
     assert.equal(session.customTitle, 'scratch')
   })
 })
+
+describe('view 的選擇跨重啟存活', () => {
+  it('三處逐欄位白名單全部命中', () => {
+    const persisted = parseSessions(
+      JSON.stringify({
+        version: 1,
+        sessions: [
+          { id: '11111111-1111-4111-8111-111111111111', folderId: 'f1', spawnTarget: 'claude', ordinal: 1, view: 'conversation' },
+          { id: '22222222-2222-4222-8222-222222222222', folderId: 'f1', spawnTarget: 'claude', ordinal: 2 },
+          { id: '33333333-3333-4333-8333-333333333333', folderId: 'f1', spawnTarget: 'shell', ordinal: 3, view: 'bogus' },
+        ],
+      }),
+    )
+    assert.ok(persisted)
+    assert.equal(persisted[0].view, 'conversation')
+    // 缺席即終端；不認得的值一律當作缺席（不接受未知的呈現方式）。
+    assert.equal(persisted[1].view, undefined)
+    assert.equal(persisted[2].view, undefined)
+  })
+})

@@ -15,6 +15,16 @@ interface TerminalViewProps {
   wakeError?: string
   /** 非 focused 的終端仍然掛載（保留 scrollback），只是隱藏起來（design D7）。 */
   active: boolean
+  /**
+   * 這個 session 是當前的，但**另一種呈現覆蓋在它上面**（對話 view）。
+   *
+   * **`active` 與 `covered` 是兩個不同的謂詞，此前它們恆等。**
+   *
+   * - `active` ＝ **有沒有版面盒子**。尺寸同步以此為判準（`terminal-sessions` 明文，且禁止在
+   *   沒有盒子時推導尺寸）—— 被覆蓋時**仍然為 true**，否則 pty 會停在一個從未被量測過的值。
+   * - `covered` ＝ **使用者看不看得見**。渲染資源的持有與焦點以此為判準。
+   */
+  covered?: boolean
 }
 
 /** 拖動分界時 resize 會連續觸發；pty 不需要每一幀都收到一次 SIGWINCH。 */
@@ -46,6 +56,7 @@ export function TerminalView({
   status,
   wakeError,
   active,
+  covered = false,
 }: TerminalViewProps): React.JSX.Element {
   const { t } = useTranslation()
   // 解構出穩定的 callback。若依賴整個 api 物件，session 清單一變動就會重建 xterm
@@ -309,12 +320,16 @@ export function TerminalView({
   }, [paste])
 
   // 由隱藏轉為顯示的那一刻，容器才第一次有尺寸 —— 必須重新 fit 一次（design D7 的代價）。
+  //
+  // **fit 與 focus 的條件不同，那是承重的。** fit 只要有版面盒子就該做（`active`）；
+  // 但**搶焦點要看使用者看不看得見**：對話 view 覆蓋在上面時，一個隱形的終端把焦點搶走，
+  // 使用者接著打的字會進 pty 而畫面上什麼都沒有 —— 與「訊息被送到錯的地方」同一族的失效。
   useEffect(() => {
     if (!active) return
     const size = handleRef.current?.fit()
     if (size) window.workspace.terminal.resize(sessionId, size.cols, size.rows)
-    handleRef.current?.focus()
-  }, [active, sessionId])
+    if (!covered) handleRef.current?.focus()
+  }, [active, covered, sessionId])
 
   /**
    * GPU 加速：**只給當下顯示的那一個終端**，且使用者可以整個關掉。
@@ -331,8 +346,13 @@ export function TerminalView({
    * 擋不住「取得了、但驅動有缺陷而畫出錯的內容」—— 那只有使用者看得出來，也只有他關得掉。
    */
   useEffect(() => {
-    handleRef.current?.setGpuRenderer(active && gpuEnabled)
-  }, [active, gpuEnabled])
+    // **判準是「看不看得見」，不是「有沒有版面盒子」。** 對話 view 覆蓋在上面時終端仍保有盒子
+    // （尺寸同步需要它），但使用者看不見它 —— 依本要求必須歸還並存額度。
+    //
+    // 這是**第四種轉換**：保有盒子、失去可見、不銷毀、不失去掛載。既有條款只寫了
+    // 顯示↔隱藏與銷毀三種，本 change 為它補了條文與驗收（`terminal-sessions` delta）。
+    handleRef.current?.setGpuRenderer(active && !covered && gpuEnabled)
+  }, [active, covered, gpuEnabled])
 
   // 套用終端字型偏好。掛載時套一次（偏好通常已由 `PreferencesProvider` 早載入備妥），偏好變更時再套。
   //

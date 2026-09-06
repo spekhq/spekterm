@@ -65,6 +65,7 @@
     "probe:keyboard": "node scripts/run-probe.mjs keyboard",
     "probe:openspec": "node scripts/run-probe.mjs openspec",
     "probe:insights": "node scripts/run-probe.mjs insights",
+    "probe:agent-view": "node scripts/run-probe.mjs agent-view",
     "probe:package": "npm run dist:linux && node scripts/run-probe.mjs package"
   },
   "devDependencies": {

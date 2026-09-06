@@ -27,6 +27,13 @@ export interface TerminalPreferences {
    * agent 呼叫方式的使用者一條退路 —— 那是本能力唯一會改變 spekterm 之外行為的部分。
    */
   agentStatus?: boolean
+  /**
+   * 與 agent 的事件橋接（見 `agent-events.ts`）。**未設定＝啟用**，與上面同一條規則。
+   *
+   * **它與 `agentStatus` 是兩個獨立的開關，這是規格條款而不是方便**：兩者共用同一個注入接縫，
+   * 但關掉狀態列 SHALL NOT 連帶關掉對話 view 的輸入能力。捆在一起的實作不會有任何型別錯誤。
+   */
+  agentEvents?: boolean
 }
 
 interface PersistedPreferences {

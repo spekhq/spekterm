@@ -497,5 +497,32 @@
         "noData": "There are no messages in this range to read."
       }
     }
+  },
+  "conversation": {
+    "label": "Conversation",
+    "userMessage": "You",
+    "metaMessage": "Context",
+    "thinking": "Thinking",
+    "toolResult": "Result",
+    "toolFailed": "Result (failed)",
+    "attaching": "Catching up…",
+    "empty": "No messages yet",
+    "dormant": "Session is asleep. Open the terminal view to wake it.",
+    "unavailable": "Conversation is unavailable",
+    "unavailableHint": "Switch to the terminal view to see what is happening.",
+    "earlierNotLoaded": "Earlier messages are not loaded.",
+    "showConversation": "Show conversation view",
+    "showTerminal": "Show terminal view",
+    "composer": "Message the agent",
+    "send": "Send",
+    "busy": "Working…",
+    "blockedUnknown": "Cannot send right now — the agent's state is unknown. Switch to the terminal view to see what it is waiting for.",
+    "blockedChoice": "The agent is waiting for a choice. Answer it in the terminal view.",
+    "pending": "Sending…",
+    "waitingForState": "Waiting for the agent to report its state. If this persists, use the terminal view.",
+    "pendingRequest": "The agent is asking to use {{tool}}. Answer it in the terminal view.",
+    "pendingRequestBare": "The agent is waiting for your permission. Answer it in the terminal view.",
+    "unconfirmed": "Not confirmed yet",
+    "unconfirmedLate": "This message has not appeared in the agent's record. Check the terminal view."
   }
 }

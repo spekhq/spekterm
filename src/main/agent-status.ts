@@ -3,6 +3,8 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
+import type { InjectionContribution } from './agent-injection'
+
 /**
  * 與 agent 的狀態橋接 —— 讓 claude **自己**把它算好的狀態交給我們。
  *
@@ -93,41 +95,26 @@ export function readUserStatusLine(home: string = os.homedir()): UserStatusLine 
   }
 }
 
-/** 單引號包裹，供拼接進 `sh -c` 的命令字串（路徑可能含空白）。 */
-function shellQuote(value: string): string {
-  return `'${value.replaceAll("'", `'\\''`)}'`
-}
-
-export interface AgentStatusInjection {
-  /** 併入 claude 命令列的片段（已 shell-quote）。 */
-  commandFragment: string
-  /** 併入 pty 環境的變數。 */
-  env: Record<string, string>
-}
-
 /**
- * 為一個 claude session 準備注入。回傳 `null` 代表**不注入**（偏好關閉、環境未就緒，
- * 或使用者有自訂 statusline 但我們串不上）。
+ * 為一個 claude session 準備狀態回報的**貢獻**（不是完整的注入）。
+ *
+ * 回傳 `null` 代表**這個功能不參與**（偏好關閉、環境未就緒，或使用者有自訂 statusline 但我們
+ * 串不上）。**它不會使其他功能一併不注入** —— 合成由 `agent-injection` 負責，各功能獨立。
+ *
+ * **`statusLine` 必須自己串接使用者原有的命令**（它是單一值，接管等於弄掉他的那條）。
+ * 這與 `hooks` 相反 —— 後者由 CLI 自己合併，不必我們處理。**這個差異是各貢獻者自己的事。**
  */
-export function prepareInjection(sessionId: string, enabled: boolean): AgentStatusInjection | null {
+export function prepareInjection(sessionId: string, enabled: boolean): InjectionContribution | null {
   if (!enabled || !statusRoot) return null
 
   const user = readUserStatusLine()
   if (user.kind === 'unknown') return null
 
-  const settingsFile = path.join(statusRoot, 'settings.json')
   const target = payloadPath(sessionId)
   if (!target) return null
 
   try {
     fs.mkdirSync(statusRoot, { recursive: true })
-    // 設定檔為所有 session 共用（per-session 的差異全在環境變數裡）。每次都重寫：
-    // 命令內容可能隨版本改變，而它很小。
-    fs.writeFileSync(
-      settingsFile,
-      JSON.stringify({ statusLine: { type: 'command', command: STATUS_LINE_COMMAND } }),
-      'utf8',
-    )
     // 上一輪的殘留會讓狀態列先顯示一份過期的資料，直到 agent 第一次回報為止。
     fs.rmSync(target, { force: true })
   } catch {
@@ -137,7 +124,7 @@ export function prepareInjection(sessionId: string, enabled: boolean): AgentStat
   const env: Record<string, string> = { SPEKTERM_STATUS_FILE: target }
   if (user.kind === 'chain') env.SPEKTERM_STATUS_CHAIN = user.command
 
-  return { commandFragment: `--settings ${shellQuote(settingsFile)}`, env }
+  return { settings: { statusLine: { type: 'command', command: STATUS_LINE_COMMAND } }, env }
 }
 
 /**

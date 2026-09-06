@@ -5,6 +5,7 @@ import { applyContentSecurityPolicy } from './content-security-policy'
 import { DirtyStateStore } from './dirty-state'
 import { registerAppHandlers } from './ipc/app'
 import { registerClipboardHandlers } from './ipc/clipboard'
+import { registerConversationHandlers } from './ipc/conversation'
 import { registerFsHandlers } from './ipc/fs'
 import { registerFolderHandlers } from './ipc/folders'
 import { registerInsightsHandlers, spawnReportDelegate, spawnScanWorker } from './ipc/insights'
@@ -16,6 +17,8 @@ import { registerTerminalHandlers } from './ipc/terminal'
 import { applyNavigationGuards } from './navigation'
 import { formatScanSummary, scanRepo } from './openspec'
 import { guardUnsavedChanges } from './unsaved-changes'
+import { configureAgentEvents } from './agent-events'
+import { configureAgentInjection } from './agent-injection'
 import { configureAgentStatus } from './agent-status'
 import { PanelStore } from './panel-store'
 import { PreferencesStore } from './preferences-store'
@@ -151,6 +154,8 @@ void app.whenReady().then(() => {
 
   // agent 狀態橋接的落點（payload 與注入用的 settings 檔）。與偏好同在 userData 之下。
   configureAgentStatus(app.getPath('userData'))
+  configureAgentEvents(app.getPath('userData'))
+  configureAgentInjection(app.getPath('userData'))
 
   const dirty = new DirtyStateStore()
 
@@ -166,6 +171,7 @@ void app.whenReady().then(() => {
   registerOpenSpecHandlers(store)
   registerShellHandlers()
   registerAppHandlers(dirty)
+  registerConversationHandlers()
   registerTerminalHandlers(store, sessionStore, preferencesStore)
   registerClipboardHandlers()
   registerSettingsHandlers(preferencesStore)

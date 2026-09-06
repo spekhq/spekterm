@@ -289,3 +289,31 @@ body[data-dragging='true'] * {
 .markdown img {
   max-width: 100%;
 }
+
+/*
+ * 對話 view 中一則訊息出現時的轉場。
+ *
+ * **時長是一個字面常數，SHALL NOT 隨訊息長度改變**（`agent-conversation-view`）。
+ * 一旦隨長度變化，它就從「這裡多了一則」變成「內容正在產生」—— 而後者是一個沒有來源的宣稱。
+ * 這也是為什麼它寫在 CSS 而不是 JS：JS 裡一個吃 `text.length` 的延遲值太容易被順手加上去。
+ */
+@keyframes conversation-enter {
+  from {
+    opacity: 0;
+    transform: translateY(2px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.conversation-enter {
+  animation: conversation-enter 120ms ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .conversation-enter {
+    animation: none;
+  }
+}

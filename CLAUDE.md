@@ -31,6 +31,10 @@ OpenSpec 結構的側欄，讓使用者不必另外開 IDE 就能一邊駕駛 ag
 - **側欄** —— OpenSpec 與 Files 兩個身分、artifact 分頁與兩棵樹、Graph／Timeline overlay、
   worktree 聚合、雙向交叉導覽、`Ctrl+P` 快速開檔、續寫入口（送 `/opsx:continue`）。
   座標（來源 repo／工作目錄／錨定的 change）是 **per-folder** 的，落盤於 `panel.json`。
+- **agent 對話 view** —— agent session 有終端與對話兩種可切換的呈現（**終端為預設**）。
+  內容來自 agent 自己寫下的紀錄（`~/.claude/projects/**/*.jsonl` 增量 tail），
+  「現在能不能送輸入」來自注入的 hooks。**SHALL NOT 解析終端畫面** —— 生態系有三個專案走過
+  那條路，一個要在自己的 app 裡再養一個 VT100 模擬器，一個已失效，一個公開宣告不可維護後刪光。
 - **鍵盤** —— 見下文「快捷鍵」。
 
 **Linux 打包已可用**（`npm run dist:linux` → AppImage，`npm run install:desktop` 裝進應用程式
@@ -60,7 +64,7 @@ tmux 與自寫 daemon 取捨。**不要把「重建」誤當成「常駐」**：
 | 任何一支 `scripts/probe-*.mjs`、`scripts/lib/` 的儀器（`instrument` / `cdp` / `mounted`）、加一條驗收斷言或一種等待、追一個 flaky | **`docs/lessons/probes.md`** |
 | pty、`src/renderer/src/shell/terminal/`、session 持久化與重建 | **`docs/lessons/terminal.md`** |
 | `src/renderer/src/side-panel/`、`@spekjs/core` 或 `@spekjs/ui` 升級 | **`docs/lessons/side-panel.md`** |
-| `src/main/transcript-*`、`src/main/insights*`、**`src/main/report-*`**、`scripts/probe-insights.mjs`，或任何會讀 `~/.claude/projects` **或委派 `claude` CLI** 的東西 | **`docs/lessons/transcript.md`** |
+| `src/main/transcript-*`、`src/main/agent-events.ts`、`src/main/agent-injection.ts`、`src/main/insights*`、**`src/main/report-*`**、`scripts/probe-insights.mjs`、`scripts/probe-agent-view.mjs`，或任何會讀 `~/.claude/projects`、**注入 `--settings`**、**或委派 `claude` CLI** 的東西 | **`docs/lessons/transcript.md`** |
 
 ## 開發指令
 
@@ -129,6 +133,12 @@ npm run probe:insights  # conversation-archive / conversation-insights / convers
                         #   進去時每一條存在性斷言照樣全綠。**真實委派刻意不在裡面** ——
                         #   要網路、會花錢、回覆不可重現；產生路徑以注入的替身驗，
                         #   真實那段由 dogfood 認定，這條缺口寫在規格裡）
+npm run probe:agent-view # agent-transcript-stream / agent-event-bridge / agent-conversation-view /
+                        #   agent-input-bridge（對話 view、注入的 hook 真的被執行、送出抵達 pty、
+                        #   **重建後直接進對話 view 時 pty 的欄數不是 80**）
+                        #   替身 agent 讀 `--settings` 並照著跑 hook 命令 —— **只斷言 argv 裡有
+                        #   `--settings` 證明不了任何事**（實際踩過：命令有語法錯，每次都失敗而
+                        #   事件目錄只是安靜地空著）。真實 agent 的委派刻意不在裡面，由 dogfood 認定
 npm run probe:openspec  # openspec-data-access / openspec-panel / worktree 聚合 / side-panel-source
 npm run probe:native    # native-module-toolchain（主行程載入 node-pty + spawn pty）
 npm run probe:core      # spek-core-integration（主行程掃描 OpenSpec，且不開 TCP 埠）

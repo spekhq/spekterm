@@ -3,10 +3,12 @@ import type { PreferencesStore } from '../preferences-store'
 import { SessionStatusService } from '../session-status'
 import type { RendererSession, SessionStore } from '../session-store'
 import { type SpawnTarget, TerminalError, TerminalService } from '../terminal'
+import { agentSettingsFile } from '../agent-injection'
 import type { FolderLookup } from '../workspace-store'
 import { worktreesFor } from './openspec'
 import { pickCreateWorktree, pickWorktree } from '../worktree-pick'
 import type { FsResult } from './fs'
+import { disposeConversationFor } from './conversation'
 
 export const TERMINAL_CHANNELS = {
   /** renderer → main：現在盯著哪個 session（`null` ＝ 停止）。狀態列只對 focused 的那一個求值。 */
@@ -58,6 +60,16 @@ async function toResult<T>(run: () => T | Promise<T>): Promise<FsResult<T>> {
 
 /** 每個 renderer 一份 pty 集合。key 是 `webContents.id`（與 watcher 的擁有者記帳同構）。 */
 const services = new Map<number, TerminalService>()
+
+/**
+ * 取得**已存在**的 service，不建立新的。
+ *
+ * 對話 view 的通道需要問 session 的來源座標，而那個問題只在 session 已經存在時才有意義 ——
+ * 若這裡改成「沒有就建一個」，一個對著不存在的 renderer 的空 service 會被留下來。
+ */
+export function existingTerminalService(contentsId: number): TerminalService | undefined {
+  return services.get(contentsId)
+}
 
 /** 每個 renderer 一份狀態輪詢（只盯它當下 focused 的那一個 session）。 */
 const statusServices = new Map<number, SessionStatusService>()
@@ -112,6 +124,10 @@ function serviceFor(
   },
   // 未設定＝啟用（與 gpuAcceleration 同一條規則）。在 spawn 當下求值。
   () => preferences.get().agentStatus !== false,
+  // **事件橋接獨立求值。** 兩者共用同一個接縫，但啟用狀態彼此獨立 —— 關掉狀態列
+  // SHALL NOT 連帶關掉對話 view 的輸入能力（`claude-status-bridge` 的合成條款）。
+  () => preferences.get().agentEvents !== false,
+  agentSettingsFile,
   )
   services.set(contents.id, service)
 
@@ -128,6 +144,7 @@ function serviceFor(
   // 'did-navigate' 殺光（design D2）。沿用 watcher 的教訓：用 'did-navigate'（已 commit），
   // 不是 'did-start-navigation'（那對被擋下的導航也會觸發）。
   contents.on('did-navigate', () => {
+    disposeConversationFor(contents.id)
     // reload 之後 renderer 會重新告訴我們要盯誰；先停掉，否則它會繼續對一個已消失的頁面推送。
     statusServices.get(contents.id)?.dispose()
     statusServices.delete(contents.id)
