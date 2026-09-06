@@ -7,7 +7,7 @@ import { after, describe, it } from 'node:test'
 import { delegateDirSuffix, resolveDelegateCwd } from './insights-source'
 import { buildCorpus, normalizeForMatch } from './report-corpus'
 import { createReportService } from './report'
-import { ReportRunner, delegateArgs, parseClaims, parseDelegateOutput, type DelegateHandle } from './report-runner'
+import { ReportRunner, delegateArgs, delegateEnv, parseClaims, parseDelegateOutput, type DelegateHandle } from './report-runner'
 import { listReports, readReport } from './report-store'
 import { verifyClaims, type RawClaim } from './report-verify'
 import { scanTranscripts } from './transcript-archive'
@@ -37,9 +37,17 @@ function fakeDelegate(opts: {
   sent?: string[]
   /** 記下委派被起了幾次 —— 「切分頁／啟動不觸發委派」那條靠它。 */
   spawns?: { n: number }
+  /**
+   * 記下每一趟 `spawn` 收到的 `configDir`。
+   *
+   * **這是「傳給委派的值與刪除用的值同源」唯一的載體** —— 接線在 `index.ts`，
+   * 那支 import electron，`node:test` 進不去。純函式層只證明得了「參數原樣回傳」。
+   */
+  configDirs?: (string | undefined)[]
 }) {
-  return (): DelegateHandle => {
+  return (options: { configDir: string | undefined }): DelegateHandle => {
     if (opts.spawns) opts.spawns.n += 1
+    opts.configDirs?.push(options.configDir)
     if (opts.throwOnSpawn) throw new Error('ENOENT')
     let onOut: ((c: string) => void) | null = null
     let onExit: ((c: number | null) => void) | null = null
@@ -190,24 +198,24 @@ describe('3.5 上限與順序', () => {
 describe('3.7 / 3.8 委派的生命週期與解析', () => {
   it('單一併發：跑到一半再叫一次回 null，不排隊', async () => {
     const runner = new ReportRunner({ spawn: fakeDelegate({ never: true }), timeoutMs: 50 })
-    const first = runner.run('x')
-    assert.equal(await runner.run('y'), null)
+    const first = runner.run('x', { configDir: undefined })
+    assert.equal(await runner.run('y', { configDir: undefined }), null)
     await first
   })
 
   it('逾時與成功可區分', async () => {
     const runner = new ReportRunner({ spawn: fakeDelegate({ never: true }), timeoutMs: 20 })
-    assert.deepEqual(await runner.run('x'), { ok: false, code: 'delegateTimeout' })
+    assert.deepEqual(await runner.run('x', { configDir: undefined }), { ok: false, code: 'delegateTimeout' })
   })
 
   it('CLI 不存在', async () => {
     const runner = new ReportRunner({ spawn: fakeDelegate({ throwOnSpawn: true }) })
-    assert.deepEqual(await runner.run('x'), { ok: false, code: 'cliMissing' })
+    assert.deepEqual(await runner.run('x', { configDir: undefined }), { ok: false, code: 'cliMissing' })
   })
 
   it('行程非零結束且無輸出 → delegateFailed', async () => {
     const runner = new ReportRunner({ spawn: fakeDelegate({ exitCode: 1 }), timeoutMs: 500 })
-    assert.deepEqual(await runner.run('x'), { ok: false, code: 'delegateFailed' })
+    assert.deepEqual(await runner.run('x', { configDir: undefined }), { ok: false, code: 'delegateFailed' })
   })
 
   it('權限拒絕紀錄非空 → toolUseAttempted（工具其實沒關掉唯一的訊號）', () => {
@@ -246,7 +254,7 @@ function bed(stdout?: string, extra: Partial<Parameters<typeof createReportServi
   const reportsDir = path.join(userData, 'conversation-reports')
   const service = createReportService({
     archiveRoot: () => archiveRoot,
-    configDir: () => facts.configDir,
+    configDir: () => ({ explicit: facts.configDir, resolved: facts.configDir }),
     delegateCwd: () => resolveDelegateCwd(userData),
     reportsDir: () => reportsDir,
     requestedModel: () => 'claude-sonnet-5',
@@ -355,6 +363,22 @@ describe('報告的產生（服務層）', () => {
     assert.equal(p.to, r.report.to)
     assert.equal(p.truncated, r.report.truncated)
   })
+
+  it('語料超過上限時亦然 —— 那才是這條 scenario 的 WHEN', async () => {
+    // **上面那條在 `truncated === false` 下比的是 `false === false`。** 該 scenario 的
+    // WHEN 是「使用者要求的範圍其語料超過上限」，而 fixture 遠低於 600,000 字元的預設值 ——
+    // 沒有這個旋鈕，那條斷言永遠落在規格不在乎的那一側。
+    const b = bed(ok([]), { maxChars: 40 })
+    const p = b.service.preview()
+    assert.equal(p.truncated, true, '前置：這一份確實被截斷了')
+    const r = await b.service.generate({ authorized: true })
+    assert.ok(r.ok)
+    assert.equal(r.report.truncated, true)
+    assert.equal(p.messages, r.report.messages)
+    assert.equal(p.chars, r.report.chars)
+    assert.equal(p.from, r.report.from)
+    assert.equal(p.to, r.report.to)
+  })
 })
 
 describe('4.1 委派的參數與排除規則對得起來', () => {
@@ -445,5 +469,141 @@ describe('對照表核對時補上的四條載體', () => {
     const r = await b.service.generate({ authorized: true })
     assert.ok(r.ok)
     assert.equal(r.report.delegateRecordDeleted, false, '找不到那一份就不得回報為已刪除')
+  })
+})
+
+describe('4.2 委派的環境是白名單', () => {
+  // **注入的集合分三類，缺一則對應的 scenario 沒有被驗到。**
+  /** (a) 已知的憑證與計費歸屬變數。 */
+  const CREDENTIALS = {
+    ANTHROPIC_API_KEY: 'sk-not-a-real-key',
+    ANTHROPIC_AUTH_TOKEN: 'bearer-not-real',
+    ANTHROPIC_BASE_URL: 'https://gateway.invalid',
+    ANTHROPIC_PROFILE: 'some-profile',
+    CLAUDE_CODE_USE_BEDROCK: '1',
+  }
+  /** (b) 巢狀 Claude Code 的標記 —— 自一個 agent session 之內啟動時實測會有的那些。 */
+  const NESTED = {
+    CLAUDECODE: '1',
+    CLAUDE_CODE_CHILD_SESSION: 'yes',
+    CLAUDE_CODE_MESSAGING_SOCKET: '/run/user/1000/parent.sock',
+    CLAUDE_CODE_MESSAGING_TOKEN: 'parent-token',
+    CLAUDE_CODE_SESSION_ID: 'parent-session',
+    CLAUDE_CODE_EXECPATH: '/opt/claude',
+    CLAUDE_PID: '4242',
+  }
+  /**
+   * (c) **白名單與任何合理的剝除清單「都沒有」的名字。**
+   *
+   * 少了這一類，白名單與「一份明確剝掉已知名字的剝除清單」對其餘輸入會產生**完全相同**
+   * 的鍵集合 —— 於是 design D1 的整個論點（白名單 vs 剝除清單）根本沒有被驗到。
+   * 最後兩個是**發明出來的**：「連今天還不存在的名字也擋得住」只有發明一個才驗得到。
+   */
+  const NEITHER = {
+    TERM: 'xterm-256color',
+    XDG_CONFIG_HOME: '/home/u/.config',
+    NODE_OPTIONS: '--inspect',
+    ANTHROPIC_FUTURE_CREDENTIAL_2027: 'invented-for-this-test',
+    SPEKTERM_NOT_A_REAL_VARIABLE: 'invented-for-this-test',
+  }
+  /** 白名單上的東西，用來確認它們真的過得去。 */
+  const ALLOWED = {
+    HOME: '/home/u',
+    PATH: '/usr/bin',
+    CLAUDE_CODE_OAUTH_TOKEN: 'subscription-token',
+    LANG: 'zh_TW.UTF-8',
+    HTTPS_PROXY: 'http://proxy.internal:3128',
+  }
+
+  const build = (configDir: string | undefined = undefined, userEnvExtra: Record<string, string> = {}) =>
+    delegateEnv({
+      processEnv: { ...ALLOWED, ...CREDENTIALS, ...NESTED, ...NEITHER },
+      // **兩條路徑都要放** —— 憑證可能來自主行程的環境，也可能來自使用者的 login shell。
+      userEnv: { ...CREDENTIALS, ...NESTED, ...NEITHER, ...userEnvExtra },
+      configDir,
+    })
+
+  it('輸出的鍵集合等於預期集合 —— 不是「不含這幾個名字」', () => {
+    // **這個陣列是字面值，不是從實作 import 的常數。** 寫成 `[...ALLOWLIST, …]` 就是
+    // 「兩端讀同一個常數」—— 往白名單加一個憑證名字照樣全綠。
+    assert.deepEqual(Object.keys(build()).sort(), [
+      'CLAUDE_CODE_OAUTH_TOKEN',
+      'HOME',
+      'HTTPS_PROXY',
+      'LANG',
+      'PATH',
+    ])
+  })
+
+  it('已知的憑證與計費歸屬變數不進入委派', () => {
+    const env = build()
+    for (const key of Object.keys(CREDENTIALS)) assert.equal(env[key], undefined, key)
+  })
+
+  it('隸屬於某個 Claude Code session 的標記不進入委派', () => {
+    const env = build()
+    for (const key of Object.keys(NESTED)) assert.equal(env[key], undefined, key)
+  })
+
+  it('白名單與剝除清單皆未涵蓋的名字也不進入委派', () => {
+    const env = build()
+    for (const key of Object.keys(NEITHER)) assert.equal(env[key], undefined, key)
+  })
+
+  it('委派仍取得執行所需的環境（HOME / PATH）', () => {
+    const env = build()
+    assert.equal(env.HOME, '/home/u')
+    assert.equal(env.PATH, '/usr/bin')
+  })
+
+  it('PATH 取 processEnv 那一份，userEnv 的不勝出', () => {
+    // `getUserEnv()` 結構上不含 PATH，但這條釘住的是「就算有也不採用」——
+    // `process.env.PATH` 是使用者路徑前置後的**超集**，讓原始版蓋回去會丟掉產物注入的項目。
+    assert.equal(build(undefined, { PATH: '/should/not/win' }).PATH, '/usr/bin')
+  })
+
+  it('使用者自身訂閱登入的 token 仍然可用', () => {
+    assert.equal(build().CLAUDE_CODE_OAUTH_TOKEN, 'subscription-token')
+  })
+
+  it('使用者未指定設定目錄時不傳入任何值', () => {
+    // 環境裡**有**一個 CLAUDE_CONFIG_DIR（`NEITHER` 沒有它，這裡另外塞）也不得漏進去。
+    const env = delegateEnv({
+      processEnv: { ...ALLOWED, CLAUDE_CONFIG_DIR: '/from/process' },
+      userEnv: { CLAUDE_CONFIG_DIR: '/from/shell' },
+      configDir: undefined,
+    })
+    assert.equal(env.CLAUDE_CONFIG_DIR, undefined, '合成預設值會讓 claude 找不到既有設定')
+  })
+
+  it('明確指定時傳入該值，且環境裡的不同值不勝出', () => {
+    const env = delegateEnv({
+      processEnv: { ...ALLOWED, CLAUDE_CONFIG_DIR: '/from/process' },
+      userEnv: { CLAUDE_CONFIG_DIR: '/from/shell' },
+      configDir: '/resolved/once',
+    })
+    assert.equal(env.CLAUDE_CONFIG_DIR, '/resolved/once')
+  })
+})
+
+describe('4.6 / 2.3 接縫與失敗路徑', () => {
+  it('傳給委派的設定目錄＝服務用來刪紀錄的那一份（接線的唯一載體）', async () => {
+    const configDirs: (string | undefined)[] = []
+    const b = bed(ok([{ claim: 'c', quote: '把 A 改好' }]), { spawn: fakeDelegate({ stdout: ok([{ claim: 'c', quote: '把 A 改好' }]), configDirs }) })
+    await b.service.generate({ authorized: true })
+    assert.deepEqual(configDirs, [b.facts.configDir], 'spawn 收到的必須是同一次解析的結果')
+  })
+
+  it('委派失敗時同樣刪掉語料副本 —— 失敗路徑上根本拿不到 sessionId', async () => {
+    const b = bed('not json at all')
+    const dir = path.join(b.facts.configDir, 'projects', b.facts.delegateDirName ?? '')
+    const leftover = path.join(dir, 'aaaaaaaa-0000-4000-8000-000000000000.jsonl')
+    const { writeFileSync } = await import('node:fs')
+    writeFileSync(leftover, '{"type":"user"}\n')
+    assert.ok(statSync(leftover).isFile(), '前置：那一份副本確實在')
+
+    const r = await b.service.generate({ authorized: true })
+    assert.equal(r.ok, false, '前置：這一趟確實失敗了')
+    assert.throws(() => statSync(leftover), '失敗的那一趟同樣留下了紀錄，同樣要刪')
   })
 })

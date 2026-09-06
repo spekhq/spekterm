@@ -32,15 +32,41 @@ export interface SourceEnv {
   home?: string
 }
 
-/** Claude Code 的設定目錄。 */
-export function resolveConfigDir(env: SourceEnv = {}): string {
+/**
+ * 使用者**明確指定**的設定目錄；沒有指定時為 `undefined`。
+ *
+ * **「沒有指定」與「指定成預設位置」必須分得開**，因為那兩件事對 `claude` 不等價：
+ * 該變數未設定時它的主設定檔是 `~/.claude.json`，設定之後是 `$CLAUDE_CONFIG_DIR/.claude.json`
+ * —— 兩者不是同一個檔。委派的環境只在「明確指定」時才傳它（見 `report-runner.ts`
+ * 的 `delegateEnv`）；把 `resolveConfigDir()` 的結果無條件傳進去會讓它找不到既有設定。
+ */
+export function explicitConfigDir(env: SourceEnv = {}): string | undefined {
   const userEnv = env.userEnv ?? getUserEnv()
   const processEnv = env.processEnv ?? process.env
   const fromUser = userEnv[CONFIG_DIR_VAR]
   if (fromUser && fromUser.trim()) return fromUser
   const fromProcess = processEnv[CONFIG_DIR_VAR]
   if (fromProcess && fromProcess.trim()) return fromProcess
-  return path.join(env.home ?? homedir(), '.claude')
+  return undefined
+}
+
+/**
+ * 設定目錄的**一次**解析，回傳兩個衍生值：
+ *
+ * - `explicit` —— 傳給委派的值（沒有明確指定時不傳，見 `explicitConfigDir`）
+ * - `resolved` —— 本應用程式用來定位委派紀錄的位置
+ *
+ * **兩者必須同源。** 若各自解析，委派可能把一份含完整語料的紀錄寫在我們不會去刪的位置，
+ * 而畫面上只會顯示「刪不掉」。一次呼叫回傳兩個值，這個分歧就表達不出來。
+ */
+export function configDirs(env: SourceEnv = {}): { explicit: string | undefined; resolved: string } {
+  const explicit = explicitConfigDir(env)
+  return { explicit, resolved: explicit ?? path.join(env.home ?? homedir(), '.claude') }
+}
+
+/** Claude Code 的設定目錄。以 `configDirs()` 實作 —— 解析順序只有一份。 */
+export function resolveConfigDir(env: SourceEnv = {}): string {
+  return configDirs(env).resolved
 }
 
 /** transcript 的來源根。 */

@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url'
 import type { WorkerHandle } from '../insights-service'
 import type { InsightsService } from '../insights'
 import type { ReportService } from '../report'
-import { delegateArgs, type DelegateHandle } from '../report-runner'
+import { delegateArgs, delegateEnv, type DelegateHandle } from '../report-runner'
 import { getUserEnv } from '../user-env'
 
 export const INSIGHTS_CHANNELS = {
@@ -68,12 +68,19 @@ export function registerInsightsHandlers(service: InsightsService, reports: Repo
  *    落在一個**可預測**的專案目錄裡，因而排除得掉。
  * 2. **關閉所有工具** —— 這趟不需要工具，而開著它就可能去讀 repo。
  * 3. **`--output-format json`** —— 成敗由欄位判定，不解析散文。
- * 4. **`PATH` 取自 `getUserEnv()`** —— 與 pty 同一個來源。使用者的 `claude` 常裝在
- *    `~/.local/bin`，那不在主行程繼承到的 `PATH` 裡（見 `user-env.ts` 的分界）。
+ * 4. **環境是一份白名單**，由 `delegateEnv` 建構（純函式，驗得到）。此前這裡是
+ *    `{ ...process.env, ...userEnv, PATH: userEnv.PATH ?? … }`，把使用者 login shell 的
+ *    整份環境交了出去 —— 其中含 API 憑證，而非互動模式（`-p`）**不會就此詢問使用者**。
+ *    順帶一提，那一行的 `userEnv.PATH` **恆為 `undefined`**（`getUserEnv()` 結構上不含
+ *    `PATH`），所以此前這裡宣稱的「`PATH` 取自 `getUserEnv()`」從第一天起就不成立。
  */
-export function spawnReportDelegate(options: { cwd: string; model: string }): DelegateHandle {
+export function spawnReportDelegate(options: {
+  cwd: string
+  model: string
+  /** 使用者**明確指定**的設定目錄；未指定時為 `undefined`，那時就不傳。 */
+  configDir: string | undefined
+}): DelegateHandle {
   mkdirSync(options.cwd, { recursive: true, mode: 0o700 })
-  const userEnv = getUserEnv()
   const child = spawn(
     'claude',
     // 參數的組裝在 `report-runner.ts`（純函式，驗得到）。工具一律關閉 ——
@@ -82,7 +89,9 @@ export function spawnReportDelegate(options: { cwd: string; model: string }): De
     {
       cwd: options.cwd,
       stdio: ['pipe', 'pipe', 'ignore'],
-      env: { ...process.env, ...userEnv, PATH: userEnv.PATH ?? process.env.PATH ?? '' },
+      // **`process.env` 直接交出去，不先展開** —— Node 對它在 Windows 上是大小寫不敏感的
+      // 代理，展開之後 `SYSTEMROOT` 之屬會查不到。見 `delegateEnv` 的 docstring。
+      env: delegateEnv({ processEnv: process.env, userEnv: getUserEnv(), configDir: options.configDir }),
     },
   )
   return {

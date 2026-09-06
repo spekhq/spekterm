@@ -174,6 +174,11 @@ $ #   {"type":"user","message":{"role":"user","content":"回覆第二個字\nALP
 **不能用 `CLAUDE_CONFIG_DIR` 把它整個導去別處**（那才是最徹底的隔離）—— 見 §「這份資料是什麼」：
 換掉設定目錄會連認證一起換掉。
 
+> **但「使用者自己設了它」是另一回事。** 委派的環境會**原樣轉送**使用者明確指定的
+> `CLAUDE_CONFIG_DIR`（而且只在他明確指定時才傳）—— 見第十三節。這裡禁止的是「我們自己
+> 挑一個目錄導過去」，不是「照抄使用者的設定」。**合成一個預設值傳進去也在禁止之列，
+> 而理由與這一段不同**（設定檔會搬家）。
+
 > **順帶一個獨立的坑**：`content` 可以是**字串**而不是 block 陣列，而真實的 `claude -p`
 > 寫出來的正是字串型。產品的 `transcript-extract.ts` 有處理，但
 > `transcript-fixture.test.ts` 那份「獨立重算」原本只認陣列 —— 於是任何字串型的使用者記錄
@@ -182,14 +187,127 @@ $ #   {"type":"user","message":{"role":"user","content":"回覆第二個字\nALP
 ## 十二、委派的回覆只依賴少數幾個 JSON 欄位
 
 `--output-format json` 實測有這些可用（同上版本）：`result`（回覆本體）、`is_error` /
-`subtype`（成敗）、`session_id`（算出要刪除的紀錄路徑）、`total_cost_usd`、
+`subtype`（成敗）、`session_id`、`total_cost_usd`、
 `permission_denials`（**工具有沒有真的被關掉唯一的偵測訊號**）。
+
+> **`session_id` 已不再被消費**（`delegate-billing-attribution`）：委派紀錄的刪除改為以
+> **專案目錄**為單位。理由見下面第十三節 —— 失敗的那幾條路根本拿不到它，而失敗的那一趟
+> 同樣留下了一份完整語料的紀錄。
 
 **模型不在清單裡** —— 報告記錄的是「本應用程式請求的模型」，那是我們自己傳出去的值。
 實際生效的可能因回退而不同，把推測寫成事實正是要避免的。
 
 **不要依賴 stderr 的文字**：它會隨版本與語言環境改變，而且可能含絕對路徑或帳號資訊 ——
 那些會被畫到畫面上。
+
+
+
+## 十三、委派的環境是一份白名單 —— 而理由不只是費用
+
+（實測 2026-09-06，`claude` 2.1.263）
+
+### 認證優先序共七層，訂閱 OAuth 排**最後**
+
+官方 `docs/en/iam`：雲端供應商選擇（`CLAUDE_CODE_USE_BEDROCK` / `_VERTEX` / `_FOUNDRY`）→
+`ANTHROPIC_AUTH_TOKEN` → `ANTHROPIC_API_KEY` → `apiKeyHelper` → `CLAUDE_CODE_OAUTH_TOKEN`
+→ profile / federation → `/login` 的訂閱憑證。而關鍵的一句是：
+
+> In interactive mode, you are prompted once to approve or decline the key ...
+> **In non-interactive mode (`-p`), the key is always used when present.**
+
+**pty 裡的互動式 claude 會問使用者一次；`-p` 的委派不會。** 於是把使用者 login shell 的整份
+環境交給委派，等同讓一個從未被詢問的憑證接管計費，而 `total_cost_usd` 是 client-side 估算、
+**看不出這筆走訂閱還是 API**。
+
+`env-vars` 頁上這類變數目前約 25 個，且一年內從三、四個長到這個數量
+（`ANTHROPIC_PROFILE`、federation 那組、`ANTHROPIC_FOUNDRY_*`、`ANTHROPIC_AWS_*`、
+`ANTHROPIC_BEDROCK_MANTLE_BASE_URL`、`CLAUDE_CODE_USE_FOUNDRY` 都是近期才有的）。
+**所以是白名單而不是剝除清單** —— 一份剝除清單需要有人定期比對官方文件，而漏補的徵狀是
+「一切正常」。
+
+**`CLAUDE_CODE_OAUTH_TOKEN` 是這一族裡的例外，它在白名單上**：那是 `claude setup-token`
+產生的**訂閱**憑證，轉送它**維持**而非改變計費歸屬。拿它去論證「不可用前綴一概剝除」、
+然後自己的白名單也沒放它，是同一個錯誤的兩面 —— **「不在清單上」與「明確剝除」後果一樣。**
+
+### `process.env` 這一半同樣要防，而它只在從終端機啟動時才髒
+
+自桌面選單啟動的產物環境很乾淨；**自一個 Claude Code session 之內啟動時**（`npm run dev`
+常常就是），`process.env` 實測帶著 11 個：
+
+```
+CLAUDECODE  CLAUDE_CODE_ENTRYPOINT  CLAUDE_CODE_SESSION_ID  CLAUDE_CODE_CHILD_SESSION
+CLAUDE_CODE_BRIDGE_SESSION_ID  CLAUDE_CODE_MESSAGING_SOCKET  CLAUDE_CODE_MESSAGING_TOKEN
+CLAUDE_CODE_EXECPATH  CLAUDE_PID  CLAUDE_EFFORT  CLAUDE_CODE_NO_FLICKER
+```
+
+`MESSAGING_SOCKET` / `_TOKEN` 是一條通往**父 session** 的通道 —— 那是剝除它們最直接的理由。
+（`terminal.ts` 的 `NESTED_CLAUDE_ENV` 只有 7 個名字，涵蓋上面 5 個 —— pty 那條路的缺口
+是 issue #38，不在委派這條路上。）
+
+> **不要把 `terminal.md` 那個二分實測外推到 `-p` 上。** 那份實測（`CLAUDE_CODE_CHILD_SESSION`
+> 單獨一個就會讓 `claude` 完全不寫 transcript）的對象是**掛在 pty 上的互動式 claude**。
+> 對非互動模式實測過了，結論相反：
+>
+> | | 帶著 `CLAUDE_CODE_CHILD_SESSION` | `env -u` 剝除 |
+> |---|---|---|
+> | 是否寫下紀錄 | **有**（221,740 bytes） | **有**（221,758 bytes） |
+>
+> （以不存在的模型跑 `-p`，`total_cost_usd: 0`，不計費 —— **這是查證這類問題的便宜作法**。）
+> 剝除的理由仍然成立，但**理由是那條通往父 session 的管道，不是「它會讓 claude 不寫紀錄」**。
+
+### `CLAUDE_CONFIG_DIR`：**設與不設，主設定檔不是同一個檔**
+
+這是本節最容易從語意推論而推錯的一條。
+
+| | 主設定檔 |
+|---|---|
+| 未設定 | `~/.claude.json` |
+| 設為 `$D` | `$D/.claude.json` |
+
+於是「反正解析出來的預設值就是 `~/.claude`，明確傳進去等於不變」是**錯的**：claude 會去找
+`~/.claude/.claude.json`，那個檔不存在，**它就地建出一份「首次啟動」的空設定**
+（實測 39,417 bytes、`projects` 為空、沒有 onboarding 狀態），並印出三行
+`Claude configuration file not found at: …`。
+
+**而 `report-runner.ts` 的 `JSON.parse(stdout)` 是零容忍的**（不取最後一行、不濾非 JSON
+前綴）—— 那三行若落在 stdout，每個使用者的**第一趟**讀後感都會 `unparsableReply`。
+「只有第一次會發生」是最容易被放行的形狀：dogfood 跑第二次就再也看不到。
+（該訊息走 stdout 還是 stderr **未能重現，查不出結論** —— 正確的做法讓這個問題不必回答。）
+
+**結論：只在使用者明確指定時才轉送它，不合成預設值。** `insights-source.ts` 的
+`explicitConfigDir()` 就是那個「有沒有明確指定」的判定；`configDirs()` 一次解析回傳
+`explicit` 與 `resolved` 兩個衍生值，因為「委派寫到哪」與「我們去哪刪」必須同源。
+
+> **這與本文件他處那句「不能用 `CLAUDE_CONFIG_DIR` 把它整個導去別處」不衝突。**
+> 那句話針對的是「把委派導去一個**不同的**目錄以求隔離」（會連認證一起換掉）。
+> 這裡轉送的是使用者**自己已經設定的那個值** —— 他的互動式 claude 看到的也是它。
+
+### 委派**失敗**的那一趟同樣寫了紀錄
+
+實測：無憑證的 `-p` 以 exit 1、`is_error: true` 結束，而
+`<configDir>/projects/<編碼後的 cwd>/<session>.jsonl` **仍然產生**，內容含送進去的語料。
+
+而失敗路徑上 `RunOutcome` 只有 `code`，**拿不到 `session_id`**。以識別碼定位單一檔案的刪除
+因此在失敗時無事可做 —— 一份 60 萬字元的語料副本留在來源目錄，活 30 天，沒有任何程式碼
+會去刪它。**刪除因此改為以委派的專案目錄為單位**（那是本應用程式專屬管理的工作目錄所對應
+的專案目錄，其中不會有別人的紀錄），並在成功與失敗兩條路上都執行。
+
+**唯一不能刪的時機是 `busy`** —— 那代表這一趟根本沒有起委派，而另一趟正在跑，刪下去會把
+**它的**紀錄一併清掉。
+
+### 白名單「夠不夠」要實測，不要從語意推論
+
+以 `env -i` 只給 `PATH` / `HOME` / `USER` / `LOGNAME` / `LANG` 跑一趟真實的
+`claude -p --output-format json`：**exit 0 並取得回覆**。
+
+- 本機的 `claude` 是 **native ELF 單檔**（`~/.local/bin/claude` → `~/.local/share/claude/versions/…`），
+  `ldd` 只有 libc/libm/libpthread/libdl/librt —— **不需要 node、與 nvm 無關**。
+  （npm 安裝法的 `#!/usr/bin/env node` 由 `PATH` 涵蓋。）
+- 認證讀 `~/.claude/.credentials.json`；binary **未連結 libsecret**，所以
+  `DBUS_SESSION_BUS_ADDRESS` / `XDG_RUNTIME_DIR` 不需要。
+- **`TERM` 不需要**；`HOME` 是致命的。
+
+**這只覆蓋這一種安裝方式。** 換一種安裝法要重測。
 
 
 

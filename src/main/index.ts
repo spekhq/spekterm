@@ -24,7 +24,7 @@ import { PanelStore } from './panel-store'
 import { PreferencesStore } from './preferences-store'
 import { SessionStore } from './session-store'
 import { createInsightsService } from './insights'
-import { delegateDirSuffix, resolveArchiveRoot, resolveConfigDir, resolveDelegateCwd, resolveProjectsDir } from './insights-source'
+import { configDirs, delegateDirSuffix, resolveArchiveRoot, resolveDelegateCwd, resolveProjectsDir } from './insights-source'
 import { createReportService, reportsRoot } from './report'
 
 /** 讀後感請求的模型。報告記錄的是**這個值** —— 實際生效的可能因回退而不同。 */
@@ -185,11 +185,14 @@ void app.whenReady().then(() => {
   })
   const reports = createReportService({
     archiveRoot: () => resolveArchiveRoot(app.getPath('userData')),
-    configDir: () => resolveConfigDir(),
+    configDir: () => configDirs(),
     delegateCwd: () => resolveDelegateCwd(app.getPath('userData')),
     reportsDir: () => reportsRoot(app.getPath('userData')),
     requestedModel: () => REPORT_MODEL,
-    spawn: () => spawnReportDelegate({ cwd: resolveDelegateCwd(app.getPath('userData')), model: REPORT_MODEL }),
+    // **`configDir` 由 `report.ts` 解析一次後傳進來**，這裡不再自己求值 ——
+    // 「委派寫紀錄的位置」與「我們刪紀錄的位置」必須同源。
+    spawn: ({ configDir }) =>
+      spawnReportDelegate({ cwd: resolveDelegateCwd(app.getPath('userData')), model: REPORT_MODEL, configDir }),
   })
   registerInsightsHandlers(insights, reports)
 

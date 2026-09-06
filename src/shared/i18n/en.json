@@ -458,6 +458,7 @@
       "authorize": {
         "title": "Send these messages to Anthropic?",
         "blurb": "What leaves this machine is the text you typed to your agent. It does not include tool output, file contents from your repositories, or anything your agent wrote. This authorises one run only.",
+      "identity": "The reading runs as your own claude login. Credentials sitting in your shell environment, such as an API key or a gateway token, are not passed to it.",
         "period": "Period",
         "projects": "Projects",
         "messages": "Messages",
@@ -487,7 +488,7 @@
       "occurrences_other": "said {{count}} times",
       "error": {
         "cliMissing": "The claude command could not be started. It has to be on the PATH your shell uses.",
-        "delegateFailed": "The claude command returned an error. Running claude once in a terminal will show whether it needs you to log in.",
+        "delegateFailed": "The claude command returned an error. Either it needs you to log in, or your only credential lives in your shell environment, which a reading does not use.",
         "delegateTimeout": "The reading did not finish in time and was stopped.",
         "unparsableReply": "The reply could not be read as a reading. Nothing was saved.",
         "allClaimsDiscarded": "Every observation in this run failed verification, so nothing was saved. This is not an empty reading; none of it could be traced back to something you actually typed.",

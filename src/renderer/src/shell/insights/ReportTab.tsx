@@ -154,6 +154,9 @@ function AuthorizeDialog({
       <div className="w-full max-w-md border border-hairline bg-shell p-4">
         <h3 className="mb-2 text-sm font-bold text-ink">{t('insights.report.authorize.title')}</h3>
         <p className="mb-3 text-2xs leading-relaxed text-ink-dim">{t('insights.report.authorize.blurb')}</p>
+        {/* **以什麼身分執行** —— 委派用的是使用者自己的 claude 登入，shell 環境裡的憑證不會被
+            交出去。憑證只存在於環境變數的使用者因此會失敗，而授權畫面是他唯一會停下來讀的地方。 */}
+        <p className="mb-3 text-2xs leading-relaxed text-ink-dim">{t('insights.report.authorize.identity')}</p>
         <dl className="mb-3 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-2xs">
           {rows.map(([label, value]) => (
             <div key={label} className="contents">

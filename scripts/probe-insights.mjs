@@ -596,6 +596,12 @@ async function runReportTab(_mode, _config, context) {
   )
   check(
     results,
+    '授權畫面說明委派以什麼身分執行（不使用 shell 環境裡的憑證）',
+    dialog.dialogText.includes(copy('insights.report.authorize.identity')),
+    dialog.dialogText.slice(0, 400),
+  )
+  check(
+    results,
     '授權畫面不是全文檢視器（fixture 的長訊息原文不在上面）',
     !dialog.dialogText.includes('長'.repeat(20)),
     'fixture 的長訊息原文出現在授權畫面上',

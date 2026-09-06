@@ -40,13 +40,21 @@ export type GenerateResult =
 
 export interface ReportDeps {
   archiveRoot: () => string
-  /** Claude Code 的設定目錄 —— 用來算出委派留下的紀錄在哪。 */
-  configDir: () => string
+  /**
+   * 設定目錄的**一次**解析（見 `insights-source.ts` 的 `configDirs`）。
+   *
+   * `resolved` 用來算出委派留下的紀錄在哪，`explicit` 是傳給委派的值（沒明確指定時為
+   * `undefined`，那時就不傳）。**兩者必須來自同一次呼叫** —— 各自解析的話，委派會把一份
+   * 含完整語料的紀錄寫在我們不會去刪的位置，而畫面上只顯示「刪不掉」。
+   */
+  configDir: () => { explicit: string | undefined; resolved: string }
   /** 委派的工作目錄。與掃描的排除規則同一個來源。 */
   delegateCwd: () => string
   reportsDir: () => string
   requestedModel: () => string
-  spawn: () => DelegateHandle
+  spawn: (options: { configDir: string | undefined }) => DelegateHandle
+  /** 語料上限。**開這個旋鈕是為了驗得到「超過上限」那條 scenario** —— 見 `report-corpus.ts`。 */
+  maxChars?: number
   timeoutMs?: number
   now?: () => number
 }
@@ -113,7 +121,7 @@ export function createReportService(deps: ReportDeps) {
       projects.set(entry.header.p, acc)
     }
     const identities = identifyProjects([...projects].map(([dirName, cwds]) => ({ dirName, cwds })))
-    const corpus = buildCorpus(rows, range)
+    const corpus = buildCorpus(rows, { ...range, maxChars: deps.maxChars })
     const insights = aggregate(rows, {
       from: corpus.from ?? undefined,
       to: corpus.to ?? undefined,
@@ -137,28 +145,32 @@ export function createReportService(deps: ReportDeps) {
   }
 
   /**
-   * 刪掉委派留下的那一份紀錄 —— 它是語料的第二份副本，落在我們的權限控制之外。
+   * 刪掉委派留下的紀錄 —— 它是語料的第二份副本，落在我們的權限控制之外。
+   *
+   * **以委派的專案目錄為單位，不依賴該趟的 `sessionId`。** 兩個理由：
+   * 失敗的那一趟**照樣寫了紀錄**（實測：無憑證的 `-p` exit 1、`is_error: true`，
+   * 紀錄仍然產生），而失敗路徑上 `RunOutcome` 根本拿不到 `sessionId` —— 逾時、
+   * 回覆無法解析、憑證錯誤三條路都是。以目錄為單位一併涵蓋它們。
+   * 這個目錄是本應用程式在 userData 底下管理的**專屬**工作目錄所對應的專案目錄，
+   * 其中不會有其他來源的紀錄。
    *
    * **刪完要回頭確認那個目錄真的空了，不能只看 `rmSync` 有沒有拋錯。**
    * `force: true` 對不存在的路徑不拋錯，於是「路徑一直算錯」會回報成「刪掉了」——
    * 而那正是這個回傳值要能分辨的兩種情況裡比較危險的那一個（每跑一趟就多留一份副本，
    * 活 30 天，而畫面上一切正常）。
    */
-  const deleteDelegateRecord = (sessionId: string | null): boolean => {
-    if (!sessionId) return false
-    const dir = path.join(deps.configDir(), 'projects', encodeProjectDir(deps.delegateCwd()))
-    const file = path.join(dir, `${sessionId}.jsonl`)
+  const deleteDelegateRecords = (configDir: string): boolean => {
+    const dir = path.join(configDir, 'projects', encodeProjectDir(deps.delegateCwd()))
     // **先確認它真的在那裡。** `rmSync({ force: true })` 對不存在的路徑不拋錯，
     // 於是只看有沒有拋的話，「路徑一直算錯」會被回報成「刪掉了」—— 而那是兩種情況裡
     // 危險的那一個：每跑一趟就在別處多留一份副本，活 30 天，而畫面上一切正常。
-    if (!existsSync(file)) return false
+    if (!existsSync(dir)) return false
     try {
-      rmSync(file, { force: true })
-      rmSync(path.join(dir, sessionId), { recursive: true, force: true })
+      rmSync(dir, { recursive: true, force: true })
     } catch {
       return false
     }
-    return !existsSync(file)
+    return !existsSync(dir)
   }
 
   const generate = async (request: ReportRequest): Promise<GenerateResult> => {
@@ -172,11 +184,19 @@ export function createReportService(deps: ReportDeps) {
     const model = deps.requestedModel()
     const input = `${buildPrompt(insights, model)}\n${corpus.messages.map((m) => m.norm).join('\n')}\n`
 
-    const run = await runner.run(input)
-    if (run === null) return { ok: false, code: 'busy' }
-    if (!run.ok) return { ok: false, code: run.code }
+    // **設定目錄解析一次，兩個衍生值。** `explicit` 交給委派（沒明確指定時不傳），
+    // `resolved` 用來刪紀錄 —— 兩者同源，分歧表達不出來。
+    const { explicit, resolved } = deps.configDir()
 
-    const deleted = deleteDelegateRecord(run.outcome.sessionId)
+    const run = await runner.run(input, { configDir: explicit })
+    // **`busy` 要在刪除之前早退。** 那代表這一趟根本沒有起委派，而另一趟正在跑 ——
+    // 刪下去會把**它的**紀錄一併清掉。
+    if (run === null) return { ok: false, code: 'busy' }
+
+    // **刪除在失敗的早退之前。** 失敗的那一趟同樣留下了一份完整語料的副本，活 30 天，
+    // 而沒有任何其他程式碼會去刪它。
+    const deleted = deleteDelegateRecords(resolved)
+    if (!run.ok) return { ok: false, code: run.code }
 
     const raw = parseClaims(run.outcome.result)
     if (raw === null) return { ok: false, code: 'unparsableReply' }
