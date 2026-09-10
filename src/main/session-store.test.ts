@@ -382,21 +382,23 @@ describe('session 的歸屬：全域以明確標記表示，缺席不是全域',
 })
 
 describe('view 的選擇跨重啟存活', () => {
-  it('三處逐欄位白名單全部命中', () => {
+  it('既有檔案殘留的 view 欄位不被保留，也不會被寫回', () => {
+    // view 的選擇改為全域偏好（`agent-conversation-view`）之後，這個欄位不再屬於 session 的
+    // 持久化紀錄。既有檔案裡的殘留值於讀取時被忽略 —— 而 `replace()` 的逐欄位白名單使
+    // 「它不會再被寫進磁碟」不需要另外做什麼，那正是這個測試要釘住的性質。
     const persisted = parseSessions(
       JSON.stringify({
         version: 1,
         sessions: [
           { id: '11111111-1111-4111-8111-111111111111', folderId: 'f1', spawnTarget: 'claude', ordinal: 1, view: 'conversation' },
-          { id: '22222222-2222-4222-8222-222222222222', folderId: 'f1', spawnTarget: 'claude', ordinal: 2 },
-          { id: '33333333-3333-4333-8333-333333333333', folderId: 'f1', spawnTarget: 'shell', ordinal: 3, view: 'bogus' },
         ],
       }),
     )
     assert.ok(persisted)
-    assert.equal(persisted[0].view, 'conversation')
-    // 缺席即終端；不認得的值一律當作缺席（不接受未知的呈現方式）。
-    assert.equal(persisted[1].view, undefined)
-    assert.equal(persisted[2].view, undefined)
+    assert.equal('view' in persisted[0], false, '讀取後不得保留該欄位')
+
+    store().replace(persisted)
+    const written = JSON.parse(fs.readFileSync(file, 'utf8'))
+    assert.equal('view' in written.sessions[0], false, '落盤時不得寫出該欄位')
   })
 })

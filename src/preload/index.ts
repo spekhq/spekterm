@@ -244,6 +244,13 @@ const workspaceApi = {
     /** 與 agent 的狀態橋接。只影響其後建立或重建的 session（注入發生在 spawn 當下）。 */
     setAgentStatus: (enabled: boolean | null): Promise<TerminalPreferences> =>
       ipcRenderer.invoke('workspace:settings:setAgentStatus', enabled),
+    /**
+     * agent session 以哪一種 view 呈現。`null` ＝回到預設（＝終端）。
+     *
+     * **它是全域的** —— 切換任何一個 agent session 的 view，所有 agent session 一起改變。
+     */
+    setAgentView: (view: 'terminal' | 'conversation' | null): Promise<TerminalPreferences> =>
+      ipcRenderer.invoke('workspace:settings:setAgentView', view),
     /** 系統的等寬字型清單，給設定對話框的下拉選單（Linux 走 fontconfig；其他平台回空陣列）。 */
     listMonospaceFonts: (): Promise<string[]> =>
       ipcRenderer.invoke('workspace:settings:listMonospaceFonts'),

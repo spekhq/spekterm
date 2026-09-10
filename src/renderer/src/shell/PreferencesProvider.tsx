@@ -34,6 +34,21 @@ export interface PreferencesApi {
   updateAgentStatus: (enabled: boolean | null) => Promise<void>
   /** 狀態橋接當下是否**應該**啟用 —— 未設定即為啟用（同 `gpuEnabled`）。 */
   agentStatusEnabled: boolean
+  /**
+   * 切換 agent session 的呈現方式。**這是全域的** —— 切一個，所有 agent session 一起改變。
+   *
+   * 同上，呼叫端要 await。**此前這是 renderer 的本地 state 更新（同步、不可能失敗）**，
+   * 現在是一次 IPC 往返 ＋ 主行程的同步寫檔：多了一種失效方式，被拒絕時畫面靜默地不動。
+   */
+  updateAgentView: (view: 'terminal' | 'conversation') => Promise<void>
+  /**
+   * 當前的呈現方式 —— **未設定即為終端**。
+   *
+   * 與 `gpuEnabled` 同一條理由：把「undefined 代表什麼」收在一處，呼叫端就不會各自寫一次
+   * `?? 'terminal'`。漏掉一處的症狀是「偏好設了對話 view，但某個地方還是終端」，
+   * 而那不會有任何型別錯誤。
+   */
+  agentView: 'terminal' | 'conversation'
 }
 
 const PreferencesContext = createContext<PreferencesApi | null>(null)
@@ -71,17 +86,30 @@ export function PreferencesProvider({ children }: { children: React.ReactNode })
     [],
   )
 
+  const updateAgentView = useCallback(
+    (view: 'terminal' | 'conversation') =>
+      window.workspace.settings
+        .setAgentView(view)
+        .then(setTerminal)
+        // 被拒絕時畫面會靜默地不動 —— 至少留下紀錄，不要連線索都沒有。
+        .catch((error: unknown) => console.error(`[preferences] setAgentView failed: ${String(error)}`)),
+    [],
+  )
+
   const api = useMemo<PreferencesApi>(
     () => ({
       terminal,
       updateTerminalFont,
       updateGpuAcceleration,
       updateAgentStatus,
+      updateAgentView,
       gpuEnabled: terminal.gpuAcceleration ?? true,
       // 未設定＝啟用（與 GPU 加速同一條規則）。
       agentStatusEnabled: terminal.agentStatus !== false,
+      // 未設定＝終端（同一條規則，見上方的欄位說明）。
+      agentView: terminal.agentView ?? 'terminal',
     }),
-    [terminal, updateTerminalFont, updateGpuAcceleration, updateAgentStatus],
+    [terminal, updateTerminalFont, updateGpuAcceleration, updateAgentStatus, updateAgentView],
   )
 
   return <PreferencesContext.Provider value={api}>{children}</PreferencesContext.Provider>

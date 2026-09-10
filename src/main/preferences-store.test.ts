@@ -183,6 +183,51 @@ describe('PreferencesStore：讀寫與持久化', () => {
     assert.deepEqual(store.get(), { fontFamily: 'Fira Code', fontSize: 14, gpuAcceleration: true })
   })
 
+  it('agentView 跨一次 load() 還原 —— 只驗 setter 的回傳值不算', () => {
+    // **必須跨 `load()`。** `parsePreferences` 的解構清單是第二處白名單，型別檢查對它零感知：
+    // 漏在那裡的欄位寫得進磁碟卻讀不回來，而只驗 setter 回傳值的測試照樣全綠
+    // （`agentStatus` / `agentEvents` 目前就是這個狀態）。
+    const first = new PreferencesStore(configPath)
+    first.load()
+    assert.equal(first.get().agentView, undefined, '前置：一開始是未設定')
+    first.setAgentView('conversation')
+
+    const second = new PreferencesStore(configPath)
+    second.load()
+    assert.equal(second.get().agentView, 'conversation')
+  })
+
+  it('agentView 只認那兩個字面值，其餘視為未設定', () => {
+    for (const bad of ['Conversation', 'chat', '', 42, null, true, {}]) {
+      fs.writeFileSync(
+        configPath,
+        JSON.stringify({ version: PREFERENCES_VERSION, terminal: { agentView: bad } }),
+      )
+      const store = new PreferencesStore(configPath)
+      store.load()
+      assert.equal(store.get().agentView, undefined, `不合法的值：${JSON.stringify(bad)}`)
+    }
+  })
+
+  it('改字型不該動到 agentView', () => {
+    const store = new PreferencesStore(configPath)
+    store.load()
+    store.setAgentView('conversation')
+
+    store.setTerminalFont('Fira Code', 14, null)
+    assert.equal(store.get().agentView, 'conversation', '改字型不該把 view 彈回終端')
+  })
+
+  it('舊檔（無 agentView）照常解析，其他欄位不受影響', () => {
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({ version: PREFERENCES_VERSION, terminal: { fontFamily: 'Fira Code', gpuAcceleration: false } }),
+    )
+    const store = new PreferencesStore(configPath)
+    store.load()
+    assert.deepEqual(store.get(), { fontFamily: 'Fira Code', gpuAcceleration: false })
+  })
+
   it('GPU 偏好跨重啟還原，且只認真正的布林', () => {
     const first = new PreferencesStore(configPath)
     first.load()

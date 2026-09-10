@@ -66,15 +66,6 @@ export interface SessionState {
    * 交還命名權：把名字清空（見 `rename`）。
    */
   customTitle?: string
-  /**
-   * 這個 session 當下以哪一種呈現方式顯示（`agent-conversation-view`）。
-   *
-   * **per-session，不是全域偏好** —— 使用者完全可能一邊以對話 view 看 agent、一邊以終端 view
-   * 用 shell。缺席即終端，因此既有 session 與 shell 目標都不需要遷移。
-   *
-   * **它不改變 session 的身分**：兩種 view 是同一個 session 的兩種呈現，不是兩個分頁。
-   */
-  view?: 'terminal' | 'conversation'
 }
 
 export type CreateOutcome =
@@ -126,12 +117,6 @@ export interface SessionsApi {
    * 使用者已接管命名權時**照樣記錄，只是不呈現** —— 不覆蓋、不確認、不打斷（design D1／D3）。
    */
   setTitle(sessionId: string, title: string): void
-  /**
-   * 切換這個 session 的呈現方式。
-   *
-   * **不建立、不結束 pty，不改變身分、順序或名稱** —— 它只換一個看的方式。
-   */
-  setView(sessionId: string, view: 'terminal' | 'conversation'): void
   /** 使用者親自命名（＝永久接管命名權）。空字串＝交還命名權，回到跟隨 pty。 */
   rename(sessionId: string, name: string): void
   /** 重排同一個 folder 之內的 session 順序。索引是該 folder 之內的序位。 */
@@ -290,7 +275,6 @@ export function SessionsProvider({ children }: { children: React.ReactNode }): R
               title: entry.title,
               customTitle: entry.customTitle,
               worktreeKey: entry.worktreeKey,
-              view: entry.view,
             }))
           // 重建的排在前面 —— 它們是上次的順序，而在它們之前建立的那些是「新的」。
           return [...restoredSessions, ...previous]
@@ -325,7 +309,7 @@ export function SessionsProvider({ children }: { children: React.ReactNode }): R
         // 已結束的 session 不持久化：重開時不該把一個死掉的分頁重建回來（使用者裁決）。
         .filter((session) => session.status !== 'exited')
         .map(
-          ({ id, folderId, spawnTarget, ordinal, title, customTitle, worktreeKey, view }) => ({
+          ({ id, folderId, spawnTarget, ordinal, title, customTitle, worktreeKey }) => ({
             id,
             folderId,
             spawnTarget,
@@ -333,7 +317,6 @@ export function SessionsProvider({ children }: { children: React.ReactNode }): R
             title,
             customTitle,
             worktreeKey,
-            view,
           }),
         ),
     )
@@ -490,12 +473,6 @@ export function SessionsProvider({ children }: { children: React.ReactNode }): R
     )
   }, [])
 
-  const setView = useCallback((sessionId: string, view: 'terminal' | 'conversation') => {
-    setSessions((previous) =>
-      previous.map((session) => (session.id === sessionId ? { ...session, view } : session)),
-    )
-  }, [])
-
   const reorder = useCallback((folderId: string, fromIndex: number, toIndex: number) => {
     setSessions((previous) => {
       // 只重排該 folder 佔據的那些位置，其餘 folder 的相對順序完全不動。
@@ -572,7 +549,6 @@ export function SessionsProvider({ children }: { children: React.ReactNode }): R
       close,
       setTitle,
       rename,
-      setView,
       reorder,
       attach,
       sendInput,
@@ -588,7 +564,6 @@ export function SessionsProvider({ children }: { children: React.ReactNode }): R
       close,
       setTitle,
       rename,
-      setView,
       reorder,
       attach,
       sendInput,

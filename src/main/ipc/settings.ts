@@ -7,6 +7,7 @@ export const SETTINGS_CHANNELS = {
   setTerminalFont: 'workspace:settings:setTerminalFont',
   setGpuAcceleration: 'workspace:settings:setGpuAcceleration',
   setAgentStatus: 'workspace:settings:setAgentStatus',
+  setAgentView: 'workspace:settings:setAgentView',
   listMonospaceFonts: 'workspace:settings:listMonospaceFonts',
 } as const
 
@@ -72,6 +73,13 @@ export function registerSettingsHandlers(store: PreferencesStore): void {
     SETTINGS_CHANNELS.setAgentStatus,
     (_event, enabled: unknown): TerminalPreferences =>
       store.setAgentStatus(typeof enabled === 'boolean' ? enabled : null),
+  )
+
+  // 值的白名單同樣在 store（只認那兩個字面值；其餘一律當成未設定＝預設的終端 view）。
+  ipcMain.handle(
+    SETTINGS_CHANNELS.setAgentView,
+    (_event, view: unknown): TerminalPreferences =>
+      store.setAgentView(view === 'terminal' || view === 'conversation' ? view : null),
   )
 
   ipcMain.handle(

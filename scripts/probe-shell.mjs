@@ -157,11 +157,13 @@ const PROBE_EXPRESSION = `(async () => {
     // settings 的能力（terminal-rendering-and-preferences，terminal-preferences 規格）。同一條
     // 白名單原則 —— 從第一天就補上守衛，避免重蹈 folders.*／terminal.* 當年「整個 namespace 沒有
     // 守衛」的覆轍。get／setTerminalFont：值由主行程的 store 清理／夾制，介面上沒有任何路徑詞彙。
+    // setAgentView 於 global-conversation-view-preference 引入（agent-conversation-view 規格）：
+    // 值是兩個字面值之一，白名單判定在主行程的 store，介面上同樣沒有路徑詞彙。
     // setAgentStatus 於 panel-drive-and-shell-affordances 引入（terminal-preferences 規格）：
     // 與 GPU 加速同型的布林偏好，值同樣由主行程的 store 承接，介面上沒有路徑詞彙。
     surplusSettingsKeys: Object.keys(api?.settings ?? {}).filter(
       (key) =>
-        !['get', 'setTerminalFont', 'setGpuAcceleration', 'setAgentStatus', 'listMonospaceFonts'].includes(
+        !['get', 'setTerminalFont', 'setGpuAcceleration', 'setAgentStatus', 'setAgentView', 'listMonospaceFonts'].includes(
           key,
         ),
     ),

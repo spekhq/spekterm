@@ -17,8 +17,13 @@ interface SessionTabsProps {
   onCreate: (spawnTarget: SpawnTarget) => void
   onRename: (sessionId: string, name: string) => void
   onReorder: (fromIndex: number, toIndex: number) => void
-  /** 切換這個 session 的呈現方式（終端 ↔ 對話）。 */
-  onSetView: (sessionId: string, view: 'terminal' | 'conversation') => void
+  /**
+   * 當前的呈現方式。**這是全域偏好，不屬於任何一個 session**
+   * （`agent-conversation-view`）—— 切一個，所有 agent session 一起改變。
+   */
+  view: 'terminal' | 'conversation'
+  /** 切換呈現方式（終端 ↔ 對話）。作用域是全部的 agent session。 */
+  onSetView: (view: 'terminal' | 'conversation') => void
   /** 建立失敗的訊息（folder 失效、pty 配置不出來等）。 */
   error: string | null
 }
@@ -34,6 +39,7 @@ export function SessionTabs({
   onCreate,
   onRename,
   onReorder,
+  view,
   onSetView,
   error,
 }: SessionTabsProps): React.JSX.Element {
@@ -216,14 +222,12 @@ export function SessionTabs({
           type="button"
           className="shrink-0 cursor-pointer rounded px-2 py-0.5 text-xs text-ink-faint transition-colors hover:bg-surface hover:text-ink focus:bg-surface focus:text-ink focus:outline-none"
           aria-label={
-            focused.view === 'conversation' ? t('conversation.showTerminal') : t('conversation.showConversation')
+            view === 'conversation' ? t('conversation.showTerminal') : t('conversation.showConversation')
           }
-          aria-pressed={focused.view === 'conversation'}
-          onClick={() =>
-            onSetView(focused.id, focused.view === 'conversation' ? 'terminal' : 'conversation')
-          }
+          aria-pressed={view === 'conversation'}
+          onClick={() => onSetView(view === 'conversation' ? 'terminal' : 'conversation')}
         >
-          {focused.view === 'conversation' ? t('sessions.tabs') : t('conversation.label')}
+          {view === 'conversation' ? t('sessions.tabs') : t('conversation.label')}
         </button>
       )}
 

@@ -395,30 +395,63 @@ async function runViewAndSend(_mode, _config, context) {
   /*
     **等它真的落盤，不要猜。**
 
-    metadata 的落盤是 debounce 的（500ms）—— 切完 view 立刻關掉 app，那次改動就飛了。
     此前這裡直接進下一段，於是重建段永遠看到終端 view，而**寬度那條斷言照樣是綠的**
     （終端 view 之下終端本來就掛載得好好的）—— 一盞完美的假綠：它通過了，但它證明的不是
     它自稱在證明的事。
 
+    **等待的理由換過了。** 選擇改為全域偏好之後落點是 `preferences.json`，而偏好的寫入
+    **沒有 debounce**（每個 setter 直接原子寫檔）—— 剩下的只有一次 IPC 往返。
+    連帶：此前這次等待隱含保證的「`sessions.json` 已 flush」**不再成立**
+    （那一份仍是 500ms debounce），下面對它的斷言因此自己帶前置。
+
     讀落盤結果同時也是「view 的選擇跨重啟保留」這條 requirement 的載體。
   */
-  const persisted = await pollFor({
-    read: () => {
-      try {
-        return JSON.parse(readFileSync(join(context.profile, 'sessions.json'), 'utf8'))
-      } catch {
-        return null
-      }
-    },
-    settled: (data) => data?.sessions?.some((entry) => entry.view === 'conversation'),
+  const readJson = (name) => {
+    try {
+      return JSON.parse(readFileSync(join(context.profile, name), 'utf8'))
+    } catch {
+      return null
+    }
+  }
+  const prefs = await pollFor({
+    read: () => readJson('preferences.json'),
+    settled: (data) => data?.terminal?.agentView === 'conversation',
     timeoutMs: 15_000,
-    label: 'view 的選擇落盤',
+    label: 'view 的選擇落盤於偏好檔',
   })
   check(
     results,
-    'view 的選擇被持久化',
-    persisted.sessions.some((entry) => entry.view === 'conversation'),
-    `落盤的 view：${persisted.sessions.map((entry) => entry.view ?? 'terminal').join(', ')}`,
+    'view 的選擇被持久化於偏好檔',
+    prefs.terminal.agentView === 'conversation',
+    `偏好檔的 terminal：${JSON.stringify(prefs.terminal)}`,
+  )
+
+  /*
+    **反向：它不得同時落在 session 的持久化紀錄裡。**
+
+    只驗「偏好檔裡有」的話，一個「兩邊都寫」的實作照樣全綠 —— 而那正是這個 change 要消滅的
+    狀態（兩處都寫使「兩個 session 的 view 不一樣」重新變得表達得出來）。
+
+    **否定式斷言要自帶前置。** 檔案讀不到（回 `null`）或 `sessions` 是空陣列時，
+    `every(...)` 恆真 —— 那是 `probes.md` 記過的同一型假綠。
+  */
+  const sessionsFile = await pollFor({
+    read: () => readJson('sessions.json'),
+    settled: (data) => Array.isArray(data?.sessions) && data.sessions.length >= 1,
+    timeoutMs: 15_000,
+    label: 'sessions.json 已落盤且非空（否定式斷言的前置）',
+  })
+  check(
+    results,
+    '前置：落盤的 session 就是這一段建立的那個 agent session',
+    sessionsFile.sessions.some((entry) => entry.spawnTarget === 'claude'),
+    `落盤的 spawnTarget：${sessionsFile.sessions.map((entry) => entry.spawnTarget).join(', ')}`,
+  )
+  check(
+    results,
+    'view 的選擇 SHALL NOT 落在 session 的持久化紀錄裡',
+    sessionsFile.sessions.every((entry) => !('view' in entry)),
+    `落盤的 session 欄位：${sessionsFile.sessions.map((entry) => Object.keys(entry).join('+')).join(' / ')}`,
   )
 }
 
@@ -427,6 +460,15 @@ async function runViewAndSend(_mode, _config, context) {
  *
  * 重建後直接以對話 view 喚醒的 session，其 pty 的欄數必須與可用寬度相符 —— 而不是那個從未被
  * 量測過的初始值。不修**也不會紅**：agent 照樣回話，症狀要到使用者切去終端 view 看歷史才顯現。
+ *
+ * **一個沒有載體的時序前提**（`global-conversation-view-preference` 之後新增）：
+ * view 的選擇改為全域偏好之後，它與 `restore()` 是**兩條互不相干的非同步**，先後沒有保證。
+ * 偏好晚到的那個窗口裡，終端會先以**未覆蓋**狀態出現並被 fit 一次 —— 欄數在那一瞬間就已經
+ * 正確，於是這一段即使在「對話 view 在上層時終端沒有版面盒子」的錯誤實作下也可能通過。
+ *
+ * **刻意不為它做載體**：那是一個競賽窗口，抽樣式的觀察做不出穩定的判別，而一條時綠時紅、
+ * 且證明不了什麼的斷言比沒有更糟（見 `docs/lessons/probes.md`）。此前沒有這個窗口 ——
+ * `session.view` 與 session 本身來自同一次 `restore()`，是原子的。
  */
 async function runRebuiltWidth(_mode, _config, context) {
   await context.app.close()
@@ -661,10 +703,13 @@ function focusTabExpression(index) {
 }
 
 /**
- * 兩個並行的 agent session **各自跟進自己的紀錄**，且**各自的 view 互不影響**。
+ * 兩個並行的 agent session **各自跟進自己的紀錄**，而 **view 的選擇是全域的、兩者共用**。
  *
  * 定位若以「最近被修改的紀錄」之類的搜尋實作，這裡就會**把 A 的對話呈現在 B 的畫面上** ——
  * 而那比沒有內容更糟，因為它看起來完全正常。
+ *
+ * **view 那一半此前驗的是相反的事**（per-session）。全域化之後這裡承擔兩條 requirement：
+ * 新建的 session 採用當前的全域選擇、以及切換其中一個時另一個一起改變。
  */
 async function runParallelSessions(_mode, _config, context) {
   if (context.app) await context.app.close()
@@ -692,28 +737,36 @@ async function runParallelSessions(_mode, _config, context) {
   })
   const firstMarker = /STUB-HELLO-([0-9a-f-]{36})/.exec(first.text)[1]
 
-  await createAgentSession(app, repoName)
-  const second = await pollFor({
-    read: () => app.client.evaluate(VIEW_STATE),
-    settled: (state) => state.hasToggle && !state.hasComposer,
-    timeoutMs: 25_000,
-    label: '第二個 session 建立且為終端 view',
-  })
-  check(
-    results,
-    '新建的第二個 session 為終端 view —— view 的選擇是 per-session',
-    !second.hasComposer && second.toggleLabel === copy('conversation.showConversation'),
-    `輸入框＝${second.hasComposer}，切換入口＝${second.toggleLabel}`,
-  )
+  /*
+    **新建的 session 採用當前的全域選擇。** 第一個已經在對話 view，所以第二個一建立就該是。
 
-  await app.client.evaluate(TOGGLE_VIEW)
+    **不可以 `hasComposer` 當 settled 條件。** `VIEW_STATE` 是 document-wide，而 DOM 裡只有
+    focused session 的那一份；`createAgentSession` 點完 spawn 選單就回來，此刻**第一個
+    session 的輸入框還在畫面上** ⇒ `hasComposer` 立刻為真 ⇒ **產品若維持 per-session，
+    這條照樣綠**。因此錨在**身分**上：等分頁數變成 2，且畫面上的 marker 換成了另一個。
+  */
+  await createAgentSession(app, repoName)
   const secondConv = await pollFor({
-    read: () => app.client.evaluate(VIEW_STATE),
-    settled: (state) => state.hasComposer && /STUB-HELLO-[0-9a-f-]{36}/.test(state.text),
+    read: () =>
+      app.client.evaluate(`(() => {
+        const state = ${VIEW_STATE}
+        const list = document.querySelector('[role="tablist"][aria-label="${copy('sessions.tabs')}"]')
+        return { ...state, tabs: list ? list.querySelectorAll('[role="tab"]').length : 0 }
+      })()`),
+    settled: (state) =>
+      state.tabs === 2 &&
+      /STUB-HELLO-[0-9a-f-]{36}/.test(state.text) &&
+      !state.text.includes(firstMarker),
     timeoutMs: 25_000,
-    label: '第二個 session 的內容抵達',
+    label: '第二個 session 建立且其內容抵達（分頁數＝2 且 marker 已換人）',
   })
   const secondMarker = /STUB-HELLO-([0-9a-f-]{36})/.exec(secondConv.text)[1]
+  check(
+    results,
+    '新建的第二個 session 採用當前的全域選擇（對話 view）',
+    secondConv.hasComposer && secondConv.toggleLabel === copy('conversation.showTerminal'),
+    `輸入框＝${secondConv.hasComposer}，切換入口＝${secondConv.toggleLabel}`,
+  )
 
   check(
     results,
@@ -737,10 +790,65 @@ async function runParallelSessions(_mode, _config, context) {
   })
   check(
     results,
-    '切換 session 後內容與 view 都跟著它自己',
+    '切換 session 後內容跟著它自己（view 則是共用的，見下）',
     backToFirst.text.includes(firstMarker) && !backToFirst.text.includes(secondMarker),
     `含自己的內容＝${backToFirst.text.includes(firstMarker)}，含另一個的＝${backToFirst.text.includes(secondMarker)}`,
   )
+
+  /*
+    **切回終端時其他 session 亦回到終端。**
+
+    **方向不可反。** 兩個都已在對話 view 時，「把其中一個切到對話、另一個也是對話」與
+    「它一直都是對話」在觀察上完全相同 —— 往終端方向的那一次才具鑑別力。
+
+    而「另一個也變了」**必須切回去才看得到**（`VIEW_STATE` 只讀得到 focused 的那一份）。
+  */
+  await pollFor({
+    read: () => app.client.evaluate(focusTabExpression(1)),
+    settled: (ok) => ok === true,
+    timeoutMs: 10_000,
+    label: '切到第二個 session（準備把它切回終端）',
+  })
+  await app.client.evaluate(TOGGLE_VIEW)
+  await pollFor({
+    read: () => app.client.evaluate(VIEW_STATE),
+    settled: (state) => !state.hasComposer,
+    timeoutMs: 15_000,
+    label: '第二個 session 切回終端 view',
+  })
+  await pollFor({
+    read: () => app.client.evaluate(focusTabExpression(0)),
+    settled: (ok) => ok === true,
+    timeoutMs: 10_000,
+    label: '切回第一個 session（觀察它是否也變了）',
+  })
+  const firstAfter = await pollFor({
+    read: () => app.client.evaluate(VIEW_STATE),
+    settled: (state) => state.hasToggle,
+    timeoutMs: 15_000,
+    label: '第一個 session 的呈現就緒',
+  })
+  check(
+    results,
+    '切回終端時其他 session 亦回到終端（view 的選擇是全域的）',
+    !firstAfter.hasComposer && firstAfter.toggleLabel === copy('conversation.showConversation'),
+    `輸入框＝${firstAfter.hasComposer}，切換入口＝${firstAfter.toggleLabel}`,
+  )
+
+  /*
+    **把全域偏好還原為對話 view —— 下一段依賴它。**
+
+    `runDormantConversation` 重啟後期待畫面出現休眠的**對話**呈現，而決定那件事的現在是
+    profile-wide 的偏好（此前是那個 session 自己的欄位）。不還原的話它會紅，而訊息看起來
+    像「休眠的呈現壞了」，離根因隔了兩層。
+  */
+  await app.client.evaluate(TOGGLE_VIEW)
+  await pollFor({
+    read: () => app.client.evaluate(VIEW_STATE),
+    settled: (state) => state.hasComposer,
+    timeoutMs: 15_000,
+    label: '還原為對話 view（供休眠段使用）',
+  })
 
   context.parallel = { profile, configDir, repo, repoName }
 }

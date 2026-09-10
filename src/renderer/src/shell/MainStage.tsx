@@ -13,6 +13,7 @@ import { VizOverlay, type VizKind } from './openspec/VizOverlay'
 import type { FileRequest, OpenSpecRequest, OpenSpecTarget } from './openspec/nav'
 import { usePanelCoordinate } from './panel-coordinate'
 import { QuickOpen } from './quick-open/QuickOpen'
+import { usePreferences } from './PreferencesProvider'
 import { PanelSwitch } from './side-panel/PanelSwitch'
 import { SidePanel } from './side-panel/SidePanel'
 import { SessionTabs } from './terminal/SessionTabs'
@@ -42,15 +43,23 @@ interface MainStageProps {
 }
 
 /**
- * 這個 session 當下的呈現方式。**缺席即終端** —— 既有 session 與 shell 目標的自然值，
- * 因此不需要任何遷移。終端也是預設：本 change 不改變既有使用者第一眼看到的東西。
+ * 這個 session 當下的呈現方式。
+ *
+ * **選擇本身是全域偏好**（`agent-conversation-view`）—— 這個函式只多做一件事：
+ * **shell 目標一律回終端**。那條判定與作用域無關，它保障的是「shell 沒有 agent 紀錄可看」，
+ * 而不是「兩個 session 可以不一樣」—— 前者是 spawn 目標的性質，後者才是被移除的那個東西。
  */
-function sessionViewOf(session: { spawnTarget: string; view?: 'terminal' | 'conversation' }): 'terminal' | 'conversation' {
+function sessionViewOf(
+  session: { spawnTarget: string },
+  agentView: 'terminal' | 'conversation',
+): 'terminal' | 'conversation' {
   if (session.spawnTarget !== 'claude') return 'terminal'
-  return session.view === 'conversation' ? 'conversation' : 'terminal'
+  return agentView
 }
 
 export function MainStage({ selection, folders }: MainStageProps): React.JSX.Element {
+  // view 的選擇是全域偏好（`agent-conversation-view`），不再逐 session 持有。
+  const preferences = usePreferences()
   const { t } = useTranslation()
   const sidePanelRef = usePanelRef()
   const [collapsed, setCollapsed] = useState(false)
@@ -439,7 +448,8 @@ export function MainStage({ selection, folders }: MainStageProps): React.JSX.Ele
           onCreate={createSession}
           onRename={sessions.rename}
           onReorder={(fromIndex, toIndex) => sessions.reorder(itemKey, fromIndex, toIndex)}
-          onSetView={sessions.setView}
+          view={preferences.agentView}
+          onSetView={(view) => void preferences.updateAgentView(view)}
           error={sessionError}
         />
       )}
@@ -486,7 +496,7 @@ export function MainStage({ selection, folders }: MainStageProps): React.JSX.Ele
                     `covered` 另外表達「使用者看不看得見」，那是渲染資源與焦點的判準。
                   */
                   covered={
-                    session.id === focusedId && sessionViewOf(session) === 'conversation'
+                    session.id === focusedId && sessionViewOf(session, preferences.agentView) === 'conversation'
                   }
                 />
               ))}
@@ -498,7 +508,7 @@ export function MainStage({ selection, folders }: MainStageProps): React.JSX.Ele
               選單），在它之下的元素會拿到錯的行為。
             */}
             {folderSessions
-              .filter((session) => session.id === focusedId && sessionViewOf(session) === 'conversation')
+              .filter((session) => session.id === focusedId && sessionViewOf(session, preferences.agentView) === 'conversation')
               .map((session) => (
                 <div key={session.id} className="absolute inset-0 z-10 bg-shell">
                   <ConversationView

@@ -34,6 +34,18 @@ export interface TerminalPreferences {
    * 但關掉狀態列 SHALL NOT 連帶關掉對話 view 的輸入能力。捆在一起的實作不會有任何型別錯誤。
    */
   agentEvents?: boolean
+  /**
+   * agent session 以哪一種 view 呈現（`agent-conversation-view`）。**未設定＝終端**。
+   *
+   * **它是全域的，不是 per-session** —— 使用者同時開著數個 agent session 時從不希望它們不一樣，
+   * 而「一邊以對話 view 看 agent、一邊以終端 view 用 shell」這個曾經的理由不成立：
+   * shell 目標根本不具備對話 view（那由 spawn 目標的判定保障，與這個偏好無關）。
+   *
+   * **名字上它不是「終端」偏好**，這個張力是真的 —— 但 `agentStatus` / `agentEvents` 已經
+   * 住在這裡，先例在。**不要順手把這個區塊改名**：`parsePreferences` 在 `version` 不符時
+   * 隔離整檔，一次版本遞增等於每個使用者的字型設定歸零。
+   */
+  agentView?: 'terminal' | 'conversation'
 }
 
 interface PersistedPreferences {
@@ -90,6 +102,17 @@ function clampLineHeight(value: unknown): number | undefined {
 }
 
 /**
+ * view 的白名單判定：**恰為那兩個字面值之一才採用**，其餘一律視為未設定。
+ *
+ * **不可寫成 `value === 'conversation' ? … : 'terminal'`** —— 那會把「檔案壞了」與
+ * 「使用者選了終端」變成同一件事。前者的正確處置是回到未設定，讓「未設定＝終端」那條規則
+ * 去決定，於是只有一個地方在決定。同 `gpuAcceleration` 那條「只認真正的布林」。
+ */
+function sanitizeAgentView(value: unknown): 'terminal' | 'conversation' | undefined {
+  return value === 'terminal' || value === 'conversation' ? value : undefined
+}
+
+/**
  * 內容無法信任時一律回傳 `null`，由呼叫端隔離該檔並以預設偏好啟動。
  *
  * **對結構嚴格，對值寬容**：version 不符、`terminal` 不是物件 → `null`（整檔不可信，隔離）；
@@ -109,7 +132,10 @@ export function parsePreferences(raw: string): PersistedPreferences | null {
   if (version !== PREFERENCES_VERSION) return null
   if (typeof terminal !== 'object' || terminal === null) return null
 
-  const { fontFamily, fontSize, lineHeight, gpuAcceleration } = terminal as Record<string, unknown>
+  // **這份解構清單是第二處白名單，而型別檢查對它零感知。** 加了欄位卻沒加在這裡，
+  // 該欄位就寫得進磁碟卻讀不回來 —— 症狀是「這個偏好不跨重啟」，而沒有任何東西會紅。
+  // （`agentStatus` / `agentEvents` 目前就漏在這裡，見 issue。）
+  const { fontFamily, fontSize, lineHeight, gpuAcceleration, agentView } = terminal as Record<string, unknown>
   const parsed: TerminalPreferences = {}
   const family = sanitizeFamily(fontFamily)
   const size = clampSize(fontSize)
@@ -120,6 +146,8 @@ export function parsePreferences(raw: string): PersistedPreferences | null {
   // 只認真正的布林 —— 檔案裡的 `"false"`／`0` 之類的東西一律當成未設定（＝預設啟用），
   // 而不是把它們硬轉成 false 而把 GPU 關掉。
   if (typeof gpuAcceleration === 'boolean') parsed.gpuAcceleration = gpuAcceleration
+  const view = sanitizeAgentView(agentView)
+  if (view !== undefined) parsed.agentView = view
 
   return { version: PREFERENCES_VERSION, terminal: parsed }
 }
@@ -214,6 +242,11 @@ export class PreferencesStore {
     if (this.preferences.gpuAcceleration !== undefined) {
       next.gpuAcceleration = this.preferences.gpuAcceleration
     }
+    // **view 的選擇同理必須保留。** 少了這一行：使用者切到對話 view，接著開設定調一次字級，
+    // 畫面就**靜默地跳回終端** —— 沒有錯誤、沒有型別問題，看起來像「這個開關會自己彈回去」。
+    if (this.preferences.agentView !== undefined) {
+      next.agentView = this.preferences.agentView
+    }
 
     this.preferences = next
     this.save()
@@ -241,6 +274,18 @@ export class PreferencesStore {
     const next: TerminalPreferences = { ...this.preferences }
     if (enabled === null) delete next.agentStatus
     else next.agentStatus = enabled
+
+    this.preferences = next
+    this.save()
+    return this.get()
+  }
+
+  /** agent session 的呈現方式。`null` ＝ 清除（回到預設的終端）。 */
+  setAgentView(view: 'terminal' | 'conversation' | null): TerminalPreferences {
+    const next: TerminalPreferences = { ...this.preferences }
+    const sanitized = view === null ? undefined : sanitizeAgentView(view)
+    if (sanitized === undefined) delete next.agentView
+    else next.agentView = sanitized
 
     this.preferences = next
     this.save()
