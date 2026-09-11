@@ -9,7 +9,7 @@ import {
   clearAgentEvents,
   configureAgentEvents,
   drainEvents,
-  encodeInput,
+  encodeInput, encodePrefill,
   EVENT_COMMAND,
   nextWaitState,
   parseEvent,
@@ -315,4 +315,16 @@ test('對話結束後接著開始的新對話，其位置被回報且狀態為�
   assert.equal(result.state, 'ready')
   // 落點仍在：清除只由 session 自身的結束觸發。
   assert.equal(fs.existsSync(dir), true)
+})
+
+test('預填的編碼不附送出字元，且濾掉換行', () => {
+  // **單行是編碼器的性質，不是呼叫端的義務。**
+  const encoded = encodePrefill('first\nsecond\r\tthird')
+  assert.equal(encoded.includes('\r'), false)
+  assert.equal(encoded.includes('\n'), false)
+  assert.equal(encoded, 'firstsecondthird')
+})
+
+test('預填與送出的控制字元過濾一致（除了換行與送出字元本身）', () => {
+  assert.equal(encodePrefill('a\x01b\x07c'), 'abc')
 })

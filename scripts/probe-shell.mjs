@@ -196,6 +196,7 @@ const PROBE_EXPRESSION = `(async () => {
           'panel',
           'insights',
           'conversation',
+          'intake',
         ].includes(key),
     ),
     // conversation 於 agent-transcript-view 引入（agent-transcript-stream / agent-input-bridge
@@ -214,6 +215,17 @@ const PROBE_EXPRESSION = `(async () => {
     // 底下再加幾個方法這支探針一聲都不會響 —— 而讀後感往這裡加了四個會送出使用者訊息的入口。
     surplusInsightsKeys: Object.keys(api?.insights ?? {}).filter(
       (key) => !['get', 'refresh', 'reportPreview', 'reportList', 'reportRead', 'reportGenerate'].includes(key),
+    ),
+    // intake 於 agent-intake-inbox 引入。**逐成員列舉的理由與 insights 同** ——
+    // 只登記頂層的話，底下再加成員這支探針一聲都不會響。
+    // **介面上沒有任何路徑詞彙**：收件匣的目錄、原始投遞的保存處、context 檔的位置都不經這裡；
+    // accept 回的是一個已解析好的 folderId（renderer 既有的合法詞彙），
+    // 而 session 的建立仍由 renderer 走它既有的 create 路徑。
+    surplusIntakeKeys: Object.keys(api?.intake ?? {}).filter(
+      (key) =>
+        !['list', 'accept', 'attach', 'dismiss', 'dismissNotices', 'rules', 'setRules', 'onChanged', 'onPrefill'].includes(
+          key,
+        ),
     ),
     // symlink 絕不可出現在白名單上。
     //
@@ -306,6 +318,9 @@ try {
   check(results, 'conversation 介面只暴露已定義邊界要求的能力',
     r?.surplusConversationKeys?.length === 0,
     r?.surplusConversationKeys?.length ? `多出：${r.surplusConversationKeys.join(', ')}` : '無多餘能力')
+  check(results, 'intake 介面只暴露已定義邊界要求的能力',
+    r?.surplusIntakeKeys?.length === 0,
+    r?.surplusIntakeKeys?.length ? `多出：${r.surplusIntakeKeys.join(', ')}` : '無多餘能力')
   // 這一條守的是「有沒有人偷偷加了一整個 namespace」—— 其餘 surplus* 全都只看既有 namespace
   // 的內部，加一個新的它們一聲都不會響。
   check(results, 'preload 未暴露任何未經定義的頂層 namespace',

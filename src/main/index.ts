@@ -8,6 +8,7 @@ import { registerClipboardHandlers } from './ipc/clipboard'
 import { registerConversationHandlers } from './ipc/conversation'
 import { registerFsHandlers } from './ipc/fs'
 import { registerFolderHandlers } from './ipc/folders'
+import { registerIntakeHandlers } from './ipc/intake'
 import { registerInsightsHandlers, spawnReportDelegate, spawnScanWorker } from './ipc/insights'
 import { registerOpenSpecHandlers } from './ipc/openspec'
 import { registerPanelHandlers } from './ipc/panel'
@@ -20,6 +21,12 @@ import { guardUnsavedChanges } from './unsaved-changes'
 import { configureAgentEvents } from './agent-events'
 import { configureAgentInjection } from './agent-injection'
 import { configureAgentStatus } from './agent-status'
+import { contextRoot } from './intake-context'
+import { ensureDeliveryRoot } from './intake-archive'
+import { IntakeService } from './intake-service'
+import { IntakeSource, inboxRoot } from './intake-source'
+import { RoutingStore, routingFile } from './intake-routing'
+import { IntakeStore } from './intake-store'
 import { PanelStore } from './panel-store'
 import { PreferencesStore } from './preferences-store'
 import { SessionStore } from './session-store'
@@ -157,6 +164,16 @@ void app.whenReady().then(() => {
   configureAgentEvents(app.getPath('userData'))
   configureAgentInjection(app.getPath('userData'))
 
+  // 收件匣：狀態 index、原始投遞的保存處、routing 規則（**本能力自己的檔案，不進 preferences**）。
+  const intakeStore = new IntakeStore(join(app.getPath('userData'), 'intake.json'))
+  intakeStore.load()
+  const routingStore = new RoutingStore(routingFile(app.getPath('userData')))
+  routingStore.load()
+  const intakeService = new IntakeService({
+    store: intakeStore,
+    archiveRoot: contextRoot(app.getPath('userData')),
+  })
+
   const dirty = new DirtyStateStore()
 
   // 在建立視窗、載入任何 renderer 內容之前施加 CSP —— renderer 從第一幀起就會渲染使用者
@@ -176,6 +193,14 @@ void app.whenReady().then(() => {
   registerClipboardHandlers()
   registerSettingsHandlers(preferencesStore)
   registerPanelHandlers(panelStore)
+  registerIntakeHandlers({
+    service: intakeService,
+    routing: routingStore,
+    folders: store,
+    contextRoot: contextRoot(app.getPath('userData')),
+    // 未設定＝啟用（與 gpuAcceleration 同一條規則）。
+    agentEventsEnabled: () => preferencesStore.get().agentEvents !== false,
+  })
 
   const insights = createInsightsService({
     projectsDir: () => resolveProjectsDir(),
@@ -199,6 +224,23 @@ void app.whenReady().then(() => {
   createWindow(dirty)
 
   /**
+   * 檔案落點：**mkdir → 建立監看並等它就緒 → 掃描既有內容**。
+   *
+   * 掃描不是優化 —— `createWatcher` 的 `ignoreInitial: true` 寫死且不可覆寫，於是
+   * 「app 關著的時候投遞」（正是外部 producer 存在的理由）的東西只有掃描看得到。
+   */
+  const intakeSource = new IntakeSource({
+    root: inboxRoot(app.getPath('userData')),
+    adapter: 'file',
+    service: intakeService,
+  })
+  void ensureDeliveryRoot(contextRoot(app.getPath('userData')))
+    .then(() => intakeSource.start())
+    .catch((error) => {
+      console.error(`[intake] failed to start inbox: ${String(error)}`)
+    })
+
+  /**
    * 啟動後跑一趟增量掃描 —— **與使用者要不要看無關**。
    *
    * 來源的保留期是 30 天。只在使用者開啟呈現介面時掃的話，他一個月沒開過，那一個月的來源就
@@ -220,6 +262,23 @@ void app.whenReady().then(() => {
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
       createWindow(dirty)
+
+  /**
+   * 檔案落點：**mkdir → 建立監看並等它就緒 → 掃描既有內容**。
+   *
+   * 掃描不是優化 —— `createWatcher` 的 `ignoreInitial: true` 寫死且不可覆寫，於是
+   * 「app 關著的時候投遞」（正是外部 producer 存在的理由）的東西只有掃描看得到。
+   */
+  const intakeSource = new IntakeSource({
+    root: inboxRoot(app.getPath('userData')),
+    adapter: 'file',
+    service: intakeService,
+  })
+  void ensureDeliveryRoot(contextRoot(app.getPath('userData')))
+    .then(() => intakeSource.start())
+    .catch((error) => {
+      console.error(`[intake] failed to start inbox: ${String(error)}`)
+    })
     }
   })
 })

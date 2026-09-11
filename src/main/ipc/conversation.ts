@@ -2,7 +2,13 @@ import { type WebContents, ipcMain } from 'electron'
 
 import { TranscriptFollower, type FollowUpdate } from '../transcript-follow-service'
 import { transcriptPathFor } from '../transcript-follow'
-import { drainEvents, encodeInput, type WaitState } from '../agent-events'
+import { encodeInput, type WaitState } from '../agent-events'
+import {
+  pendingRequestOf,
+  subscribeWait,
+  waitStateOf,
+  type WaitSnapshot,
+} from '../agent-wait'
 import { existingTerminalService } from './terminal'
 
 /**
@@ -36,41 +42,30 @@ export const CONVERSATION_CHANNELS = {
   send: 'workspace:conversation:send',
 } as const
 
-/** 等待狀態的輪詢間隔。與狀態列的 tick 同量級 —— 事件是落盤的，沒有推送可訂閱。 */
-const WAIT_TICK_MS = 400
-
 interface Entry {
   follower: TranscriptFollower
   sessionId: string
-  timer: NodeJS.Timeout
+  unsubscribe: () => void
 }
 
 /**
- * 等待狀態 —— **per session，而不是 per 訂閱**。
+ * 等待狀態住在 `agent-wait`，**而這裡只是它的訂閱者之一**。
  *
- * 這個區分是承重的：事件是**可消費的串流**（讀完即刪，去重由此保證），而狀態是它的摺疊結果。
- * 把狀態放在訂閱物件裡的話，使用者切走再切回時狀態重設為「未知」，**而重建它所需的事件早已
- * 被前一次訂閱讀走刪掉** —— agent 正閒著、不再產生新事件，於是狀態永遠停在未知、輸入框永遠
- * 送不出去。dogfood 的第二句話就撞上了。
- *
- * **一般形式：一個由可消費串流推導出來的狀態，其生命週期必須綁在被描述的對象上，
- * 不能綁在觀察者上。**
+ * 狀態本來就是 per session（事件是讀完即刪的串流，把狀態綁在訂閱上會讓切走再切回時它退回
+ * 未知，而重建它所需的事件早已被讀走）。**輪詢原本還綁在這個觀察者身上** —— 於是「還沒有人
+ * 在看」的 session 其狀態根本不會被求值，預填就永遠等不到 `ready`。那一半已經搬走。
  */
-const waitStates = new Map<string, WaitState>()
 
-/** 等待選擇時「正在被問什麼」。與 `waitStates` 同一個生命週期。 */
-const pendingRequests = new Map<string, { tool: string; arg: string | null } | null>()
-
-/** 每個 renderer 至多一份 —— 見上。 */
+/** 每個 renderer 至多一份 —— 呈現的恆是當下顯示的那一個 session。 */
 const followers = new Map<number, Entry>()
 
 function stop(contentsId: number): void {
   const entry = followers.get(contentsId)
   if (!entry) return
-  clearInterval(entry.timer)
+  entry.unsubscribe()
   entry.follower.dispose()
   followers.delete(contentsId)
-  // **等待狀態刻意不清除** —— 它屬於那個 session，不屬於這次訂閱（見 `waitStates`）。
+  // **等待狀態刻意不清除** —— 它屬於那個 session，不屬於這次訂閱。
   // 清除的時機是 session 結束，那由 `agent-events` 的落點清理負責。
 }
 
@@ -84,18 +79,14 @@ function stop(contentsId: number): void {
  * **而 `SessionEnd` 事件 SHALL NOT 觸發拆除** —— `drainEvents` 只把它翻成「狀態未知」，
  * 跟進器照常活著，等 `SessionStart` 帶來新位置。
  */
-function tick(contents: WebContents, entry: Entry): void {
+function onWait(contents: WebContents, entry: Entry, snapshot: WaitSnapshot, previous: () => WaitState): void {
   if (contents.isDestroyed()) return
-  const previous = waitStates.get(entry.sessionId) ?? 'unknown'
-  const result = drainEvents(entry.sessionId, previous)
-  if (result.transcriptPath) entry.follower.relocate(result.transcriptPath)
+  if (snapshot.transcriptPath) entry.follower.relocate(snapshot.transcriptPath)
   // **監看負責延遲，這裡負責保證。** 監看有一整類靜默的失效方式，而它們的徵狀都是
   // 「畫面安靜地停住」—— 那比沒有 view 更糟。
   entry.follower.poll()
-  if (result.count === 0 && result.state === previous) return
-  waitStates.set(entry.sessionId, result.state)
-  pendingRequests.set(entry.sessionId, result.pending)
-  contents.send(CONVERSATION_CHANNELS.wait, entry.sessionId, result.state, result.pending)
+  if (snapshot.count === 0 && snapshot.state === previous()) return
+  contents.send(CONVERSATION_CHANNELS.wait, entry.sessionId, snapshot.state, snapshot.pending)
 }
 
 function start(contents: WebContents, sessionId: string): void {
@@ -120,19 +111,20 @@ function start(contents: WebContents, sessionId: string): void {
     if (contents.isDestroyed()) return
     contents.send(CONVERSATION_CHANNELS.update, update)
   })
+  let lastSent: WaitState = waitStateOf(sessionId)
   const entry: Entry = {
     follower,
     sessionId,
-    timer: setInterval(() => tick(contents, entry), WAIT_TICK_MS),
+    unsubscribe: () => undefined,
   }
+  entry.unsubscribe = subscribeWait(sessionId, (snapshot) => {
+    const previous = lastSent
+    lastSent = snapshot.state
+    onWait(contents, entry, snapshot, () => previous)
+  })
   followers.set(contents.id, entry)
   // 沿用這個 session 既有的狀態（切走再切回不該退回未知）。
-  contents.send(
-    CONVERSATION_CHANNELS.wait,
-    sessionId,
-    waitStates.get(sessionId) ?? 'unknown',
-    pendingRequests.get(sessionId) ?? null,
-  )
+  contents.send(CONVERSATION_CHANNELS.wait, sessionId, waitStateOf(sessionId), pendingRequestOf(sessionId))
   // 算出來的位置是初始值；事件帶來的 `transcript_path` 一旦到達即取代它。
   follower.relocate(transcriptPathFor(source.cwd, source.conversationId))
 }
@@ -165,7 +157,7 @@ export function registerConversationHandlers(): void {
     if (typeof sessionId !== 'string' || typeof text !== 'string') return { ok: false, reason: 'unknown' }
     const entry = followers.get(event.sender.id)
     if (!entry || entry.sessionId !== sessionId) return { ok: false, reason: 'unknown' }
-    const wait = waitStates.get(sessionId) ?? 'unknown'
+    const wait = waitStateOf(sessionId)
     // `awaiting-choice` 只接受選項，不接受自由文字（`agent-input-bridge`）。
     if (wait === 'unknown' || wait === 'awaiting-choice') return { ok: false, reason: wait }
     const service = existingTerminalService(event.sender.id)

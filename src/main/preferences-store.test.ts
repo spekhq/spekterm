@@ -356,3 +356,41 @@ describe('PreferencesStore：損毀韌性', () => {
     assert.equal(fs.existsSync(nested), true)
   })
 })
+
+describe('agentEvents 讀得回來，且不被字型變更抹掉', () => {
+  it('寫得進磁碟也讀得回來', () => {
+    const parsed = parsePreferences(
+      JSON.stringify({ version: PREFERENCES_VERSION, terminal: { agentEvents: false } }),
+    )
+    assert.equal(parsed?.terminal.agentEvents, false)
+  })
+
+  it('非布林一律視為未設定（＝預設啟用）', () => {
+    const parsed = parsePreferences(
+      JSON.stringify({ version: PREFERENCES_VERSION, terminal: { agentEvents: 'false' } }),
+    )
+    assert.equal(parsed?.terminal.agentEvents, undefined)
+  })
+})
+
+describe('變更字型不抹掉 agentEvents', () => {
+  it('setTerminalFont 之後 agentEvents 仍在', () => {
+    const file = path.join(tmpdir(), `prefs-agentevents-${process.pid}-${Date.now()}.json`)
+    try {
+      fs.writeFileSync(
+        file,
+        JSON.stringify({ version: PREFERENCES_VERSION, terminal: { agentEvents: false } }),
+      )
+      const store = new PreferencesStore(file)
+      store.load()
+      assert.equal(store.get().agentEvents, false)
+
+      // **這個方法從空物件重建 `terminal`** —— 每個欄位都倚賴呼叫端記得保留它。
+      // 少了那一行，症狀是「關掉事件回報之後調一次字級，它自己開回來了」。
+      store.setTerminalFont('Fira Code', 14, null)
+      assert.equal(store.get().agentEvents, false)
+    } finally {
+      fs.rmSync(file, { force: true })
+    }
+  })
+})

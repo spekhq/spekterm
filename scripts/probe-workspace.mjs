@@ -543,12 +543,17 @@ try {
   check(results, 'Sessions 可用且預設選取',
     byLabel('activityBar.sessions')?.disabled === false && byLabel('activityBar.sessions')?.current === 'page',
     JSON.stringify(byLabel('activityBar.sessions')))
-  // **尚未實作的入口自 `terminal-rendering-and-preferences` 起只剩 Handoffs 與 Search** —— Settings
-  // 已實作（開啟終端字型設定介面），對話計量亦然，因此兩者都不是停用的 placeholder。
-  const pending = ['activityBar.handoffs', 'activityBar.search'].map((key) => byLabel(key))
+  // **尚未實作的入口自 `agent-intake-inbox` 起只剩 Search。** Settings 已實作（終端字型設定）、
+  // 對話計量亦然，而 Handoffs 已由收件匣接上 —— 那不是對雛型的偏離，是兌現它（雛型枚舉的
+  // 入口集合本來就有 Handoffs，它此前為停用只因為背後的能力尚未存在）。
+  const pending = ['activityBar.search'].map((key) => byLabel(key))
   check(results, '尚未實作的入口停用且附提示',
     pending.every((item) => item?.disabled && item.title.includes(suffixOf('activityBar.comingSoon'))),
     pending.map((i) => `${i?.label}(disabled=${i?.disabled})`).join(', '))
+  // **反面一起驗**：只驗「Search 是停用的」的話，一個把整排都關掉的實作照樣通過。
+  check(results, 'Handoffs 入口為可用狀態（收件匣已接上）',
+    byLabel('activityBar.handoffs')?.disabled === false,
+    `${byLabel('activityBar.handoffs')?.label}(disabled=${byLabel('activityBar.handoffs')?.disabled})`)
   check(results, 'Settings 入口為可用狀態（已實作，不再是 placeholder）',
     byLabel('activityBar.settings')?.disabled === false,
     `${byLabel('activityBar.settings')?.label}(disabled=${byLabel('activityBar.settings')?.disabled})`)

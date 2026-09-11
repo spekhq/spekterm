@@ -9,6 +9,7 @@ import { DirtyBuffersProvider } from './files/dirty-buffers'
 import { OpenSpecProvider } from './openspec/data'
 import { PanelCoordinateProvider } from './panel-coordinate'
 import { SessionsProvider } from './terminal/sessions'
+import { PrefillProvider } from './intake/prefill-state'
 import { folderSelection } from './types'
 import { useWorkspaceFolders } from './useWorkspaceFolders'
 
@@ -27,6 +28,7 @@ export function AppShell(): React.JSX.Element {
     <PreferencesProvider>
       <DirtyBuffersProvider folders={folders}>
         <SessionsProvider>
+          <PrefillProvider>
           {/*
             側欄座標的 Provider 與 SessionsProvider 同一層 —— 它有兩個消費者（MainStage 與
             StatusBar），兩者都在這一層之下。座標隸屬於 rail 的項目而非 session，但它與 session
@@ -98,6 +100,7 @@ export function AppShell(): React.JSX.Element {
             </div>
           </OpenSpecProvider>
           </PanelCoordinateProvider>
+          </PrefillProvider>
         </SessionsProvider>
       </DirtyBuffersProvider>
     </PreferencesProvider>

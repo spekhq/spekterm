@@ -35,6 +35,10 @@ OpenSpec 結構的側欄，讓使用者不必另外開 IDE 就能一邊駕駛 ag
   內容來自 agent 自己寫下的紀錄（`~/.claude/projects/**/*.jsonl` 增量 tail），
   「現在能不能送輸入」來自注入的 hooks。**SHALL NOT 解析終端畫面** —— 生態系有三個專案走過
   那條路，一個要在自己的 app 裡再養一個 VT100 模擬器，一個已失效，一個公開宣告不可維護後刪光。
+- **收件匣** —— 活動列的 `Handoffs` 入口已接上（PRD §11 Phase 7 的本機 inbox）。外部 producer
+  往 `<userData>/intake-inbox/` 投遞一份 JSON，使用者**看過本文之後**接受它，就在 routing 解析出
+  的 folder 得到一個開好、context 備妥、第一則 prompt 已填但**尚未送出**的 agent session。
+  **Slack 不在裡面** —— 收件匣的契約是「一個目錄 + 一份 JSON」，來源是之後的 change。
 - **鍵盤** —— 見下文「快捷鍵」。
 
 **Linux 打包已可用**（`npm run dist:linux` → AppImage，`npm run install:desktop` 裝進應用程式
@@ -64,6 +68,7 @@ tmux 與自寫 daemon 取捨。**不要把「重建」誤當成「常駐」**：
 | 任何一支 `scripts/probe-*.mjs`、`scripts/lib/` 的儀器（`instrument` / `cdp` / `mounted`）、加一條驗收斷言或一種等待、追一個 flaky | **`docs/lessons/probes.md`** |
 | pty、`src/renderer/src/shell/terminal/`、session 持久化與重建 | **`docs/lessons/terminal.md`** |
 | `src/renderer/src/side-panel/`、`@spekjs/core` 或 `@spekjs/ui` 升級 | **`docs/lessons/side-panel.md`** |
+| `src/main/intake-*`、`src/main/ipc/intake.ts`、`scripts/probe-intake.mjs`、`scripts/lib/stub-agent.mjs`、或任何會動到「呈現給人看的文字」與「交給 agent 的文字」其中一端的東西 | **`docs/lessons/intake.md`** |
 | `src/main/transcript-*`、`src/main/agent-events.ts`、`src/main/agent-injection.ts`、`src/main/insights*`、**`src/main/report.ts` 與 `src/main/report-*`**、`scripts/probe-insights.mjs`、`scripts/probe-agent-view.mjs`，或任何會讀 `~/.claude/projects`、**注入 `--settings`**、**或委派 `claude` CLI** 的東西 | **`docs/lessons/transcript.md`** |
 
 ## 開發指令
@@ -100,7 +105,7 @@ SPEKTERM_SCAN_PATH=../spek npm run dev
 | | 是什麼 | 什麼時候跑 |
 |---|---|---|
 | `npm test`（＝ `test:unit`） | node:test —— headless、秒級、可平行、無副作用 | **隨時**。改完就跑 |
-| `npm run test:e2e` | 全部 9 支探針，走 CDP 或真 Electron 主行程，驗**被出貨的那份程式碼** | **驗收時**。約十幾分鐘 |
+| `npm run test:e2e` | 全部 10 支探針，走 CDP 或真 Electron 主行程，驗**被出貨的那份程式碼** | **驗收時**。約十幾分鐘 |
 | `npm run test:all` | 兩層都跑 | 封存前 |
 
 **探針不併進 `npm test` 是刻意的**：它們不可平行（各自佔 debugging port、各自起 Electron 還要收屍）。
@@ -133,6 +138,13 @@ npm run probe:insights  # conversation-archive / conversation-insights / convers
                         #   進去時每一條存在性斷言照樣全綠。**真實委派刻意不在裡面** ——
                         #   要網路、會花錢、回覆不可重現；產生路徑以注入的替身驗，
                         #   真實那段由 dogfood 認定，這條缺口寫在規格裡）
+npm run probe:intake    # agent-intake / intake-routing（收件匣的兩條入口、純文字呈現、
+                        #   routing 解析、接受→預填、忽略不建 session）
+                        #   **唯一跨行程的那條斷言住在這裡**：畫面上那一列的 textContent 與
+                        #   磁碟上 context 檔界線之內的內容必須逐字元相同 —— 主行程裡的單元
+                        #   測試看不見呈現那一端，於是「正規化被搬到呈現層」對它是透明的。
+                        #   對照組見 `scripts/intake-control-groups.mjs`（四個 mutation，
+                        #   每一個都指名哪一條斷言必須變紅）
 npm run probe:agent-view # agent-transcript-stream / agent-event-bridge / agent-conversation-view /
                         #   agent-input-bridge（對話 view、注入的 hook 真的被執行、送出抵達 pty、
                         #   **重建後直接進對話 view 時 pty 的欄數不是 80**）
@@ -151,8 +163,8 @@ PROBE_SKIP_BUILD=1 npm run probe:keyboard         # 只改探針腳本時跳過�
 PROBE_DISPLAY=physical npm run probe:terminal     # 逃生口：畫在實體螢幕上
 ```
 
-**`probe:package` 自成第三個成本層級 —— 它不在上面那九支裡，也刻意不併進 `test:e2e`。**
-它會先跑一次**完整打包**再啟動**真正的 AppImage**（其餘九支驗的都是 `electron .` 載入 `out/`，
+**`probe:package` 自成第三個成本層級 —— 它不在上面那十支裡，也刻意不併進 `test:e2e`。**
+它會先跑一次**完整打包**再啟動**真正的 AppImage**（其餘十支驗的都是 `electron .` 載入 `out/`，
 那不是被出貨的東西）。層級是「**換版前跑一次**」。
 
 ```bash

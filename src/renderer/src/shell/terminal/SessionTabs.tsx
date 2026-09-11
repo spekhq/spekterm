@@ -8,6 +8,7 @@ import { useDragReorder } from '../useDragReorder'
 import { useScrollIntoView } from '../useScrollIntoView'
 import { useSpawnMenu } from './useSpawnMenu'
 import { useTranslation } from 'react-i18next'
+import { usePrefillState } from '../intake/prefill-state'
 
 interface SessionTabsProps {
   sessions: SessionState[]
@@ -185,6 +186,7 @@ export function SessionTabs({
                 {session.status === 'exited' && (
                   <span className="text-2xs text-ink-faint">{t('sessions.exitedBadge')}</span>
                 )}
+                <PrefillBadge sessionId={session.id} />
               </button>
 
               <button
@@ -252,5 +254,24 @@ export function SessionTabs({
         />
       )}
     </div>
+  )
+}
+
+/**
+ * 「有一則尚未送出的 prompt」。
+ *
+ * 預填寫進的是 pty —— 終端 view 裡直接看得到，**對話 view 裡看不到**。
+ * 少了這個標示，全域偏好是對話 view 的使用者接受一則 intake 之後會看到一個空的對話畫面、
+ * 什麼提示都沒有：這條管線在他眼中就是「接受了卻什麼也沒發生」。
+ */
+function PrefillBadge({ sessionId }: { sessionId: string }): React.JSX.Element | null {
+  const { t } = useTranslation()
+  const state = usePrefillState(sessionId)
+  if (!state) return null
+  const text = state === 'timedOut' ? t('intake.prefillTimedOut') : t('intake.prefillPending')
+  return (
+    <span aria-label={text} title={text} className="text-2xs text-accent">
+      ✎
+    </span>
   )
 }

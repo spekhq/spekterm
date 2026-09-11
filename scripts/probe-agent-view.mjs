@@ -24,11 +24,21 @@
  * 用法：npm run probe:agent-view
  */
 import { spawn } from 'node:child_process'
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { check, connectToApp, pollFor } from './lib/cdp.mjs'
 import { copy, label } from './lib/copy.mjs'
+import { makeStubAgent } from './lib/stub-agent.mjs'
 import { awaitMounted } from './lib/mounted.mjs'
 import { electronExtraArgs } from './lib/display.mjs'
 import { runSections } from './lib/sections.mjs'
@@ -47,123 +57,6 @@ function mkTemp(prefix) {
   return dir
 }
 
-/**
- * 替身 agent。
- *
- * **它自己算紀錄的位置，用的是與產品相同的規則**（cwd 的每個非英數字元換成 `-`）。刻意不從
- * 產品那邊接一個路徑進來 —— 那樣兩邊就是同一個推導，而「產品算錯位置」這個失敗會變得表達不出來。
- */
-function makeStubAgent(
-  configDir,
-  {
-    honorHooks = true,
-    echoDelaySeconds = 0,
-    holdPermission = false,
-    bulkRecords = 0,
-    unreadable = false,
-    relocateAfterInput = false,
-    busySeconds = 0,
-  } = {},
-) {
-  const home = mkTemp('spekterm-agentview-stub-')
-  const bin = join(home, '.local', 'bin')
-  mkdirSync(bin, { recursive: true })
-  const sizeReceipt = join(home, 'stty-size')
-  const inputLog = join(home, 'agent-input.log')
-
-  const script = [
-    '#!/bin/sh',
-    /*
-      這顆 pty 拿到的終端尺寸，**持續回報**。
-
-      **一次性的讀取是一場競態，不是一條斷言。** pty 誕生時的尺寸本來就是那個暫定值，要等
-      renderer 掛載並 fit 之後才會被校正 —— 只在啟動當下讀一次，量到的是「校正有沒有搶在替身
-      之前到」，而不是「終端有沒有版面盒子」。實測那讓斷言時綠時紅，而**紅的時候看起來像產品
-      壞了**。
-
-      改為週期性覆寫，呼叫端則等它**最終**不再是暫定值：沒有版面盒子的話，校正永遠不會來，
-      它就永遠停在暫定值 —— 那才是這條 requirement 真正的失效樣貌。
-
-      **`< /dev/tty` 不可省。** POSIX 規定非互動 shell 的非同步命令其標準輸入預設為 `/dev/null`
-      —— 於是背景迴圈裡的 `stty` 讀不到終端，回報恆為 0。徵狀與「產品沒有推送尺寸」完全一樣，
-      而那會讓人去查產品。
-    */
-    `(while :; do stty size < /dev/tty > "${sizeReceipt}" 2>/dev/null || echo "0 0" > "${sizeReceipt}"; sleep 0.3; done) &`,
-    // 對話識別碼由產品以 `--session-id` 或 `--resume` 指定，兩者都掃。
-    'sid=""; prev=""; settings=""',
-    'for a in "$@"; do',
-    '  case "$prev" in --session-id|--resume) sid="$a" ;; --settings) settings="$a" ;; esac',
-    '  prev="$a"',
-    'done',
-    // 紀錄的位置：與產品相同的推導規則。
-    `slug=$(printf %s "$PWD" | sed 's/[^0-9A-Za-z]/-/g')`,
-    `dir="${configDir}/projects/$slug"`,
-    'mkdir -p "$dir"',
-    'tp="$dir/$sid.jsonl"',
-    // 觸發注入的 hook。**照著設定檔裡真正的命令跑** —— 只看 argv 證明不了它能用。
-    'fire() {',
-    // `honorHooks: false` 的替身完全不觸發事件 —— 用來驗「內容與輸入是兩條獨立的路」：
-    // 沒有事件 ⇒ 等待狀態恆為未知 ⇒ 送不出去，**但內容照樣讀得到**。
-    honorHooks ? '  [ -n "$settings" ] || return 0' : '  return 0',
-    `  cmd=$(node -e 'const s=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));`
-      + `const g=(s.hooks||{})[process.argv[2]];process.stdout.write(g&&g[0]&&g[0].hooks&&g[0].hooks[0]?g[0].hooks[0].command:"")' `
-      + `"$settings" "$1")`,
-    '  [ -n "$cmd" ] || return 0',
-    `  printf '{"hook_event_name":"%s","session_id":"%s","transcript_path":"%s","cwd":"%s"}' "$1" "$sid" "$tp" "$PWD" | sh -c "$cmd" >/dev/null 2>&1`,
-    '}',
-    'fire SessionStart',
-    // 一則 agent 訊息 —— 讓「內容真的抵達對話 view」有東西可斷言。
-    `printf '{"type":"assistant","uuid":"a1","timestamp":"2026-09-06T00:00:00.000Z","message":{"role":"assistant","content":[{"type":"text","text":"STUB-HELLO-%s"}]}}\\n' "$sid" >> "$tp"`,
-    // 大量紀錄 —— 供「初次附掛超過上限時只送最近一段並明示」。
-    bulkRecords
-      ? `i=0; while [ $i -lt ${bulkRecords} ]; do printf '{"type":"assistant","uuid":"b%s","timestamp":"2026-09-06T00:00:00.000Z","message":{"role":"assistant","content":[{"type":"text","text":"BULK-%s"}]}}\\n' "$i" "$i" >> "$tp"; i=$((i+1)); done`
-      : '',
-    // 讀不到 —— 供「來源不可讀時明說，而非靜默呈現為沒有內容」。**在寫完之後才拿掉權限**，
-    // 於是 `stat` 讀得到大小、`open` 卻失敗，正是那條 requirement 的情境。
-    unreadable ? 'chmod 000 "$tp"' : '',
-    'fire Stop',
-    // 讀 pty 的輸入並落盤；每收到一行就補一則使用者訊息與一次 Stop（模擬 agent 收下它）。
-    `while IFS= read -r line; do`,
-    `  printf '%s\\n' "$line" >> "${inputLog}"`,
-    // 延遲補寫紀錄 —— 用來驗「送出後在它出現於紀錄之前標示為未確認」。
-    echoDelaySeconds ? `  sleep ${echoDelaySeconds}` : '',
-    `  printf '{"type":"user","uuid":"u-%s","timestamp":"2026-09-06T00:00:01.000Z","message":{"role":"user","content":"%s"}}\\n' "$$" "$line" >> "$tp"`,
-    // `busySeconds`：先宣告忙碌、停一段時間再宣告就緒 —— 供「忙碌時呈現忙碌、閒置後消失」。
-    busySeconds ? '  fire PreToolUse' : '',
-    busySeconds ? `  sleep ${busySeconds}` : '',
-    /*
-      `relocateAfterInput`：**換一份紀錄**，並以事件回報新的位置。
-
-      這模擬的是使用者在 agent 之內清空或切換對話 —— 那些操作發生在 pty 之內，pty 沒死，
-      spekterm 收不到任何自己發出的訊號。**唯一的線索就是事件帶來的 `transcript_path`。**
-    */
-    relocateAfterInput ? '  tp="$dir/relocated-$sid.jsonl"' : '',
-    relocateAfterInput
-      ? `  printf '{"type":"assistant","uuid":"r1","timestamp":"2026-09-06T00:00:02.000Z","message":{"role":"assistant","content":[{"type":"text","text":"RELOCATED-MARKER"}]}}\\n' >> "$tp"`
-      : '',
-    relocateAfterInput ? '  fire SessionEnd' : '',
-    relocateAfterInput ? '  fire SessionStart' : '',
-    // `holdPermission`：收到輸入後提出一個許可請求並**停在那裡**（不送 Stop）——
-    // 模擬「agent 正在等使用者於終端回答」。
-    holdPermission ? '  fire PermissionRequest' : '  fire Stop',
-    'done',
-  ].filter(Boolean).join('\n')
-
-  writeFileSync(join(bin, 'claude'), `${script}\n`)
-  chmodSync(join(bin, 'claude'), 0o755)
-  return {
-    home,
-    bin,
-    cols: () => Number(readFileSync(sizeReceipt, 'utf8').trim().split(/\s+/)[1] ?? 0),
-    input: () => {
-      try {
-        return readFileSync(inputLog, 'utf8')
-      } catch {
-        return ''
-      }
-    },
-  }
-}
 
 function seedProfile(repo) {
   const profile = mkTemp('spekterm-agentview-profile-')
@@ -270,7 +163,7 @@ const SEND = `document.querySelector('${label('conversation.send')}')`
 async function runViewAndSend(_mode, _config, context) {
   const repo = mkTemp('spekterm-agentview-repo-')
   const configDir = mkTemp('spekterm-agentview-config-')
-  const stub = makeStubAgent(configDir)
+  const stub = makeStubAgent(mkTemp, configDir)
   const profile = seedProfile(repo)
   Object.assign(context, { profile, configDir, stub, repo, repoName: repo.split('/').pop() })
 
@@ -474,7 +367,7 @@ async function runRebuiltWidth(_mode, _config, context) {
   await context.app.close()
   context.app = null
 
-  const stub = makeStubAgent(context.configDir)
+  const stub = makeStubAgent(mkTemp, context.configDir)
   const app = await launch({
     profile: context.profile,
     configDir: context.configDir,
@@ -539,7 +432,7 @@ async function runReadableWithoutEvents(_mode, _config, context) {
   if (context.app) await context.app.close()
   const repo = mkTemp('spekterm-agentview-repo2-')
   const configDir = mkTemp('spekterm-agentview-config2-')
-  const stub = makeStubAgent(configDir, { honorHooks: false })
+  const stub = makeStubAgent(mkTemp, configDir, { honorHooks: false })
   const profile = seedProfile(repo)
   const repoName = repo.split('/').pop()
 
@@ -715,7 +608,7 @@ async function runParallelSessions(_mode, _config, context) {
   if (context.app) await context.app.close()
   const repo = mkTemp('spekterm-agentview-repo3-')
   const configDir = mkTemp('spekterm-agentview-config3-')
-  const stub = makeStubAgent(configDir)
+  const stub = makeStubAgent(mkTemp, configDir)
   const profile = seedProfile(repo)
   const repoName = repo.split('/').pop()
   const app = await launch({ profile, configDir, stub, port: PORT })
@@ -868,7 +761,7 @@ async function runDormantConversation(_mode, _config, context) {
   const { profile, configDir, repo, repoName } = context.parallel
   rmSync(repo, { recursive: true, force: true })
 
-  const stub = makeStubAgent(configDir)
+  const stub = makeStubAgent(mkTemp, configDir)
   const app = await launch({ profile, configDir, stub, port: RESTORE_PORT })
   context.app = app
 
@@ -905,7 +798,7 @@ async function runUnconfirmed(_mode, _config, context) {
   if (context.app) await context.app.close()
   const repo = mkTemp('spekterm-agentview-repo4-')
   const configDir = mkTemp('spekterm-agentview-config4-')
-  const stub = makeStubAgent(configDir, { echoDelaySeconds: 4 })
+  const stub = makeStubAgent(mkTemp, configDir, { echoDelaySeconds: 4 })
   const profile = seedProfile(repo)
   const app = await launch({ profile, configDir, stub, port: PORT })
   context.app = app
@@ -1029,7 +922,7 @@ async function runAwaitingChoice(_mode, _config, context) {
   if (context.app) await context.app.close()
   const repo = mkTemp('spekterm-agentview-repo5-')
   const configDir = mkTemp('spekterm-agentview-config5-')
-  const stub = makeStubAgent(configDir, { holdPermission: true })
+  const stub = makeStubAgent(mkTemp, configDir, { holdPermission: true })
   const profile = seedProfile(repo)
   const app = await launch({ profile, configDir, stub, port: PORT })
   context.app = app
@@ -1101,7 +994,7 @@ async function runIncompleteContent(_mode, _config, context) {
 
   const repoA = mkTemp('spekterm-agentview-repo6-')
   const configA = mkTemp('spekterm-agentview-config6-')
-  const bulkStub = makeStubAgent(configA, { bulkRecords: 500 })
+  const bulkStub = makeStubAgent(mkTemp, configA, { bulkRecords: 500 })
   const profileA = seedProfile(repoA)
   const appA = await launch({ profile: profileA, configDir: configA, stub: bulkStub, port: PORT })
   context.app = appA
@@ -1122,7 +1015,7 @@ async function runIncompleteContent(_mode, _config, context) {
   await appA.close()
   const repoB = mkTemp('spekterm-agentview-repo7-')
   const configB = mkTemp('spekterm-agentview-config7-')
-  const brokenStub = makeStubAgent(configB, { unreadable: true })
+  const brokenStub = makeStubAgent(mkTemp, configB, { unreadable: true })
   const profileB = seedProfile(repoB)
   const appB = await launch({ profile: profileB, configDir: configB, stub: brokenStub, port: RESTORE_PORT })
   context.app = appB
@@ -1169,7 +1062,7 @@ async function runCoveredReleasesQuota(_mode, _config, context) {
   if (context.app) await context.app.close()
   const repo = mkTemp('spekterm-agentview-repo8-')
   const configDir = mkTemp('spekterm-agentview-config8-')
-  const stub = makeStubAgent(configDir)
+  const stub = makeStubAgent(mkTemp, configDir)
   const profile = seedProfile(repo)
   const app = await launch({ profile, configDir, stub, port: PORT })
   context.app = app
@@ -1296,7 +1189,7 @@ async function runRelocateByEvent(_mode, _config, context) {
   if (context.app) await context.app.close()
   const repo = mkTemp('spekterm-agentview-repo9-')
   const configDir = mkTemp('spekterm-agentview-config9-')
-  const stub = makeStubAgent(configDir, { relocateAfterInput: true })
+  const stub = makeStubAgent(mkTemp, configDir, { relocateAfterInput: true })
   const profile = seedProfile(repo)
   const app = await launch({ profile, configDir, stub, port: PORT })
   context.app = app
@@ -1340,7 +1233,7 @@ async function runBusyIndicator(_mode, _config, context) {
   if (context.app) await context.app.close()
   const repo = mkTemp('spekterm-agentview-repoA-')
   const configDir = mkTemp('spekterm-agentview-configA-')
-  const stub = makeStubAgent(configDir, { busySeconds: 4 })
+  const stub = makeStubAgent(mkTemp, configDir, { busySeconds: 4 })
   const profile = seedProfile(repo)
   const app = await launch({ profile, configDir, stub, port: PORT })
   context.app = app

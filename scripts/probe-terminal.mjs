@@ -35,6 +35,7 @@ import {
   retrySample,
 } from './lib/cdp.mjs'
 import { menuEvidence } from './lib/menu-evidence.mjs'
+import { SHELL_PATH, ptyPids, ptySessionPids } from './lib/pty-pids.mjs'
 import { copy, prefixOf } from './lib/copy.mjs'
 import { RENDER_PATH_PRELUDE } from './lib/render-path.mjs'
 import { sectionConsole } from './lib/instrument.mjs'
@@ -48,7 +49,6 @@ const BUILD_PORT = PROBE_PORTS.terminal.build
 const DEV_PORT = PROBE_PORTS.terminal.dev
 
 /** 探針固定用 /bin/sh：可預測、無 bash/zsh profile 的雜訊，且處處存在。 */
-const SHELL_PATH = '/bin/sh'
 
 const results = []
 const temps = []
@@ -286,49 +286,10 @@ function seedProfile(folders) {
 }
 
 // ── pty 行程的清點 ──────────────────────────────────────────────────────────
+//
+// `ptyPids` / `ptySessionPids` 已抽到 `lib/pty-pids.mjs`（`probe-intake` 也要用）。
+// **兩者的差別是一條實測結論，不是風格**：一個 claude session 是兩個帶 marker 的行程。
 
-/**
- * 帶著 marker 的 pty 行程。
- *
- * 以 `environ` 比對 marker（pty 自主行程繼承整個 env），並以 argv[0] 等於我們指定的 shell
- * 排除 electron 自己（它的 environ 同樣帶 marker，但 argv[0] 是 electron）。
- */
-function ptyPids(marker) {
-  const pids = []
-  for (const entry of readdirSync('/proc')) {
-    if (!/^\d+$/.test(entry)) continue
-    try {
-      const environ = readFileSync(`/proc/${entry}/environ`, 'utf8')
-      if (!environ.includes(marker)) continue
-      const cmdline = readFileSync(`/proc/${entry}/cmdline`, 'utf8')
-      if (cmdline.split('\0')[0] === SHELL_PATH) pids.push(Number(entry))
-    } catch {
-      // 行程在我們讀它的途中結束了 —— 那就不算數。
-    }
-  }
-  return pids
-}
-
-/**
- * **session 的數量，不是行程的數量。**
- *
- * 一個 claude session 是**兩個**帶 marker 的 `/bin/sh` 行程（實測，cmdline 說了實話）：
- * `\/bin\/sh -l -c claude …`（node-pty 直接 spawn 的那個，它沒有 exec）以及它底下 claude 自己
- * 的 shell。一個 login shell session 則只有一個。**拿行程數去斷言「只喚醒了一個 session」，
- * 會把一個好的實作判成壞的。**
- *
- * node-pty spawn 的恆是 `$SHELL -l …` —— 以 `-l` 認出領頭行程，數量就等於 session 數。
- */
-function ptySessionPids(marker) {
-  return ptyPids(marker).filter((pid) => {
-    try {
-      const argv = readFileSync(`/proc/${pid}/cmdline`, 'utf8').split('\0').filter(Boolean)
-      return argv[1] === '-l'
-    } catch {
-      return false
-    }
-  })
-}
 
 /** 診斷用：帶 marker 的 pty 行程完整命令列。斷言失敗時，光看數字看不出是誰。 */
 function ptyCmdlines(marker) {

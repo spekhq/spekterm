@@ -1,0 +1,185 @@
+import { digestOf, IntakeStore, MAX_PENDING, type IntakeRecord } from './intake-store'
+import { isValidIntakeId } from './intake-id'
+import { parseIntake, type IntakeRejection } from './intake-schema'
+import { saveDelivery } from './intake-archive'
+
+/**
+ * 投遞的唯一入口。
+ *
+ * ## 為什麼是一個函式，而檔案只是它的 adapter
+ *
+ * 第一個 producer（Slack adapter）會住在主行程裡；強迫它「寫檔給自己讀」是為了介面而繞路。
+ * 但檔案介面必須存在 —— 外部 producer（`spek handoff` CLI、日後的 relay）是獨立行程，
+ * 而且它讓這個能力得以在沒有任何來源的情況下被完整驗收。
+ *
+ * **驗證、去重、落盤全部在 `deliver()` 之後**，於是「啟動掃描」與「監看」不可能演化成
+ * 兩份寬嚴不同的實作 —— 那是這條管線最容易出現、而且完全靜默的 bug（第二份較弱的實作）。
+ *
+ * ## 拒絕分永久性與暫時性，而分界是「這次拒絕可不可逆」
+ *
+ * - **永久性**（識別碼不合法、超長、型別不合、內容相同的重複、內容不同的重複）—— 投遞檔被
+ *   消費掉。留著的話，每次啟動都會把歷來每一次拒絕重新處理、重新呈現一遍。
+ * - **暫時性**（達到待處理總量上限）—— 投遞檔**原封留在落點**，等上限解除後再處理。
+ *   刪掉它就是把一件只是「現在太多了」的真實工作項目銷毀。
+ * - **解析失敗**（`JSON.parse` 不過）—— 也是原封留著，因為它可能只是**寫到一半**。
+ *   這一類與「確定損毀」在讀取當下不可分辨，分辨它需要穩定窗口或跨啟動計數；
+ *   本 change 接受「永久損毀的檔案每次啟動被重讀一次」這個成本（見 design 的缺口表）。
+ *
+ * ## 內容相同的重複要靜默
+ *
+ * `deliver()` 自己就會製造內容相同的重複：檔案 adapter 刻意「先建立監看、再掃描落點」，
+ * 於是中間抵達的檔案被處理兩次。**把它做成可見的拒絕，等於每次啟動都對使用者報告一件他沒
+ * 做過的事**，而那個通道正是識別碼搶佔唯一的警訊 —— 讓噪音與警訊走同一條路，等於把警訊關掉。
+ */
+
+/** 投遞的結果。`consume` 告訴 adapter 該不該把投遞檔收掉。 */
+export interface DeliverOutcome {
+  ok: boolean
+  code?: IntakeRejection
+  /** 是否應消費掉來源項目（永久性處置為真）。 */
+  consume: boolean
+  /** 是否要讓使用者看到。內容相同的重複恆為 false。 */
+  notify: boolean
+  detail?: string
+  record?: IntakeRecord
+}
+
+/**
+ * 面向使用者的拒絕與警示 —— **有界**。
+ *
+ * 同一主鍵的重複拒絕合併為一則並累加次數；總則數設上限。投遞者控制投遞的數量，
+ * 而使用者的注意力是這條管線僅有的兩道人類防線之一（另一道是讀本文）。
+ */
+export interface IntakeNotice {
+  key: string
+  code: IntakeRejection
+  count: number
+  detail?: string
+}
+
+const MAX_NOTICES = 20
+
+export interface IntakeServiceOptions {
+  store: IntakeStore
+  /** 原始投遞的保存處。 */
+  archiveRoot: string
+  /** 待處理則數上限。**可注入** —— 驗收要造出「達到上限」這個前提，真實值造不起。 */
+  maxPending?: number
+}
+
+export class IntakeService {
+  readonly #store: IntakeStore
+  readonly #archiveRoot: string
+  readonly #maxPending: number
+  #notices: IntakeNotice[] = []
+  #listeners = new Set<() => void>()
+
+  constructor({ store, archiveRoot, maxPending = MAX_PENDING }: IntakeServiceOptions) {
+    this.#store = store
+    this.#archiveRoot = archiveRoot
+    this.#maxPending = maxPending
+  }
+
+  get store(): IntakeStore {
+    return this.#store
+  }
+
+  notices(): IntakeNotice[] {
+    return this.#notices.map((n) => ({ ...n }))
+  }
+
+  clearNotices(): void {
+    this.#notices = []
+    this.#emit()
+  }
+
+  subscribe(listener: () => void): () => void {
+    this.#listeners.add(listener)
+    return () => this.#listeners.delete(listener)
+  }
+
+  #emit(): void {
+    for (const listener of this.#listeners) listener()
+  }
+
+  #notice(code: IntakeRejection, key: string, detail?: string): void {
+    const existing = this.#notices.find((n) => n.key === key && n.code === code)
+    if (existing) {
+      existing.count += 1
+      return
+    }
+    if (this.#notices.length >= MAX_NOTICES) {
+      // 已達上限：合併成一則「其餘」而非無限累積。
+      const overflow = this.#notices.find((n) => n.key === '…')
+      if (overflow) overflow.count += 1
+      else this.#notices.push({ key: '…', code, count: 1 })
+      return
+    }
+    this.#notices.push({ key, code, count: 1, ...(detail ? { detail } : {}) })
+  }
+
+  /**
+   * 超出大小上限的投遞 —— **由 adapter 判定**（它才看得到檔案），但拒絕的呈現仍走這裡，
+   * 於是「拒絕必須可見」只有一個實作，而它的合併與上限也只有一份。
+   */
+  rejectOversize(label: string): DeliverOutcome {
+    this.#notice('TOO_LARGE', label)
+    this.#emit()
+    return { ok: false, code: 'TOO_LARGE', consume: true, notify: true }
+  }
+
+  /**
+   * 收下一份投遞。
+   *
+   * `contents` 是**原始的 JSON 文字**（保存用），`adapter` 由接收端決定 —— payload 自稱的
+   * 來源一律不採信，檔案落點中的 `source` / `origin` 是自稱，不是 provenance。
+   */
+  async deliver(contents: string, adapter: string): Promise<DeliverOutcome> {
+    let raw: unknown
+    try {
+      raw = JSON.parse(contents)
+    } catch {
+      // **不消費** —— 可能只是寫到一半。
+      return { ok: false, code: 'MALFORMED', consume: false, notify: false }
+    }
+
+    const parsed = parseIntake(raw, adapter)
+    if (!parsed.ok) {
+      this.#notice(parsed.code, typeof (raw as { id?: unknown })?.id === 'string' ? String((raw as { id: string }).id) : '(unknown)', parsed.detail)
+      this.#emit()
+      return { ok: false, code: parsed.code, consume: true, notify: true, detail: parsed.detail }
+    }
+
+    const intake = parsed.value
+    if (!isValidIntakeId(intake.id)) {
+      this.#notice('INVALID_ID', '(invalid)')
+      this.#emit()
+      return { ok: false, code: 'INVALID_ID', consume: true, notify: true }
+    }
+
+    const existing = this.#store.get(adapter, intake.id)
+    if (existing) {
+      const digest = digestOf(intake.authored, intake.verified)
+      if (digest === existing.digest) {
+        // **內容相同 ⇒ 靜默。** 正常的重送與我們自己的雙重讀取都落在這裡。
+        return { ok: false, code: 'DUPLICATE', consume: true, notify: false }
+      }
+      // **內容不同 ⇒ 可見。** 那才是識別碼搶佔，而使用者必須有機會知道有一件事沒進來。
+      this.#notice('DUPLICATE', intake.id)
+      this.#emit()
+      return { ok: false, code: 'DUPLICATE', consume: true, notify: true }
+    }
+
+    if (this.#store.pendingCount() >= this.#maxPending) {
+      // **暫時性拒絕 ⇒ 不消費。** 使用者清一清收件匣，這一則本來就該進來。
+      this.#notice('CAPACITY', intake.id)
+      this.#emit()
+      return { ok: false, code: 'CAPACITY', consume: false, notify: true }
+    }
+
+    await saveDelivery(this.#archiveRoot, intake.id, contents)
+    const record = this.#store.add(intake)
+    this.#emit()
+    return { ok: true, consume: true, notify: false, record }
+  }
+}

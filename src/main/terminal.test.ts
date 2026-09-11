@@ -569,3 +569,53 @@ describe('全域 session：不隸屬任何 folder，位置為家目錄', () => {
     await waitFor(() => service.sessionCount === 0, { label: 'pty 已釋放' })
   })
 })
+
+describe('由 intake 建立的 session 其啟動參數與手動建立者等價', () => {
+  /**
+   * **這條刻意寫成等價／白名單，而不是「不得含某些旗標」。**
+   *
+   * 後者是黑名單：它只擋得住列舉得出來的東西，而且**在今日恆真** —— `create()` 根本沒有
+   * 能夠加旗標的參數。一條恆真的斷言撐不住任何東西。
+   *
+   * 等價形式涵蓋所有未來新增的旗標，並順帶驗證了「走相同路徑」：`agent-intake` 不擴充
+   * `terminal.create` 的介面，於是「由 intake 建立」與「手動建立」在這一層根本沒有分岔。
+   *
+   * **允許相異的只有兩樣**：對話識別碼（每次都是新的 UUID），以及注入設定的位置
+   * （未注入時兩者皆無）。其餘逐項相同，**且參數個數相同** —— 一個多出來的旗標必然破壞後者，
+   * 不論正規化怎麼寫。
+   */
+  const UUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g
+
+  function normalize(argv: string): string[] {
+    return argv.replace(UUID, '<conversation>').split(' ')
+  }
+
+  it('去除對話識別碼之後逐項相同，且參數個數相同', async () => {
+    const stub = installStubClaude()
+    service = new TerminalService(lookup([{ id: 'f1', path: repo, status: 'ok' }]), sink())
+
+    await service.create('f1', 'claude')
+    await waitFor(() => stub.calls().length === 1, { label: '第一個 session' })
+    await service.create('f1', 'claude')
+    await waitFor(() => stub.calls().length === 2, { label: '第二個 session' })
+
+    const [first, second] = stub.calls().map(normalize)
+    assert.deepEqual(first, second)
+    assert.equal(first.length, second.length)
+  })
+
+  it('對照組：多一個旗標即破壞等價（證明這條斷言有鑑別力）', () => {
+    const withFlag = normalize('--session-id 11111111-2222-3333-4444-555555555555 --dangerous-extra')
+    const without = normalize('--session-id 66666666-7777-8888-9999-000000000000')
+    assert.notDeepEqual(withFlag, without)
+    assert.notEqual(withFlag.length, without.length)
+  })
+
+  it('對照組：一個長得像路徑的旗標同樣破壞等價（驗正規化本身）', () => {
+    // 正規化若以**位置**處理（第 N 個元素是可變片段），一個長得像路徑的旗標會落進
+    // 被當成「可變」的那一格而溜過去。以個數與逐項比對就沒有那個洞。
+    const withFlag = normalize('--session-id 11111111-2222-3333-4444-555555555555 /tmp/looks/like/a/path')
+    const without = normalize('--session-id 66666666-7777-8888-9999-000000000000')
+    assert.notDeepEqual(withFlag, without)
+  })
+})

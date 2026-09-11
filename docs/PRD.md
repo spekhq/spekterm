@@ -621,11 +621,32 @@ session 脈絡裡送出的，彙整成一份跨數十天、跨數十個專案的
 一陣子，再決定要不要付上面的代價 —— 那會是一個資訊充分的決定，而不是現在猜。
 
 ### Phase 7 — Handoff 免費核心（moat 起步）
+
+> **本機 inbox 與 spawner + context 注入器已由 `agent-intake-inbox` 落地**（活動列的 Handoffs
+> 入口已接上）。外部 producer 往 `<userData>/intake-inbox/` 投遞一份 JSON，使用者看過本文之後
+> 接受它，就在 routing 解析出的 folder 得到一個開好、context 備妥、第一則 prompt 已填但
+> **尚未送出**的 agent session。
+>
+> **Slack 來源不在其中** —— 收件匣的契約是「一個目錄 + 一份 JSON」，第一個真實 producer 是
+> 下一個 change。接取方式已知不只一種且必然會換（Socket Mode 的 app 不允許上架 Slack
+> Marketplace，且 app-level token 是整個 app 一份、多條連線之間是負載平衡），因此那一層
+> 刻意與收件匣分離。
+>
+> **該 change 有十條刻意的缺口**，其中兩條會限制這個能力能承諾什麼：本文可以只放一個連結，
+> 把內容移到所有機制的作用域之外；以及在長度上限之內，投遞者仍決定使用者要掃過多少字。
+> 完整清單與「這些缺口的交互」見該 change 的 `design.md`。
+>
+> **一行技術債**：Slack token 進來之前，`ipc/settings.ts` 的 `settings:get` 必須先改成逐欄位
+> 投影（保持「未設定即省略」的語意，否則 `probe-workspace` 會紅）並加原始碼守衛 ——
+> 它目前是原樣轉手，任何加進那個物件的欄位都會零改動、零紅燈地送到 renderer。
+> `agent-intake-inbox` 因為 routing 規則搬到自己的檔案而不必動它，但下一個 change 正是
+> 有機密流過的那一個。
+
 - **Handoff schema**（§7.4）：frontmatter + 錨點 + 磁碟狀態快照。
-- **本機 daemon inbox** + repo/workspace addressing registry（沿用已管的 repo 清單）。
+- ~~**本機 daemon inbox**~~（已落地）+ repo/workspace addressing registry（沿用已管的 repo 清單）。
 - **`spek handoff` CLI**（producer）：狀態由磁碟推導、agent 補意圖。
 - **Router / probe daemon**（主行程 watcher）：同機 auto-spawn，跨人先 pending。
-- **Spawner + context 注入器**（先只接 `claude`）。
+- ~~**Spawner + context 注入器**（先只接 `claude`）~~（已落地）。
 - **Consumer / ack** 流轉（open → awaiting-ack → done）。
 - **UI**：收件匣、通知、compose、session「picked up from handoff X」標示。
 

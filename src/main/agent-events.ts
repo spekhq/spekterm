@@ -309,3 +309,20 @@ export function encodeInput(text: string): string {
   const sanitized = text.replace(/[\x00-\x09\x0b-\x1f\x7f]/g, '')
   return `${sanitized}\r`
 }
+
+/**
+ * **預填**的編碼 —— 寫進 agent 的輸入處，但**不送出**。
+ *
+ * 與 `encodeInput` 的差別只有兩點，而兩點都是刻意的：
+ *
+ * 1. **不附 `\r`** —— 送出由使用者為之，那是 intake 那條管線唯一的人類閘門。
+ * 2. **連 `\n` 一起濾掉** —— `\n` 是訊息內的換行，留著它不會送出，但**單行是編碼器的性質，
+ *    不是呼叫端的義務**。「呼叫端記得只傳單行」是紀律；濾掉它才是結構。
+ *
+ * 實測（2026-09-11、CLI 2.1.267）：不附 `\r` 的寫入落在輸入框裡、可編輯、**且不送出** ——
+ * 寫入後等 16 秒，transcript 檔案根本沒有被建立。見 `docs/lessons/transcript.md`。
+ */
+export function encodePrefill(text: string): string {
+  // eslint-disable-next-line no-control-regex
+  return text.replace(/[\x00-\x1f\x7f]/g, '')
+}

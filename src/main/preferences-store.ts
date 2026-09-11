@@ -134,8 +134,10 @@ export function parsePreferences(raw: string): PersistedPreferences | null {
 
   // **這份解構清單是第二處白名單，而型別檢查對它零感知。** 加了欄位卻沒加在這裡，
   // 該欄位就寫得進磁碟卻讀不回來 —— 症狀是「這個偏好不跨重啟」，而沒有任何東西會紅。
-  // （`agentStatus` / `agentEvents` 目前就漏在這裡，見 issue。）
-  const { fontFamily, fontSize, lineHeight, gpuAcceleration, agentView } = terminal as Record<string, unknown>
+  // （`agentStatus` 目前仍漏在這裡，見 issue；`agentEvents` 已由 `agent-intake-inbox` 補上
+  // —— 它依賴「事件回報已關閉」這個前提，而那個前提原本在產品與驗收裡都造不出來。）
+  const { fontFamily, fontSize, lineHeight, gpuAcceleration, agentView, agentEvents } =
+    terminal as Record<string, unknown>
   const parsed: TerminalPreferences = {}
   const family = sanitizeFamily(fontFamily)
   const size = clampSize(fontSize)
@@ -148,6 +150,8 @@ export function parsePreferences(raw: string): PersistedPreferences | null {
   if (typeof gpuAcceleration === 'boolean') parsed.gpuAcceleration = gpuAcceleration
   const view = sanitizeAgentView(agentView)
   if (view !== undefined) parsed.agentView = view
+  // 同 `gpuAcceleration`：只認真正的布林。
+  if (typeof agentEvents === 'boolean') parsed.agentEvents = agentEvents
 
   return { version: PREFERENCES_VERSION, terminal: parsed }
 }
@@ -246,6 +250,11 @@ export class PreferencesStore {
     // 畫面就**靜默地跳回終端** —— 沒有錯誤、沒有型別問題，看起來像「這個開關會自己彈回去」。
     if (this.preferences.agentView !== undefined) {
       next.agentView = this.preferences.agentView
+    }
+    // **事件回報的開關同理。** 只修讀取路徑而漏掉這裡，等於把「完全不生效」的缺陷換成
+    // 「調一次字型就失效」—— 後者更難察覺，因為它在一段時間內是對的。
+    if (this.preferences.agentEvents !== undefined) {
+      next.agentEvents = this.preferences.agentEvents
     }
 
     this.preferences = next

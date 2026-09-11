@@ -8,6 +8,11 @@ import type { FsResult, WriteResponse } from '../main/ipc/fs'
 import type { PanelSnapshot } from '../main/panel-store'
 import type { FollowUpdate as ConversationUpdate } from '../main/transcript-follow-service'
 import type { DrainResult, WaitState } from '../main/agent-events'
+import type {
+  IntakeAcceptResult,
+  IntakeRulesSnapshot,
+  IntakeSnapshot,
+} from '../main/ipc/intake'
 
 /** 等待選擇時「正在被問什麼」。**沒有選項** —— 作答一律回終端 view。 */
 type PendingRequest = DrainResult['pending']
@@ -441,6 +446,45 @@ const workspaceApi = {
     reportRead: (name: string): Promise<Report | null> => ipcRenderer.invoke('workspace:insights:reportRead', name),
     reportGenerate: (request: { from?: number; to?: number; authorized: boolean }): Promise<GenerateResult> =>
       ipcRenderer.invoke('workspace:insights:reportGenerate', request),
+  },
+  /**
+   * 收件匣（`agent-intake`）。
+   *
+   * **這裡送回 renderer 的一律沒有路徑** —— 收件匣的目錄、原始投遞的保存處、context 檔的位置
+   * 都不經這條通道。renderer 拿到的是 `intakeId`、通用欄位、與一個**已解析好的 `folderId`**
+   * （那是它既有的合法詞彙）。
+   *
+   * `accept` 只回一個**指示**：要在哪個 folder 建立 agent session。建立本身由 renderer 走它
+   * 既有的 create 路徑 —— session 清單的權威在 renderer，主行程自行建立的 session 會在 500ms
+   * 之後被抹掉而 pty 還活著。建好之後以 `attach` 回報，主行程才寫 context 檔並排定預填。
+   */
+  intake: {
+    list: (): Promise<IntakeSnapshot> => ipcRenderer.invoke('workspace:intake:list'),
+    accept: (id: string, adapter: string): Promise<IntakeAcceptResult> =>
+      ipcRenderer.invoke('workspace:intake:accept', id, adapter),
+    attach: (id: string, adapter: string, sessionId: string): Promise<{ ok: boolean }> =>
+      ipcRenderer.invoke('workspace:intake:attach', id, adapter, sessionId),
+    dismiss: (id: string, adapter: string): Promise<{ ok: boolean }> =>
+      ipcRenderer.invoke('workspace:intake:dismiss', id, adapter),
+    dismissNotices: (): Promise<{ ok: boolean }> => ipcRenderer.invoke('workspace:intake:dismissNotices'),
+    rules: (): Promise<IntakeRulesSnapshot> => ipcRenderer.invoke('workspace:intake:rules'),
+    setRules: (config: IntakeRulesSnapshot): Promise<{ ok: boolean }> =>
+      ipcRenderer.invoke('workspace:intake:setRules', config),
+    onChanged: (listener: () => void): (() => void) => {
+      const handler = (): void => listener()
+      ipcRenderer.on('workspace:intake:changed', handler)
+      return () => ipcRenderer.removeListener('workspace:intake:changed', handler)
+    },
+    onPrefill: (listener: (sessionId: string, state: 'pending' | 'sent' | 'timedOut') => void): (() => void) => {
+      const handler = (
+        _event: IpcRendererEvent,
+        sessionId: string,
+        state: 'pending' | 'sent' | 'timedOut',
+      ): void =>
+        listener(sessionId, state)
+      ipcRenderer.on('workspace:intake:prefill', handler)
+      return () => ipcRenderer.removeListener('workspace:intake:prefill', handler)
+    },
   },
 } as const
 

@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { InsightsOverlay } from './insights/InsightsOverlay'
+import { IntakeOverlay } from './intake/IntakeOverlay'
 import { TerminalFontDialog } from './settings/TerminalFontDialog'
 
 const ICON_PROPS = {
@@ -46,7 +47,9 @@ const ITEMS: ActivityItem[] = [
   {
     id: 'handoffs',
     labelKey: 'activityBar.handoffs',
-    enabled: false,
+    // **由 `agent-intake-inbox` 啟用。** 雛型枚舉的入口集合本來就有 Handoffs，
+    // 它此前為停用只因為背後的能力尚未存在 —— 接上它是兌現雛型，不是偏離它。
+    enabled: true,
     icon: (
       <svg {...ICON_PROPS}>
         <path d="M22 12h-6l-2 3h-4l-2-3H2" />
@@ -103,12 +106,14 @@ export function ActivityBar(): React.JSX.Element {
   const [settingsOpen, setSettingsOpen] = useState(false)
   // 開啟 overlay 的那個按鈕 —— 關閉時焦點要還給它，否則落回 `<body>`，下一次按鍵什麼都不發生。
   const [insightsOpener, setInsightsOpener] = useState<HTMLElement | null>(null)
+  const [intakeOpener, setIntakeOpener] = useState<HTMLElement | null>(null)
 
-  // Sessions 恆為當前 view；Handoffs 與 Search 仍是停用的 placeholder
-  //（`workspace-layout`：尚未實作的入口為停用狀態）。
+  // Sessions 恆為當前 view；**Search 仍是停用的 placeholder**
+  //（`workspace-layout`：尚未實作的入口為停用狀態）。Handoffs 已由 `agent-intake-inbox` 接上。
   const activate = (id: string, element: HTMLElement): void => {
     if (id === 'settings') setSettingsOpen(true)
     if (id === 'insights') setInsightsOpener(element)
+    if (id === 'handoffs') setIntakeOpener(element)
   }
 
   return (
@@ -148,6 +153,7 @@ export function ActivityBar(): React.JSX.Element {
       {insightsOpener && (
         <InsightsOverlay opener={insightsOpener} onClose={() => setInsightsOpener(null)} />
       )}
+      {intakeOpener && <IntakeOverlay opener={intakeOpener} onClose={() => setIntakeOpener(null)} />}
     </nav>
   )
 }

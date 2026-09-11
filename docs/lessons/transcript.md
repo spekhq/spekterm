@@ -381,6 +381,32 @@ CLAUDE_CODE_EXECPATH  CLAUDE_PID  CLAUDE_EFFORT  CLAUDE_CODE_NO_FLICKER
   新增一個帶路徑的欄位時靜默失效。
 - **`Stop` 帶 `last_assistant_message`**，是「剛講完話」的即時訊號。
 
+### `SessionStart` 的時序，與「往一個剛起來的 TUI 寫字」（2026-09-11、CLI 2.1.267）
+
+此前這份清單逐條記了 `PermissionRequest` 早 22ms、`Notification` 晚 6002ms，**唯獨沒有
+`SessionStart` 的時序** —— 而「預填第一則 prompt」整條路徑就建立在它上面。實測（`bash -l -c
+claude`，6 次）：
+
+| 事件 | 相對 spawn |
+|---|---|
+| TUI 進入 alt-screen（`\e[?1049h`） | 1030–1180ms |
+| **`SessionStart` hook 觸發** | **1284–1449ms** |
+
+- **`SessionStart` 恆晚於 alt-screen 約 200–300ms，而且晚於 TUI 啟動時的輸入丟棄窗口。**
+  以「看到 `SessionStart` 就寫入」重複 5 次，**5 次全部落進輸入框**。
+  ⇒ **它是一個可用的閘，不需要第二個條件。**
+- **失效的是一個窄帶，不是「越早越糟」。** 掃時間點的結果反直覺：
+  **300ms 寫入會成功**（`bash -l -c` 不讀 stdin，位元組留在 tty 緩衝區，claude 起來後讀得到），
+  **1000ms 寫入會被吞掉**（正好落在 TUI 啟動時清空輸入的窗口），1150ms 之後一律成功。
+  > **因此「marker 有沒有出現在 pty 輸出裡」不是判準** —— 啟動前 tty 仍是 canonical 模式，
+  > login shell 會回顯它，而那次回顯會被 alt-screen 切換連同整個畫面抹掉。
+  > 判準是「**marker 出現在 `\e[?1049h` 之後的輸出裡**」。第一版的量測正是栽在這裡（300ms 那筆
+  > 被判成成功，而它成功的理由與 TUI 無關）。
+- **不附 `\r` 的寫入：文字落在輸入框裡、可編輯、且不送出。** 實測寫入後等 16 秒，
+  **transcript 檔案根本沒有被建立** —— 沒有任何訊息被送出。
+- **閒置時 `Notification` / `idle_prompt` 一次都沒有觸發**（9s 與 25s 各試）。
+  ⇒ 把它當作「TUI 就緒」的備選訊號是**行不通的**，那個候選集合實際上是空的。
+
 ### 送出的編碼（以讀回紀錄驗證 agent 實際收到什麼）
 
 - **`\n`（0x0A）是訊息內的換行，`\r`（0x0D）才是送出。** 送「多行本文 + `\r`」得到**恰好一則**

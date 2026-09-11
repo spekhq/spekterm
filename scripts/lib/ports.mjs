@@ -52,6 +52,14 @@ export const PROBE_PORTS = {
    * 上 `connectToApp` 會連到先起來的那一個 —— 比照 `insights` 的兩個 port 學到的同一件事。
    */
   agentView: { main: 9238, restore: 9239 },
+  /**
+   * 兩次啟動：主要的那一次，以及**以同一份 profile 重啟**的那一次。
+   *
+   * 第二個 port 不是可有可無的：「app 關閉期間投遞的 intake 於下次啟動時進入收件匣」
+   * 這條要先關掉第一個 app、寫檔、再起第二個 —— 同一個 port 上 `connectToApp` 會連到
+   * 先起來的那一個（比照 `insights` 與 `agentView` 學到的同一件事）。
+   */
+  intake: { main: 9241, restart: 9242 },
   package: { main: 9240 },
 }
 
