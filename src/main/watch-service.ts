@@ -244,7 +244,8 @@ export class WatchService {
     // 用根判定 polling 是正確的；而 chokidar 的錯誤事件不指出是哪一個目標失敗，印 `target`
     // 只會識別到「碰巧第一個被訂閱的目錄」。
     //
-    // **這是產品程式碼中唯一顯式傳 `pollingRoot` 的地方**（其餘三個建立點都是一對一，靠預設）。
+    // **這是產品程式碼中唯一顯式傳 `pollingRoot` 的地方**（其餘每一個建立點都是一對一，靠預設；
+    // 完整清單見 `watcher.ts` 的檔頭 —— 那裡是唯一該維護那份清單的地方）。
     // 因此它看起來會像一個可以順手清掉的殘留 —— 刪掉它不會讓型別、既有測試或探針變紅，只會讓
     // 跨掛載點的使用者靜默受害。`watch-service.test.ts` 有一條測試專門釘住它，別繞過。
     const watcher = this.watcherFactory({

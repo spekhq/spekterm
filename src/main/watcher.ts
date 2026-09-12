@@ -21,9 +21,27 @@ import { type FSWatcher, watch as chokidarWatch } from 'chokidar'
  * 檔案系統。判定錯誤的後果是靜默的，而且**連底下的錯誤 handler 都救不到** —— `fs.watch` 只是
  * 永遠不觸發，沒有任何錯誤可以 emit。
  *
- * 四個建立點裡有**三個**服務單一目標（`branch-service` 兩層、`openspec-service`），它們的正確
- * 答案就是自己的 `target`；只有 `watch-service` 一個 watcher 服務 N 個動態增減的子目標，需要
- * 另一條路徑。`pollingRoot` 因此是**可省略**的：省略即以 `target` 判定。
+ * **服務單一目標的建立點佔絕大多數**，它們的正確答案就是自己的 `target`；只有 `watch-service`
+ * 一個 watcher 服務 N 個動態增減的子目標，需要另一條路徑。`pollingRoot` 因此是**可省略**的：
+ * 省略即以 `target` 判定。
+ *
+ * 目前的建立點（七個，服務單一目標的六個 ＋ 服務多目標的一個）：
+ *
+ * | 建立點 | 監看什麼 | `pollingRoot` |
+ * |---|---|---|
+ * | `branch-service` | folder 根（等 `.git` 出現） | 省略 |
+ * | `branch-service` | gitdir 底下的 `HEAD` | 省略 |
+ * | `openspec-service` | repo 的 `openspec/` | 省略 |
+ * | `transcript-follow-service` | transcript 所在目錄 | 省略 |
+ * | `transcript-follow-service` | transcript 檔本身 | 省略 |
+ * | `intake-source` | 投遞落點 | 省略 |
+ * | `watch-service` | N 個動態增減的子目標 | **顯式傳入共同根** |
+ *
+ * **這份清單是實作，條文只講比例。** 此前這段寫著「四個建立點裡有三個服務單一目標」，而落地後
+ * 是七個 —— 那個數字連同它在 `watcher-error-reporting` 主 spec 裡的複本一起過時了（issue #42）。
+ * **一個精確但過時的數字比一個含糊的敘述更糟**，因為它讀起來像是被查核過的。條文所倚賴的是
+ * 比例（一對一佔絕大多數、服務多目標者為孤例），而那在 7 = 6 + 1 之下比在 4 = 3 + 1 之下更強。
+ * 改動這份清單時**不必**回去改規格；規格不再提任何數目。
  *
  * 這個預設是有由來的 —— 它此前是必填，於是每個呼叫端都得自己想一次，而 `branch-service` 第二層
  * 想錯了：它監看 gitdir 底下的 `HEAD`（worktree／submodule 時可能在另一個掛載點），卻傳 folder

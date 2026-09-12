@@ -18,7 +18,7 @@ import type {
 type PendingRequest = DrainResult['pending']
 import type { RestoredSession } from '../main/ipc/terminal'
 import type { DirEntry, FileContent } from '../main/fs-service'
-import type { TerminalPreferences } from '../main/preferences-store'
+import type { ProjectedPreferences } from '../main/preferences-store'
 import type { SessionStatusSnapshot } from '../main/session-status'
 import type { RendererSession } from '../main/session-store'
 import type {
@@ -226,35 +226,41 @@ const workspaceApi = {
     },
   },
   /**
-   * 使用者偏好的讀寫。本輪只有終端字型（family + size）。
+   * 使用者偏好的讀寫。
    *
    * 值的驗證在主行程的 store（清理 family、夾制 size）—— preload 與 renderer 同屬一個行程樹，
-   * 在這裡檢查等同沒有檢查。`setTerminalFont` 回傳套用後的偏好，供 renderer 立即更新終端。
+   * 在這裡檢查等同沒有檢查。每個方法回傳套用後的偏好，供 renderer 立即更新終端。
+   *
+   * **型別是 `ProjectedPreferences` 而非 `TerminalPreferences`，這道窄化是承重的。**
+   * renderer 的偏好型別是自這裡回推的（`shell/types.ts`），所以**這裡寫寬了，主行程那邊的
+   * 逐欄位白名單就只剩執行期效果** —— renderer 仍然寫得出讀未送出欄位的程式碼，而它永遠是
+   * `undefined`，症狀是一個安靜地永遠走 else 分支的判斷。實測過：把這裡改回寬的型別，
+   * 「renderer 讀 `agentEvents`」這個對照組不會變紅。
    */
   settings: {
-    get: (): Promise<TerminalPreferences> => ipcRenderer.invoke('workspace:settings:get'),
+    get: (): Promise<ProjectedPreferences> => ipcRenderer.invoke('workspace:settings:get'),
     setTerminalFont: (
       fontFamily: string | null,
       fontSize: number | null,
       lineHeight: number | null,
-    ): Promise<TerminalPreferences> =>
+    ): Promise<ProjectedPreferences> =>
       ipcRenderer.invoke('workspace:settings:setTerminalFont', fontFamily, fontSize, lineHeight),
     /**
      * 開／關 GPU 加速（＝終端的 webgl renderer）。`null` ＝回到預設（＝啟用）。
      *
      * 與 `setTerminalFont` 分開 —— 它不是字型偏好。字型偏好不受此影響，反之亦然。
      */
-    setGpuAcceleration: (enabled: boolean | null): Promise<TerminalPreferences> =>
+    setGpuAcceleration: (enabled: boolean | null): Promise<ProjectedPreferences> =>
       ipcRenderer.invoke('workspace:settings:setGpuAcceleration', enabled),
     /** 與 agent 的狀態橋接。只影響其後建立或重建的 session（注入發生在 spawn 當下）。 */
-    setAgentStatus: (enabled: boolean | null): Promise<TerminalPreferences> =>
+    setAgentStatus: (enabled: boolean | null): Promise<ProjectedPreferences> =>
       ipcRenderer.invoke('workspace:settings:setAgentStatus', enabled),
     /**
      * agent session 以哪一種 view 呈現。`null` ＝回到預設（＝終端）。
      *
      * **它是全域的** —— 切換任何一個 agent session 的 view，所有 agent session 一起改變。
      */
-    setAgentView: (view: 'terminal' | 'conversation' | null): Promise<TerminalPreferences> =>
+    setAgentView: (view: 'terminal' | 'conversation' | null): Promise<ProjectedPreferences> =>
       ipcRenderer.invoke('workspace:settings:setAgentView', view),
     /** 系統的等寬字型清單，給設定對話框的下拉選單（Linux 走 fontconfig；其他平台回空陣列）。 */
     listMonospaceFonts: (): Promise<string[]> =>

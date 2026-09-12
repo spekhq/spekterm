@@ -3,53 +3,60 @@
 
 ## 1. 偏好欄位的單一來源
 
-- [ ] 1.1 建立偏好欄位的單一來源表，型別為
+- [x] 1.1 建立偏好欄位的單一來源表，型別為
       `{ [K in keyof Required<TerminalPreferences>]: FieldSpec<Required<TerminalPreferences>[K]> }`
       （**不是 `Record<keyof T, FieldSpec>`** —— 後者會弄丟逐欄位的清理器型別繫結，見 D9），
       每個欄位就三條路徑（怎麼清理／是否屬字型群組／是否送往 renderer）各自作答且**無預設值**；
       驗證方式：`npm run typecheck` 通過
-- [ ] 1.2 `parsePreferences` 改為自該表推導讀入白名單，移除手寫解構清單；
+- [x] 1.2 `parsePreferences` 改為自該表推導讀入白名單，移除手寫解構清單；
       驗證方式：`npm test` 既有的 preferences 測試全綠
-- [ ] 1.3 `setTerminalFont` 改為自該表推導保留清單，移除手寫的 preserve（`:246-258` 三處）；
+- [x] 1.3 `setTerminalFont` 改為自該表推導保留清單，移除手寫的 preserve（`:246-258` 三處）；
       驗證方式：同上
-- [ ] 1.4 **對照組（三個方向，各驗一次）**：(a) 自表移除 `agentStatus`、(b) 某欄位不答
+- [x] 1.4 **對照組（三個方向，各驗一次）**：(a) 自表移除 `agentStatus`、(b) 某欄位不答
       `toRenderer`、(c) 把 `fontFamily` 的清理器換成 `clampSize` —— 三者都要讓
       `npm run typecheck` 確實失敗；確認後還原。**(c) 是 D9 之所以不用 `Record` 的唯一理由，
       少了它就沒有人會發現那個形狀已經被改回去**
-- [ ] 1.5 補回歸測試：`agentStatus` 跨一次 `load()` 仍在（載體：
+- [x] 1.5 補回歸測試：`agentStatus` 跨一次 `load()` 仍在（載體：
       `terminal-preferences` 的「切換後跨重啟保留」）；驗證方式：`npm test`
-- [ ] 1.6 補回歸測試：設定 `agentStatus` 後變更字型，該值仍在（載體：「變更字型不影響該開關」）；
+- [x] 1.6 補回歸測試：設定 `agentStatus` 後變更字型，該值仍在（載體：「變更字型不影響該開關」）；
       驗證方式：`npm test`
-- [ ] 1.7 **對照組**：把 1.2 與 1.3 的修正各自退回一次，確認 1.5 與 1.6 分別變紅
+- [x] 1.7 **對照組**：把 1.2 與 1.3 的修正各自退回一次，確認 1.5 與 1.6 分別變紅
       （兩個失效方向要各驗一次 —— 它們是不同的 bug）
-- [ ] 1.8 檢視 `PreferencesProvider.tsx:106-110` 的三行預設值解析（`?? true` / `!== false` /
-      `?? 'terminal'`）。它不是第四處白名單（回答的是「undefined 代表什麼」），但**同樣漏一個
-      不會紅** —— 決定是否一併由單一來源推導，並把裁決寫進 design；驗證方式：`npm run typecheck`
-- [ ] 1.9 更新 `preferences-store.test.ts:189` 已過時的註解（`agentEvents` 已補、只剩
+- [x] 1.8 預設值語意（「undefined 代表什麼」）**本 change 不做，已轉為 issue #43**。
+      實測共 5 處、跨兩個 realm（`index.ts:202`、`ipc/terminal.ts:126,129`、
+      `PreferencesProvider.tsx:106,108,110`）；收斂需要一個 `src/shared/` 的新模組，
+      是另一個 refactor。裁決已寫進 design 的 D9
+- [x] 1.9 更新 `preferences-store.test.ts:189` 已過時的註解（`agentEvents` 已補、只剩
       `agentStatus`），並移除 `preferences-store.ts:137` 指向 issue 的註解
 
 ## 2. `settings:get` 的逐欄位投影
 
-- [ ] 2.1 `ipc/settings.ts` 的 `settings:get` 改為自 1.1 的表推導逐欄位投影，
-      保持「未設定即省略」；驗證方式：`scripts/probe-workspace.mjs:1713-1715` 那條以
-      `Object.keys(defaultPrefs).length === 0` 為判準的斷言不紅（**投影若把未設定欄位寫成
-      `undefined`／`null`，它當場變紅** —— 這是「未設定即省略」唯一的既有載體）
-- [ ] 2.2 renderer 側（`PreferencesProvider`）隨投影後的型別調整；
+- [x] 2.1 `ipc/settings.ts` **五個**處理常式（`get` ＋ 四個 setter）都改為經 `projectPreferences`
+      逐欄位投影，保持「未設定即省略」。**比原訂的多了四個** —— setter 同樣把套用後的偏好回傳
+      給 renderer，只改 `get` 會留下四個沒有白名單的出口。
+      另外把 `preload/index.ts` 的宣告從 `TerminalPreferences` 窄化為 `ProjectedPreferences`：
+      **renderer 的型別是自 preload 回推的，preload 寫寬了主行程的白名單就只剩執行期效果**
+      （這一條是對照組抓出來的，第一版的註解宣稱了一件假的事）。
+      驗證方式：`npm run probe:workspace` 129/129 全通過，含「損毀的偏好以預設啟動（空偏好）：{}」
+      那條以鍵數為判準的斷言
+- [x] 2.2 renderer 側（`PreferencesProvider`）隨投影後的型別調整；
       驗證方式：`npm run typecheck`
-- [ ] 2.3 新增原始碼守衛 `scripts/settings-projection.test.mjs`：該 IPC 處理常式不得原樣轉手
-      持有偏好的物件；驗證方式：`npm test`
-- [ ] 2.4 **對照組**：把 2.1 退回成 `store.get()` 原樣轉手，確認 2.3 的守衛確實變紅
-- [ ] 2.5 新增單元測試：主行程偏好物件中存在一個未列入投影的欄位時，投影結果不含它
+- [x] 2.3 新增原始碼守衛 `scripts/settings-projection.test.mjs`，**兩個方向**：(a) `ipc/settings.ts`
+      裡每一個 `store.*()` 的回傳值都必須被 `projectPreferences()` 包住（判準是**父節點**，
+      不是「檔案裡有沒有出現那個函式名」）；(b) `preload/index.ts` 不得宣告寬的
+      `TerminalPreferences`；驗證方式：`npm test`
+- [x] 2.4 **對照組（三個）**：(a) `get` 退回原樣轉手、(b) **只**退回一個 setter（其餘仍有投影）、
+      (c) preload 放寬型別 —— 三者各自命中對應的那條測試。(b) 是「五個都要」那條的鑑別力，
+      (c) 是型別窄化真的抵達 renderer 的鑑別力（實測 `TS2339`）
+- [x] 2.5 新增單元測試：主行程偏好物件中存在一個未列入投影的欄位時，投影結果不含它
       （載體：「不在白名單中的欄位不被送出」）；驗證方式：`npm test`
 
 ## 3. watcher 條文與註解的事實校正
 
-- [ ] 3.1 `src/main/watcher.ts:24` 的檔頭註解改為講**比例**而非數目，並補上實際的七個建立點
-      清單（`branch-service.ts:94,133`、`watch-service.ts:250`、
-      `transcript-follow-service.ts:168,198`、`openspec-service.ts:870`、
-      `intake-source.ts:109`）；驗證方式：清單與
-      `grep -rn "createWatcher\|makeWatcher\|watcherFactory" src/` 的結果逐一對得起來
-- [ ] 3.2 確認 `watch-service.test.ts` 釘住顯式 `pollingRoot` 的那條測試仍然存在且會紅
+- [x] 3.1 `src/main/watcher.ts` 的檔頭註解改為講**比例**而非數目，並補上實際七個建立點的表格。
+      順帶修掉 `watch-service.ts:247` 同樣過時的「其餘三個建立點」，並改為指向 `watcher.ts`
+      的檔頭（那裡是唯一該維護那份清單的地方）；驗證方式：清單與 grep 的 7 處逐一對得起來
+- [x] 3.2 確認 `watch-service.test.ts` 釘住顯式 `pollingRoot` 的那條測試仍然存在且會紅
       （孤例看起來很像可以順手清掉的殘留）；驗證方式：暫時移除該處的 `pollingRoot`，
       確認測試變紅，確認後還原
 

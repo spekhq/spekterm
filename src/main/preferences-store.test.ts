@@ -7,6 +7,7 @@ import {
   PREFERENCES_VERSION,
   PreferencesStore,
   parsePreferences,
+  projectPreferences,
   writePreferencesFileAtomic,
 } from './preferences-store'
 
@@ -183,10 +184,57 @@ describe('PreferencesStore：讀寫與持久化', () => {
     assert.deepEqual(store.get(), { fontFamily: 'Fira Code', fontSize: 14, gpuAcceleration: true })
   })
 
+  it('agentStatus 跨一次 load() 還原（issue #39 的讀入那一半）', () => {
+    // **這條與下一條是兩個不同的 bug，必須各驗一次。** 這一條守讀入路徑：漏在讀入白名單中的
+    // 欄位寫得進磁碟卻讀不回來，於是下一次任何 setter 的 save() 整份重寫時把它從磁碟抹掉。
+    // 症狀是「這個開關不跨重啟」，而只驗 setter 回傳值的測試照樣全綠。
+    const first = new PreferencesStore(configPath)
+    first.load()
+    assert.equal(first.get().agentStatus, undefined, '前置：一開始是未設定')
+    first.setAgentStatus(false)
+
+    const second = new PreferencesStore(configPath)
+    second.load()
+    assert.equal(second.get().agentStatus, false)
+  })
+
+  it('設定字型不得抹掉 agentStatus（issue #39 的保留那一半）', () => {
+    // **這條守部分更新路徑**：`setTerminalFont` 自空物件重建 `terminal`，未被保留的欄位於該次
+    // 儲存中被抹除。它與上一條的失效方向相反 —— 只修讀取路徑而漏掉這裡，等於把「完全不生效」
+    // 換成「調一次字型就失效」，而後者更難察覺，因為它在一段時間內是對的。
+    const store = new PreferencesStore(configPath)
+    store.load()
+    store.setAgentStatus(false)
+
+    store.setTerminalFont('Fira Code', 14, null)
+    assert.equal(store.get().agentStatus, false, '改字型不該動到 agent 狀態橋接的開關')
+
+    // 並且它要真的落盤 —— 不只是記憶體裡還在。
+    const reloaded = new PreferencesStore(configPath)
+    reloaded.load()
+    assert.equal(reloaded.get().agentStatus, false)
+  })
+
+  it('agentEvents 跨一次 load() 還原', () => {
+    // `agentEvents` 沒有 setter（它的前提「事件回報已關閉」由直接寫檔造出），因此讀入那一半
+    // 要以寫檔驗。它與 agentStatus 共用同一份欄位表，這條是那份表的回歸。
+    writePreferencesFileAtomic(configPath, {
+      version: PREFERENCES_VERSION,
+      terminal: { agentEvents: false },
+    })
+    const store = new PreferencesStore(configPath)
+    store.load()
+    assert.equal(store.get().agentEvents, false)
+
+    // 改字型之後仍在（保留那一半）。
+    store.setTerminalFont('Fira Code', 14, null)
+    assert.equal(store.get().agentEvents, false, '改字型不該動到事件橋接的開關')
+  })
+
   it('agentView 跨一次 load() 還原 —— 只驗 setter 的回傳值不算', () => {
-    // **必須跨 `load()`。** `parsePreferences` 的解構清單是第二處白名單，型別檢查對它零感知：
-    // 漏在那裡的欄位寫得進磁碟卻讀不回來，而只驗 setter 回傳值的測試照樣全綠
-    // （`agentStatus` / `agentEvents` 目前就是這個狀態）。
+    // **必須跨 `load()`。** 讀入的白名單是三條路徑之一，而型別檢查曾經對它零感知：
+    // 漏在那裡的欄位寫得進磁碟卻讀不回來，而只驗 setter 回傳值的測試照樣全綠。
+    // 三條路徑現已自 `PREFERENCE_FIELDS` 推導（漏一個是編譯錯誤），這幾條是那份表的回歸。
     const first = new PreferencesStore(configPath)
     first.load()
     assert.equal(first.get().agentView, undefined, '前置：一開始是未設定')
@@ -392,5 +440,36 @@ describe('變更字型不抹掉 agentEvents', () => {
     } finally {
       fs.rmSync(file, { force: true })
     }
+  })
+})
+
+describe('projectPreferences：送往 renderer 的逐欄位白名單', () => {
+  it('未宣告送往 renderer 的欄位不出現在投影中', () => {
+    // `agentEvents` 的 `toRenderer` 是 `false` —— renderer 從不讀它（只有主行程的注入路徑讀）。
+    // **這條是白名單真的在做事的證據**：它在主行程的偏好裡，卻不在投影裡。
+    const projected = projectPreferences({
+      fontFamily: 'Fira Code',
+      agentStatus: false,
+      agentEvents: false,
+    })
+
+    assert.equal('agentEvents' in projected, false, 'agentEvents 不該送到 renderer')
+    assert.deepEqual(projected, { fontFamily: 'Fira Code', agentStatus: false })
+  })
+
+  it('未設定的欄位於投影中省略，而非成為 undefined', () => {
+    // **不是風格問題**：`probe:workspace` 有一條以「空偏好的鍵數為 0」為判準的斷言
+    // （`scripts/probe-workspace.mjs` 的「損毀的偏好以預設啟動（空偏好）」），
+    // 把未設定欄位寫成 `undefined` 會讓它當場變紅。
+    assert.equal(Object.keys(projectPreferences({})).length, 0)
+
+    const partial = projectPreferences({ fontSize: 14 })
+    assert.deepEqual(Object.keys(partial), ['fontSize'])
+  })
+
+  it('投影不是同一個物件 —— 改它不影響主行程持有的偏好', () => {
+    const source = { fontFamily: 'Fira Code' }
+    const projected = projectPreferences(source)
+    assert.notEqual(projected, source)
   })
 })

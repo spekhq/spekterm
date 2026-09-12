@@ -113,6 +113,132 @@ function sanitizeAgentView(value: unknown): 'terminal' | 'conversation' | undefi
 }
 
 /**
+ * 布林偏好的清理：**只認真正的布林**，其餘一律視為未設定。
+ *
+ * 與 `sanitizeAgentView` 同一條理由 —— 檔案裡的 `"false"` / `0` 之類的東西不硬轉成 `false`，
+ * 因為「檔案壞了」與「使用者關掉了」不是同一件事。前者的正確處置是回到未設定，
+ * 讓「未設定＝啟用」那條規則去決定，於是只有一個地方在決定。
+ */
+function sanitizeBoolean(value: unknown): boolean | undefined {
+  return typeof value === 'boolean' ? value : undefined
+}
+
+/** 一個偏好欄位必須回答的三件事。**沒有任何一個有預設值** —— 見 `PREFERENCE_FIELDS`。 */
+interface FieldSpec<T> {
+  /**
+   * 不受信任的值 → 該欄位的值，或未設定。
+   *
+   * **回傳型別與欄位的值型別相繫，這是承重的**：若這裡寫成 `(value: unknown) => unknown`，
+   * 把 `fontFamily` 接上 `clampSize` 就不再是型別錯誤 —— 那會用一個新的靜默失效
+   * （表是單一來源，但每一格接錯無人知）換掉舊的那個。
+   */
+  sanitize: (value: unknown) => T | undefined
+  /**
+   * 屬於字型群組嗎？`setTerminalFont` 自空物件重建 `terminal` 時，**只有字型群組的欄位由參數
+   * 決定，其餘一律自當前偏好保留**。
+   */
+  group: 'font' | 'other'
+  /** 送往 renderer 嗎？ */
+  toRenderer: boolean
+}
+
+/**
+ * 偏好欄位的**單一來源**。三條路徑全部自這裡推導：自磁碟讀入（`parsePreferences`）、
+ * 部分更新時的保留（`setTerminalFont`）、送往 renderer（`projectPreferences`）。
+ *
+ * ## 它取代的是一條已經失效過的紀律
+ *
+ * 那三處此前是三份各自維護的清單，而**型別檢查對它們零感知**：漏在讀入清單中的欄位寫得進
+ * 磁碟卻讀不回來（症狀是「這個偏好不跨重啟」），漏在保留清單中的欄位會在使用者改一次字型時
+ * 被抹掉（症狀是「這個開關會自己彈回去」）。**兩種失效都沒有任何東西會變紅，而 `agentStatus`
+ * 兩處都漏了**（issue #39）。
+ *
+ * `satisfies` 使三件事成為編譯錯誤：少一個欄位、某欄位漏答一個問題、多一個型別上不存在的欄位。
+ *
+ * > **不要把型別改寫成 `Record<keyof TerminalPreferences, FieldSpec>`。** 它讀起來等價，
+ * > 但 `Record` 的鍵型別受限於 `keyof any` 而非 `keyof T`，於是它不是 homomorphic mapped
+ * > type，`FieldSpec` 也就拿不到逐欄位的 `T` —— 清理器接到錯的欄位上**零錯誤**。
+ *
+ * ## 三個答案都必須被明確作答
+ *
+ * 特別是 `toRenderer`：一個沉默的預設會讓下一個機密欄位靜默地流到 renderer，
+ * 而 renderer 渲染的是不受信任的內容。**`agentEvents` 是 `false`，因為 renderer 從不讀它**
+ * （只有主行程的注入路徑讀）—— 這不是保守起見，是它真的不需要。
+ */
+const PREFERENCE_FIELDS = {
+  fontFamily: { sanitize: sanitizeFamily, group: 'font', toRenderer: true },
+  fontSize: { sanitize: clampSize, group: 'font', toRenderer: true },
+  lineHeight: { sanitize: clampLineHeight, group: 'font', toRenderer: true },
+  gpuAcceleration: { sanitize: sanitizeBoolean, group: 'other', toRenderer: true },
+  agentStatus: { sanitize: sanitizeBoolean, group: 'other', toRenderer: true },
+  agentEvents: { sanitize: sanitizeBoolean, group: 'other', toRenderer: false },
+  agentView: { sanitize: sanitizeAgentView, group: 'other', toRenderer: true },
+} satisfies {
+  [K in keyof Required<TerminalPreferences>]: FieldSpec<Required<TerminalPreferences>[K]>
+}
+
+type PreferenceKey = keyof typeof PREFERENCE_FIELDS
+
+/**
+ * 字型群組的欄位，**自 `PREFERENCE_FIELDS` 的 `group` 反推**。
+ *
+ * 它讓 `setTerminalFont` 的參數組在型別上完整：往表裡新增一個 `group: 'font'` 的欄位時，
+ * 那個方法裡的參數物件會少一個鍵而**編譯失敗**。少了這層，新欄位會落進「不由參數決定、
+ * 也不被保留」的縫裡 —— 每改一次字型就被清掉一次。
+ */
+type FontField = {
+  [K in PreferenceKey]: (typeof PREFERENCE_FIELDS)[K]['group'] extends 'font' ? K : never
+}[PreferenceKey]
+
+const PREFERENCE_KEYS = Object.keys(PREFERENCE_FIELDS) as PreferenceKey[]
+
+/**
+ * 把一個欄位寫進偏好物件（未設定則不寫 —— 「未設定即省略」）。
+ *
+ * **這是唯一需要放寬型別的地方，而放寬是安全的**：`PREFERENCE_FIELDS` 已經在型別上把每個
+ * 欄位的清理器與該欄位的值型別繫在一起，這裡只是把「走訪一個物件時失去的鍵—值關聯」補回來。
+ */
+function assignField(target: TerminalPreferences, key: PreferenceKey, value: unknown): void {
+  if (value === undefined) return
+  ;(target as Record<string, unknown>)[key] = value
+}
+
+/** 送往 renderer 的欄位，**自 `PREFERENCE_FIELDS` 的 `toRenderer` 反推**。 */
+type RendererField = {
+  [K in PreferenceKey]: (typeof PREFERENCE_FIELDS)[K]['toRenderer'] extends true ? K : never
+}[PreferenceKey]
+
+/**
+ * renderer 看得到的偏好。**它是一個比 `TerminalPreferences` 窄的型別**，而那道窄化是承重的：
+ * renderer 讀一個未宣告要送出的欄位是**編譯錯誤**，不是一個在執行期恰好是 `undefined` 的值。
+ *
+ * 執行期的白名單擋得住「欄位被送出去」，擋不住「有人寫了讀它的程式碼、而它永遠是 undefined」
+ * —— 後者的症狀是一個安靜地永遠走 else 分支的判斷。
+ */
+export type ProjectedPreferences = Pick<TerminalPreferences, RendererField>
+
+/**
+ * 送往 renderer 的投影：**逐欄位白名單**，且保持「未設定即省略」。
+ *
+ * **不可改回原樣轉手整個物件。** 那樣的話，任何日後加進偏好的欄位 —— 包含機密 ——
+ * 都會零改動、零紅燈地送到 renderer。這條由 `scripts/settings-projection.test.mjs` 守著。
+ *
+ * **五個 IPC 處理常式都要經過這裡，不只 `settings:get`** —— 四個 setter 同樣把套用後的偏好
+ * 回傳給 renderer，漏掉任一個，那條路就是一個沒有白名單的出口。
+ *
+ * 「未設定即省略」不是風格：`probe:workspace` 有一條以「空偏好的鍵數為 0」為判準的斷言，
+ * 把未設定欄位寫成 `undefined` 會讓它當場變紅。
+ */
+export function projectPreferences(preferences: TerminalPreferences): ProjectedPreferences {
+  const projected: TerminalPreferences = {}
+  for (const key of PREFERENCE_KEYS) {
+    if (!PREFERENCE_FIELDS[key].toRenderer) continue
+    assignField(projected, key, preferences[key])
+  }
+  return projected
+}
+
+/**
  * 內容無法信任時一律回傳 `null`，由呼叫端隔離該檔並以預設偏好啟動。
  *
  * **對結構嚴格，對值寬容**：version 不符、`terminal` 不是物件 → `null`（整檔不可信，隔離）；
@@ -132,26 +258,14 @@ export function parsePreferences(raw: string): PersistedPreferences | null {
   if (version !== PREFERENCES_VERSION) return null
   if (typeof terminal !== 'object' || terminal === null) return null
 
-  // **這份解構清單是第二處白名單，而型別檢查對它零感知。** 加了欄位卻沒加在這裡，
-  // 該欄位就寫得進磁碟卻讀不回來 —— 症狀是「這個偏好不跨重啟」，而沒有任何東西會紅。
-  // （`agentStatus` 目前仍漏在這裡，見 issue；`agentEvents` 已由 `agent-intake-inbox` 補上
-  // —— 它依賴「事件回報已關閉」這個前提，而那個前提原本在產品與驗收裡都造不出來。）
-  const { fontFamily, fontSize, lineHeight, gpuAcceleration, agentView, agentEvents } =
-    terminal as Record<string, unknown>
+  // 讀入的白名單**自 `PREFERENCE_FIELDS` 推導**，不是一份手寫的解構清單。此前它是手寫的，
+  // 而型別檢查對它零感知 —— 漏在那裡的欄位寫得進磁碟卻讀不回來，症狀是「這個偏好不跨重啟」，
+  // 而沒有任何東西會紅（`agentStatus` 就是這樣漏了一輪，見 issue #39）。
+  const source = terminal as Record<string, unknown>
   const parsed: TerminalPreferences = {}
-  const family = sanitizeFamily(fontFamily)
-  const size = clampSize(fontSize)
-  const height = clampLineHeight(lineHeight)
-  if (family !== undefined) parsed.fontFamily = family
-  if (size !== undefined) parsed.fontSize = size
-  if (height !== undefined) parsed.lineHeight = height
-  // 只認真正的布林 —— 檔案裡的 `"false"`／`0` 之類的東西一律當成未設定（＝預設啟用），
-  // 而不是把它們硬轉成 false 而把 GPU 關掉。
-  if (typeof gpuAcceleration === 'boolean') parsed.gpuAcceleration = gpuAcceleration
-  const view = sanitizeAgentView(agentView)
-  if (view !== undefined) parsed.agentView = view
-  // 同 `gpuAcceleration`：只認真正的布林。
-  if (typeof agentEvents === 'boolean') parsed.agentEvents = agentEvents
+  for (const key of PREFERENCE_KEYS) {
+    assignField(parsed, key, PREFERENCE_FIELDS[key].sanitize(source[key]))
+  }
 
   return { version: PREFERENCES_VERSION, terminal: parsed }
 }
@@ -231,30 +345,29 @@ export class PreferencesStore {
     fontSize: number | null,
     lineHeight: number | null,
   ): TerminalPreferences {
-    const next: TerminalPreferences = {}
-    const family = fontFamily === null ? undefined : sanitizeFamily(fontFamily)
-    const size = fontSize === null ? undefined : clampSize(fontSize)
-    const height = lineHeight === null ? undefined : clampLineHeight(lineHeight)
-    if (family !== undefined) next.fontFamily = family
-    if (size !== undefined) next.fontSize = size
-    if (height !== undefined) next.lineHeight = height
+    // 字型群組的參數組。**它的型別自 `PREFERENCE_FIELDS` 的 `group` 反推** —— 往表裡新增一個
+    // `group: 'font'` 的欄位時，這個物件會少一個鍵而編譯失敗，於是新欄位不會落進
+    // 「不由參數決定、也不被保留」的縫裡（那條縫的症狀是每改一次字型就被清掉一次）。
+    const incoming: { [K in FontField]: TerminalPreferences[K] | null } = {
+      fontFamily,
+      fontSize,
+      lineHeight,
+    }
 
-    // **GPU 偏好必須明確保留 —— 這個方法從一個空物件開始重建 `terminal`。**
-    // 少了這一行，使用者每改一次字型就會**靜默地把 GPU 偏好重設回預設**：他關掉了 GPU（因為
-    // 驅動有問題、畫面是壞的），接著調一下字級，GPU 就自己開回來了 —— 而那正是他關掉它的原因。
-    // 這個方法只管字型。
-    if (this.preferences.gpuAcceleration !== undefined) {
-      next.gpuAcceleration = this.preferences.gpuAcceleration
-    }
-    // **view 的選擇同理必須保留。** 少了這一行：使用者切到對話 view，接著開設定調一次字級，
-    // 畫面就**靜默地跳回終端** —— 沒有錯誤、沒有型別問題，看起來像「這個開關會自己彈回去」。
-    if (this.preferences.agentView !== undefined) {
-      next.agentView = this.preferences.agentView
-    }
-    // **事件回報的開關同理。** 只修讀取路徑而漏掉這裡，等於把「完全不生效」的缺陷換成
-    // 「調一次字型就失效」—— 後者更難察覺，因為它在一段時間內是對的。
-    if (this.preferences.agentEvents !== undefined) {
-      next.agentEvents = this.preferences.agentEvents
+    const next: TerminalPreferences = {}
+    for (const key of PREFERENCE_KEYS) {
+      const spec = PREFERENCE_FIELDS[key]
+      if (spec.group === 'font') {
+        // `null` ＝明確清為預設；不合法的值由清理器退回未設定。
+        const raw = incoming[key as FontField]
+        assignField(next, key, raw === null ? undefined : spec.sanitize(raw))
+        continue
+      }
+      // **非字型的偏好一律自當前值保留 —— 這個方法只管字型。**
+      // 此前這裡是三行手寫的保留，而漏一行的症狀是靜默的：使用者關掉了 GPU（因為驅動有問題、
+      // 畫面是壞的），接著調一下字級，GPU 就自己開回來了 —— 而那正是他關掉它的原因。
+      // 改為自表推導之後，「忘記保留新欄位」表達不出來。
+      assignField(next, key, this.preferences[key])
     }
 
     this.preferences = next

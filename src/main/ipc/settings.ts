@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process'
 import { ipcMain } from 'electron'
-import type { PreferencesStore, TerminalPreferences } from '../preferences-store'
+import { type ProjectedPreferences, projectPreferences } from '../preferences-store'
+import type { PreferencesStore } from '../preferences-store'
 
 export const SETTINGS_CHANNELS = {
   get: 'workspace:settings:get',
@@ -49,14 +50,25 @@ function listMonospaceFonts(): Promise<string[]> {
 }
 
 /**
- * 使用者偏好的讀寫。本輪只有終端字型。
+ * 使用者偏好的讀寫。
  *
  * **值的驗證在 store**（`setTerminalFont` 會清理 family、夾制 size）—— 一個被入侵或有 bug 的
  * renderer 可送出任意型別，store 的 `sanitizeFamily`／`clampSize` 對非字串／非數字皆退回未設定，
  * 因此這裡不需要另做型別 guard。回傳套用後的偏好，讓 renderer 立即以之更新終端。
+ *
+ * ## 每一條往 renderer 的回傳都經 `projectPreferences`
+ *
+ * **不可原樣轉手 `store` 的回傳值。** 那個物件是主行程持有的完整偏好，而這裡是它通往 renderer
+ * 的唯一出口 —— 原樣轉手的話，任何日後加進偏好的欄位（**包含機密**）都會零改動、零紅燈地送到
+ * renderer，而 renderer 渲染的是不受信任的內容。
+ *
+ * **五個處理常式都要經過它，不只 `get`** —— 四個 setter 同樣把套用後的偏好回傳，漏掉任一個，
+ * 那條路就是一個沒有白名單的出口。這條由 `scripts/settings-projection.test.mjs` 守著。
  */
 export function registerSettingsHandlers(store: PreferencesStore): void {
-  ipcMain.handle(SETTINGS_CHANNELS.get, (): TerminalPreferences => store.get())
+  ipcMain.handle(SETTINGS_CHANNELS.get, (): ProjectedPreferences =>
+    projectPreferences(store.get()),
+  )
 
   ipcMain.handle(
     SETTINGS_CHANNELS.setTerminalFont,
@@ -65,27 +77,30 @@ export function registerSettingsHandlers(store: PreferencesStore): void {
       fontFamily: string | null,
       fontSize: number | null,
       lineHeight: number | null,
-    ): TerminalPreferences => store.setTerminalFont(fontFamily, fontSize, lineHeight),
+    ): ProjectedPreferences =>
+      projectPreferences(store.setTerminalFont(fontFamily, fontSize, lineHeight)),
   )
 
   // 值的驗證同樣在 store（只認真正的布林；其餘一律當成未設定＝預設啟用）。
   ipcMain.handle(
     SETTINGS_CHANNELS.setAgentStatus,
-    (_event, enabled: unknown): TerminalPreferences =>
-      store.setAgentStatus(typeof enabled === 'boolean' ? enabled : null),
+    (_event, enabled: unknown): ProjectedPreferences =>
+      projectPreferences(store.setAgentStatus(typeof enabled === 'boolean' ? enabled : null)),
   )
 
   // 值的白名單同樣在 store（只認那兩個字面值；其餘一律當成未設定＝預設的終端 view）。
   ipcMain.handle(
     SETTINGS_CHANNELS.setAgentView,
-    (_event, view: unknown): TerminalPreferences =>
-      store.setAgentView(view === 'terminal' || view === 'conversation' ? view : null),
+    (_event, view: unknown): ProjectedPreferences =>
+      projectPreferences(
+        store.setAgentView(view === 'terminal' || view === 'conversation' ? view : null),
+      ),
   )
 
   ipcMain.handle(
     SETTINGS_CHANNELS.setGpuAcceleration,
-    (_event, enabled: boolean | null): TerminalPreferences =>
-      store.setGpuAcceleration(typeof enabled === 'boolean' ? enabled : null),
+    (_event, enabled: boolean | null): ProjectedPreferences =>
+      projectPreferences(store.setGpuAcceleration(typeof enabled === 'boolean' ? enabled : null)),
   )
 
   ipcMain.handle(SETTINGS_CHANNELS.listMonospaceFonts, (): Promise<string[]> =>

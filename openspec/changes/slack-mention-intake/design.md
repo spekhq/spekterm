@@ -226,9 +226,13 @@ unknown }` 之後，把 `fontFamily` 配上 `clampSize`、`fontSize` 配上 `san
 - **這條必須跑對照組，而且是三個方向**：拿掉一個欄位、漏答一個答案、把清理器接錯。
   一個「拿掉之後沒有任何東西會紅」的防護就是一個遲早會被拿掉的防護
   （`i18next.d.ts` 那條教訓的同一形狀）。
-- 順帶：`PreferencesProvider.tsx:106-110` 的三行預設值解析（`?? true` / `!== false` /
-  `?? 'terminal'`）**不是**第四處白名單（它回答的是「undefined 代表什麼」），
-  但它同樣是**漏一個不會紅**。收斂時一併看。
+- **預設值語意（「undefined 代表什麼」）不在本 change 的範圍內，已轉為 issue #43。**
+  它**不是**第四處白名單，而是另一個問題，但同樣是漏一個不會紅 —— 實測共 **5 處、跨兩個
+  realm**：`index.ts:202`、`ipc/terminal.ts:126,129`、`PreferencesProvider.tsx:106,108,110`。
+  不在本 change 做的理由是結構性的：renderer 不能 import 主行程的模組，收斂需要一個
+  `src/shared/` 的新模組，那是另一個 refactor。
+  （`PreferencesProvider.tsx:25` 的註解本身就寫著這個危害，當時的處置是「收斂到 provider」
+  —— 而主行程有它自己的三份。）
 
 ### D10 連線與授權的失效必須使用者看得見
 
