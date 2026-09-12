@@ -6,6 +6,7 @@ import type { IntakeSnapshot, IntakeView } from '../../../../main/ipc/intake'
 import { useSessions } from '../terminal/sessions'
 import { useWorkspaceFolders } from '../useWorkspaceFolders'
 import { RulesEditor } from './RulesEditor'
+import { SlackSettings } from './SlackSettings'
 
 /**
  * 收件匣的全視窗 overlay。
@@ -37,7 +38,7 @@ import { RulesEditor } from './RulesEditor'
  * 抹掉，**而 pty 還活著**。建好之後以 `attach` 回報，主行程才寫 context 檔並排定預填。
  */
 
-type Tab = 'inbox' | 'rules'
+type Tab = 'inbox' | 'rules' | 'slack'
 
 export interface IntakeOverlayProps {
   onClose: () => void
@@ -138,6 +139,21 @@ export function IntakeOverlay({ onClose, opener }: IntakeOverlayProps): React.JS
           >
             {t('intake.rules.label')}
           </button>
+          {/*
+            Slack 連線設定的家。**刻意不放在終端偏好對話框裡** —— 那個對話框的內容由
+            `terminal-preferences` 以列舉的方式規定，往其中加入本能力的區段將構成對該能力的修改
+            （`intake-routing` 已就規則的編輯入口立下同一條約束）。
+            兩份既有規格都沒有列舉這個 overlay 的分頁，因此加在這裡不構成對它們的修改。
+          */}
+          <button
+            type="button"
+            role="tab"
+            aria-selected={tab === 'slack'}
+            onClick={() => setTab('slack')}
+            className={tabClass(tab === 'slack')}
+          >
+            {t('slack.label')}
+          </button>
         </div>
         <span className="flex-1" />
         <span className="text-2xs text-ink-faint">
@@ -184,7 +200,9 @@ export function IntakeOverlay({ onClose, opener }: IntakeOverlayProps): React.JS
           </div>
         ) : null}
 
-        {tab === 'rules' ? (
+        {tab === 'slack' ? (
+          <SlackSettings />
+        ) : tab === 'rules' ? (
           <RulesEditor />
         ) : items.length === 0 ? (
           <p className="text-2xs text-ink-faint">{t('intake.empty')}</p>

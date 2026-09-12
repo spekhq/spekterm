@@ -39,26 +39,56 @@ import ts from 'typescript'
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..')
 
-const SETTINGS_IPC = join('src', 'main', 'ipc', 'settings.ts')
 const PRELOAD = join('src', 'preload', 'index.ts')
-
-/** 投影的函式名 —— 唯一允許把偏好交給 renderer 的形狀。 */
-const PROJECTOR = 'projectPreferences'
-
-/** 持有完整偏好的那個東西在 `ipc/settings.ts` 裡的識別碼。 */
-const STORE = 'store'
 
 /** 寬的型別名 —— preload 宣告它即違規。 */
 const WIDE_TYPE = 'TerminalPreferences'
 
 /**
- * `ipc/settings.ts`：找出沒有被 `projectPreferences()` 包住的 `store.*()` 回傳值。
+ * 每一條「設定 → renderer」的路徑各一條規則。
  *
- * 判準是**父節點**：`store.get()` 合法的唯一位置是 `projectPreferences(store.get())` 的引數。
- * 不看「有沒有出現 projectPreferences」—— 那種寫法對
- * `projectPreferences(store.get()); return store.get()` 一樣會通過。
+ * `fullObjectMethods` 是**回傳整份設定物件**的那些方法 —— 只有它們需要被投影包住。
+ * 回傳純量的（`apiBaseUrl()`、`lookbackDays()`、`usesDefaultEndpoint()`）不在此列：
+ * 它們本身就是衍生事實，包住反而說不通。
+ *
+ * **`storeModule` 是給守衛自己用的**：每一個列在 `fullObjectMethods` 的名字都必須真的存在於
+ * 那個模組裡。少了這道檢查，一次方法改名會讓守衛**靜默地不再比對到任何東西** ——
+ * 它會全綠，而它守的性質已經沒了。那正是這個 repo 最常見的假綠形狀。
  */
-export function findUnprojectedStoreReads(source, fileName = 'settings.ts') {
+const PROJECTION_RULES = [
+  {
+    file: join('src', 'main', 'ipc', 'settings.ts'),
+    storeModule: join('src', 'main', 'preferences-store.ts'),
+    receiver: 'store',
+    projector: 'projectPreferences',
+    fullObjectMethods: [
+      'get',
+      'setTerminalFont',
+      'setAgentStatus',
+      'setAgentView',
+      'setGpuAcceleration',
+    ],
+  },
+  {
+    file: join('src', 'main', 'slack-state.ts'),
+    storeModule: join('src', 'main', 'slack-settings-store.ts'),
+    receiver: 'settings',
+    projector: 'projectSlackSettings',
+    fullObjectMethods: ['get'],
+  },
+]
+
+/**
+ * 找出沒有被投影包住的「整份設定」讀取。
+ *
+ * 判準是**父節點**：合法的唯一位置是投影函式的引數。不看「檔案裡有沒有出現投影函式」——
+ * 那種寫法對 `project(store.get()); return store.get()` 一樣會通過。
+ */
+export function findUnprojectedStoreReads(
+  source,
+  fileName = 'settings.ts',
+  { receiver = 'store', projector = 'projectPreferences', fullObjectMethods = null } = {},
+) {
   const sourceFile = ts.createSourceFile(fileName, source, ts.ScriptTarget.Latest, true)
   const found = []
   const at = (node) => sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1
@@ -68,14 +98,15 @@ export function findUnprojectedStoreReads(source, fileName = 'settings.ts') {
       ts.isCallExpression(node) &&
       ts.isPropertyAccessExpression(node.expression) &&
       ts.isIdentifier(node.expression.expression) &&
-      node.expression.expression.text === STORE
+      node.expression.expression.text === receiver &&
+      (fullObjectMethods === null || fullObjectMethods.includes(node.expression.name.text))
     ) {
       const parent = node.parent
       const wrapped =
         parent !== undefined &&
         ts.isCallExpression(parent) &&
         ts.isIdentifier(parent.expression) &&
-        parent.expression.text === PROJECTOR &&
+        parent.expression.text === projector &&
         parent.arguments.includes(node)
       if (!wrapped) {
         found.push({ line: at(node), kind: 'unprojected-store-read', method: node.expression.name.text })
@@ -114,18 +145,40 @@ export function findWideTypeUses(source, fileName = 'index.ts') {
   return found
 }
 
-test('偏好送往 renderer 的每一條路都經逐欄位投影', () => {
-  const source = readFileSync(join(repoRoot, SETTINGS_IPC), 'utf8')
-  const offenders = findUnprojectedStoreReads(source, SETTINGS_IPC)
+test('設定送往 renderer 的每一條路都經逐欄位投影', () => {
+  for (const rule of PROJECTION_RULES) {
+    const source = readFileSync(join(repoRoot, rule.file), 'utf8')
+    const offenders = findUnprojectedStoreReads(source, rule.file, rule)
 
-  assert.deepEqual(
-    offenders,
-    [],
-    `${SETTINGS_IPC} 的每一個 store.*() 回傳值都必須被 ${PROJECTOR}() 包住 —— 含四個 setter，\n` +
-      '它們同樣把套用後的偏好回傳給 renderer。原樣轉手的話，日後加進偏好的任何欄位\n' +
-      '（包含機密）都會零改動、零紅燈地送到 renderer。\n\n' +
-      offenders.map((hit) => `${SETTINGS_IPC}:${hit.line}: store.${hit.method}()`).join('\n'),
-  )
+    assert.deepEqual(
+      offenders,
+      [],
+      `${rule.file} 中每一個回傳整份設定的呼叫都必須被 ${rule.projector}() 包住 ——\n` +
+        '含 setter：它們同樣把套用後的設定回傳給 renderer。原樣轉手的話，\n' +
+        '日後加進那個物件的任何欄位（包含機密）都會零改動、零紅燈地送到 renderer。\n\n' +
+        offenders
+          .map((hit) => `${rule.file}:${hit.line}: ${rule.receiver}.${hit.method}()`)
+          .join('\n'),
+    )
+  }
+})
+
+test('守衛自己沒有失效：列出的方法都真的存在於 store 模組中', () => {
+  // **少了這道檢查，一次方法改名會讓上一條測試靜默地不再比對到任何東西** —— 它會全綠，
+  // 而它守的性質已經沒了。這是這個 repo 最常見的假綠形狀（「測試沒有在測它自稱在測的東西」）。
+  for (const rule of PROJECTION_RULES) {
+    const storeSource = readFileSync(join(repoRoot, rule.storeModule), 'utf8')
+    const missing = rule.fullObjectMethods.filter(
+      (name) => !new RegExp(`^\\s{2}(?:#)?${name}\\s*\\(`, 'm').test(storeSource),
+    )
+    assert.deepEqual(
+      missing,
+      [],
+      `${rule.storeModule} 中找不到這些方法：${missing.join('、')}\n` +
+        '它們列在這道守衛的 fullObjectMethods 裡。名字對不上時守衛會靜默失效，\n' +
+        '所以請更新這份清單（而不是讓它繼續全綠）。',
+    )
+  }
 })
 
 test('preload 宣告窄的投影型別，於是窄化抵達 renderer', () => {
@@ -166,6 +219,14 @@ test('對照組：原樣轉手的四種形狀各自被抓到', () => {
   // 包在別的函式裡不算 —— 那不是投影。
   const wrongWrapper = findUnprojectedStoreReads('ipcMain.handle(C.get, () => structuredClone(store.get()))')
   assert.equal(wrongWrapper.length, 1, '包在別的函式裡應被抓到')
+
+  // Slack 那條規則的接收端與投影函式都不同名，同樣要抓到。
+  const slack = findUnprojectedStoreReads('const s = settings.get()', 'slack.ts', {
+    receiver: 'settings',
+    projector: 'projectSlackSettings',
+    fullObjectMethods: ['get'],
+  })
+  assert.equal(slack.length, 1, '另一條路徑的原樣轉手應被抓到')
 })
 
 test('對照組：preload 放寬型別的兩種形狀各自被抓到', () => {
@@ -192,6 +253,19 @@ test('對照組：合法的寫法不被誤報', () => {
     ].join('\n'),
   )
   assert.deepEqual(ok, [], `合法的投影被誤報：${JSON.stringify(ok)}`)
+
+  // **回傳純量的方法不必被包住** —— 它們本身就是衍生事實，包住反而說不通。
+  const scalars = findUnprojectedStoreReads(
+    [
+      'const base = settings.apiBaseUrl()',
+      'const days = settings.lookbackDays()',
+      'const isDefault = settings.usesDefaultEndpoint()',
+      'const wrapped = projectSlackSettings(settings.get())',
+    ].join('\n'),
+    'slack.ts',
+    { receiver: 'settings', projector: 'projectSlackSettings', fullObjectMethods: ['get'] },
+  )
+  assert.deepEqual(scalars, [], `回傳純量的方法被誤報：${JSON.stringify(scalars)}`)
 
   const preloadOk = findWideTypeUses(
     [

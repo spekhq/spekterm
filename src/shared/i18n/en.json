@@ -52,7 +52,10 @@
     "back": "‹ Back",
     "path": "Path",
     "expand": "Expand",
-    "collapse": "Collapse"
+    "collapse": "Collapse",
+    "save": "Save",
+    "clear": "Clear",
+    "reset": "Reset"
   },
   "stage": {
     "label": "Main stage",
@@ -571,5 +574,31 @@
     "itemLabel": "Inbox item: {{title}}",
     "dismissNotices": "Clear",
     "close": "Close inbox"
+  },
+  "slack": {
+    "label": "Slack",
+    "title": "Slack connection",
+    "description": "Detects when someone mentions you in Slack and delivers it to this inbox. You still read it and press send yourself.",
+    "appToken": "App-level token",
+    "userToken": "User token",
+    "tokenPlaceholder": "Paste token",
+    "tokenSet": "Set",
+    "tokenUnset": "Not set",
+    "clearToken": "Clear {{name}}",
+    "saveToken": "Save {{name}}",
+    "identity": "Identity",
+    "connectedAs": "Connected as {{user}} in {{team}}",
+    "notConnected": "Not connected yet — the identity comes from the token, there is nothing to fill in.",
+    "lookback": "Look-back window",
+    "lookbackDays_one": "{{count}} day",
+    "lookbackDays_other": "{{count}} days",
+    "lookbackHint": "How far back to search on startup. Mentions older than this are missed — Slack does not replay events while the app is closed.",
+    "endpoint": "API endpoint",
+    "endpointDefault": "Default",
+    "endpointCustom": "Custom endpoint in use — your credentials are sent here",
+    "endpointPlaceholder": "https://slack.com/api",
+    "endpointHint": "Only https is accepted. Change this only if you know why: it is where your credentials are sent.",
+    "resetEndpoint": "Reset to the default endpoint",
+    "routingHint": "Set a routing fallback under Rules, otherwise every mention arrives with no folder to open in."
   }
 }

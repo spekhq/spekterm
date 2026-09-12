@@ -43,7 +43,7 @@
  */
 import assert from 'node:assert/strict'
 import { readFileSync, readdirSync } from 'node:fs'
-import { dirname, join, relative } from 'node:path'
+import { dirname, join, relative, sep as path_sep } from 'node:path'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
 import ts from 'typescript'
@@ -83,6 +83,24 @@ const REVEAL_ALLOWLIST = [SECRET_MODULE]
 
 /** `reveal()` 的方法名。 */
 const REVEAL = 'reveal'
+
+/**
+ * 端點的寫入方法，與**唯一**允許呼叫它的模組。
+ *
+ * `secret-scope` 要求端點「只能由使用者明確操作改動，SHALL NOT 由投遞內容、routing 規則或
+ * 任何其他外部輸入寫入」。它是**憑證的目的地**（使用者裁決把它做成設定項），所以那條要求
+ * 必須是結構性的：只有那個綁在使用者動作上的 IPC 處理常式可以呼叫它。
+ *
+ * **定義域限於 `src/main/**`，而那是刻意的。** 威脅是「主行程用不受信任的輸入寫端點」——
+ * 投遞的本文、routing 規則、環境變數。renderer 的呼叫是**點擊處理常式**，它就是那個
+ * 「使用者明確操作」；而它寫進去的值仍然要過主行程的 scheme 白名單。
+ * 把 renderer 一併納入只會讓這道守衛擋住它該允許的那條路。
+ */
+const ENDPOINT_SETTER = 'setApiBaseUrl'
+const ENDPOINT_WRITERS = [
+  join('src', 'main', 'ipc', 'slack.ts'),
+  join('src', 'main', 'slack-settings-store.ts'),
+]
 
 /** 機密模組的 import 路徑長什麼樣（`./secret-store`、`../secret-store`…）。 */
 const SECRET_MODULE_SPECIFIER = /(^|\/)secret-store$/
@@ -165,6 +183,26 @@ export function findSecretImports(source, fileName = 'sample.ts') {
           : undefined
     if (spec !== undefined && ts.isStringLiteral(spec) && SECRET_MODULE_SPECIFIER.test(spec.text)) {
       found.push({ line: lineOf(sourceFile, node), kind: 'secret-import' })
+    }
+    ts.forEachChild(node, visit)
+  }
+
+  visit(sourceFile)
+  return found
+}
+
+/** 找出對端點 setter 的呼叫。 */
+export function findEndpointWrites(source, fileName = 'sample.ts') {
+  const sourceFile = ts.createSourceFile(fileName, source, ts.ScriptTarget.Latest, true)
+  const found = []
+
+  const visit = (node) => {
+    if (
+      ts.isCallExpression(node) &&
+      ts.isPropertyAccessExpression(node.expression) &&
+      node.expression.name.text === ENDPOINT_SETTER
+    ) {
+      found.push({ line: lineOf(sourceFile, node), kind: 'endpoint-write' })
     }
     ts.forEachChild(node, visit)
   }
@@ -275,6 +313,27 @@ test('③ 解開機密只發生在白名單模組中', () => {
   )
 })
 
+test('④ 端點只由綁在使用者動作上的處理常式寫入', () => {
+  const offenders = []
+  const mainRoot = join('src', 'main') + path_sep
+  for (const { rel, source } of productSources()) {
+    if (!rel.startsWith(mainRoot)) continue
+    if (ENDPOINT_WRITERS.includes(rel)) continue
+    for (const hit of findEndpointWrites(source, rel)) {
+      offenders.push(`${rel}:${hit.line}: ${hit.kind}`)
+    }
+  }
+
+  assert.deepEqual(
+    offenders,
+    [],
+    `端點是憑證的目的地，只能由使用者明確操作改動。允許寫入的模組：\n  ${ENDPOINT_WRITERS.join('\n  ')}\n` +
+      '它 SHALL NOT 由投遞內容、routing 規則或任何其他外部輸入寫入 ——\n' +
+      '那條要求必須是結構性的，因為「把憑證送到別處」不會有任何錯誤。\n\n' +
+      offenders.join('\n'),
+  )
+})
+
 test('對照組：三種 process.env 寫入形式各自被抓到', () => {
   const member = findProcessEnvWrites("process.env.SLACK_TOKEN = token")
   assert.equal(member.length, 1, '具名指派應被抓到')
@@ -321,6 +380,11 @@ test('對照組：機密的 import 與 reveal 各種形式被抓到，無關的�
 
   const unrelated = findSecretImports("import { PreferencesStore } from './preferences-store'")
   assert.deepEqual(unrelated, [], `無關的 import 被誤報：${JSON.stringify(unrelated)}`)
+
+  // **這個對照組指名的是「主行程用不受信任的輸入寫端點」** —— 投遞的本文正是那種輸入。
+  const endpoint = findEndpointWrites('settings.setApiBaseUrl(intake.body)')
+  assert.equal(endpoint.length, 1, '端點的寫入應被抓到')
+  assert.equal(endpoint[0].kind, 'endpoint-write')
 
   const reveal = findRevealCalls('const plain = secret.reveal()')
   assert.equal(reveal.length, 1, 'reveal() 應被抓到')

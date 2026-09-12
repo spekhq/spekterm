@@ -115,3 +115,14 @@ export type SessionStatus = Parameters<Parameters<WorkspaceTerminal['onStatus']>
 
 /** 終端外觀偏好（字型 family / size）。由白名單回推 —— renderer 不 import 主行程模組。 */
 export type TerminalPreferences = Awaited<ReturnType<Window['workspace']['settings']['get']>>
+
+/**
+ * Slack 的連線狀態。同樣由白名單回推。
+ *
+ * **憑證在這個型別裡只是布林**（`configured`）—— 介面上沒有讀取憑證的方法，
+ * 所以 renderer 連「拿到一份憑證」這件事都表達不出來。
+ */
+export type SlackState = Awaited<ReturnType<Window['workspace']['slack']['get']>>
+
+/** 憑證的種類。由 `setToken` 的參數回推 —— 白名單住在主行程。 */
+export type SlackTokenKind = Parameters<Window['workspace']['slack']['setToken']>[0]

@@ -197,6 +197,7 @@ const PROBE_EXPRESSION = `(async () => {
           'insights',
           'conversation',
           'intake',
+          'slack',
         ].includes(key),
     ),
     // conversation 於 agent-transcript-view 引入（agent-transcript-stream / agent-input-bridge
@@ -227,6 +228,22 @@ const PROBE_EXPRESSION = `(async () => {
           key,
         ),
     ),
+    // slack 於 slack-mention-intake 引入（slack-intake-source / secret-scope 規格）：
+    // 連線設定的讀寫。**逐成員列舉的理由與 insights／intake 同** —— 只登記頂層的話，
+    // 底下再加成員這支探針一聲都不會響。
+    // **介面上沒有讀取憑證的方法**（回傳值裡憑證只是布林），也**沒有設定「要偵測誰」與
+    // 「哪個工作區」的方法** —— 兩者自憑證推導，而一個填錯的身分其症狀與「沒有人提及我」
+    // 在畫面上完全相同。端點自己一個成員，不併進一個吃整份設定的 setter。
+    surplusSlackKeys: Object.keys(api?.slack ?? {}).filter(
+      (key) => !['get', 'setToken', 'setLookbackDays', 'setApiBaseUrl'].includes(key),
+    ),
+    // **憑證的讀取方法絕不可出現在介面上。** 上一條 surplusSlackKeys 是白名單（多出即違規），
+    // 這一條是針對這個特定危害的具名斷言 —— 兩者互補：白名單會在有人把成員名字加進清單時
+    // 一起被改掉（那是一個刻意的動作，但改的人可能沒想過這件事），而這一條指名了那個危害。
+    slackHasCredentialReader:
+      typeof api?.slack?.getToken !== 'undefined' ||
+      typeof api?.slack?.token !== 'undefined' ||
+      typeof api?.slack?.revealToken !== 'undefined',
     // symlink 絕不可出現在白名單上。
     //
     // 寫入邊界的 TOCTOU 論證（file-editing-and-crud 的 design D3）整個建立在「renderer 既造不出、
@@ -321,6 +338,12 @@ try {
   check(results, 'intake 介面只暴露已定義邊界要求的能力',
     r?.surplusIntakeKeys?.length === 0,
     r?.surplusIntakeKeys?.length ? `多出：${r.surplusIntakeKeys.join(', ')}` : '無多餘能力')
+  check(results, 'slack 介面只暴露已定義邊界要求的能力',
+    r?.surplusSlackKeys?.length === 0,
+    r?.surplusSlackKeys?.length ? `多出：${r.surplusSlackKeys.join(', ')}` : '無多餘能力')
+  check(results, 'slack 介面沒有讀取憑證的能力',
+    r?.slackHasCredentialReader === false,
+    r?.slackHasCredentialReader ? '介面上出現了讀取憑證的方法' : '憑證只以布林出現在回傳值裡')
   // 這一條守的是「有沒有人偷偷加了一整個 namespace」—— 其餘 surplus* 全都只看既有 namespace
   // 的內部，加一個新的它們一聲都不會響。
   check(results, 'preload 未暴露任何未經定義的頂層 namespace',

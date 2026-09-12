@@ -13,6 +13,7 @@ import { registerInsightsHandlers, spawnReportDelegate, spawnScanWorker } from '
 import { registerOpenSpecHandlers } from './ipc/openspec'
 import { registerPanelHandlers } from './ipc/panel'
 import { registerSettingsHandlers } from './ipc/settings'
+import { registerSlackHandlers } from './ipc/slack'
 import { registerShellHandlers } from './ipc/shell'
 import { registerTerminalHandlers } from './ipc/terminal'
 import { applyNavigationGuards } from './navigation'
@@ -29,7 +30,9 @@ import { RoutingStore, routingFile } from './intake-routing'
 import { IntakeStore } from './intake-store'
 import { PanelStore } from './panel-store'
 import { PreferencesStore } from './preferences-store'
+import { SecretStore } from './secret-store'
 import { SessionStore } from './session-store'
+import { SlackSettingsStore } from './slack-settings-store'
 import { createInsightsService } from './insights'
 import { configDirs, delegateDirSuffix, resolveArchiveRoot, resolveDelegateCwd, resolveProjectsDir } from './insights-source'
 import { createReportService, reportsRoot } from './report'
@@ -174,6 +177,15 @@ void app.whenReady().then(() => {
     archiveRoot: contextRoot(app.getPath('userData')),
   })
 
+  // Slack adapter 的兩份落盤 —— **刻意分成兩份檔案**。連線設定本來就要投影給 renderer
+  // （介面要顯示連到哪個工作區、是否已設定、端點是不是預設值），而憑證絕不可以；
+  // 放在同一個物件裡，那個投影就直接成了 `secret-scope` 第一條所防的那條出口。
+  // 分家之後「把憑證投影出去」需要先跨檔案去拿它 —— 做得到，但不會被不小心做出來。
+  const secretStore = new SecretStore(join(app.getPath('userData'), 'secrets.json'))
+  secretStore.load()
+  const slackSettingsStore = new SlackSettingsStore(join(app.getPath('userData'), 'slack.json'))
+  slackSettingsStore.load()
+
   const dirty = new DirtyStateStore()
 
   // 在建立視窗、載入任何 renderer 內容之前施加 CSP —— renderer 從第一幀起就會渲染使用者
@@ -192,6 +204,7 @@ void app.whenReady().then(() => {
   registerTerminalHandlers(store, sessionStore, preferencesStore)
   registerClipboardHandlers()
   registerSettingsHandlers(preferencesStore)
+  registerSlackHandlers({ settings: slackSettingsStore, secrets: secretStore })
   registerPanelHandlers(panelStore)
   registerIntakeHandlers({
     service: intakeService,

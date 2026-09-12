@@ -18,6 +18,7 @@ import type {
 type PendingRequest = DrainResult['pending']
 import type { RestoredSession } from '../main/ipc/terminal'
 import type { DirEntry, FileContent } from '../main/fs-service'
+import type { SlackState, SlackTokenKind } from '../main/slack-state'
 import type { ProjectedPreferences } from '../main/preferences-store'
 import type { SessionStatusSnapshot } from '../main/session-status'
 import type { RendererSession } from '../main/session-store'
@@ -464,6 +465,32 @@ const workspaceApi = {
    * 既有的 create 路徑 —— session 清單的權威在 renderer，主行程自行建立的 session 會在 500ms
    * 之後被抹掉而 pty 還活著。建好之後以 `attach` 回報，主行程才寫 context 檔並排定預填。
    */
+  /**
+   * Slack adapter 的連線設定。
+   *
+   * **憑證只以布林出現在回傳值裡，介面上沒有讀取憑證的方法。** 這是 `secret-scope` 第一條
+   * requirement 的形狀：renderer 取得的限於**衍生的事實**（是否已設定、連到哪個工作區、
+   * 端點是不是預設值），SHALL NOT 包含機密本身或其任何可還原的片段。
+   *
+   * **沒有設定「要偵測誰」與「哪個工作區」的方法，那是刻意的**（design D14）：兩者自憑證推導。
+   * 一個填錯的「要偵測誰」，症狀是什麼都不會發生 —— 與「沒有人提及我」和「連線已失效」
+   * 在畫面上完全相同，而讓後兩者可區分正是那條能力花了一整條 requirement 在做的事。
+   *
+   * **端點自己一個方法，不併進一個吃整份設定的 setter** —— `secret-scope` 要求它只能由使用者
+   * 明確操作改動，而一個吃整份物件的 setter 會讓任何一次「改回看範圍」順帶有能力改掉它。
+   */
+  slack: {
+    get: (): Promise<SlackState> => ipcRenderer.invoke('workspace:slack:get'),
+    /** `null` ＝清除該份憑證。 */
+    setToken: (kind: SlackTokenKind, value: string | null): Promise<SlackState> =>
+      ipcRenderer.invoke('workspace:slack:setToken', kind, value),
+    /** `null` ＝清回預設。 */
+    setLookbackDays: (days: number | null): Promise<SlackState> =>
+      ipcRenderer.invoke('workspace:slack:setLookbackDays', days),
+    /** `null`／不合法（非 https）＝清回預設端點。 */
+    setApiBaseUrl: (url: string | null): Promise<SlackState> =>
+      ipcRenderer.invoke('workspace:slack:setApiBaseUrl', url),
+  },
   intake: {
     list: (): Promise<IntakeSnapshot> => ipcRenderer.invoke('workspace:intake:list'),
     accept: (id: string, adapter: string): Promise<IntakeAcceptResult> =>

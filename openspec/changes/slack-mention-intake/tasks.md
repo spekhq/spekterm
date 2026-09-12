@@ -89,26 +89,38 @@
 
 ## 5. Slack 連線設定、端點與編輯入口
 
-- [ ] 5.1 新增連線設定的持久化（工作區、要偵測的身分、回看範圍、端點），**與 token 檔分家**、
-      與終端偏好分家、以白名單解析、形狀不合的單項被忽略而不使其餘失效；驗證方式：單元測試
-      （載體：「設定跨重啟保留」「變更終端偏好不影響本能力的設定」）
-- [ ] 5.2 端點的三條約束（D11）：只能由使用者明確操作改動、非預設值時畫面上可見、
-      scheme 限 `https:`；驗證方式：單元測試 + probe
-      （載體：`secret-scope` 的端點三條 scenario）
-- [ ] 5.3 連線設定的投影同樣走逐欄位白名單並加守衛（**它與 `settings:get` 是兩個不同的
-      處理常式，2.3 的守衛管不到它**）；驗證方式：單元測試斷言未宣告的欄位不出現在投影中
-      （載體：「與機密同源的設定物件其投影為白名單」）
-- [ ] 5.4 新增編輯入口的 UI，**不置於終端偏好對話框之內**；文案全數進
-      `src/shared/i18n/en.json`，`aria-label` 一律 `t(...)`；
-      驗證方式：`npm test` 的 `copy-language` 與 `aria-label-source` 兩道守衛全綠
-- [ ] 5.5 UI 呈現「已設定／未設定」而非憑證本身；驗證方式：probe 斷言
-      **IPC 回傳值整份**不含 sentinel（`window.workspace.…` 的結果，**不是**
-      `document.body.textContent` —— 憑證可以在 payload 裡而畫面上不顯示）
-- [ ] 5.6 設定 Slack 時一併提示需要設定 routing 的 fallback（否則第一批 mention 全部是
-      解析不出的待處理項目 —— 見 design 的 Risks）；驗證方式：probe 斷言該提示可見
-- [ ] 5.7 新增依賴至 **`dependencies`**（非 `devDependencies`）；驗證方式：
-      `npm run probe:package` 啟動的 AppImage 不出現 `MODULE_NOT_FOUND`
-      （**這是唯一驗得到它的載體** —— dev 模式對放錯區塊完全無感）
+- [x] 5.1 新增 `slack-settings-store.ts`（回看範圍、端點，**與 token 檔分家**、與終端偏好分家、
+      欄位表白名單、形狀不合的單項被忽略）。**「工作區」與「要偵測的身分」改為自憑證推導而非
+      設定** —— 填錯的症狀是什麼都不會發生，與「沒人提及我」在畫面上相同，而那正是這個 change
+      在對付的失效類。**spec delta 與 design D14 已隨此裁決更新，不靜默偏離**；
+      驗證方式：`slack-settings-store.test.ts` 18 條
+- [x] 5.2 端點的三條約束（D11）全部落地：scheme 白名單只認 `https:`（單元測試涵蓋 9 種壞值）、
+      `usesDefaultEndpoint` 供介面警示、**寫入點由 `secret-scope` 守衛④釘住**
+      （定義域限 `src/main/**` —— 威脅是主行程用不受信任的輸入寫它；renderer 的呼叫
+      就是那個「使用者明確操作」）。對照組：在主行程無關模組寫端點 ⇒ ④ 變紅
+- [x] 5.3 連線設定的投影走逐欄位白名單，且 `scripts/settings-projection.test.mjs` 改為**規則表**
+      同時涵蓋兩條路徑。順帶加一道「**守衛自己沒有失效**」的檢查：規則裡列出的方法必須真的存在
+      於 store 模組中 —— 少了它，一次方法改名會讓守衛靜默地不再比對到任何東西（全綠而性質已失）。
+      對照組：把方法名改錯 ⇒ 該檢查變紅
+- [x] 5.4 新增 `SlackSettings.tsx`，住在收件匣 overlay 的**第三個分頁**。
+      **先查證過 `agent-intake` 與 `intake-routing` 都沒有列舉那個 overlay 的分頁**，
+      所以這不構成對它們的修改（proposal 宣稱「一條都不改」的那個宣稱成立）。
+      24 個 i18n key，`aria-label` 一律 `t(...)`；驗證方式：`copy-language` 與
+      `aria-label-source` 兩道守衛全綠
+- [x] 5.5 UI 呈現「已設定／未設定」，輸入框**唯寫**（送出後清空、重新載入不回填 ——
+      值連在 DOM 裡都不存在）。斷言落在**整份 IPC 回傳值的序列化結果**上而非 DOM
+      （`slack-state.test.ts`：不含憑證、不含其前綴與末段、不含落盤位置）——
+      為此把純邏輯自 `ipc/slack.ts` 搬到 `slack-state.ts`（那個模組 import `electron`，
+      `node:test` 載不起來，比照 `report-runner` 的 `delegateEnv`）。
+      對照組：把憑證塞進狀態 ⇒ **單元測試與守衛③同時變紅**。
+      跨行程的那一層在第 9 組的 probe
+- [x] 5.6 設定 Slack 的分頁帶一段提示，指向 Rules 分頁設定 fallback（否則第一批提及全部是
+      解析不出的待處理項目）；驗證方式：probe 斷言該提示可見（第 9 組）
+- [x] 5.7 **不需要新增任何依賴**（design D15，實測）：Node 22.22 同時具備全域 `fetch` 與全域
+      `WebSocket`，回補與 Socket Mode 都不需要 Slack 的官方 SDK。這順帶關掉兩個風險 ——
+      放錯 `dependencies` 區塊的 `MODULE_NOT_FOUND`（唯一載體是最貴的 `probe:package`），
+      以及**「SDK 讀約定俗成的環境變數」這個正是守衛①所防的向量**。
+      Electron 主行程的全域 `WebSocket` 待第 7 組實測
 
 ## 6. 回補路徑（主幹）
 
@@ -165,6 +177,7 @@
 ## 9. 驗收：替身 Slack 與 probe
 
 - [ ] 9.1 建立替身 Slack（`scripts/lib/stub-slack.mjs`），**接縫為 5.1 的端點設定**；
+      **接縫已就位**（`slack.json` 的 `apiBaseUrl`，scheme 限 https）。
       能演出：連線中斷、憑證失效、同一則提及被重複取回（含頻道／成員改名）、
       討論串超過本文上限、標題超過欄位上限、提及落在回看範圍之外、收件匣已達總量上限；
       驗證方式：七種情形各有一支自測
