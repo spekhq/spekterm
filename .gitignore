@@ -4,3 +4,9 @@ out/
 release/
 *.log
 .DS_Store
+
+# 機密的落點是 userData（~/.config/Spekterm），不在 repo 內 —— 這幾條是防手滑：
+# 除錯時在 repo 根目錄產生一份、或把它複製進來比對。
+secrets.json
+secrets.json.tmp
+secrets.json.corrupt-*

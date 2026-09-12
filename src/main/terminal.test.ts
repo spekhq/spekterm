@@ -10,6 +10,7 @@ import {
   type TerminalSink,
   ptyEnv,
 } from './terminal'
+import { SecretStore } from './secret-store'
 import type { FolderLookup, WorkspaceFolder } from './workspace-store'
 
 /**
@@ -491,6 +492,46 @@ describe('pty 的環境', () => {
     // 其餘一律保留，且 TERM 對齊前端的 xterm。
     assert.equal(env.PATH, '/usr/bin')
     assert.equal(env.TERM, 'xterm-256color')
+  })
+
+  it('應用程式自己持有的機密不出現在 pty 環境的任何一個值裡', () => {
+    // **這是一條純否定斷言，它的鑑別力不在自己身上。** 如果機密與 pty 之間本來就沒有任何連線，
+    // 它對「這個機制完全不存在」的實作也照樣綠 —— 判準見 `docs/lessons/probes.md`：
+    // 「如果這個機制整個不存在，這條會不會照樣綠？」會。
+    //
+    // 它真正的作用是**回歸絆線**：`ptyEnv()` 展開 `process.env`，所以任何模組往那裡寫一個值，
+    // 都會出現在這裡。鑑別力由 `scripts/secret-scope.test.mjs` 的三道守衛提供
+    // （尤其是「`process.env` 的指派只允許一個地方」那一道）。
+    //
+    // **而這兩者是互補的，不是重複的**：那道守衛豁免 `user-env.ts`（使用者環境唯一的套用點），
+    // 所以那個檔案裡的一行 `process.env.X = …` 守衛抓不到 —— **這條抓得到**。
+    //
+    // **因此必須呼叫 `ptyEnv()` 而不傳 `source`。** 第一版傳了明確的 `{ PATH: … }`，
+    // 於是它繞過了 `process.env` 這個真正的向量：一個真的往 process.env 寫機密的實作，
+    // 這條照樣綠。
+    //
+    // **sentinel 要獨特到不會被任何東西吞掉** —— 用 `'token'` 之類的字串，這條斷言會在
+    // 某個無關的值裡偶然命中而變成噪音。
+    const sentinel = 'xoxp-SENTINEL-a7f3c91e-do-not-leak'
+    const secretsBase = fs.realpathSync(fs.mkdtempSync(path.join(tmpdir(), 'spek-secret-pty-')))
+    const store = new SecretStore(path.join(secretsBase, 'secrets.json'))
+    store.load()
+    store.set('slack.userToken', sentinel)
+
+    const env = ptyEnv()
+
+    for (const [key, value] of Object.entries(env)) {
+      assert.equal(
+        value?.includes(sentinel) ?? false,
+        false,
+        `機密出現在 pty 環境的 ${key} 裡`,
+      )
+    }
+    // 前提：這個環境本來就不是空的（否則上面的迴圈跑零次而恆真）。
+    assert.ok(Object.keys(env).length > 3, `pty 環境意外地空：${Object.keys(env).length} 個變數`)
+    assert.equal(env.TERM, 'xterm-256color')
+
+    fs.rmSync(secretsBase, { recursive: true, force: true })
   })
 
   it('不以前綴一概剝除 —— 認證用的變數必須留下', () => {
