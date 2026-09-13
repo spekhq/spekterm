@@ -38,7 +38,11 @@ OpenSpec 結構的側欄，讓使用者不必另外開 IDE 就能一邊駕駛 ag
 - **收件匣** —— 活動列的 `Handoffs` 入口已接上（PRD §11 Phase 7 的本機 inbox）。外部 producer
   往 `<userData>/intake-inbox/` 投遞一份 JSON，使用者**看過本文之後**接受它，就在 routing 解析出
   的 folder 得到一個開好、context 備妥、第一則 prompt 已填但**尚未送出**的 agent session。
-  **Slack 不在裡面** —— 收件匣的契約是「一個目錄 + 一份 JSON」，來源是之後的 change。
+  **Slack 已是第一個 producer**（`slack-mention-intake`）：有人在 Slack 提及使用者本人時，
+  那件事成為一則待處理項目。**回補是主幹、即時是加速器** —— 桌面 app 大多數時間是關著的，
+  而 Socket Mode 沒有重送佇列。它**交付不了多租戶**（Socket Mode 上不了 Marketplace、
+  app-level token 一個 app 一份），能交付的是邊界位置：adapter 只是收件匣的一個 producer。
+  **不需要任何新依賴**（Node 22 與 Electron 43 內的 Node 24 都有全域 `fetch` 與 `WebSocket`）。
 - **鍵盤** —— 見下文「快捷鍵」。
 
 **Linux 打包已可用**（`npm run dist:linux` → AppImage，`npm run install:desktop` 裝進應用程式
@@ -69,6 +73,7 @@ tmux 與自寫 daemon 取捨。**不要把「重建」誤當成「常駐」**：
 | pty、`src/renderer/src/shell/terminal/`、session 持久化與重建 | **`docs/lessons/terminal.md`** |
 | `src/renderer/src/side-panel/`、`@spekjs/core` 或 `@spekjs/ui` 升級 | **`docs/lessons/side-panel.md`** |
 | `src/main/intake-*`、`src/main/ipc/intake.ts`、`scripts/probe-intake.mjs`、`scripts/lib/stub-agent.mjs`、或任何會動到「呈現給人看的文字」與「交給 agent 的文字」其中一端的東西 | **`docs/lessons/intake.md`** |
+| `src/main/slack-*`、`src/main/secret-store.ts`、`scripts/probe-slack.mjs`、`scripts/lib/stub-slack.mjs`、或任何會把憑證交給第三方的東西 | **`docs/lessons/slack.md`** |
 | `src/main/transcript-*`、`src/main/agent-events.ts`、`src/main/agent-injection.ts`、`src/main/insights*`、**`src/main/report.ts` 與 `src/main/report-*`**、`scripts/probe-insights.mjs`、`scripts/probe-agent-view.mjs`，或任何會讀 `~/.claude/projects`、**注入 `--settings`**、**或委派 `claude` CLI** 的東西 | **`docs/lessons/transcript.md`** |
 
 ## 開發指令
@@ -145,6 +150,12 @@ npm run probe:intake    # agent-intake / intake-routing（收件匣的兩條入�
                         #   測試看不見呈現那一端，於是「正規化被搬到呈現層」對它是透明的。
                         #   對照組見 `scripts/intake-control-groups.mjs`（四個 mutation，
                         #   每一個都指名哪一條斷言必須變紅）
+npm run probe:slack     # slack-intake-source / secret-scope（替身是**真的 HTTPS 伺服器** ——
+                        #   產品的端點白名單只認 https，而那條不為驗收放寬。信任錨走
+                        #   `NODE_EXTRA_CA_CERTS`：實測 `--ignore-certificate-errors` 無效，
+                        #   因為主行程的 `fetch` 走 undici 而非 Chromium 的網路堆疊。
+                        #   **即時路徑「收得到事件」那一半沒有載體**（替身回一個連不上的 wss），
+                        #   真實 Slack 由 dogfood 認定 —— 兩條缺口都寫在規格裡）
 npm run probe:agent-view # agent-transcript-stream / agent-event-bridge / agent-conversation-view /
                         #   agent-input-bridge（對話 view、注入的 hook 真的被執行、送出抵達 pty、
                         #   **重建後直接進對話 view 時 pty 的欄數不是 80**）
@@ -576,6 +587,19 @@ session 開得進 worktree 之後，邊界保證從「renderer 沒有路徑詞�
 - **folder 自身以「省略識別碼」表示** —— folder 不在版控之下時 `listWorktrees` 回空陣列，**根本
   沒有 key 可放**。
 
+### 機密的四條出口
+
+應用程式代使用者持有的憑證（`secret-store.ts`），其**唯一**可接受的流向是「它所屬的那個服務」。
+四條出口逐一被堵住，而**每一條的失效都是靜默的**（沒有錯誤、沒有型別問題）。完整的實測細節與
+三個「第一版沒有鑑別力」的斷言見 **`docs/lessons/slack.md`**。留在這裡的只有跨模組的那一條：
+
+- **`process.env` 的指派只允許 `user-env.ts`**（`scripts/secret-scope.test.mjs` 守著）。
+  `ptyEnv()` 展開 `process.env`，所以**任何模組往它寫一個值，那個值就會進到每一個 pty** ——
+  而那個模組不必是 `terminal.ts`、也不必被它 import。這條規則 CLAUDE.md 早就寫著
+  （見「終端與 pty」一節），但**此前沒有任何東西在守**。
+- 那道守衛豁免 `user-env.ts`（唯一的套用點），而那個缺口由一條行為測試補：pty 環境的任何一個值
+  都不含機密。**兩者互補而非重複**，已實測配對。
+
 ### CSP
 
 由**主行程**施加（`webRequest.onHeadersReceived`），不是 renderer 自宣告的 `<meta>` —— 與 fs 邊界
@@ -879,6 +903,11 @@ ANSI escape）。**而失效方式是最壞的那種 —— grep 回 0 個、exi
 查法：`python3 -c "print(open(f,'rb').read().count(b'\x00'))"`（**不能用 grep 查 grep 看不到的
 東西**）。三道原始碼守衛不受影響 —— 它們走 `readFileSync` + AST／regex，不經 grep。
 
+**第四例出現在 `intake-store.ts`（cache key 的分隔符），而它讓 `grep` 對整個檔案零輸出 ——
+那就是發現它的方式。** 四次之後終於有守衛：`scripts/nul-byte-source.test.mjs`
+（讀**原始位元組**，不經任何文字工具 —— 檢查的手段不能與被檢查的缺陷共享盲點）。
+**那道守衛抓到的第一個東西是它自己** —— 我在撰寫它的對照組時往裡面寫進了兩個字面 NUL。
+
 ### 不要讓 pipe 蓋掉 exit code，也不要用 `head -N` 過濾輸出
 
 npm 會先印幾行 `>` 開頭的腳本回顯與**空行**；`npm run typecheck 2>&1 | grep -v '^>' | head -3` 於是
@@ -897,8 +926,14 @@ probe 的。**要看 exit code。**
   **它們全都躲過了** `openspec validate --strict`（scenario 存在且格式合法）、
   delta 與主 spec 的 header 稽核（那支腳本不看驗收），以及探針全綠（沒有人在看那條）。
   **而後兩次是在寫下前兩條教訓之後犯的 —— 所以「記得要小心」顯然不是機制。**
-  **能結構性擋住它的做法**（已開為 **issue #12**）：稽核腳本對**每一條新增的 scenario** 要求一個
-  驗收指認（哪支探針、哪條斷言、或明寫「不覆蓋，理由是…」）。而修法**不是改標籤，是把載體做出來**。
+  **能結構性擋住它的做法已經落地**（issue #12 的處置）：`scripts/intake-coverage.test.mjs`
+  是一份 scenario → 載體的對照表，由**兩道機械守衛**釘住 —— 每一條 `#### Scenario:` 在表上恰有
+  一列，且**每一個載體標籤必須真的存在於原始碼中**。它另有兩欄比「哪支探針哪條斷言」值錢：
+  `greenIfAbsent`（若實作完全沒做，這條會不會照樣綠）與 `mutation`（使它變紅的那個錯誤實作）。
+  **`slack-mention-intake` 填那 57 列時，守衛抓到 5 個憑印象填的標籤** —— 那正是上一次 82 列
+  表裡那 4 列的形狀，而這次它在 commit 之前就紅了。
+  加新 change 時要把它登記進 `COVERED_CHANGES`（第一版寫死一個名字，於是對下一個 change
+  完全沉默）。而修法仍然**不是改標籤，是把載體做出來**。
   > **第五次發生在 `rail-pinned-repos`，而它的形狀是新的：對照表做了，填表的方式錯了。**
   > 那個 change 為了防這件事親手建了一張 82 列的 scenario → 載體對照表 —— 然後把 39 條既有
   > scenario 憑印象填成「既有」。事後逐條核對，**其中 4 條是假的**（一成）：兩條零覆蓋、一條

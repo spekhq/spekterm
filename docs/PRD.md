@@ -627,20 +627,33 @@ session 脈絡裡送出的，彙整成一份跨數十天、跨數十個專案的
 > 接受它，就在 routing 解析出的 folder 得到一個開好、context 備妥、第一則 prompt 已填但
 > **尚未送出**的 agent session。
 >
-> **Slack 來源不在其中** —— 收件匣的契約是「一個目錄 + 一份 JSON」，第一個真實 producer 是
-> 下一個 change。接取方式已知不只一種且必然會換（Socket Mode 的 app 不允許上架 Slack
-> Marketplace，且 app-level token 是整個 app 一份、多條連線之間是負載平衡），因此那一層
-> 刻意與收件匣分離。
+> **Slack 已是第一個真實 producer**（`slack-mention-intake`）：有人在 Slack 提及使用者本人時，
+> 那件事成為收件匣的一則待處理項目，帶著該提及所在討論串的內容（**上界固定於被提及的那一則**）。
 >
-> **該 change 有十條刻意的缺口**，其中兩條會限制這個能力能承諾什麼：本文可以只放一個連結，
-> 把內容移到所有機制的作用域之外；以及在長度上限之內，投遞者仍決定使用者要掃過多少字。
-> 完整清單與「這些缺口的交互」見該 change 的 `design.md`。
+> **回補是主幹，即時是加速器。** 桌面應用程式大多數時間是關著的，而 Socket Mode 沒有重送佇列
+> —— 以即時為主等於把最常見的情形（關機八小時）交給一個結構上補不了的機制。啟動時以 Web API
+> 取回「上次水位之後」的提及；即時路徑（若 app-level token 也設定了）只是把同一件事提早送到。
 >
-> **一行技術債**：Slack token 進來之前，`ipc/settings.ts` 的 `settings:get` 必須先改成逐欄位
-> 投影（保持「未設定即省略」的語意，否則 `probe-workspace` 會紅）並加原始碼守衛 ——
-> 它目前是原樣轉手，任何加進那個物件的欄位都會零改動、零紅燈地送到 renderer。
-> `agent-intake-inbox` 因為 routing 規則搬到自己的檔案而不必動它，但下一個 change 正是
-> 有機密流過的那一個。
+> **交付不了多租戶，而那要攤開講**：Socket Mode 的 app 上不了 Slack Marketplace（要上架就得走
+> HTTP 端點），且 app-level token 是整個 app 一份、多條連線之間是負載平衡 —— 結構上這是單人、
+> 單一工作區的。能交付的是**邊界的位置**：adapter 只是收件匣的一個 producer，換接取層時
+> 收件匣、routing、session 的建立與預填**一個字都不必改**。
+>
+> **不需要任何新依賴**（實測）：Node 22.22 與 Electron 43.4.1 內的 Node 24.18.1 都具備全域
+> `fetch` 與全域 `WebSocket`。不引入官方 SDK 的第二個理由是承重的 —— 許多服務 SDK 會讀約定俗成的
+> 環境變數，而往 `process.env` 寫一個值就會進到**每一個 pty**。
+>
+> **身分自憑證推導，不是設定欄位**：一個填錯的「要偵測誰」，症狀是什麼都不會發生 —— 與
+> 「沒有人提及我」和「連線已失效」在畫面上完全相同，而讓後兩者可區分正是這條能力花了一整條
+> requirement 在做的事。
+>
+> **刻意的缺口**（完整清單見該 change 的 `design.md` 與規格）：回看範圍有上限，關機超過它的期間
+> 會漏（範圍對使用者可見）；即時路徑「收得到事件」這一半沒有自動化載體（替身回一個連不上的
+> wss 位址，只驗得到降級那一半）；真實 Slack 的連線由 dogfood 認定。
+>
+> **那筆技術債已還**：`settings:get` 改為逐欄位投影，且 preload 的宣告一併窄化 ——
+> renderer 的偏好型別是自 preload 回推的，**preload 寫寬了，主行程的白名單就只剩執行期效果**。
+> 兩者都由 `scripts/settings-projection.test.mjs` 守著。
 
 - **Handoff schema**（§7.4）：frontmatter + 錨點 + 磁碟狀態快照。
 - ~~**本機 daemon inbox**~~（已落地）+ repo/workspace addressing registry（沿用已管的 repo 清單）。

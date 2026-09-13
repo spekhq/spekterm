@@ -643,6 +643,17 @@ try {
       // —— 一個寫著 Terminal 卻內含應用程式版本的對話框，會讓使用者在找版本時不會打開它。
       // （註解在 template literal 之內：**不能寫反引號**，它會把字串提前關掉。）
       about: !!d.querySelector('[role="group"][aria-label="${copy('settings.about')}"]'),
+      // **agent 狀態橋接的開關**。這條 scenario 在 terminal-preferences 裡自訂立起就存在，
+      // 而它**此前是零載體**（那個鍵名在整個 scripts 目錄中零命中）—— 於是「對話框提供該開關」
+      // 與「對話框根本沒有它」在每一輪全綠的驗收中無法區分。
+      // （註解在 template literal 之內：**不能寫反引號**，它會把字串提前關掉。）
+      agentStatus: !!d.querySelector('input[aria-label="${copy('settings.agentStatus')}"]'),
+      // 預設為啟用（＝未設定）。**這是那條 scenario 的第二句 AND**，而它與第一句是兩件事：
+      // 開關存在但預設是關的，等於「agent 狀態橋接預設啟用」那條被靜默違反。
+      agentStatusChecked:
+        d.querySelector('input[aria-label="${copy('settings.agentStatus')}"]')?.checked ?? null,
+      // 第三句 AND：介面要說明它只影響其後建立或重建的 session。
+      agentStatusHint: (d.textContent ?? '').includes('${copy('settings.agentStatusHint').slice(0, 40)}'),
       title: d.getAttribute('aria-label'),
     }
   })()`
@@ -658,6 +669,15 @@ try {
   check(results, '設定介面涵蓋終端偏好以外的區段（唯讀的建置身分），且標題不侷限於終端',
     dialog?.about === true && !/terminal/i.test(dialog?.title ?? ''),
     `about=${dialog?.about} title="${dialog?.title}"`)
+
+  // **三句 AND 各驗一次。** 那條 scenario 寫的是「呈現該開關 AND 其預設為啟用 AND 介面說明它
+  // 只影響其後的 session」—— 只驗第一句的話，另兩句被違反時不會有任何東西變紅。
+  check(results, '設定對話框提供 agent 狀態橋接的開關',
+    dialog?.agentStatus === true, `agentStatus=${dialog?.agentStatus}`)
+  check(results, '該開關的預設為啟用',
+    dialog?.agentStatusChecked === true, `checked=${dialog?.agentStatusChecked}`)
+  check(results, '介面說明它只影響其後建立或重建的 session',
+    dialog?.agentStatusHint === true, `hint=${dialog?.agentStatusHint}`)
 
   check(results, '預覽的範例文字不含框線字元（那些字元在終端不經字型）',
     dialog?.previewHasBoxDrawing === false,

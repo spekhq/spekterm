@@ -8,9 +8,17 @@ import { saveDelivery } from './intake-archive'
  *
  * ## 為什麼是一個函式，而檔案只是它的 adapter
  *
- * 第一個 producer（Slack adapter）會住在主行程裡；強迫它「寫檔給自己讀」是為了介面而繞路。
- * 但檔案介面必須存在 —— 外部 producer（`spek handoff` CLI、日後的 relay）是獨立行程，
- * 而且它讓這個能力得以在沒有任何來源的情況下被完整驗收。
+ * 第一個 producer（Slack adapter）住在主行程裡，而**它仍然寫檔給自己讀** —— 那個繞路是
+ * 裁決過的（`slack-mention-intake` 的 design D5），理由不是「介面的整潔」：
+ *
+ * - 走檔案多拿到的是**投遞檔的大小上限**與**拒絕的消費語意**（暫時性拒絕原封留著等重試）。
+ *   其餘守衛（正規化、識別碼驗證、重複、總量上限）都在 `deliver()` 之內，行程內捷徑一樣拿得到。
+ * - **真正承重的理由**：Socket Mode 的 app 上不了 Slack Marketplace，所以那一層**必然會被換掉**
+ *   （產品化要走 Events API + 公開端點）。adapter 日後要搬到另一個行程，而那時這個檔案
+ *   一個字都不必改。
+ *
+ * 外部 producer（`spek handoff` CLI、日後的 relay）是獨立行程，因此檔案介面本來就必須存在；
+ * 而它也讓這個能力得以在沒有任何來源的情況下被完整驗收。
  *
  * **驗證、去重、落盤全部在 `deliver()` 之後**，於是「啟動掃描」與「監看」不可能演化成
  * 兩份寬嚴不同的實作 —— 那是這條管線最容易出現、而且完全靜默的 bug（第二份較弱的實作）。

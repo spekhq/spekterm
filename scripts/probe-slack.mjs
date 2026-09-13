@@ -138,6 +138,17 @@ async function openInboxTab(app) {
 }
 
 const slackText = (app) => app.client.evaluate(`(${SLACK_PANEL}?.textContent ?? '')`)
+
+/**
+ * 整個收件匣 overlay 的文字。
+ *
+ * **必須有這一個，卡片文字不夠**：重複交付時收件匣會跳「識別碼搶佔」的拒絕彙整，而它渲染在
+ * notices 那一條（一個 div），**不在 `li` 裡**。只看卡片的話，「去重完全沒做」這個錯誤實作
+ * 照樣綠 —— 因為內容相同的重投會被收件匣靜默吞掉，卡片仍是一張。
+ * （實測：對照組 `dedup-cursor-only` 與 `id-thread-scoped` 第一版都紅不起來。）
+ */
+const overlayText = (app) =>
+  app.client.evaluate(`(document.querySelector('[role="dialog"]')?.textContent ?? '')`)
 const inboxText = (app) =>
   app.client.evaluate(`[...document.querySelectorAll('li')].map((n) => n.textContent ?? '').join('\\n')`)
 
@@ -189,7 +200,16 @@ async function runDelivery(_mode, context) {
     port: STUB_PORT,
     state: {
       messages: [mention],
-      threads: { [mention.ts]: [stubMessage({ secondsAgo: 120, text: 'earlier context' }), mention] },
+      threads: {
+        [mention.ts]: [
+          stubMessage({ secondsAgo: 120, text: 'earlier context' }),
+          mention,
+          // **提及之後的那一則。** 它必須不出現在本文裡 —— 那是 design D3(a)（上界固定於
+          // 被提及的那一則）在這一層唯一的載體。少了它，「把上界改成取回當下」這個 mutation
+          // 紅不起來（實測：對照組第一版就是那樣）。
+          stubMessage({ secondsAgo: 30, text: 'LATER-REPLY' }),
+        ],
+      },
     },
   })
   seedSlackSettings(profile, { baseUrl: stub.baseUrl })
@@ -211,6 +231,12 @@ async function runDelivery(_mode, context) {
       cards.slice(0, 160),
     )
     check(results, '本文帶入提及之前的上下文', cards.includes('earlier context'), cards.slice(0, 240))
+    check(
+      results,
+      '提及**之後**的回覆不進本文（上界固定於被提及的那一則）',
+      !cards.includes('LATER-REPLY'),
+      cards.slice(0, 400),
+    )
 
     // **憑證只走 header** —— 替身記下了實際收到的呼叫。
     const authCalls = stub.calls.filter((entry) => entry.method === 'auth.test')
@@ -313,7 +339,13 @@ async function runNoDuplicate(_mode, context) {
     const cards = await inboxText(second)
     const count = await cardCount(second, 'only once')
     check(results, '水位遺失之後不重複交付（卡片仍為一張）', count === 1, `卡片 ${count} 張`)
-    check(results, '不產生面向使用者的拒絕或警示', !/reject/i.test(cards), cards.slice(0, 160))
+    const overlay = await overlayText(second)
+    check(
+      results,
+      '不產生面向使用者的拒絕或警示（含收件匣的拒絕彙整）',
+      !/rejected/i.test(overlay),
+      overlay.slice(0, 300),
+    )
     // **這條是必要的**：少了它，「那則根本沒被重新看見」會讓上面兩條假綠。
     check(
       results,
