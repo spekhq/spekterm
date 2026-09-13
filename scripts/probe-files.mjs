@@ -923,6 +923,13 @@ async function probeBuild(fixture, profile) {
     await app.client.evaluate(CONFIRM_DELETE)
     const deleted = await pollDisk(() => !existsSync(join(fixture.repo, 'probe-new.txt')))
     check(results, '確認後檔案自磁碟移除', deleted)
+    // **等畫面也把這次刪除消化完，再進下一段。** 磁碟判準不涵蓋 UI 的狀態：確認還在畫面上、
+    // 或 watcher 事件晚一步抵達而觸發重繪時，下一段第一個動作（按「+」）就會落空 ——
+    // 選單開不出來（或剛開就被重繪關掉），而 `pollUntil` 只看當下狀態，於是那個等待窗口
+    // 一定耗盡。**實測踩過一次**：那一段六個等待連續耗盡（各 20.2s），最後 `coordsOf` 回
+    // null 讓整支探針以 `reading 'x'` 中斷，而單跑同一支是全綠的。
+    // 新增那條用的是樹（`ROW_PATHS`）、刪除卻退成磁碟 —— 不對稱的那一邊就是缺口。
+    await pollUntil(app.client, ROW_PATHS, (paths) => !paths.includes('probe-new.txt'))
 
     // ── file-operations：對有未存變更的檔案改名 / 刪除 ─────────────────────
     // 建一個檔並編輯使其 dirty，改名時 buffer 要跟著新路徑走，刪除時要先警告未存變更。
