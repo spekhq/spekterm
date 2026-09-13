@@ -1,4 +1,4 @@
-import { ipcMain } from 'electron'
+import { type WebContents, ipcMain } from 'electron'
 import type { SecretStore } from '../secret-store'
 import {
   type SlackState,
@@ -15,6 +15,7 @@ export const SLACK_CHANNELS = {
   setToken: 'workspace:slack:setToken',
   setLookbackDays: 'workspace:slack:setLookbackDays',
   setApiBaseUrl: 'workspace:slack:setApiBaseUrl',
+  changed: 'workspace:slack:changed',
 } as const
 
 /**
@@ -39,10 +40,32 @@ export function registerSlackHandlers(input: {
   settings: SlackSettingsStore
   secrets: SecretStore
   status: () => SlackStatus
+  /** 註冊「狀態改變了」的通知器 —— 回補是非同步的，取一次是不夠的（見下）。 */
+  onStatusChanged?: (notify: () => void) => void
 }): void {
   const state = (): SlackState => slackState(input)
 
-  ipcMain.handle(SLACK_CHANNELS.get, (): SlackState => state())
+  /**
+   * 狀態改變時推給 renderer。
+   *
+   * **少了它，整個狀態呈現是一個只在掛載時取一次的快照。** 回補在啟動數秒後才跑完，於是
+   * 使用者打開分頁看到的永遠是「還沒檢查過」，而憑證失效**永遠不會出現在畫面上** ——
+   * 那正是 D10 那條 requirement 要防的事，而它會以一個看起來正常的介面失敗。
+   * （這是 `probe:slack` 抓到的：狀態停在「Set up, but it has not checked yet」。）
+   */
+  const senders = new Set<WebContents>()
+  const broadcast = (): void => {
+    for (const sender of senders) {
+      if (sender.isDestroyed()) senders.delete(sender)
+      else sender.send(SLACK_CHANNELS.changed)
+    }
+  }
+  input.onStatusChanged?.(broadcast)
+
+  ipcMain.handle(SLACK_CHANNELS.get, (event): SlackState => {
+    senders.add(event.sender)
+    return state()
+  })
 
   // 值的驗證在這裡（種類白名單）與 store（值的清理）。`null` ＝清除該份憑證。
   ipcMain.handle(SLACK_CHANNELS.setToken, (_event, kind: unknown, value: unknown): SlackState => {

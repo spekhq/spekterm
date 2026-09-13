@@ -198,11 +198,16 @@ void app.whenReady().then(() => {
   // Slack 的執行期。**在註冊 IPC 之前建立** —— 那個 handler 要問它狀態。
   // 它持有的狀態是一條 requirement 的載體：「失效」與「目前沒有待處理項目」必須分得出來，
   // 因為兩者在外部本來是同一個樣子（收件匣是空的）。
+  /** 狀態改變的訂閱者 —— IPC 那一層在註冊時掛進來。 */
+  const slackStatusListeners = new Set<() => void>()
   const slackRuntime = new SlackRuntime({
     settings: slackSettingsStore,
     secrets: secretStore,
     cursors: slackCursorStore,
     intake: intakeStore,
+    onStatusChanged: () => {
+      for (const listener of slackStatusListeners) listener()
+    },
     inboxRoot: inboxRoot(app.getPath('userData')),
     // 與 `IntakeSource` 的 adapter 同一個值 —— 去重的主鍵是 `(adapter, id)`，
     // 兩邊不一致的話「這個識別碼進來過嗎」永遠答否，而重複交付會靜默地發生。
@@ -231,6 +236,7 @@ void app.whenReady().then(() => {
     settings: slackSettingsStore,
     secrets: secretStore,
     status: () => slackRuntime.status(),
+    onStatusChanged: (notify) => slackStatusListeners.add(notify),
   })
   registerPanelHandlers(panelStore)
   registerIntakeHandlers({

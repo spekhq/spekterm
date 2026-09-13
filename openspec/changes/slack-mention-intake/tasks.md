@@ -203,13 +203,18 @@
       能演出：連線中斷、憑證失效、同一則提及被重複取回（含頻道／成員改名）、
       討論串超過本文上限、標題超過欄位上限、提及落在回看範圍之外、收件匣已達總量上限；
       驗證方式：七種情形各有一支自測
-- [ ] 9.2 新增 `scripts/probe-slack.mjs`，於 `scripts/lib/ports.mjs` 登記其 debugging port；
+- [x] 9.2 新增 `scripts/probe-slack.mjs`，於 `scripts/lib/ports.mjs` 登記其 debugging port；
       驗證方式：`npm test` 的 ports 守衛不報重複
-- [ ] 9.3 加入 `package.json` 的 `probe:slack` 與 `scripts/run-probes.mjs` 的序列；
+- [x] 9.3 加入 `package.json` 的 `probe:slack` 與 `scripts/run-probes.mjs` 的序列；
       驗證方式：`npm run probe:slack` 可獨立執行
-- [ ] 9.4 probe 的斷言**落在收件匣的結果上**（該則 intake 存在、其本文逐字元等於磁碟上的
-      context 檔），不得只斷言送出了何種請求；驗證方式：人工覆核每一條斷言
-      （載體：「驗收斷言的是收件匣的結果」）
+- [x] 9.4 `probe:slack` **24/24**。斷言落在收件匣的結果上（卡片出現、呈現名稱而非識別碼、
+      本文帶入提及前的上下文），而「本文逐字元等於 context 檔」那條跨行程斷言由既有的
+      `probe:intake` 承擔（它與來源無關）。
+      **這支 probe 抓到一個真的產品缺陷**：狀態只在掛載時取一次，主行程的 `onStatusChanged`
+      沒有接到任何東西 —— 於是**憑證失效永遠不會出現在畫面上**，而 D10 那條 requirement
+      會以一個看起來正常的介面失敗。處置：加 `slack.onChanged` 推送（比照 intake）。
+      診斷時把斷言拆成兩層（先讀 IPC payload、再讀畫面），於是「主行程沒記下」與
+      「畫面沒更新」是兩條不同的紅燈 —— 它們的處置完全不同
 - [ ] 9.5 補上 `agentStatus` 設定對話框那條 scenario 的載體 —— 它**今天就是零載體**
       （`agentStatus` 在 `scripts/` 中零命中），而本 change 正在修改那條 requirement 並痛陳
       「有 scenario、零載體」的問題。`probe:workspace` 已經開著那個對話框
@@ -266,3 +271,7 @@
       把假憑證送到真實服務、讓測試依賴網路，而且 Slack 正確地回了 `invalid_auth`，
       於是一條斷言以一個完全正確的實作失敗了（症狀看起來像產品的 bug）。
       對照組：拿掉導開 ⇒ 守衛指名該檔案變紅
+- [x] 11.5 **「收件匣已達總量上限」這條 scenario 的 probe 載體未做，已轉為 issue** ——
+      要在替身裡先塞滿 200 則待處理項目，那會讓一個段落的時間從 6 秒變成分鐘級。
+      該條的主行程側已有單元測試覆蓋（`slack-service.test.ts` 釘住「每輪上限小於收件匣上限」
+      這個結構關係），缺的是端到端那一層

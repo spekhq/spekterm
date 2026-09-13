@@ -27,6 +27,17 @@
  * 也不得對這份表的成員做算術。
  */
 
+/**
+ * 探針用到的**其他**監聽 port（不是 debugging port）。
+ *
+ * 它們同樣必須登記在這裡：**一個寫在探針裡的數字字面，下一支探針不會知道它被佔用了**，
+ * 而撞號的症狀是「替身收不到呼叫」——那看起來像產品沒有去打它。
+ */
+export const STUB_PORTS = {
+  /** 替身 Slack 的 HTTPS 伺服器。 */
+  slack: 18443,
+}
+
 /** 探針名 → 該支所有 debugging port（鍵名說明它是哪一次啟動）。 */
 export const PROBE_PORTS = {
   shell: { main: 9222 },
@@ -52,6 +63,14 @@ export const PROBE_PORTS = {
    * 上 `connectToApp` 會連到先起來的那一個 —— 比照 `insights` 的兩個 port 學到的同一件事。
    */
   agentView: { main: 9238, restore: 9239 },
+  /**
+   * 兩次啟動：第一次讓回補跑完並交付，第二次**以同一份 profile、但水位已被清掉**重啟 ——
+   * 那是「取回位置遺失之後不重複交付」唯一的載體。
+   *
+   * 第二個 port 不是可有可無的（比照 `insights` / `agentView` / `intake` 學到的同一件事）：
+   * 同一個 port 上 `connectToApp` 會連到先起來的那一個。
+   */
+  slack: { main: 9243, restart: 9244 },
   /**
    * 兩次啟動：主要的那一次，以及**以同一份 profile 重啟**的那一次。
    *

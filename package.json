@@ -67,6 +67,7 @@
     "probe:insights": "node scripts/run-probe.mjs insights",
     "probe:agent-view": "node scripts/run-probe.mjs agent-view",
     "probe:intake": "node scripts/run-probe.mjs intake",
+    "probe:slack": "node scripts/run-probe.mjs slack",
     "probe:package": "npm run dist:linux && node scripts/run-probe.mjs package"
   },
   "devDependencies": {

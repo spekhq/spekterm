@@ -78,6 +78,15 @@ export function SlackSettings(): React.JSX.Element {
 
   useEffect(reload, [reload])
 
+  /**
+   * 訂閱狀態改變。
+   *
+   * **回補在啟動數秒後才跑完** —— 只在掛載時取一次的話，使用者看到的永遠是「還沒檢查過」，
+   * 而憑證失效永遠不會出現在畫面上。那條 requirement 會以一個看起來正常的介面失敗，
+   * 而這正是 `probe:slack` 抓到的（狀態停在「Set up, but it has not checked yet」）。
+   */
+  useEffect(() => window.workspace.slack.onChanged(reload), [reload])
+
   const applyToken = useCallback((kind: SlackTokenKind, value: string | null) => {
     void window.workspace.slack.setToken(kind, value).then((next) => {
       setState(next)

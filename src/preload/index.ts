@@ -490,6 +490,18 @@ const workspaceApi = {
     /** `null`／不合法（非 https）＝清回預設端點。 */
     setApiBaseUrl: (url: string | null): Promise<SlackState> =>
       ipcRenderer.invoke('workspace:slack:setApiBaseUrl', url),
+    /**
+     * 狀態改變了。
+     *
+     * **不是可有可無的**：回補在啟動數秒後才跑完，只在掛載時取一次的話，使用者看到的永遠是
+     * 「還沒檢查過」，而**憑證失效永遠不會出現在畫面上** —— 那條 requirement 會以一個
+     * 看起來正常的介面失敗。（`probe:slack` 抓到的就是這個。）
+     */
+    onChanged: (listener: () => void): (() => void) => {
+      const handler = (): void => listener()
+      ipcRenderer.on('workspace:slack:changed', handler)
+      return () => ipcRenderer.removeListener('workspace:slack:changed', handler)
+    },
   },
   intake: {
     list: (): Promise<IntakeSnapshot> => ipcRenderer.invoke('workspace:intake:list'),

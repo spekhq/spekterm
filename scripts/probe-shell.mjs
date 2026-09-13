@@ -235,7 +235,7 @@ const PROBE_EXPRESSION = `(async () => {
     // 「哪個工作區」的方法** —— 兩者自憑證推導，而一個填錯的身分其症狀與「沒有人提及我」
     // 在畫面上完全相同。端點自己一個成員，不併進一個吃整份設定的 setter。
     surplusSlackKeys: Object.keys(api?.slack ?? {}).filter(
-      (key) => !['get', 'setToken', 'setLookbackDays', 'setApiBaseUrl'].includes(key),
+      (key) => !['get', 'setToken', 'setLookbackDays', 'setApiBaseUrl', 'onChanged'].includes(key),
     ),
     // **憑證的讀取方法絕不可出現在介面上。** 上一條 surplusSlackKeys 是白名單（多出即違規），
     // 這一條是針對這個特定危害的具名斷言 —— 兩者互補：白名單會在有人把成員名字加進清單時
