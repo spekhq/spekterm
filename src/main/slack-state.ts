@@ -1,4 +1,5 @@
 import type { SecretStore } from './secret-store'
+import type { SlackStatus } from './slack-service'
 import {
   type ProjectedSlackSettings,
   type SlackSettingsStore,
@@ -29,6 +30,11 @@ export function secretName(kind: SlackTokenKind): string {
  */
 export interface SlackState {
   settings: ProjectedSlackSettings
+  /**
+   * 執行期狀態。**「失效」與「目前沒有待處理項目」必須分得出來** —— 兩者在外部本來是同一個
+   * 樣子（收件匣是空的），而使用者分不出來就會在一件已經壞掉的事情上繼續等。
+   */
+  status: SlackStatus
   /** 每一種憑證**有沒有被設定**。 */
   configured: Record<SlackTokenKind, boolean>
   /** 端點是不是預設值。 */
@@ -47,10 +53,12 @@ export interface SlackState {
 export function slackState(input: {
   settings: SlackSettingsStore
   secrets: SecretStore
+  status: () => SlackStatus
 }): SlackState {
   const { settings, secrets } = input
   return {
     settings: projectSlackSettings(settings.get()),
+    status: input.status(),
     configured: {
       appToken: secrets.has(secretName('appToken')),
       userToken: secrets.has(secretName('userToken')),

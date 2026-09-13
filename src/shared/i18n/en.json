@@ -602,6 +602,22 @@
     "routingHint": "Set a routing fallback under Rules, otherwise every mention arrives with no folder to open in.",
     "truncatedBody": "[earlier messages in this thread were left out — the text was too long to show in full]",
     "truncatedField": "…",
-    "bodyHeader": "Thread in #{{channel}}, up to the message that mentioned you:"
+    "bodyHeader": "Thread in #{{channel}}, up to the message that mentioned you:",
+    "status": "Status",
+    "statusUnconfigured": "Not set up yet — paste a user token above.",
+    "statusIdle": "Working. Nothing new since the last check.",
+    "statusNeverRan": "Set up, but it has not checked yet.",
+    "statusFailureAuth": "Your Slack credentials are no longer valid ({{error}}). Mentions are NOT arriving until you paste a new token.",
+    "statusFailureTransient": "Cannot reach Slack right now ({{error}}). Mentions will arrive on the next check.",
+    "statusFailureCount_one": "seen once",
+    "statusFailureCount_other": "seen {{count}} times",
+    "statusDeferred_one": "{{count}} more mention is waiting — it arrives on the next check.",
+    "statusDeferred_other": "{{count}} more mentions are waiting — they arrive on the next check.",
+    "statusDelivered_one": "{{count}} mention arrived on the last check.",
+    "statusDelivered_other": "{{count}} mentions arrived on the last check.",
+    "realtimeLabel": "Live updates",
+    "realtimeConnected": "On — new mentions arrive within seconds.",
+    "realtimeOff": "Off — add an app-level token to get mentions within seconds instead of on the next check.",
+    "realtimeDegraded": "Interrupted — falling back to the periodic check."
   }
 }

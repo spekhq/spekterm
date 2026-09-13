@@ -26,6 +26,43 @@ import type { SlackState, SlackTokenKind } from '../types'
  * —— **一個沉默的端點欄位比沒有這個欄位更糟**。因此非預設值時呈現一段明確的警示文字，
  * 而不只是把值填在輸入框裡。
  */
+/**
+ * 狀態那一行要用哪個字典 key。
+ *
+ * **回傳 key 而不是已翻譯的字串**，兩個理由：`t` 的型別不必在這裡重述（那會迫使我們寫一個比
+ * i18next 寬鬆的簽名，而寬鬆的簽名會讓打錯的 key 通過編譯）；而且 key 是**字面值的聯集**，
+ * 於是字典的型別安全仍然管得到它 —— 樣板字串組出來的 key 逃得過那道檢查。
+ *
+ * 順序是刻意的：**失效優先於一切**。設定好了而連不上時，「Working」是一句謊話。
+ * 四種情形各一句而不是一個布林 —— 「失效」與「目前沒有待處理項目」在外部本來是同一個樣子。
+ */
+function statusCopy(state: SlackState): {
+  key:
+    | 'slack.statusUnconfigured'
+    | 'slack.statusFailureAuth'
+    | 'slack.statusFailureTransient'
+    | 'slack.statusNeverRan'
+    | 'slack.statusIdle'
+  options?: { error: string }
+} {
+  if (!state.configured.userToken) return { key: 'slack.statusUnconfigured' }
+  const failure = state.status.failure
+  if (failure !== undefined) {
+    return failure.kind === 'auth'
+      ? { key: 'slack.statusFailureAuth', options: { error: failure.error } }
+      : { key: 'slack.statusFailureTransient', options: { error: failure.error } }
+  }
+  if (state.status.lastRoundAt === undefined) return { key: 'slack.statusNeverRan' }
+  return { key: 'slack.statusIdle' }
+}
+
+/** 即時路徑的三種狀態各一句。**`off` 與 `degraded` 分得出來** —— 前者沒開，後者壞了。 */
+const REALTIME_COPY = {
+  connected: 'slack.realtimeConnected',
+  degraded: 'slack.realtimeDegraded',
+  off: 'slack.realtimeOff',
+} as const
+
 export function SlackSettings(): React.JSX.Element {
   const { t } = useTranslation()
   const [state, setState] = useState<SlackState | null>(null)
@@ -51,6 +88,7 @@ export function SlackSettings(): React.JSX.Element {
 
   if (state === null) return <p className="text-2xs text-ink-faint">{t('common.loading')}</p>
 
+  const status = statusCopy(state)
   const identity =
     state.settings.selfUserId !== undefined && state.settings.teamId !== undefined
       ? t('slack.connectedAs', { user: state.settings.selfUserId, team: state.settings.teamId })
@@ -98,6 +136,40 @@ export function SlackSettings(): React.JSX.Element {
             </button>
           </div>
         ))}
+      </div>
+
+      {/*
+        狀態。**「失效」與「目前沒有待處理項目」必須在畫面上不同** —— 兩者在外部本來是同一個
+        樣子（收件匣是空的），而使用者分不出來就會在一件已經壞掉的事情上繼續等。
+        因此這裡呈現四種情形而不是一個布林，且失效的呈現**恰為一則並帶次數**
+        （「而非多則」單獨在零則時也成立，那是一條紅不起來的斷言）。
+      */}
+      <div className="flex flex-col gap-1" aria-label={t('slack.status')}>
+        <span className="text-2xs font-bold text-ink">{t('slack.status')}</span>
+        <span className="text-2xs text-ink-muted">{t(status.key, status.options)}</span>
+        {state.status.failure !== undefined ? (
+          <span className="text-2xs text-ink-faint">
+            {t('slack.statusFailureCount', { count: state.status.failure.count })}
+          </span>
+        ) : null}
+        {state.status.deferred > 0 ? (
+          <span className="text-2xs text-ink">
+            {t('slack.statusDeferred', { count: state.status.deferred })}
+          </span>
+        ) : null}
+        {state.status.delivered > 0 ? (
+          <span className="text-2xs text-ink-faint">
+            {t('slack.statusDelivered', { count: state.status.delivered })}
+          </span>
+        ) : null}
+      </div>
+
+      {/* 即時路徑 —— **它是加速器**，off 與 degraded 必須分得出來（前者沒開，後者壞了）。 */}
+      <div className="flex flex-col gap-1" aria-label={t('slack.realtimeLabel')}>
+        <span className="text-2xs font-bold text-ink">{t('slack.realtimeLabel')}</span>
+        <span className="text-2xs text-ink-muted">
+          {t(REALTIME_COPY[state.status.realtime])}
+        </span>
       </div>
 
       {/* 身分 —— 推導出來的，沒有輸入框。 */}

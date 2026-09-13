@@ -324,8 +324,9 @@ Slack 的主機」的能力。**
 
 ### D15 不需要新增任何依賴（實測）
 
-Node 22.22（本 repo 的 `.nvmrc`，也是 Electron 43 內的版本線）**同時具備全域 `fetch` 與全域
-`WebSocket`**。回補只需要 HTTPS 呼叫，即時路徑（Socket Mode 在 `apps.connections.open` 之後
+Node 22.22（本 repo 的 `.nvmrc`）與 **Electron 43.4.1 內的 Node 24.18.1**（實測，兩者皆驗）
+**同時具備全域 `fetch` 與全域 `WebSocket`**，且 `WebSocket` 在 Electron 主行程中確實建構得起來
+（`typeof` 是 function 而構造時 throw 的情形存在過，所以那一條要分開驗）。回補只需要 HTTPS 呼叫，即時路徑（Socket Mode 在 `apps.connections.open` 之後
 就是一條普通的 WSS 連線）只需要 WebSocket —— 兩者都不需要 Slack 的官方 SDK。
 
 **這順帶關掉兩個風險，而第二個正是本 change 剛立的守衛所防的**：
@@ -336,8 +337,9 @@ Node 22.22（本 repo 的 `.nvmrc`，也是 Electron 43 內的版本線）**同�
    `secret-scope` 守衛①所防的向量：往 `process.env` 寫一個值，它就進到**每一個 pty**。
    不引入 SDK，這件事連發生的機會都沒有。
 
-> **Electron 主行程的全域 `WebSocket` 尚未實測**（只驗了系統 Node）。它是即時路徑的前提，
-> 而即時路徑在 D1 之下是加速器 —— 不成立時退化為輪詢，其餘模組不動。第 7 組會一併實測。
+> **已實測**（第 7 組）：`electron 43.4.1` 的主行程回
+> `{"node":"24.18.1","WebSocket":"function","constructable":true}`。
+> 順帶更正一個原本寫錯的事實 —— Electron 43 內的 Node 是 **24**，不是 22。
 
 ### D13 watcher 建立點的數字
 

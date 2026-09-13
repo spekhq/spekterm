@@ -5,7 +5,16 @@ import path from 'node:path'
 import { afterEach, beforeEach, describe, it } from 'node:test'
 import { SecretStore } from './secret-store'
 import { SLACK_TOKEN_KINDS, isTokenKind, secretName, slackState } from './slack-state'
+import type { SlackStatus } from './slack-service'
 import { DEFAULT_API_BASE_URL, DEFAULT_LOOKBACK_DAYS, SlackSettingsStore } from './slack-settings-store'
+
+/** 一份不失效、什麼都沒交付的狀態 —— 本檔案驗的是投影，不是狀態本身。 */
+const idleStatus = (): SlackStatus => ({
+  configured: true,
+  delivered: 0,
+  deferred: 0,
+  realtime: 'off',
+})
 
 /** 獨特到不會被任何東西吞掉。**「不含憑證」的斷言要釘得住才有意義。** */
 const APP_SENTINEL = 'xapp-SENTINEL-4d2b8e01-do-not-leak'
@@ -37,7 +46,7 @@ describe('slackState：送往 renderer 的狀態', () => {
     secrets.set(secretName('userToken'), USER_SENTINEL)
     settings.rememberIdentity('T012ABCDEF', 'U345GHIJKL')
 
-    const state = slackState({ settings, secrets })
+    const state = slackState({ settings, secrets, status: idleStatus })
     const serialized = JSON.stringify(state)
 
     assert.equal(serialized.includes(APP_SENTINEL), false, 'app token 洩漏到 renderer')
@@ -51,7 +60,7 @@ describe('slackState：送往 renderer 的狀態', () => {
   })
 
   it('憑證未設定時 configured 為假，且身分欄位不存在', () => {
-    const state = slackState({ settings, secrets })
+    const state = slackState({ settings, secrets, status: idleStatus })
     assert.deepEqual(state.configured, { appToken: false, userToken: false })
     assert.equal('teamId' in state.settings, false, '未設定的欄位應省略而非為 undefined')
     assert.equal('selfUserId' in state.settings, false)
@@ -59,13 +68,13 @@ describe('slackState：送往 renderer 的狀態', () => {
 
   it('推導出的身分出現在投影中 —— 介面要顯示它，而它不是使用者填的', () => {
     settings.rememberIdentity('T012ABCDEF', 'U345GHIJKL')
-    const state = slackState({ settings, secrets })
+    const state = slackState({ settings, secrets, status: idleStatus })
     assert.equal(state.settings.teamId, 'T012ABCDEF')
     assert.equal(state.settings.selfUserId, 'U345GHIJKL')
   })
 
   it('effective 帶著套用預設後的值 —— 預設住在主行程', () => {
-    const state = slackState({ settings, secrets })
+    const state = slackState({ settings, secrets, status: idleStatus })
     assert.equal(state.effective.apiBaseUrl, DEFAULT_API_BASE_URL)
     assert.equal(state.effective.lookbackDays, DEFAULT_LOOKBACK_DAYS)
     assert.equal(state.usesDefaultEndpoint, true)
@@ -75,7 +84,7 @@ describe('slackState：送往 renderer 的狀態', () => {
     // `secret-scope` 的端點第二條：憑證的目的地是一個資料欄位，那個代價只有在使用者看得見時
     // 才可接受。**一個沉默的端點欄位比沒有這個欄位更糟。**
     settings.setApiBaseUrl('https://slack.internal.example.com/api')
-    const state = slackState({ settings, secrets })
+    const state = slackState({ settings, secrets, status: idleStatus })
     assert.equal(state.usesDefaultEndpoint, false)
     assert.equal(state.effective.apiBaseUrl, 'https://slack.internal.example.com/api')
   })
@@ -83,7 +92,7 @@ describe('slackState：送往 renderer 的狀態', () => {
   it('狀態中沒有任何檔案系統位置', () => {
     // renderer 的詞彙裡沒有絕對路徑。機密檔與設定檔的位置都不該經這裡流出去。
     secrets.set(secretName('userToken'), USER_SENTINEL)
-    const serialized = JSON.stringify(slackState({ settings, secrets }))
+    const serialized = JSON.stringify(slackState({ settings, secrets, status: idleStatus }))
     assert.equal(serialized.includes(base), false, '洩漏了落盤位置')
     assert.equal(serialized.includes('secrets.json'), false)
   })

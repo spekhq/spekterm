@@ -30,6 +30,7 @@ import type { SlackMessage } from './slack-mention'
 
 /** 端點的相對路徑 —— 全部以 POST + form body 呼叫（Slack 兩種都吃，form 較不易踩編碼問題）。 */
 type SlackMethod =
+  | 'apps.connections.open'
   | 'auth.test'
   | 'users.conversations'
   | 'conversations.history'
@@ -170,6 +171,27 @@ export class SlackApi {
       return { ok: false, kind: 'malformed', error: 'auth_test_shape' }
     }
     return { ok: true, value: { teamId, userId } }
+  }
+
+  /**
+   * 開一條 Socket Mode 的連線，回傳那條 WebSocket 的 URL。
+   *
+   * **這個方法要的是 app-level token，不是 user token** —— 呼叫端必須用另一個 `SlackApi`
+   * 實例（帶另一份憑證）。把兩份憑證混在一個實例裡會讓「哪個方法用哪一份」變成一條紀律，
+   * 而用錯的症狀是 `not_allowed_token_type`（已在 AUTH_ERRORS 裡，所以會被正確地報成
+   * 「憑證問題」而不是「沒有人提及我」）。
+   *
+   * 回傳的 URL **本身就是一份短期憑證** —— 任何人拿到它就能收那個 app 的事件。
+   * 因此它不進診斷輸出、不進 renderer。
+   */
+  async appsConnectionsOpen(): Promise<SlackResult<string>> {
+    const result = await this.#call('apps.connections.open', {})
+    if (!result.ok) return result
+    const url = (result.value as Record<string, unknown>).url
+    if (typeof url !== 'string' || !url.startsWith('wss://')) {
+      return { ok: false, kind: 'malformed', error: 'connections_open_shape' }
+    }
+    return { ok: true, value: url }
   }
 
   /** 使用者所在的頻道（含私訊）。一頁一頁取，由呼叫端決定要不要全部取完。 */

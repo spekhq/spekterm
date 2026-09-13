@@ -33,7 +33,7 @@ import { PreferencesStore } from './preferences-store'
 import { SecretStore } from './secret-store'
 import { SessionStore } from './session-store'
 import { SlackCursorStore } from './slack-cursor-store'
-import { runSlackRound } from './slack-service'
+import { SlackRuntime } from './slack-service'
 import { SlackSettingsStore } from './slack-settings-store'
 import { createInsightsService } from './insights'
 import { configDirs, delegateDirSuffix, resolveArchiveRoot, resolveDelegateCwd, resolveProjectsDir } from './insights-source'
@@ -195,6 +195,20 @@ void app.whenReady().then(() => {
   const slackCursorStore = new SlackCursorStore(join(app.getPath('userData'), 'slack-cursors.json'))
   slackCursorStore.load()
 
+  // Slack 的執行期。**在註冊 IPC 之前建立** —— 那個 handler 要問它狀態。
+  // 它持有的狀態是一條 requirement 的載體：「失效」與「目前沒有待處理項目」必須分得出來，
+  // 因為兩者在外部本來是同一個樣子（收件匣是空的）。
+  const slackRuntime = new SlackRuntime({
+    settings: slackSettingsStore,
+    secrets: secretStore,
+    cursors: slackCursorStore,
+    intake: intakeStore,
+    inboxRoot: inboxRoot(app.getPath('userData')),
+    // 與 `IntakeSource` 的 adapter 同一個值 —— 去重的主鍵是 `(adapter, id)`，
+    // 兩邊不一致的話「這個識別碼進來過嗎」永遠答否，而重複交付會靜默地發生。
+    inboxAdapter: 'file',
+  })
+
   const dirty = new DirtyStateStore()
 
   // 在建立視窗、載入任何 renderer 內容之前施加 CSP —— renderer 從第一幀起就會渲染使用者
@@ -213,7 +227,11 @@ void app.whenReady().then(() => {
   registerTerminalHandlers(store, sessionStore, preferencesStore)
   registerClipboardHandlers()
   registerSettingsHandlers(preferencesStore)
-  registerSlackHandlers({ settings: slackSettingsStore, secrets: secretStore })
+  registerSlackHandlers({
+    settings: slackSettingsStore,
+    secrets: secretStore,
+    status: () => slackRuntime.status(),
+  })
   registerPanelHandlers(panelStore)
   registerIntakeHandlers({
     service: intakeService,
@@ -273,16 +291,7 @@ void app.whenReady().then(() => {
    * 延遲觸發是為了不與啟動搶資源，比照上面那趟對話存檔的掃描。
    */
   setTimeout(() => {
-    void runSlackRound({
-      settings: slackSettingsStore,
-      secrets: secretStore,
-      cursors: slackCursorStore,
-      intake: intakeStore,
-      inboxRoot: inboxRoot(app.getPath('userData')),
-      // 與上面 `IntakeSource` 的 adapter 同一個值 —— 去重的主鍵是 `(adapter, id)`，
-      // 兩邊不一致的話「這個識別碼進來過嗎」永遠答否，而重複交付會靜默地發生。
-      inboxAdapter: 'file',
-    })
+    void slackRuntime.runRound()
   }, SLACK_BACKFILL_DELAY_MS)
 
   /**

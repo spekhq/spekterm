@@ -66,12 +66,20 @@ export interface BackfillOutcome {
   deferred: number
   /** 掃過幾個頻道。 */
   channelsScanned: number
+  /**
+   * 這一輪列舉到的頻道（id → 名稱）。
+   *
+   * **即時路徑需要它**：Socket Mode 的事件裡沒有頻道名稱，而少了名稱那條路徑會把 id 寫進
+   * 投遞內容 —— 於是同一則提及會**依「哪條路先到」而呈現不同**，那是「卡片顯示識別碼對使用者
+   * 不構成資訊」那個缺陷的另一種形式。
+   */
+  channels: Readonly<Record<string, string>>
   /** 失敗（若有）。`auth` 代表使用者必須知道，重試無用。 */
   failure?: SlackFailure
 }
 
 /** 一個待交付的候選。 */
-interface Candidate {
+export interface Candidate {
   channelId: string
   channelName: string
   message: SlackMessage
@@ -93,15 +101,17 @@ export function lookbackOldest(nowMs: number, days: number): string {
 export async function runBackfill(deps: BackfillDeps): Promise<BackfillOutcome> {
   const identity = await deps.api.authTest()
   if (!identity.ok) {
-    return { delivered: 0, deferred: 0, channelsScanned: 0, failure: identity }
+    return { delivered: 0, deferred: 0, channelsScanned: 0, channels: {}, failure: identity }
   }
   const { teamId, userId } = identity.value
   deps.rememberIdentity(teamId, userId)
 
   const channels = await listChannels(deps)
   if (!channels.ok) {
-    return { delivered: 0, deferred: 0, channelsScanned: 0, failure: channels.failure }
+    return { delivered: 0, deferred: 0, channelsScanned: 0, channels: {}, failure: channels.failure }
   }
+  const channelNames: Record<string, string> = {}
+  for (const channel of channels.value) channelNames[channel.id] = channel.name
 
   let delivered = 0
   let deferred = 0
@@ -130,7 +140,7 @@ export async function runBackfill(deps: BackfillDeps): Promise<BackfillOutcome> 
         handledUpTo = previousTs(scanned.candidates, index)
         break
       }
-      const outcome = await handleCandidate(deps, teamId, candidate, names)
+      const outcome = await deliverCandidate(deps, teamId, candidate, names)
       if (outcome.failure !== undefined) {
         failure ??= outcome.failure
         // 這一則沒處理成功 ⇒ 水位同樣不得越過它。
@@ -143,7 +153,13 @@ export async function runBackfill(deps: BackfillDeps): Promise<BackfillOutcome> 
     if (handledUpTo !== undefined) deps.advanceCursor(channel.id, handledUpTo)
   }
 
-  return { delivered, deferred, channelsScanned: channels.value.length, failure }
+  return {
+    delivered,
+    deferred,
+    channelsScanned: channels.value.length,
+    channels: channelNames,
+    failure,
+  }
 }
 
 /** 候選清單中第 `index` 個之前的那一則的 ts（沒有就 `undefined` ＝水位完全不動）。 */
@@ -194,7 +210,14 @@ async function scanChannel(
   return { candidates, newestSeen }
 }
 
-async function handleCandidate(
+/**
+ * 把一個候選交付出去。**回補與即時兩條路徑共用這個函式，而那是 design D1 的載體。**
+ *
+ * D1 承諾「即時只是把同一件事提早送到」。若兩條路徑各自組出投遞內容，先到的那一條會定案，
+ * 而使用者讀到的與另一條會產出的**不同** —— 那是一個難查的不一致，且沒有任何東西會紅。
+ * 共用一個函式讓那件事表達不出來。
+ */
+export async function deliverCandidate(
   deps: BackfillDeps,
   teamId: string,
   candidate: Candidate,
@@ -266,7 +289,7 @@ function collectUserIds(messages: SlackMessage[]): string[] {
  * **它是一輪之內的快取，不落盤** —— 落盤的話它就成了「與水位同居的快照」，而那個設計已經被
  * D3(b) 作廢（水位遺失時它一起遺失，保護不了促使它存在的情境）。
  */
-class NameCache {
+export class NameCache {
   readonly #api: SlackApi
   readonly #names: Record<string, string> = {}
 

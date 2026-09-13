@@ -8,6 +8,7 @@ import {
   slackState,
 } from '../slack-state'
 import { DEFAULT_API_BASE_URL, DEFAULT_LOOKBACK_DAYS, type SlackSettingsStore } from '../slack-settings-store'
+import type { SlackStatus } from '../slack-service'
 
 export const SLACK_CHANNELS = {
   get: 'workspace:slack:get',
@@ -37,6 +38,7 @@ export const SLACK_CHANNELS = {
 export function registerSlackHandlers(input: {
   settings: SlackSettingsStore
   secrets: SecretStore
+  status: () => SlackStatus
 }): void {
   const state = (): SlackState => slackState(input)
 
