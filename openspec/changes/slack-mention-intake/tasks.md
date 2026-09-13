@@ -267,8 +267,10 @@
 - [x] 10.6 關閉 issue #39（已註明其標題涵蓋的 `agentEvents` 已由 `agent-intake-inbox` 補上、
       本 change 補的是 `agentStatus`，以及那兩條 scenario 此前都是零載體）
 - [x] 10.7 關閉 issue #42（已說明條文改為講比例、清單移到 `watcher.ts` 檔頭，比單純校正數字多做一步）
-- [ ] 10.8 `npm run test:all` 全綠（封存前的完整驗收；約十幾分鐘）
-- [ ] 10.9 `npm run lint` 與 `npm run typecheck` 全綠
+- [x] 10.8 `npm run test:all` **全綠**：`npm test` 1172 條、`test:e2e` **13/13**
+      （probe:slack 37s、probe:workspace 132/132、probe:terminal 284/284），
+      每一支都標示「完整執行」或無段落資訊，沒有中斷的段落
+- [x] 10.9 `npm run lint` 與 `npm run typecheck` 全綠（0 error / 0 warning）
 - [ ] 10.10 使用者實際操作驗過（dogfood：真實 Slack 的連線由他認定 —— 自動化驗收刻意不涵蓋）
 
 ## 11. 順帶修掉的既有缺陷（實作第 6 組時發現）
