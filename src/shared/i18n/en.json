@@ -599,6 +599,9 @@
     "endpointPlaceholder": "https://slack.com/api",
     "endpointHint": "Only https is accepted. Change this only if you know why: it is where your credentials are sent.",
     "resetEndpoint": "Reset to the default endpoint",
-    "routingHint": "Set a routing fallback under Rules, otherwise every mention arrives with no folder to open in."
+    "routingHint": "Set a routing fallback under Rules, otherwise every mention arrives with no folder to open in.",
+    "truncatedBody": "[earlier messages in this thread were left out — the text was too long to show in full]",
+    "truncatedField": "…",
+    "bodyHeader": "Thread in #{{channel}}, up to the message that mentioned you:"
   }
 }

@@ -32,6 +32,8 @@ import { PanelStore } from './panel-store'
 import { PreferencesStore } from './preferences-store'
 import { SecretStore } from './secret-store'
 import { SessionStore } from './session-store'
+import { SlackCursorStore } from './slack-cursor-store'
+import { runSlackRound } from './slack-service'
 import { SlackSettingsStore } from './slack-settings-store'
 import { createInsightsService } from './insights'
 import { configDirs, delegateDirSuffix, resolveArchiveRoot, resolveDelegateCwd, resolveProjectsDir } from './insights-source'
@@ -136,6 +138,9 @@ async function logScanSummary(): Promise<void> {
  */
 void applyUserEnvOnce()
 
+/** 啟動後多久跑第一輪 Slack 回補 —— 不與啟動搶資源。 */
+const SLACK_BACKFILL_DELAY_MS = 4000
+
 void app.whenReady().then(() => {
   // workspace 設定隨使用者資料目錄走，因此 `--user-data-dir` 可指向暫存 profile，
   // 讓驗收得以反覆重啟應用程式而不污染真實設定。
@@ -185,6 +190,10 @@ void app.whenReady().then(() => {
   secretStore.load()
   const slackSettingsStore = new SlackSettingsStore(join(app.getPath('userData'), 'slack.json'))
   slackSettingsStore.load()
+  // 水位是**純粹的最佳化**（design D3(b)）：去重的權威是收件匣自己的紀錄，這份檔案只決定
+  // 「要掃多少訊息」。遺失它的代價是多掃一遍，不是重複交付 —— 因此它不做韌性設計。
+  const slackCursorStore = new SlackCursorStore(join(app.getPath('userData'), 'slack-cursors.json'))
+  slackCursorStore.load()
 
   const dirty = new DirtyStateStore()
 
@@ -252,6 +261,29 @@ void app.whenReady().then(() => {
     .catch((error) => {
       console.error(`[intake] failed to start inbox: ${String(error)}`)
     })
+
+  /**
+   * 啟動後跑一輪 Slack 的回補。
+   *
+   * **這是本能力的主幹，不是加速器**（design D1）：桌面應用程式大多數時間是關著的，而 Slack 的
+   * 即時通道沒有重送佇列 —— 以即時為主等於把最常見的情形（關機八小時）交給一個補不了的機制。
+   *
+   * **不 await** —— 它不得阻塞啟動。因此它也不得拋錯：`runSlackRound` 以回傳值呈現失敗，
+   * 一個漏出去的 rejection 在主行程裡是致命的（主行程一死，所有 pty 陪葬）。
+   * 延遲觸發是為了不與啟動搶資源，比照上面那趟對話存檔的掃描。
+   */
+  setTimeout(() => {
+    void runSlackRound({
+      settings: slackSettingsStore,
+      secrets: secretStore,
+      cursors: slackCursorStore,
+      intake: intakeStore,
+      inboxRoot: inboxRoot(app.getPath('userData')),
+      // 與上面 `IntakeSource` 的 adapter 同一個值 —— 去重的主鍵是 `(adapter, id)`，
+      // 兩邊不一致的話「這個識別碼進來過嗎」永遠答否，而重複交付會靜默地發生。
+      inboxAdapter: 'file',
+    })
+  }, SLACK_BACKFILL_DELAY_MS)
 
   /**
    * 啟動後跑一趟增量掃描 —— **與使用者要不要看無關**。
