@@ -36,6 +36,19 @@ import { secretName } from './slack-state'
 /** 一輪最多交付幾則。刻意小於收件匣的 `MAX_PENDING`（200）。 */
 export const MAX_DELIVERIES_PER_ROUND = 25
 
+/**
+ * 兩輪回補之間的間隔。
+ *
+ * **沒有它，這個能力只在啟動的那一刻有效。** design D1 的降級模式寫的是「啟動時 **+ 週期輪詢**」，
+ * 而第一版只做了前半 —— 實測踩到：使用者在 app 起來之後才貼上憑證，那一輪早就跑完了，
+ * 而**不重開 app 就永遠不會有第二輪**。即時路徑是加速器、可能根本不可用（見 D1），
+ * 所以週期輪詢不是備援而是主幹的一部分。
+ *
+ * 五分鐘的取捨：Slack 的 tier-3 方法每分鐘約 50 次，而一輪的呼叫數約為「頻道數 + 提及數 × 2」。
+ * 五分鐘讓一個頻道很多的使用者也離速率上限很遠，而延遲對「沒有即時路徑」的情形可以接受。
+ */
+export const ROUND_INTERVAL_MS = 5 * 60_000
+
 export interface SlackServiceDeps {
   settings: SlackSettingsStore
   secrets: SecretStore
@@ -58,6 +71,13 @@ export interface SlackFailureNotice {
   kind: SlackFailure['kind']
   error: string
   count: number
+  /**
+   * 權限不足時，Slack 告訴我們**缺哪些 scope**。
+   *
+   * **這是這則訊息唯一可行動的部分。** 少了它，使用者看到的是「權限不足」而不知道要加什麼；
+   * 而 Slack 在回應裡就給了它，只是第一版把它丟掉了。它是 scope 名稱的清單，不是憑證。
+   */
+  needed?: string
 }
 
 export interface SlackStatus {
@@ -90,6 +110,9 @@ export class SlackRuntime {
   #status: SlackStatus = { configured: false, delivered: 0, deferred: 0, realtime: 'off' }
   #channels: Readonly<Record<string, string>> = {}
   #realtime: SlackRealtime | null = null
+  #timer: ReturnType<typeof setInterval> | null = null
+  /** 一輪還在跑時不要疊上另一輪 —— 那會讓速率上限與水位的推進同時變得難以推理。 */
+  #running = false
 
   constructor(deps: SlackServiceDeps) {
     this.#deps = deps
@@ -106,6 +129,17 @@ export class SlackRuntime {
    * **不拋錯** —— 呼叫端不 await 它。
    */
   async runRound(): Promise<void> {
+    // **不重入。** 週期輪詢、啟動那一輪、以及「使用者剛存了憑證」這三個觸發點可能重疊。
+    if (this.#running) return
+    this.#running = true
+    try {
+      await this.#round()
+    } finally {
+      this.#running = false
+    }
+  }
+
+  async #round(): Promise<void> {
     const token = this.#deps.secrets.get(secretName('userToken'))
     if (token === undefined) {
       this.#update({ configured: false, realtime: 'off' })
@@ -132,12 +166,30 @@ export class SlackRuntime {
       failure: outcome.failure === undefined ? undefined : this.#merge(outcome.failure),
     })
 
-    if (outcome.failure?.kind === 'auth') return
+    // **憑證或權限有問題時不要再去開即時連線** —— 它一定也會失敗，而那只會讓同一個問題
+    // 以第二種面貌再報一次（`realtime: degraded`），把真正的處置埋在噪音底下。
+    if (outcome.failure?.kind === 'auth' || outcome.failure?.kind === 'scope') return
     await this.#startRealtime(token)
   }
 
-  /** 停止即時連線（app 結束時）。 */
+  /**
+   * 開始週期性地跑回補，並立刻跑第一輪。
+   *
+   * **`unref()` 是必要的**：一個被 ref 的 interval 會讓主行程在該關的時候關不掉。
+   */
+  start(): void {
+    if (this.#timer !== null) return
+    void this.runRound()
+    this.#timer = setInterval(() => void this.runRound(), ROUND_INTERVAL_MS)
+    this.#timer.unref?.()
+  }
+
+  /** 停止週期輪詢與即時連線（app 結束時）。 */
   async dispose(): Promise<void> {
+    if (this.#timer !== null) {
+      clearInterval(this.#timer)
+      this.#timer = null
+    }
     await this.#realtime?.stop()
     this.#realtime = null
   }
@@ -202,11 +254,12 @@ export class SlackRuntime {
    * 逐次各發一則會讓一次網路不穩把使用者的注意力用完 —— 而那是這條管線僅有的兩道防線之一。
    */
   #merge(failure: SlackFailure): SlackFailureNotice {
+    const needed = failure.kind === 'scope' ? failure.needed : undefined
     const current = this.#status.failure
     if (current !== undefined && current.kind === failure.kind && current.error === failure.error) {
-      return { ...current, count: current.count + 1 }
+      return { ...current, count: current.count + 1, needed: needed ?? current.needed }
     }
-    return { kind: failure.kind, error: failure.error, count: 1 }
+    return { kind: failure.kind, error: failure.error, count: 1, needed }
   }
 
   #update(patch: Partial<SlackStatus>): void {

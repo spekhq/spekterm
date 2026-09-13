@@ -42,6 +42,14 @@ export function registerSlackHandlers(input: {
   status: () => SlackStatus
   /** 註冊「狀態改變了」的通知器 —— 回補是非同步的，取一次是不夠的（見下）。 */
   onStatusChanged?: (notify: () => void) => void
+  /**
+   * 請求跑一輪回補。
+   *
+   * **使用者剛存下憑證的那一刻，正是該去試一次的時候。** 少了它，他貼完 token 之後畫面上
+   * 什麼都不會變，而下一輪要等到週期到期或重開 app —— 那個「什麼都沒發生」與「功能壞了」
+   * 在畫面上完全相同（實測踩過：在 app 起來之後才貼憑證，那一輪早就跑完了）。
+   */
+  requestRound?: () => void
 }): void {
   const state = (): SlackState => slackState(input)
 
@@ -72,6 +80,9 @@ export function registerSlackHandlers(input: {
     if (!isTokenKind(kind)) return state()
     if (value === null) input.secrets.clear(secretName(kind))
     else if (typeof value === 'string') input.secrets.set(secretName(kind), value.trim())
+    // **存下憑證即試一次。** 不 await —— 回傳值只回報「已設定」那個事實，結果經
+    // `changed` 事件推送。
+    if (value !== null) input.requestRound?.()
     return state()
   })
 

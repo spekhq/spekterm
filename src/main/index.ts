@@ -237,6 +237,7 @@ void app.whenReady().then(() => {
     secrets: secretStore,
     status: () => slackRuntime.status(),
     onStatusChanged: (notify) => slackStatusListeners.add(notify),
+    requestRound: () => void slackRuntime.runRound(),
   })
   registerPanelHandlers(panelStore)
   registerIntakeHandlers({
@@ -297,7 +298,10 @@ void app.whenReady().then(() => {
    * 延遲觸發是為了不與啟動搶資源，比照上面那趟對話存檔的掃描。
    */
   setTimeout(() => {
-    void slackRuntime.runRound()
+    // `start()` 立刻跑第一輪，並開始週期輪詢。
+    // **週期輪詢不是備援** —— 即時路徑是加速器且可能根本不可用（design D1），
+    // 而少了它這個能力只在啟動的那一刻有效（實測踩過）。
+    slackRuntime.start()
   }, SLACK_BACKFILL_DELAY_MS)
 
   /**

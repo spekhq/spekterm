@@ -62,12 +62,40 @@ describe('失敗分三類 —— Slack 對業務錯誤回 HTTP 200', () => {
   it('**HTTP 200 + ok:false + 憑證類錯誤碼 ⇒ auth**', async () => {
     // **這是本模組最重要的一條。** 只看 HTTP 狀態碼的實作會把「憑證已失效」當成成功而拿到一個
     // 空清單 —— 而那個症狀與「沒有人提及我」完全相同，使用者會在一件壞掉的事上繼續等。
-    for (const error of ['invalid_auth', 'token_revoked', 'missing_scope', 'account_inactive']) {
+    for (const error of ['invalid_auth', 'token_revoked', 'account_inactive', 'token_expired']) {
       const { api: client } = api([{ status: 200, body: { ok: false, error } }])
       const result = await client.authTest()
       assert.equal(result.ok, false)
       assert.equal(result.ok ? '' : result.kind, 'auth', `${error} 應被判為 auth`)
     }
+  })
+
+  it('**權限不足是 scope 而不是 auth，且帶出缺哪些**', async () => {
+    // **兩者的處置完全不同**：`auth` 要換一份憑證，`scope` 要加 scope 並重新安裝。
+    // 併在一起是一句會害人白做一輪的謊 —— 實測踩過：`users.conversations` 回 `missing_scope`，
+    // 畫面上說「你的憑證不再有效」，而憑證是完全好的。
+    const { api: client } = api([
+      {
+        status: 200,
+        body: {
+          ok: false,
+          error: 'missing_scope',
+          needed: 'channels:read,groups:read',
+          provided: 'channels:history',
+        },
+      },
+    ])
+    const result = await client.authTest()
+    assert.equal(result.ok, false)
+    if (result.ok) return
+    assert.equal(result.kind, 'scope')
+    // **`needed` 是這則訊息唯一可行動的部分**，而 Slack 在回應裡就給了它。
+    assert.equal(result.kind === 'scope' ? result.needed : undefined, 'channels:read,groups:read')
+  })
+
+  it('用錯 token 種類也是 scope —— 處置是換用對的那一份，不是重新產生', async () => {
+    const { api: client } = api([{ status: 200, body: { ok: false, error: 'not_allowed_token_type' } }])
+    assert.equal((await client.authTest()).ok ? '' : 'scope', 'scope')
   })
 
   it('不認得的錯誤碼判為 transient —— 寧可重試也不要謊報憑證壞了', async () => {

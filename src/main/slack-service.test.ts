@@ -6,7 +6,13 @@ import { afterEach, beforeEach, describe, it } from 'node:test'
 import { IntakeStore } from './intake-store'
 import { SecretStore } from './secret-store'
 import { SlackCursorStore } from './slack-cursor-store'
-import { MAX_DELIVERIES_PER_ROUND, SlackRuntime, isConfigured } from './slack-service'
+import {
+  MAX_DELIVERIES_PER_ROUND,
+  ROUND_INTERVAL_MS,
+  type SlackServiceDeps,
+  SlackRuntime,
+  isConfigured,
+} from './slack-service'
 import { SlackSettingsStore } from './slack-settings-store'
 import { secretName } from './slack-state'
 
@@ -28,8 +34,8 @@ let settings: SlackSettingsStore
 let cursors: SlackCursorStore
 let intake: IntakeStore
 
-function runtime(): SlackRuntime {
-  return new SlackRuntime({
+function deps(): SlackServiceDeps {
+  return {
     settings,
     secrets,
     cursors,
@@ -37,7 +43,19 @@ function runtime(): SlackRuntime {
     inboxRoot: path.join(base, 'intake-inbox'),
     inboxAdapter: 'file',
     now: () => 1_700_000_000_000,
-  })
+  }
+}
+
+function runtime(): SlackRuntime {
+  return new SlackRuntime(deps())
+}
+
+/** 只記帳、不做事的一輪 —— 用來觀察「誰觸發了一輪」。 */
+class CountingRuntime extends SlackRuntime {
+  readonly rounds: number[] = []
+  override async runRound(): Promise<void> {
+    this.rounds.push(this.rounds.length + 1)
+  }
 }
 
 beforeEach(() => {
@@ -146,5 +164,68 @@ describe('不阻塞、不拋錯', () => {
     const service = runtime()
     await assert.doesNotReject(() => service.dispose())
     await assert.doesNotReject(() => service.dispose())
+  })
+})
+
+describe('週期輪詢 —— 沒有它，這個能力只在啟動的那一刻有效', () => {
+  // **dogfood 踩到的缺陷。** design D1 的降級模式寫的是「啟動時 **+ 週期輪詢**」，而第一版
+  // 只做了前半：使用者在 app 起來之後才貼上憑證，那一輪早就跑完了，而**不重開 app 就永遠
+  // 不會有第二輪**。而 dev 模式下「重開 app」還需要有人重跑 `npm run dev`。
+  it('start() 立刻跑一輪，之後每個間隔再跑一輪', (t) => {
+    t.mock.timers.enable({ apis: ['setInterval'] })
+    const instance = new CountingRuntime(deps())
+
+    instance.start()
+    // **啟動那一輪不能等到第一個間隔到期** —— 關閉期間的提及要馬上補上，而那是 D1 的主幹。
+    assert.equal(instance.rounds.length, 1, '啟動時就該跑一輪')
+
+    t.mock.timers.tick(ROUND_INTERVAL_MS)
+    assert.equal(instance.rounds.length, 2, '一個間隔之後該有第二輪')
+    t.mock.timers.tick(ROUND_INTERVAL_MS)
+    assert.equal(instance.rounds.length, 3, '週期性 —— 不是只有第二輪')
+  })
+
+  it('重複 start() 不會疊出第二個計時器', (t) => {
+    // 疊出兩個計時器的症狀是每個間隔跑兩輪 —— 速率上限會被無謂地逼近，而沒有東西會紅。
+    t.mock.timers.enable({ apis: ['setInterval'] })
+    const instance = new CountingRuntime(deps())
+
+    instance.start()
+    instance.start()
+    t.mock.timers.tick(ROUND_INTERVAL_MS)
+
+    assert.equal(instance.rounds.length, 2, '啟動那一輪 + 一個間隔 = 兩輪')
+  })
+
+  it('dispose() 之後不再有新的一輪', async (t) => {
+    t.mock.timers.enable({ apis: ['setInterval'] })
+    const instance = new CountingRuntime(deps())
+
+    instance.start()
+    await instance.dispose()
+    t.mock.timers.tick(ROUND_INTERVAL_MS * 3)
+
+    assert.equal(instance.rounds.length, 1, '只有啟動那一輪')
+  })
+})
+
+describe('一輪還在跑時不疊上另一輪', () => {
+  it('第二次呼叫直接返回', async () => {
+    // 三個觸發點（啟動、週期、使用者剛存下憑證）可能重疊。疊起來會讓速率上限與水位的推進
+    // 同時變得難以推理，而症狀只是「偶爾多打了一輪」—— 不會有任何東西變紅。
+    secrets.set(secretName('userToken'), USER_TOKEN)
+    const realGet = secrets.get.bind(secrets)
+    let gets = 0
+    // 觀察點取 `#round()` 的第一個動作 —— 它在任何 await 之前，所以「跑了幾輪」數得準。
+    // **必須認名字**：一輪裡會再讀一次 app-level token（即時路徑），不分辨的話一輪就數成兩輪。
+    ;(secrets as unknown as { get: typeof realGet }).get = (name) => {
+      if (name === secretName('userToken')) gets += 1
+      return realGet(name)
+    }
+
+    const instance = runtime()
+    await Promise.all([instance.runRound(), instance.runRound()])
+
+    assert.equal(gets, 1, '第二次呼叫應直接返回，而不是再跑一輪')
   })
 })

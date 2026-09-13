@@ -38,8 +38,22 @@ type SlackMethod =
   | 'users.info'
 
 export type SlackFailure =
-  /** 憑證已失效或權限不足 —— **使用者必須知道**，重試無用。 */
+  /**
+   * 憑證已失效 —— **使用者必須知道**，重試無用。處置是換一份憑證。
+   */
   | { kind: 'auth'; error: string }
+  /**
+   * 憑證有效但**權限不足** —— 同樣重試無用，但**處置完全不同**：要去加 scope 並重新安裝，
+   * 換一份新 token 一點用也沒有。
+   *
+   * **這一類此前被併進 `auth`，而那是一句會害人白做一輪的謊。** 實際踩到過：
+   * `users.conversations` 回 `missing_scope`，畫面上說「你的憑證不再有效」，
+   * 而憑證是完全好的 —— 缺的是 `channels:read` 那一組。
+   *
+   * `needed` / `provided` 是 Slack **在回應裡就給了**的，而第一版的用戶端把它們丟掉了 ——
+   * 那正是唯一能讓這則訊息可行動的資訊。
+   */
+  | { kind: 'scope'; error: string; needed?: string; provided?: string }
   /** 暫時性：網路、5xx、速率限制。重試有用。 */
   | { kind: 'transient'; error: string; retryAfterSeconds?: number }
   /** 對端回了我們看不懂的東西 —— 不當成暫時性，否則會無限重試。 */
@@ -47,17 +61,22 @@ export type SlackFailure =
 
 export type SlackResult<T> = { ok: true; value: T } | ({ ok: false } & SlackFailure)
 
-/** Slack 判定為「憑證／權限」的錯誤碼。其餘一律當暫時性 —— 寧可重試也不要謊報憑證壞了。 */
+/**
+ * 憑證**本身**失效的錯誤碼 —— 處置是換一份 token。
+ *
+ * **`missing_scope` 刻意不在這裡**（見 `SCOPE_ERRORS`）：它的處置是加 scope 並重新安裝，
+ * 而把它報成「憑證失效」會讓使用者去換一份新 token —— 白做一輪，而問題原封不動。
+ */
 const AUTH_ERRORS = new Set([
   'invalid_auth',
   'not_authed',
   'account_inactive',
   'token_revoked',
   'token_expired',
-  'missing_scope',
-  'no_permission',
-  'not_allowed_token_type',
 ])
+
+/** 憑證有效而**權限不足**的錯誤碼 —— 處置是加 scope 並重新安裝。 */
+const SCOPE_ERRORS = new Set(['missing_scope', 'no_permission', 'not_allowed_token_type'])
 
 export interface SlackApiOptions {
   baseUrl: string
@@ -87,8 +106,19 @@ export interface SlackHistoryPage {
   nextCursor?: string
 }
 
-function failureFromError(error: string): SlackFailure {
-  return AUTH_ERRORS.has(error) ? { kind: 'auth', error } : { kind: 'transient', error }
+function failureFromError(error: string, body: Record<string, unknown>): SlackFailure {
+  if (AUTH_ERRORS.has(error)) return { kind: 'auth', error }
+  if (SCOPE_ERRORS.has(error)) {
+    // **`needed` / `provided` 一併帶出去** —— 它們是唯一能讓那則訊息可行動的資訊，
+    // 而它們**不是憑證**（是 scope 名稱的清單），所以帶到呈現層是安全的。
+    return {
+      kind: 'scope',
+      error,
+      needed: typeof body.needed === 'string' ? body.needed : undefined,
+      provided: typeof body.provided === 'string' ? body.provided : undefined,
+    }
+  }
+  return { kind: 'transient', error }
 }
 
 export class SlackApi {
@@ -150,7 +180,7 @@ export class SlackApi {
     // **Slack 對業務錯誤回 HTTP 200** —— 只看狀態碼的實作會把「憑證已失效」當成成功。
     if (body.ok !== true) {
       const error = typeof body.error === 'string' ? body.error : 'unknown'
-      return { ok: false, ...failureFromError(error) }
+      return { ok: false, ...failureFromError(error, body) }
     }
     return { ok: true, value: body }
   }
@@ -178,8 +208,8 @@ export class SlackApi {
    *
    * **這個方法要的是 app-level token，不是 user token** —— 呼叫端必須用另一個 `SlackApi`
    * 實例（帶另一份憑證）。把兩份憑證混在一個實例裡會讓「哪個方法用哪一份」變成一條紀律，
-   * 而用錯的症狀是 `not_allowed_token_type`（已在 AUTH_ERRORS 裡，所以會被正確地報成
-   * 「憑證問題」而不是「沒有人提及我」）。
+   * 而用錯的症狀是 `not_allowed_token_type`（在 `SCOPE_ERRORS` 裡 —— 它會被報成「權限不足」
+   * 而不是「憑證失效」，因為處置是換用對的那一份 token，不是重新產生一份）。
    *
    * 回傳的 URL **本身就是一份短期憑證** —— 任何人拿到它就能收那個 app 的事件。
    * 因此它不進診斷輸出、不進 renderer。

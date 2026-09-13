@@ -40,14 +40,23 @@ function statusCopy(state: SlackState): {
   key:
     | 'slack.statusUnconfigured'
     | 'slack.statusFailureAuth'
+    | 'slack.statusFailureScope'
+    | 'slack.statusFailureScopeUnknown'
     | 'slack.statusFailureTransient'
     | 'slack.statusNeverRan'
     | 'slack.statusIdle'
-  options?: { error: string }
+  options?: { error: string } | { needed: string }
 } {
   if (!state.configured.userToken) return { key: 'slack.statusUnconfigured' }
   const failure = state.status.failure
   if (failure !== undefined) {
+    // **權限不足與憑證失效的處置完全不同** —— 前者要加 scope 並重新安裝，後者要換一份 token。
+    // 報錯的那一句必須說對，否則使用者會白做一輪（實測踩過：`missing_scope` 被報成憑證失效）。
+    if (failure.kind === 'scope') {
+      return failure.needed === undefined || failure.needed === ''
+        ? { key: 'slack.statusFailureScopeUnknown', options: { error: failure.error } }
+        : { key: 'slack.statusFailureScope', options: { needed: failure.needed } }
+    }
     return failure.kind === 'auth'
       ? { key: 'slack.statusFailureAuth', options: { error: failure.error } }
       : { key: 'slack.statusFailureTransient', options: { error: failure.error } }

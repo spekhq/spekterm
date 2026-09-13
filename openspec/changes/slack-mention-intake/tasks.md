@@ -319,3 +319,27 @@
       而「tag 自己」是唯一完全可信、完全刻意的一種提及。**不加開關**（沒有證據說它吵；
       日後若確認，那時加會是資訊充分的決定）。
       驗收：`npm test` 1172、`probe:slack` **25/25**、`openspec validate --strict` 通過
+
+## 14. dogfood 當場抓到的兩個缺陷
+
+使用者第一次接上真實 Slack 就同時踩到這兩個，而**兩個都以「收件匣是空的」呈現** ——
+與「沒有人提及我」在畫面上完全相同。
+
+- [x] 14.1 **權限不足被報成憑證失效。** `missing_scope` 原本落在 `AUTH_ERRORS`，於是狀態那一行
+      說「你的憑證不再有效」，而憑證是完全好的 —— 照那句話做會白換一份 token，而問題原封不動。
+      拆出 `{ kind: 'scope', needed, provided }`（`needed` 是 Slack 自己給的，**是這則訊息唯一
+      可行動的部分**，第一版把它丟掉了），`#round` 對 `scope` 也早退（不要讓同一個問題以
+      `realtime: degraded` 再報一次），畫面改為「Missing Slack permissions: {{needed}}」。
+      載體：`slack-api.test.ts` 的「**權限不足是 scope 而不是 auth，且帶出缺哪些**」，
+      對照組＝把 `SCOPE_ERRORS` 併回 `AUTH_ERRORS`
+- [x] 14.2 **回補只在啟動後跑一次，沒有週期性重試。** design D1 的降級模式寫的是
+      「啟動時 **+ 週期輪詢**」而只做了前半。使用者在 app 起來之後才貼上憑證是常態（實測就是
+      這樣踩到的），而不重開 app 就永遠不會有第二輪 —— 在 dev 模式下「重開 app」還需要有人
+      重跑 `npm run dev`。加 `ROUND_INTERVAL_MS`（5 分鐘）、`start()`（立刻一輪 + `setInterval`
+      並 `unref()`）、`#running` 再入保護、`dispose()` 清計時器，以及**存下憑證即觸發一輪**
+      （`ipc/slack.ts` 的 `requestRound`）。
+      載體：`slack-service.test.ts` 的四條（假時鐘），四個對照組各自指名的斷言都驗過變紅
+- [x] 14.3 **文件給錯的 scope 清單已修。** 我原本只叫他加 `:history` 那一組，而
+      `users.conversations`（列舉頻道）要的是 `channels:read` / `groups:read` / `mpim:read` /
+      `im:read` —— 少了它頻道清單是空的，於是整條回補一則都掃不到。
+      `docs/lessons/slack.md` 補上完整清單與「改完必須 Reinstall」

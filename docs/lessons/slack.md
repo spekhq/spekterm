@@ -37,13 +37,43 @@
 `intake-schema.ts` 的註解就寫著 `originLabel`「是可變的字串」。**動去重相關的任何東西之前
 先回來看這張表。**
 
+## 三之前：**列舉頻道與讀取歷史是兩組不同的 scope**（dogfood 踩到）
+
+`conversations.history` 只要 `channels:history` 那一組，但 **`users.conversations`（列出使用者
+在哪些頻道）要 `channels:read` / `groups:read` / `mpim:read` / `im:read`**。少了後者，
+`users.conversations` 回 `missing_scope`，頻道清單是空的，於是**整條回補一則都掃不到** ——
+而症狀只是「收件匣是空的」。
+
+完整的 user token scope 清單：
+
+```
+channels:history  groups:history  im:history  mpim:history   # 讀得到訊息
+channels:read     groups:read     im:read     mpim:read      # 列得出頻道
+users:read                                                    # 把 <@U123> 換成人名
+```
+
+**改完 scope 一定要 Reinstall**，而且要重新複製 token。
+
 ## 三、Slack 對業務錯誤回 **HTTP 200**
 
 `{ ok: false, error: 'invalid_auth' }` 配 200。只看狀態碼的實作會把「憑證已失效」當成成功而
 拿到一個空清單 —— **而那個症狀與「沒有人提及我」完全相同**，使用者會在一件已經壞掉的事上繼續等。
 
-因此回應分三類，而 **`malformed` 刻意不併進 `transient`**：併了會讓上層無限重試一個永遠不會
-成功的呼叫。`AUTH_ERRORS` 之外的錯誤碼一律當暫時性 —— 寧可重試也不要謊報憑證壞了。
+因此回應分**四**類，而每一條分界都是「處置不同」而不是「原因不同」：
+
+| 類別 | 處置 |
+|---|---|
+| `auth` | 換一份憑證 |
+| **`scope`** | **加 scope 並重新安裝** —— 換新 token 一點用也沒有 |
+| `transient` | 等下一輪 |
+| `malformed` | 不重試（見下） |
+
+**`malformed` 刻意不併進 `transient`**：併了會讓上層無限重試一個永遠不會成功的呼叫。
+
+**而 `scope` 刻意不併進 `auth`，那是 dogfood 踩到的**：`missing_scope` 被報成「你的憑證不再
+有效」，而憑證是完全好的 —— 照那句話做會白換一份 token，而問題原封不動。
+**Slack 在回應裡就給了 `needed` 與 `provided`**，而第一版的用戶端把它們丟掉了 ——
+那是這則訊息**唯一可行動的部分**。
 
 ## 四、Electron 主行程的 `fetch` 走 **undici**，不是 Chromium 的網路堆疊
 
@@ -161,3 +191,22 @@ renderer 的偏好型別是自 preload 回推的（`shell/types.ts` 的 `Awaited
 另外：**狀態的斷言要拆成兩層**（先讀 IPC payload、再讀畫面）。分開之後「主行程沒記下」與
 「畫面沒更新」是兩條不同的紅燈，而它們的處置完全不同 —— 第一次跑這支 probe 時主行程那一層
 就是綠的，直接指著 renderer（那是一個真的缺陷：狀態沒有推送）。
+
+## 十二、回補必須是週期性的，不能只在啟動時跑（dogfood 踩到）
+
+第一版是一次性的 `setTimeout` —— design D1 的降級模式寫的是「啟動時 **+ 週期輪詢**」，
+而只做了前半。踩到的方式很普通：**使用者在 app 起來之後才貼上憑證**，那一輪早就跑完了，
+而不重開 app 就永遠不會有第二輪。
+
+而在 dev 模式下這件事更糟：**關掉視窗會結束整個 `npm run dev`**，於是「重開 app」需要有人
+重跑那個指令。
+
+三個觸發點，各自有理由：
+
+- **啟動後一次**（延遲數秒，不與啟動搶資源）。
+- **每 5 分鐘一次** —— 即時路徑是加速器且可能根本不可用，所以這不是備援而是主幹的一部分。
+- **使用者存下憑證的那一刻** —— 那正是該去試一次的時機，而少了它他看到的是一個什麼都沒變的
+  畫面，與「功能壞了」無法區分。
+
+三者會重疊，所以 `runRound()` **不可重入**（一個 `#running` 旗標）；`setInterval` 要
+`unref()`，否則主行程在該關的時候關不掉。

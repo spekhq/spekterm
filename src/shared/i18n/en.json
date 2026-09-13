@@ -618,6 +618,8 @@
     "realtimeLabel": "Live updates",
     "realtimeConnected": "On — new mentions arrive within seconds.",
     "realtimeOff": "Off — add an app-level token to get mentions within seconds instead of on the next check.",
-    "realtimeDegraded": "Interrupted — falling back to the periodic check."
+    "realtimeDegraded": "Interrupted — falling back to the periodic check.",
+    "statusFailureScope": "Your Slack token is valid but is missing permissions. Add these User Token Scopes and reinstall the app: {{needed}}",
+    "statusFailureScopeUnknown": "Your Slack token is valid but is missing permissions ({{error}}). Add the missing User Token Scopes and reinstall the app."
   }
 }
