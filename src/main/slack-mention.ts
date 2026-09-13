@@ -74,13 +74,24 @@ export function mentionsUser(text: string | undefined, selfUserId: string): bool
 }
 
 /**
- * 一則訊息是否構成「**別人**提及使用者本人」。
+ * 一則訊息是否構成一則該被收進來的提及。
  *
- * 使用者自己發的不算 —— 他不需要被自己交辦。**這不只是禮貌**：他在訊息裡 tag 自己（例如
- * 做筆記）是常見用法，而那不是一件交進收件匣的工作。
+ * ## 使用者自己發的**也算**，而那是改過的裁決
+ *
+ * 第一版排除了它，理由是「他不需要被自己交辦」、而且在訊息裡 tag 自己（做筆記、標記段落）
+ * 會變成噪音。**那條理由站不住，因為失效方向是不對稱的：**
+ *
+ * - 收了而他不想要 ⇒ 收件匣多幾則**他自己造成的**項目，按一下忽略就沒了。
+ * - **不收而他想要 ⇒ 他 tag 了自己，什麼都沒發生** —— 而那與「這個功能壞了」在畫面上完全
+ *   相同，正是本能力花了一整條 requirement 在對付的那類失效。
+ *
+ * 而且「tag 自己」是**唯一完全可信、完全刻意**的那一種提及（其他每一則都來自第三方）——
+ * 拿 Slack 當待辦捕捉是很常見的用法。
+ *
+ * > 若 dogfood 之後確認它真的吵，再加一個設定開關會是一個**資訊充分**的決定；
+ * > 現在就加是猜。
  */
-export function isIncomingMention(message: SlackMessage, selfUserId: string): boolean {
-  if (message.user === selfUserId) return false
+export function isCapturedMention(message: SlackMessage, selfUserId: string): boolean {
   return mentionsUser(message.text, selfUserId)
 }
 

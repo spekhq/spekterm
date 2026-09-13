@@ -1,5 +1,5 @@
 import type { IntakeDelivery, SlackMessage } from './slack-mention'
-import { buildDelivery, intakeIdOf, isIncomingMention } from './slack-mention'
+import { buildDelivery, intakeIdOf, isCapturedMention } from './slack-mention'
 import type { SlackApi, SlackFailure } from './slack-api'
 
 /**
@@ -198,7 +198,7 @@ async function scanChannel(
     if (!result.ok) return { candidates, newestSeen, failure: result }
     for (const message of result.value.messages) {
       if (newestSeen === undefined || Number(message.ts) > Number(newestSeen)) newestSeen = message.ts
-      if (isIncomingMention(message, selfUserId)) {
+      if (isCapturedMention(message, selfUserId)) {
         candidates.push({ channelId: channel.id, channelName: channel.name, message })
       }
     }

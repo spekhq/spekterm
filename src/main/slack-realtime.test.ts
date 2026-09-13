@@ -108,8 +108,10 @@ describe('mentionFromEnvelope：純函式', () => {
     assert.deepEqual(found, { channelId: CHANNEL, message: { ts: TS, user: OTHER, text: `hi <@${SELF}>` } })
   })
 
-  it('自己發的、沒提及的、非 message 型別、有 subtype 的都不算', () => {
-    assert.equal(mentionFromEnvelope(JSON.parse(envelope({ user: SELF })), SELF), null)
+  it('自己發的**算**；沒提及的、非 message 型別、有 subtype 的都不算', () => {
+    // **自己 tag 自己要收**（D16）—— 不收而使用者想要時，症狀與「功能壞了」完全相同。
+    // 這條路徑與回補共用同一個判定函式，所以那個裁決在這裡也必須成立。
+    assert.notEqual(mentionFromEnvelope(JSON.parse(envelope({ user: SELF })), SELF), null)
     assert.equal(mentionFromEnvelope(JSON.parse(envelope({ text: 'nothing' })), SELF), null)
     assert.equal(mentionFromEnvelope(JSON.parse(envelope({ type: 'reaction_added' })), SELF), null)
     // 編輯／刪除不是一則新訊息。

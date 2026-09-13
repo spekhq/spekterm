@@ -7,7 +7,7 @@ import {
   type SlackMessage,
   buildDelivery,
   intakeIdOf,
-  isIncomingMention,
+  isCapturedMention,
   mentionsUser,
   truncateToCodeUnits,
 } from './slack-mention'
@@ -50,25 +50,28 @@ describe('mentionsUser：判準是 <@id> 的形式', () => {
   })
 })
 
-describe('isIncomingMention：自己 tag 自己不算', () => {
-  it('別人 tag 我算，我 tag 自己不算，沒 tag 的不算', () => {
-    assert.equal(isIncomingMention(message({ user: OTHER }), SELF), true)
-    assert.equal(isIncomingMention(message({ user: SELF }), SELF), false)
-    assert.equal(isIncomingMention(message({ text: 'no mention here' }), SELF), false)
+describe('isCapturedMention：自己 tag 自己**也算**', () => {
+  it('別人 tag 我算，我 tag 自己也算，沒 tag 的不算', () => {
+    // **第一版排除了「自己發的」，而那條裁決被改掉了。** 失效方向不對稱：
+    // 收了而使用者不想要 ⇒ 他按一下忽略；**不收而他想要 ⇒ 他 tag 了自己，什麼都沒發生**，
+    // 而那與「功能壞了」在畫面上完全相同。拿 Slack 當待辦捕捉是很常見的用法。
+    assert.equal(isCapturedMention(message({ user: OTHER }), SELF), true)
+    assert.equal(isCapturedMention(message({ user: SELF }), SELF), true, '自己 tag 自己要收')
+    assert.equal(isCapturedMention(message({ text: 'no mention here' }), SELF), false)
   })
 
-  it('**同一批**三則訊息只有一則成立', () => {
-    // 三則必須一起驗。兩條否決各自單獨驗時，「整條管線沒有接上」會讓它們都全綠 ——
+  it('**同一批**三則訊息，只有沒 tag 的那一則不成立', () => {
+    // 三則必須一起驗。那條否決單獨驗時，「整條管線沒有接上」會讓它全綠 ——
     // 一個什麼都不產生的實作完美滿足「不產生任何 intake」。
     const batch = [
       message({ ts: '1.1', user: SELF }),
       message({ ts: '1.2', text: 'unrelated chatter' }),
       message({ ts: '1.3', user: OTHER }),
     ]
-    const hits = batch.filter((m) => isIncomingMention(m, SELF))
+    const hits = batch.filter((m) => isCapturedMention(m, SELF))
     assert.deepEqual(
       hits.map((m) => m.ts),
-      ['1.3'],
+      ['1.1', '1.3'],
     )
   })
 })

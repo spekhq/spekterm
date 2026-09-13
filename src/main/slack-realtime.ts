@@ -1,7 +1,7 @@
 import type { SlackApi, SlackFailure } from './slack-api'
 import type { BackfillDeps, Candidate } from './slack-backfill'
 import { NameCache, deliverCandidate } from './slack-backfill'
-import { isIncomingMention } from './slack-mention'
+import { isCapturedMention } from './slack-mention'
 import type { SlackMessage } from './slack-mention'
 
 /**
@@ -93,7 +93,7 @@ export function mentionFromEnvelope(envelope: unknown, selfUserId: string): Real
     user: typeof entry.user === 'string' ? entry.user : undefined,
     text: typeof entry.text === 'string' ? entry.text : undefined,
   }
-  if (!isIncomingMention(message, selfUserId)) return null
+  if (!isCapturedMention(message, selfUserId)) return null
   return { channelId: entry.channel, message }
 }
 
