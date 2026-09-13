@@ -40,7 +40,9 @@ OpenSpec 結構的側欄，讓使用者不必另外開 IDE 就能一邊駕駛 ag
   的 folder 得到一個開好、context 備妥、第一則 prompt 已填但**尚未送出**的 agent session。
   **Slack 已是第一個 producer**（`slack-mention-intake`）：有人在 Slack 提及使用者本人時，
   那件事成為一則待處理項目。**回補是主幹、即時是加速器** —— 桌面 app 大多數時間是關著的，
-  而 Socket Mode 沒有重送佇列。它**交付不了多租戶**（Socket Mode 上不了 Marketplace、
+  而 Socket Mode 沒有重送佇列。**回補有三個觸發點**（啟動時、每五分鐘、存下憑證的那一刻）——
+  少了後兩個，這個能力只在啟動的那一刻有效（dogfood 當場踩到）。
+  它**交付不了多租戶**（Socket Mode 上不了 Marketplace、
   app-level token 一個 app 一份），能交付的是邊界位置：adapter 只是收件匣的一個 producer。
   **不需要任何新依賴**（Node 22 與 Electron 43 內的 Node 24 都有全域 `fetch` 與 `WebSocket`）。
 - **鍵盤** —— 見下文「快捷鍵」。
