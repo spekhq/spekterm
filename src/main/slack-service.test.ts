@@ -6,9 +6,12 @@ import { afterEach, beforeEach, describe, it } from 'node:test'
 import { IntakeStore } from './intake-store'
 import { SecretStore } from './secret-store'
 import { SlackCursorStore } from './slack-cursor-store'
+import type { BackfillOutcome } from './slack-backfill'
 import {
+  BACKOFF,
   MAX_DELIVERIES_PER_ROUND,
   ROUND_INTERVAL_MS,
+  backoffSeconds,
   type SlackServiceDeps,
   SlackRuntime,
   isConfigured,
@@ -227,5 +230,136 @@ describe('一輪還在跑時不疊上另一輪', () => {
     await Promise.all([instance.runRound(), instance.runRound()])
 
     assert.equal(gets, 1, '第二次呼叫應直接返回，而不是再跑一輪')
+  })
+})
+
+describe('對端要求延後時的夾制', () => {
+  it('缺席不是零 —— 對端已經拒絕了，零等於不退避', () => {
+    assert.equal(backoffSeconds(undefined), BACKOFF.defaultSeconds)
+    assert.equal(backoffSeconds(Number.NaN), BACKOFF.defaultSeconds)
+  })
+
+  it('**荒謬的值被夾住** —— 端點是使用者可設定的，那個值不是完全可信的輸入', () => {
+    // 一個回 `Retry-After: 99999999` 的端點會讓這個能力無限期停擺，而畫面上只顯示
+    // 「正在等待」。一個能被輸入資料無限期關閉的能力，是一個可以被關掉的能力。
+    assert.equal(backoffSeconds(99_999_999), BACKOFF.maxSeconds)
+    assert.equal(backoffSeconds(0), BACKOFF.minSeconds)
+    assert.equal(backoffSeconds(-5), BACKOFF.minSeconds)
+  })
+
+  it('正常範圍內原樣採用', () => {
+    assert.equal(backoffSeconds(17), 17)
+  })
+})
+
+describe('退避期內不開始新的一輪', () => {
+  /** 一份可指定結果的回補。 */
+  function stubBackfill(results: Partial<BackfillOutcome>[]): {
+    run: (deps: unknown) => Promise<BackfillOutcome>
+    rounds: number
+  } {
+    const state = { rounds: 0 }
+    const run = async (): Promise<BackfillOutcome> => {
+      const spec = results[Math.min(state.rounds, results.length - 1)]
+      state.rounds += 1
+      return { delivered: 0, deferred: 0, channelsScanned: 0, channels: {}, ...spec }
+    }
+    return {
+      run: run as unknown as (deps: unknown) => Promise<BackfillOutcome>,
+      get rounds() {
+        return state.rounds
+      },
+    }
+  }
+
+  function runtimeWith(
+    backfill: ReturnType<typeof stubBackfill>,
+    clock: { now: number },
+  ): SlackRuntime {
+    return new SlackRuntime({
+      ...deps(),
+      now: () => clock.now,
+      backfill: backfill.run as never,
+    })
+  }
+
+  it('**退避期內的每一次觸發都不跑，期滿之後的會跑**', async () => {
+    // 後半句是承重的：少了它，一個「退避之後永遠不再取回」的實作照樣綠，
+    // 而那個失效在畫面上只是「一直在等待」。
+    //
+    // **刻意不經 `start()`**：那一輪是 `void runRound()`，排不乾它就會被再入保護擋掉
+    // 之後每一次呼叫 —— 而那會讓這條測的是再入而不是退避（實測踩過）。週期觸發本身
+    // 另有「週期輪詢」那組測試承擔。
+    secrets.set(secretName('userToken'), USER_TOKEN)
+    const clock = { now: 1_700_000_000_000 }
+    const backfill = stubBackfill([
+      { rateLimited: true, retryAfterSeconds: 600, failure: { kind: 'rate_limited', error: 'rate_limited' } },
+      {},
+    ])
+    const instance = runtimeWith(backfill, clock)
+
+    await instance.runRound()
+    assert.equal(backfill.rounds, 1, '前提：第一輪跑了，而它被限流')
+    assert.equal(instance.status().retryAt, clock.now + 600_000, '前提：退避到 600 秒之後')
+
+    // 退避 600 秒 ⇒ 之後兩個週期（各 5 分鐘）都落在期內。
+    // **算術要留邊**：兩次各 +300 秒剛好落在截止點上，那不是「期內」（實測踩過）。
+    clock.now += ROUND_INTERVAL_MS
+    await instance.runRound()
+    assert.equal(backfill.rounds, 1, '退避期內不該再跑')
+    clock.now += ROUND_INTERVAL_MS - 1_000
+    await instance.runRound()
+    assert.equal(backfill.rounds, 1, '第二次也不跑 —— 不是只擋掉一次')
+
+    clock.now += 2_000
+    await instance.runRound()
+    assert.equal(backfill.rounds, 2, '期滿之後要恢復')
+
+    await instance.dispose()
+  })
+
+  it('**退避期間累積的提及在恢復後的那一輪被交付** —— 跳過不等於漏掉', async () => {
+    secrets.set(secretName('userToken'), USER_TOKEN)
+    const clock = { now: 1_700_000_000_000 }
+    const backfill = stubBackfill([
+      { rateLimited: true, retryAfterSeconds: 60, failure: { kind: 'rate_limited', error: 'rate_limited' } },
+      { delivered: 3 },
+    ])
+    const instance = runtimeWith(backfill, clock)
+
+    await instance.runRound()
+    await instance.runRound()
+    assert.equal(instance.status().delivered, 0, '前提：被跳過的那一輪什麼都沒交付')
+
+    clock.now += 61_000
+    await instance.runRound()
+    assert.equal(instance.status().delivered, 3, '期間累積的三則在恢復後的那一輪進來')
+    await instance.dispose()
+  })
+
+  it('**退避期內被觸發時，狀態仍然被推一次** —— 使用者的操作不得落空', async () => {
+    // 他存下憑證卻什麼都沒發生，與「功能壞了」在畫面上完全相同。
+    secrets.set(secretName('userToken'), USER_TOKEN)
+    const clock = { now: 1_700_000_000_000 }
+    const backfill = stubBackfill([
+      { rateLimited: true, retryAfterSeconds: 600, failure: { kind: 'rate_limited', error: 'rate_limited' } },
+    ])
+    let notices = 0
+    const instance = new SlackRuntime({
+      ...deps(),
+      now: () => clock.now,
+      backfill: backfill.run as never,
+      onStatusChanged: () => {
+        notices += 1
+      },
+    })
+
+    await instance.runRound()
+    const before = notices
+    await instance.runRound()
+
+    assert.ok(notices > before, '被跳過的那一次仍要通知呈現層')
+    assert.equal(instance.status().retryAt, clock.now + 600_000, '而且說得出下次何時會試')
+    await instance.dispose()
   })
 })

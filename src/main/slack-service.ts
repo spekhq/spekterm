@@ -48,10 +48,29 @@ export const MAX_DELIVERIES_PER_ROUND = 25
  * `conversations.history`（**每個頻道一次**）。間隔五分鐘 ⇒ 每分鐘最多一輪，於是即使頻道很多
  * 也離上限很遠；延遲對「沒有即時路徑」的情形可以接受。
  *
- * **要縮短它之前先看 issue #46**：429 的 `Retry-After` 目前解析了但沒有任何消費點，
- * 於是被限流時我們會照原節奏繼續敲。五分鐘的間隔讓這件事不痛，縮短就會痛。
+ * **縮短它現在是安全的操作**（issue #46 已清償）：被限流時會依對端的 `Retry-After` 退避，
+ * 而且該輪不再詢問其餘頻道。縮短之後仍要重算的是**一輪的呼叫數與退避的關係** ——
+ * 間隔若短於典型的 `Retry-After`，實際節奏就由對端決定而不是由這個常數決定。
  */
 export const ROUND_INTERVAL_MS = 5 * 60_000
+
+/**
+ * 對端要求延後時的夾制。
+ *
+ * - **缺席時不是零。** 對端已經明確拒絕了，零等於不退避 —— 而那正是讓拒絕延長的做法。
+ * - **上界不是「不相信 Slack」，是因為端點是使用者可設定的**（見 `slack-settings-store`）：
+ *   一個回 `Retry-After: 99999999` 的端點會讓這個能力**無限期停擺**，而畫面上只會顯示
+ *   「正在等待」。**一個能被輸入資料無限期關閉的能力，是一個可以被關掉的能力。**
+ */
+export const BACKOFF = { defaultSeconds: 60, minSeconds: 1, maxSeconds: 15 * 60 } as const
+
+/** 把對端給的秒數（可能缺席、可能荒謬）夾成一個可用的值。 */
+export function backoffSeconds(retryAfterSeconds: number | undefined): number {
+  if (retryAfterSeconds === undefined || !Number.isFinite(retryAfterSeconds)) {
+    return BACKOFF.defaultSeconds
+  }
+  return Math.min(Math.max(retryAfterSeconds, BACKOFF.minSeconds), BACKOFF.maxSeconds)
+}
 
 export interface SlackServiceDeps {
   settings: SlackSettingsStore
@@ -65,6 +84,14 @@ export interface SlackServiceDeps {
   now?: () => number
   /** 狀態改變時通知（呈現層據此更新）。 */
   onStatusChanged?: () => void
+  /**
+   * 跑一輪回補 —— 預設為真正的 `runBackfill`。
+   *
+   * 注入點與 `SlackApi` 的 `fetchImpl`、`SlackRealtime` 的 `openSocket` 同一個形狀：
+   * **退避的行為是「這一輪的結果如何影響下一輪」，而那在真實對端上造不出來**
+   * （要真的去撞速率上限）。
+   */
+  backfill?: (deps: BackfillDeps) => Promise<BackfillOutcome>
 }
 
 /** 即時路徑的狀態。**`off` 與 `degraded` 必須分得出來** —— 前者是沒開，後者是壞了。 */
@@ -95,6 +122,14 @@ export interface SlackStatus {
   deferred: number
   /** 合併後的失效（最多一則）。 */
   failure?: SlackFailureNotice
+  /**
+   * 對端要求延後時，**下一次會去試的時間**（毫秒）。`undefined` ＝目前沒有在退避。
+   *
+   * **這個欄位存在是為了讓使用者的操作不落空。** 他存下憑證之後如果什麼都沒發生，
+   * 那與「功能壞了」在畫面上完全相同 —— 而讓這兩者可區分正是這個能力花了一整條
+   * requirement 在做的事。
+   */
+  retryAt?: number
   realtime: RealtimeState
 }
 
@@ -117,10 +152,17 @@ export class SlackRuntime {
   #timer: ReturnType<typeof setInterval> | null = null
   /** 一輪還在跑時不要疊上另一輪 —— 那會讓速率上限與水位的推進同時變得難以推理。 */
   #running = false
+  /** 對端要求延後到這個時間（毫秒）。`undefined` ＝沒有在退避。 */
+  #retryAt: number | undefined
 
   constructor(deps: SlackServiceDeps) {
     this.#deps = deps
     this.#status = { ...this.#status, configured: isConfigured(deps) }
+  }
+
+  /** **時間一律走這裡** —— 直接呼叫 `Date.now()` 會讓假時鐘測不到，而症狀是測試通過但行為錯。 */
+  #now(): number {
+    return (this.#deps.now ?? Date.now)()
   }
 
   status(): SlackStatus {
@@ -135,6 +177,17 @@ export class SlackRuntime {
   async runRound(): Promise<void> {
     // **不重入。** 週期輪詢、啟動那一輪、以及「使用者剛存了憑證」這三個觸發點可能重疊。
     if (this.#running) return
+    // **對端要我們等到某個時間，就等到那個時間。** 被跳過的這一輪**不排隊補做** ——
+    // 補做會在解禁的那一刻形成尖峰，正是這種拒絕存在的理由。而跳過不等於漏掉：
+    // 水位機制保證這段期間發生的提及會在之後的取回中出現。
+    if (this.#retryAt !== undefined) {
+      if (this.#now() < this.#retryAt) {
+        // 狀態要再推一次 —— 使用者剛才的操作必須在畫面上有回應（見 `retryAt` 的說明）。
+        this.#update({})
+        return
+      }
+      this.#retryAt = undefined
+    }
     this.#running = true
     try {
       await this.#round()
@@ -152,7 +205,7 @@ export class SlackRuntime {
 
     let outcome: BackfillOutcome
     try {
-      outcome = await runBackfill(this.#backfillDeps(token))
+      outcome = await (this.#deps.backfill ?? runBackfill)(this.#backfillDeps(token))
     } catch (error) {
       // **這一層存在的唯一理由**：一個漏出去的 rejection 會變成未捕捉的 rejection。
       // 訊息刻意只帶錯誤的類別名 —— `String(error)` 可能含 request 的描述，而那含 header。
@@ -162,16 +215,28 @@ export class SlackRuntime {
     }
 
     this.#channels = outcome.channels
+    // **退避的依據是 outcome 的獨立欄位，不是 `failure`** —— 後者是「先到的贏」，
+    // 一個更早的網路錯誤會把速率上限遮掉（見 `BackfillOutcome.retryAfterSeconds`）。
+    this.#retryAt =
+      outcome.rateLimited === true
+        ? this.#now() + backoffSeconds(outcome.retryAfterSeconds) * 1000
+        : undefined
+
     this.#update({
       configured: true,
-      lastRoundAt: (this.#deps.now ?? Date.now)(),
+      lastRoundAt: this.#now(),
       delivered: outcome.delivered,
       deferred: outcome.deferred,
       failure: outcome.failure === undefined ? undefined : this.#merge(outcome.failure),
+      retryAt: this.#retryAt,
     })
 
     // **憑證或權限有問題時不要再去開即時連線** —— 它一定也會失敗，而那只會讓同一個問題
     // 以第二種面貌再報一次（`realtime: degraded`），把真正的處置埋在噪音底下。
+    //
+    // **`rate_limited` 刻意不在這裡**：它與即時連線無關（Socket Mode 的事件流不走這條
+    // 速率上限），而且它會自癒 —— 因為一次限流就不開即時連線，是把一個暫時的情形
+    // 升級成一個更大的降級。
     if (outcome.failure?.kind === 'auth' || outcome.failure?.kind === 'scope') return
     await this.#startRealtime(token)
   }
@@ -210,7 +275,7 @@ export class SlackRuntime {
       deliver: (delivery) => writeDelivery(this.#deps.inboxRoot, delivery),
       lookbackDays: () => this.#deps.settings.lookbackDays(),
       maxPerRound: MAX_DELIVERIES_PER_ROUND,
-      now: this.#deps.now ?? (() => Date.now()),
+      now: () => this.#now(),
     }
   }
 

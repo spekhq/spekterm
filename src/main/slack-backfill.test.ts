@@ -26,6 +26,10 @@ interface StubOptions {
   replies?: Record<string, SlackMessage[]>
   authFails?: 'auth' | 'transient'
   historyFails?: boolean
+  /** 第 N 次（1 起算）`conversations.history` 回 429。 */
+  rateLimitOnHistoryCall?: number
+  /** 該 429 帶的 `Retry-After`（秒）。省略＝對端沒帶。 */
+  retryAfterSeconds?: number
 }
 
 interface Harness {
@@ -57,6 +61,14 @@ function harness(options: StubOptions = {}, overrides: Partial<BackfillDeps> = {
     }),
     conversationsHistory: async (params: { channel: string; oldest: string }) => {
       historyCalls.push({ channel: params.channel, oldest: params.oldest })
+      if (options.rateLimitOnHistoryCall === historyCalls.length) {
+        return {
+          ok: false as const,
+          kind: 'rate_limited' as const,
+          error: 'rate_limited',
+          retryAfterSeconds: options.retryAfterSeconds,
+        }
+      }
       if (options.historyFails === true) {
         return { ok: false as const, kind: 'transient' as const, error: 'network' }
       }
@@ -260,5 +272,83 @@ describe('討論串裁切至被提及的那一則', () => {
     await runBackfill(h.deps)
     assert.equal(h.delivered.length, 1)
     assert.match(h.delivered[0].body, /only @kewang here/)
+  })
+})
+
+describe('對端要我們稍後再試', () => {
+  const FOUR = [
+    { id: 'C1', name: 'one' },
+    { id: 'C2', name: 'two' },
+    { id: 'C3', name: 'three' },
+    { id: 'C4', name: 'four' },
+  ]
+
+  it('**該輪停止詢問其餘頻道 —— 呼叫數等於「到被拒為止」，而不是頻道總數**', async () => {
+    // 「不再送註定失敗的請求」這件事在收件匣上看不見（那些請求本來就帶不回任何東西），
+    // 可觀察的是**對端收到幾次**。
+    const h = harness({ channels: FOUR, rateLimitOnHistoryCall: 2, retryAfterSeconds: 17 })
+    const outcome = await runBackfill(h.deps)
+
+    assert.equal(h.historyCalls.length, 2, '被拒之後不該再問第 3、4 個頻道')
+    // **後半句是承重的**：少了它，一個「一個頻道都沒掃」的實作也會讓上一條通過。
+    assert.notEqual(h.historyCalls.length, FOUR.length, '頻道總數是 4 —— 中止與跑完必須分得出來')
+    assert.equal(outcome.rateLimited, true)
+    assert.equal(outcome.retryAfterSeconds, 17)
+  })
+
+  it('對端沒帶 Retry-After 時仍然回報為速率上限', async () => {
+    // 缺席**不代表不必退避** —— 等多久由上層的預設值決定，但「是這一類」必須傳達出去。
+    const h = harness({ channels: FOUR, rateLimitOnHistoryCall: 1 })
+    const outcome = await runBackfill(h.deps)
+
+    assert.equal(outcome.rateLimited, true)
+    assert.equal(outcome.retryAfterSeconds, undefined)
+    assert.equal(outcome.failure?.kind, 'rate_limited')
+  })
+
+  it('**中止不使已完成的工作回退**', async () => {
+    // 中止只是少送了註定失敗的請求。第一個頻道已經掃完、已經交付的部分與其水位不受影響 ——
+    // 否則每次被限流都會讓下一輪重做一遍，而那是更多的請求，不是更少。
+    const h = harness({
+      channels: FOUR,
+      history: { C1: [mention(INSIDE)] },
+      rateLimitOnHistoryCall: 2,
+    })
+    const outcome = await runBackfill(h.deps)
+
+    assert.equal(h.delivered.length, 1, '第一個頻道的那則照樣交付')
+    assert.equal(h.cursors.C1, INSIDE, '已掃完的頻道水位照常前進')
+    assert.equal(h.cursors.C2, undefined, '被拒的頻道水位不動')
+    assert.equal(outcome.delivered, 1)
+  })
+
+  it('**速率上限不被先到的其他失敗遮掉**', async () => {
+    // `failure` 是「先到的贏」。退避資訊若寄生在它上面，一個更早的網路錯誤就會讓 429
+    // 永遠讀不到 —— 而症狀只是「偶爾沒有退避」，沒有任何東西會紅。
+    const h = harness({
+      channels: FOUR,
+      rateLimitOnHistoryCall: 3,
+      retryAfterSeconds: 9,
+      // 第 1、2 次呼叫走這條：`historyFails` 對每一次都成立，所以第 3 次才是 429。
+    })
+    // 讓前兩次是別種失敗：以 override 包一層。
+    const inner = h.deps.api.conversationsHistory.bind(h.deps.api)
+    let calls = 0
+    ;(h.deps.api as unknown as { conversationsHistory: typeof inner }).conversationsHistory = async (
+      params,
+    ) => {
+      calls += 1
+      if (calls <= 2) {
+        void (await inner(params))
+        return { ok: false as const, kind: 'transient' as const, error: 'network' }
+      }
+      return inner(params)
+    }
+
+    const outcome = await runBackfill(h.deps)
+
+    assert.equal(outcome.failure?.kind, 'transient', '前提：先到的是網路錯誤')
+    assert.equal(outcome.rateLimited, true, '而速率上限仍然傳達得出去')
+    assert.equal(outcome.retryAfterSeconds, 9)
   })
 })

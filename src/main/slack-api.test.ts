@@ -58,7 +58,7 @@ describe('憑證只走 header', () => {
   })
 })
 
-describe('失敗分三類 —— Slack 對業務錯誤回 HTTP 200', () => {
+describe('失敗分四類 —— Slack 對業務錯誤回 HTTP 200', () => {
   it('**HTTP 200 + ok:false + 憑證類錯誤碼 ⇒ auth**', async () => {
     // **這是本模組最重要的一條。** 只看 HTTP 狀態碼的實作會把「憑證已失效」當成成功而拿到一個
     // 空清單 —— 而那個症狀與「沒有人提及我」完全相同，使用者會在一件壞掉的事上繼續等。
@@ -104,16 +104,27 @@ describe('失敗分三類 —— Slack 對業務錯誤回 HTTP 200', () => {
     assert.equal(result.ok ? '' : result.kind, 'transient')
   })
 
-  it('429 判為 transient 並帶上 Retry-After', async () => {
+  it('**429 自成一類，並帶上 Retry-After**', async () => {
+    // 與 `transient` 分開的理由和 `scope` 與 `auth` 分開相同：**處置不同**。
+    // 這一類使用者什麼都不必做，而系統必須等到對端說的那個時間才能再來。
     const { api: client } = api([
       { status: 429, headers: { 'retry-after': '17' }, body: { ok: false, error: 'ratelimited' } },
     ])
     const result = await client.authTest()
     assert.equal(result.ok, false)
     if (result.ok) return
-    assert.equal(result.kind, 'transient')
+    assert.equal(result.kind, 'rate_limited')
     assert.equal(result.error, 'rate_limited')
-    assert.equal(result.retryAfterSeconds, 17)
+    assert.equal(result.kind === 'rate_limited' ? result.retryAfterSeconds : undefined, 17)
+  })
+
+  it('**沒有 Retry-After 的 429 仍然是 rate_limited**', async () => {
+    // 以標頭的有無決定種類，會讓「對端沒帶標頭」靜默退化成「馬上重試」——
+    // 而那正是讓拒絕延長的做法。缺席只影響等多久（由上層夾制），不影響是哪一類。
+    const { api: client } = api([{ status: 429, body: { ok: false, error: 'ratelimited' } }])
+    const result = await client.authTest()
+    assert.equal(result.ok ? '' : result.kind, 'rate_limited')
+    assert.equal(result.ok || result.kind !== 'rate_limited' ? 'x' : result.retryAfterSeconds, undefined)
   })
 
   it('5xx 判為 transient', async () => {

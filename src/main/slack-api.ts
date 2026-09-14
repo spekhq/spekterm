@@ -54,8 +54,20 @@ export type SlackFailure =
    * 那正是唯一能讓這則訊息可行動的資訊。
    */
   | { kind: 'scope'; error: string; needed?: string; provided?: string }
-  /** 暫時性：網路、5xx、速率限制。重試有用。 */
-  | { kind: 'transient'; error: string; retryAfterSeconds?: number }
+  /**
+   * **對端要我們稍後再試** —— 重試有用，但**不能馬上**。
+   *
+   * 與 `transient` 分開的理由與 `scope` 與 `auth` 分開相同：**處置不同**。
+   * 這一類使用者**什麼都不必做**，把它報成憑證或權限的問題會讓他去修一個不存在的問題。
+   * 而對系統而言它是唯一一種「對端指定了何時可以再來」的失敗 —— 那個時間必須被尊重，
+   * 否則我們會照原節奏繼續敲一個正在說「等一下」的服務。
+   *
+   * `retryAfterSeconds` **可能缺席**（對端不保證帶），而缺席**不代表「不是速率上限」** ——
+   * 退避仍然要發生，只是改用保守的預設值（見 `slack-service.ts` 的夾制）。
+   */
+  | { kind: 'rate_limited'; error: string; retryAfterSeconds?: number }
+  /** 暫時性：網路、5xx。重試有用，且可以馬上。 */
+  | { kind: 'transient'; error: string }
   /** 對端回了我們看不懂的東西 —— 不當成暫時性，否則會無限重試。 */
   | { kind: 'malformed'; error: string }
 
@@ -157,9 +169,11 @@ export class SlackApi {
     if (response.status === 429) {
       const header = response.headers.get('retry-after')
       const seconds = header === null ? undefined : Number(header)
+      // **缺 `Retry-After` 仍然是速率上限。** 以標頭的有無決定種類，會讓「對端沒帶標頭」
+      // 靜默退化成「馬上重試」—— 而那正是讓拒絕延長的做法。
       return {
         ok: false,
-        kind: 'transient',
+        kind: 'rate_limited',
         error: 'rate_limited',
         retryAfterSeconds: Number.isFinite(seconds) ? seconds : undefined,
       }

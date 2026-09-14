@@ -76,6 +76,19 @@ export interface BackfillOutcome {
   channels: Readonly<Record<string, string>>
   /** 失敗（若有）。`auth` 代表使用者必須知道，重試無用。 */
   failure?: SlackFailure
+  /**
+   * 對端要求的等待秒數 —— **獨立於 `failure`，而那是刻意的**。
+   *
+   * `failure` 的規則是「**先到的贏**」（`failure ??=`）：一個發生在第 2 個頻道的網路錯誤會
+   * 先佔住它，於是第 5 個頻道的速率上限**永遠讀不到** —— 退避就靜默地不會發生，而症狀只是
+   * 「偶爾沒有退避」，沒有任何東西會紅。兩者分開，就互不遮蔽。
+   *
+   * 值可能是 `undefined` 而 `failure.kind` 仍為 `rate_limited`（對端沒帶 `Retry-After`）——
+   * **那不代表不必退避**，只代表等多久由上層的預設值決定。
+   */
+  retryAfterSeconds?: number
+  /** 這一輪是否因為對端要求延後而提前中止。 */
+  rateLimited?: boolean
 }
 
 /** 一個待交付的候選。 */
@@ -99,23 +112,40 @@ export function lookbackOldest(nowMs: number, days: number): string {
  * 變成未捕捉的 rejection，而那在主行程裡是致命的。
  */
 export async function runBackfill(deps: BackfillDeps): Promise<BackfillOutcome> {
+  // **迴圈之前的兩個早退也要帶出退避資訊。** 速率上限不保證發生在逐頻道那一段 ——
+  // 它可能就發生在第一個呼叫上，而那時整輪會提早 return，退避資訊如果只在迴圈裡收集
+  // 就一併遺失了（症狀：被限流時**完全不退避**，而畫面上只是一次暫時性失敗）。
   const identity = await deps.api.authTest()
   if (!identity.ok) {
-    return { delivered: 0, deferred: 0, channelsScanned: 0, channels: {}, failure: identity }
+    return { delivered: 0, deferred: 0, channelsScanned: 0, channels: {}, ...exitOn(identity) }
   }
   const { teamId, userId } = identity.value
   deps.rememberIdentity(teamId, userId)
 
   const channels = await listChannels(deps)
   if (!channels.ok) {
-    return { delivered: 0, deferred: 0, channelsScanned: 0, channels: {}, failure: channels.failure }
+    return { delivered: 0, deferred: 0, channelsScanned: 0, channels: {}, ...exitOn(channels.failure) }
   }
   const channelNames: Record<string, string> = {}
   for (const channel of channels.value) channelNames[channel.id] = channel.name
 
   let delivered = 0
   let deferred = 0
+  let scannedCount = 0
   let failure: SlackFailure | undefined
+  /**
+   * 對端要求延後 —— **獨立於 `failure` 記錄**（見 `BackfillOutcome.retryAfterSeconds`：
+   * `failure` 是「先到的贏」，會把後到的速率上限遮掉）。
+   */
+  let rateLimited = false
+  let retryAfterSeconds: number | undefined
+  const noteFailure = (found: SlackFailure): void => {
+    failure ??= found
+    if (found.kind === 'rate_limited') {
+      rateLimited = true
+      retryAfterSeconds ??= found.retryAfterSeconds
+    }
+  }
   const names = new NameCache(deps.api)
   const oldestAllowed = lookbackOldest(deps.now(), deps.lookbackDays())
 
@@ -127,9 +157,13 @@ export async function runBackfill(deps: BackfillDeps): Promise<BackfillOutcome> 
 
     const scanned = await scanChannel(deps, channel, oldest, userId)
     if (scanned.failure !== undefined) {
-      failure ??= scanned.failure
+      noteFailure(scanned.failure)
+      // **對端要我們等一下時，這一輪不再問其餘頻道。** 繼續逐一詢問只會逐一被拒絕 ——
+      // 那些請求註定帶不回任何內容，而它們正是讓拒絕延長的原因。
+      if (rateLimited) break
       continue
     }
+    scannedCount += 1
 
     // **候選依時間排序處理，而水位只前進到「已處理完」的位置。**
     let handledUpTo: string | undefined = scanned.newestSeen
@@ -142,7 +176,7 @@ export async function runBackfill(deps: BackfillDeps): Promise<BackfillOutcome> 
       }
       const outcome = await deliverCandidate(deps, teamId, candidate, names)
       if (outcome.failure !== undefined) {
-        failure ??= outcome.failure
+        noteFailure(outcome.failure)
         // 這一則沒處理成功 ⇒ 水位同樣不得越過它。
         handledUpTo = previousTs(scanned.candidates, index)
         break
@@ -150,16 +184,29 @@ export async function runBackfill(deps: BackfillDeps): Promise<BackfillOutcome> 
       if (outcome.delivered) delivered += 1
     }
 
+    // **水位先前進，再中止。** 這一個頻道已經掃完的部分不因為下一個頻道被拒絕而作廢 ——
+    // 中止只是少送了註定失敗的請求，不改變已完成的工作。
     if (handledUpTo !== undefined) deps.advanceCursor(channel.id, handledUpTo)
+    if (rateLimited) break
   }
 
   return {
     delivered,
     deferred,
-    channelsScanned: channels.value.length,
+    channelsScanned: scannedCount,
     channels: channelNames,
     failure,
+    retryAfterSeconds,
+    rateLimited: rateLimited ? true : undefined,
   }
+}
+
+/** 把一個使整輪提早結束的失敗翻成 outcome 的三個欄位。 */
+function exitOn(
+  failure: SlackFailure,
+): Pick<BackfillOutcome, 'failure' | 'retryAfterSeconds' | 'rateLimited'> {
+  if (failure.kind !== 'rate_limited') return { failure }
+  return { failure, retryAfterSeconds: failure.retryAfterSeconds, rateLimited: true }
 }
 
 /** 候選清單中第 `index` 個之前的那一則的 ts（沒有就 `undefined` ＝水位完全不動）。 */
@@ -304,8 +351,14 @@ export class NameCache {
       if (this.#names[id] !== undefined) continue
       const result = await this.#api.userDisplayName(id)
       if (!result.ok) {
-        // **憑證失效要往上傳**；其餘（查不到名字）不該讓整則消失 —— 呈現層會退回 id。
-        if (result.kind === 'auth') return { names: this.#names, failure: result }
+        // **憑證失效與「對端要我們等一下」都要往上傳**；其餘（查不到名字）不該讓整則消失
+        // —— 呈現層會退回 id。
+        //
+        // `rate_limited` 在這裡繼續 `continue` 的話，剩下的每一個 id 都會再打一次
+        // `users.info`，而每一次都會被拒絕 —— 那正是讓拒絕延長的做法。
+        if (result.kind === 'auth' || result.kind === 'rate_limited') {
+          return { names: this.#names, failure: result }
+        }
         continue
       }
       this.#names[id] = result.value

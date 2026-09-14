@@ -291,6 +291,70 @@ async function runAuthFailure(_mode, context) {
   })
 }
 
+/**
+ * 對端要我們稍後再試。
+ *
+ * **可觀察面在替身端而不是收件匣。** 「不再送註定失敗的請求」不會讓畫面上多或少一張卡片
+ * —— 那些請求本來就帶不回任何東西。看的是**替身收到幾次 `conversations.history`**。
+ */
+async function runRateLimited(_mode, context) {
+  const { profile } = seedProfile()
+  // **四個頻道**，而在第 2 次呼叫上被拒 —— 於是「中止」（2 次）與「跑完」（4 次）分得出來。
+  const channels = [
+    { id: 'C0STUBONE0', name: 'stub-one' },
+    { id: 'C0STUBTWO0', name: 'stub-two' },
+    { id: 'C0STUBTHR0', name: 'stub-three' },
+    { id: 'C0STUBFOU0', name: 'stub-four' },
+  ]
+  const stub = await startStubSlack({
+    port: STUB_PORT,
+    state: { messages: [], channels, rateLimitOnHistoryCall: 2, retryAfterSeconds: 120 },
+  })
+  seedSlackSettings(profile, { baseUrl: stub.baseUrl })
+  seedSlackToken(profile)
+  context.stub = stub
+
+  const historyCalls = () => stub.calls.filter((call) => call.method === 'conversations.history').length
+
+  await withApp(context, { profile, stub }, async (app) => {
+    await openSlackTab(app)
+    await pollFor({
+      read: () => slackText(app),
+      settled: (text) => text.includes('slow down'),
+      timeoutMs: 30_000,
+      label: '畫面上呈現「對端要我們慢一點」',
+    })
+
+    check(
+      results,
+      '被要求稍後再試之後，該輪不再詢問其餘頻道',
+      historyCalls() === 2,
+      `conversations.history 收到 ${historyCalls()} 次（被拒的是第 2 次）`,
+    )
+    // **後半句是承重的**：少了它，一個「一個頻道都沒問」的實作也會讓上一條通過。
+    check(
+      results,
+      '而那個次數確實不等於頻道總數（否則中止與跑完分不出來）',
+      historyCalls() !== channels.length,
+      `頻道總數 ${channels.length}，實際呼叫 ${historyCalls()} 次`,
+    )
+
+    const text = await slackText(app)
+    check(
+      results,
+      '呈現指出這是暫時的、不需要使用者做任何事',
+      /slow down/.test(text) && /Nothing is wrong/.test(text),
+      text.slice(0, 200),
+    )
+    check(
+      results,
+      '該呈現與「憑證失效」及「權限不足」皆可區分',
+      !text.includes('no longer valid') && !text.includes('missing permissions'),
+      '沒有同時說憑證或權限有問題',
+    )
+  })
+}
+
 async function runNoDuplicate(_mode, context) {
   const { profile } = seedProfile()
   const mention = stubMention({ secondsAgo: 60, text: 'only once' })
@@ -454,6 +518,7 @@ async function runEndpointVisible(_mode, context) {
 const SECTIONS = [
   { name: 'runDelivery', run: runDelivery },
   { name: 'runAuthFailure', run: runAuthFailure },
+  { name: 'runRateLimited', run: runRateLimited },
   { name: 'runNoDuplicate', run: runNoDuplicate, deps: ['runDelivery'] },
   { name: 'runTruncation', run: runTruncation },
   { name: 'runLookback', run: runLookback },

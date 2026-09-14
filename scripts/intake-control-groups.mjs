@@ -19,7 +19,7 @@
 import { execFileSync } from 'node:child_process'
 import { readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..')
 
@@ -28,7 +28,7 @@ const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..')
  *
  * 沒有指名的話，一個「因為別的理由紅了」的 mutation 會被當成通過 —— 而那正是這支腳本要防的。
  */
-const MUTATIONS = [
+export const MUTATIONS = [
   {
     name: 'prefill-no-wait',
     file: 'src/main/intake-prefill.ts',
@@ -128,4 +128,8 @@ function run(names) {
   console.log(`\n${selected.length} 個對照組全部如預期變紅。`)
 }
 
-run(process.argv.slice(2))
+// **只有被直接執行時才跑。** 守衛（`control-groups-source.test.mjs`）要 import `MUTATIONS`，
+// 而一個在 import 時就開跑的模組會讓 `npm test` 變成十幾分鐘的完整對照組。
+if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  run(process.argv.slice(2))
+}

@@ -89,8 +89,13 @@ export function startStubSlack({ port, state }) {
     })
     req.on('end', () => {
       calls.push({ method, body, authorization: req.headers.authorization ?? '' })
-      const payload = respond(method, body, state)
-      res.writeHead(payload.status ?? 200, { 'content-type': 'application/json' })
+      const payload = respond(method, body, state, calls)
+      // **header 不能寫死** —— `Retry-After` 是 429 這一類**唯一可行動的部分**，
+      // 而產品是從 header 讀它的（body 裡沒有）。
+      res.writeHead(payload.status ?? 200, {
+        'content-type': 'application/json',
+        ...(payload.headers ?? {}),
+      })
       res.end(JSON.stringify(payload.body))
     })
   })
@@ -118,9 +123,30 @@ export function startStubSlack({ port, state }) {
   })
 }
 
-function respond(method, body, state) {
+function respond(method, body, state, calls) {
   if (state.authFails === true) {
     return { body: { ok: false, error: 'invalid_auth' } }
+  }
+
+  /**
+   * 第 N 次 `conversations.history` 回 429。
+   *
+   * **以「第幾次」而不是「哪個頻道」指定**：要驗的是「被拒之後就不再問其餘頻道」，
+   * 而那條斷言的可觀察面正是**呼叫次數**。用頻道 id 指定的話，被拒的那個頻道跳過之後
+   * 其餘照問，次數仍然等於頻道總數 —— 斷言就沒有鑑別力了。
+   */
+  if (state.rateLimitOnHistoryCall !== undefined && method === 'conversations.history') {
+    const nth = calls.filter((call) => call.method === 'conversations.history').length
+    if (nth === state.rateLimitOnHistoryCall) {
+      return {
+        status: 429,
+        headers:
+          state.retryAfterSeconds === undefined
+            ? {}
+            : { 'retry-after': String(state.retryAfterSeconds) },
+        body: { ok: false, error: 'ratelimited' },
+      }
+    }
   }
 
   switch (method) {
@@ -133,8 +159,14 @@ function respond(method, body, state) {
       return { body: { ok: true, url: 'wss://127.0.0.1:1/link' } }
 
     case 'users.conversations':
+      // **頻道數可覆寫**：驗「被拒之後不再問其餘頻道」時，一個頻道的劇本裡
+      // 「中止」與「跑完」的結果完全相同 —— 斷言就沒有鑑別力了（同拖曳排序那條紀律：
+      // 兩個項目時兩種語意看不出差別）。
       return {
-        body: { ok: true, channels: [{ id: STUB_CHANNEL, name: STUB_CHANNEL_NAME }] },
+        body: {
+          ok: true,
+          channels: state.channels ?? [{ id: STUB_CHANNEL, name: STUB_CHANNEL_NAME }],
+        },
       }
 
     case 'conversations.history': {

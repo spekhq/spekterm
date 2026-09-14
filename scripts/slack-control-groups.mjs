@@ -19,7 +19,7 @@
 import { execFileSync } from 'node:child_process'
 import { readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..')
 
@@ -28,7 +28,7 @@ const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..')
  *
  * 沒有指名的話，一個「因為別的理由紅了」的 mutation 會被當成通過 —— 而那正是這支腳本要防的。
  */
-const MUTATIONS = [
+export const MUTATIONS = [
   {
     name: 'thread-upper-bound-now',
     file: 'src/main/slack-backfill.ts',
@@ -124,8 +124,8 @@ const MUTATIONS = [
   {
     name: 'auth-merged-into-transient',
     file: 'src/main/slack-api.ts',
-    from: `  return AUTH_ERRORS.has(error) ? { kind: 'auth', error } : { kind: 'transient', error }`,
-    to: `  return { kind: 'transient', error }`,
+    from: `  if (AUTH_ERRORS.has(error)) return { kind: 'auth', error }`,
+    to: `  if (false) return { kind: 'auth', error }`,
     expectRed: '憑證失效時使用者看得到，且說明重試無用',
     why: '**把憑證問題併進暫時性失敗。** 使用者會看到「稍後會再試一次」而那永遠不會成功 ——'
       + '重試無用這件事必須說出來。順帶：報成 transient 也會讓即時路徑不被跳過。',
@@ -133,14 +133,84 @@ const MUTATIONS = [
   {
     name: 'failure-not-merged',
     file: 'src/main/slack-service.ts',
-    from: `      return { ...current, count: current.count + 1 }`,
-    to: `      return { kind: failure.kind, error: failure.error, count: 1 }`,
+    from: `      return { ...current, count: current.count + 1, needed: needed ?? current.needed }`,
+    to: `      return { kind: failure.kind, error: failure.error, count: 1, needed }`,
     command: 'test',
     expectRed: '**同一種失效合併為恰好一則，且帶次數**',
     why: '**同一種失效不累加次數。** \n'
       + '> **這條的載體是單元測試，不是 probe**（實測）：probe 只觸發一輪失效，於是畫面上顯示'
       + '「seen once」，而那仍然滿足 `/seen (once|\\d+ times)/`。**probe 那條斷言在這個 mutation'
       + '之下紅不起來** —— 要兩輪失效才看得出「沒有累加」，而那是單元測試在做的事。',
+  },
+  {
+    name: 'rate-limit-keeps-scanning',
+    file: 'src/main/slack-backfill.ts',
+    from: `      if (rateLimited) break
+      continue`,
+    to: `      continue`,
+    expectRed: '被要求稍後再試之後，該輪不再詢問其餘頻道',
+    why: '**被拒的那個頻道跳過之後繼續問下一個。** 那些請求註定帶不回任何東西，'
+      + '而它們正是讓拒絕延長的原因。\n'
+      + '> **指名的必須是「恰為 2 次」那一條，不是「不等於頻道總數」那一條**（實測踩過）：'
+      + '這個 mutation 只拿掉迴圈內的中止，底部那個還在，於是呼叫數是 **3** —— '
+      + '「≠ 4」仍然成立，紅不起來。那條斷言的對照組是下一個 mutation。',
+  },
+  {
+    name: 'rate-limit-never-aborts',
+    file: 'src/main/slack-backfill.ts',
+    from: `      rateLimited = true`,
+    to: `      rateLimited = false`,
+    expectRed: '而那個次數確實不等於頻道總數（否則中止與跑完分不出來）',
+    why: '**中止整個不發生**（兩個 break 同時失效）。這是「≠ 頻道總數」那條斷言存在的理由：'
+      + '呼叫數回到 4，而那正是「跑完了全部頻道」的樣子。\n'
+      + '> 與上一個 mutation 成對：**一個驗「中止的位置對不對」，一個驗「中止有沒有發生」。**',
+  },
+  {
+    name: 'rate-limit-no-gate',
+    file: 'src/main/slack-service.ts',
+    from: `      if (this.#now() < this.#retryAt) {`,
+    to: `      if (false) {`,
+    command: 'test',
+    expectRed: '**退避期內的每一次觸發都不跑，期滿之後的會跑**',
+    why: '**拿掉跨輪的閘。** 對端說「等 10 分鐘」，而我們每 5 分鐘照敲一次。\n'
+      + '> 載體只能是單元測試：探針驗不了「下一輪何時發生」—— 那要等五分鐘。',
+  },
+  {
+    name: 'rate-limit-never-clears',
+    file: 'src/main/slack-service.ts',
+    from: `      if (this.#now() < this.#retryAt) {`,
+    to: `      if (true) {`,
+    command: 'test',
+    expectRed: '**退避期內的每一次觸發都不跑，期滿之後的會跑**',
+    why: '**退避之後永遠不再取回** —— 與上一條方向相反。那條斷言的後半句（「期滿之後要恢復」）'
+      + '正是為了這個方向而寫的。\n'
+      + '> 少了後半句，這個 mutation 全綠，而畫面上只是一直顯示「正在等待」。',
+  },
+  {
+    name: 'retry-after-unclamped',
+    file: 'src/main/slack-service.ts',
+    from: `  return Math.min(Math.max(retryAfterSeconds, BACKOFF.minSeconds), BACKOFF.maxSeconds)`,
+    to: `  return Math.max(retryAfterSeconds, BACKOFF.minSeconds)`,
+    command: 'test',
+    expectRed: '**荒謬的值被夾住** —— 端點是使用者可設定的，那個值不是完全可信的輸入',
+    why: '**拿掉上界。** 端點是使用者可設定的，一個回 `Retry-After: 99999999` 的端點會讓這個'
+      + '能力無限期停擺，而畫面上只會顯示「正在等待」。',
+  },
+  {
+    name: 'rate-limit-parasitic-field',
+    file: 'src/main/slack-backfill.ts',
+    from: `    if (found.kind === 'rate_limited') {
+      rateLimited = true
+      retryAfterSeconds ??= found.retryAfterSeconds
+    }`,
+    to: `    if (failure.kind === 'rate_limited') {
+      rateLimited = true
+      retryAfterSeconds ??= failure.retryAfterSeconds
+    }`,
+    command: 'test',
+    expectRed: '**速率上限不被先到的其他失敗遮掉**',
+    why: '**把退避資訊改回寄生在 `failure` 上。** `failure` 是「先到的贏」——'
+      + '一個更早的網路錯誤會讓 429 永遠讀不到，而症狀只是「偶爾沒有退避」，沒有任何東西會紅。',
   },
 ]
 
@@ -205,4 +275,8 @@ function run(names) {
   console.log(`\n${selected.length} 個對照組全部如預期變紅。`)
 }
 
-run(process.argv.slice(2))
+// **只有被直接執行時才跑。** 守衛（`control-groups-source.test.mjs`）要 import `MUTATIONS`，
+// 而一個在 import 時就開跑的模組會讓 `npm test` 變成十幾分鐘的完整對照組。
+if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  run(process.argv.slice(2))
+}

@@ -43,9 +43,11 @@ function statusCopy(state: SlackState): {
     | 'slack.statusFailureScope'
     | 'slack.statusFailureScopeUnknown'
     | 'slack.statusFailureTransient'
+    | 'slack.statusRateLimited'
+    | 'slack.statusRateLimitedSoon'
     | 'slack.statusNeverRan'
     | 'slack.statusIdle'
-  options?: { error: string } | { needed: string }
+  options?: { error: string } | { needed: string } | { time: string }
 } {
   if (!state.configured.userToken) return { key: 'slack.statusUnconfigured' }
   const failure = state.status.failure
@@ -56,6 +58,17 @@ function statusCopy(state: SlackState): {
       return failure.needed === undefined || failure.needed === ''
         ? { key: 'slack.statusFailureScopeUnknown', options: { error: failure.error } }
         : { key: 'slack.statusFailureScope', options: { needed: failure.needed } }
+    }
+    // **「對端要我們慢一點」的處置是什麼都不必做。** 報成憑證或權限的問題，會讓使用者去修
+    // 一個根本不存在的問題 —— 那正是 `missing_scope` 曾被歸進 `auth` 時發生的事。
+    if (failure.kind === 'rate_limited') {
+      const retryAt = state.status.retryAt
+      return retryAt === undefined
+        ? { key: 'slack.statusRateLimitedSoon' }
+        : {
+            key: 'slack.statusRateLimited',
+            options: { time: new Date(retryAt).toLocaleTimeString() },
+          }
     }
     return failure.kind === 'auth'
       ? { key: 'slack.statusFailureAuth', options: { error: failure.error } }
