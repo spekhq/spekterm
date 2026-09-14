@@ -668,7 +668,13 @@ session 脈絡裡送出的，彙整成一份跨數十天、跨數十個專案的
 - **Router / probe daemon**（主行程 watcher）：同機 auto-spawn，跨人先 pending。
 - ~~**Spawner + context 注入器**（先只接 `claude`）~~（已落地）。
 - **Consumer / ack** 流轉（open → awaiting-ack → done）。
-- **UI**：收件匣、通知、compose、session「picked up from handoff X」標示。
+- **UI**：~~收件匣~~（已落地）、~~通知~~（已落地：活動列入口的待處理計數 ＋ 作業系統原生通知，
+  觸發它把視窗帶到前景並打開收件匣）、compose、session「picked up from handoff X」標示。
+
+  > **通知有兩條缺口寫在規格裡**：「它真的出現在桌面上」與「視窗真的浮到前景」沒有自動化
+  > 載體，由 dogfood 認定。另外**桌面沒有通知服務時本能力靜默無效，而應用程式偵測不到**
+  > —— 實測「支援通知」的回報在完全沒有通知服務、甚至連匯流排都連不上時依然為真。
+  > 已裁決不做主動偵測；計數標示是那種情況下唯一仍然有效的那一半。
 
 ### Phase 8+ — Handoff 付費層與 agent 擴充
 - **Relay**：跨機 / 跨人中繼 + 身分 / Team registry + 存取控制 + 跨人核准。

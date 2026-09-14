@@ -24,6 +24,9 @@ import { configureAgentInjection } from './agent-injection'
 import { configureAgentStatus } from './agent-status'
 import { contextRoot } from './intake-context'
 import { ensureDeliveryRoot } from './intake-archive'
+import { IntakeNotifier } from './intake-notify'
+import { electronNotifyBackend } from './intake-notify-electron'
+import { createStubBackend, stubNotifyRoot } from './intake-notify-stub'
 import { IntakeService } from './intake-service'
 import { IntakeSource, inboxRoot } from './intake-source'
 import { RoutingStore, routingFile } from './intake-routing'
@@ -141,7 +144,58 @@ void applyUserEnvOnce()
 /** 啟動後多久跑第一輪 Slack 回補 —— 不與啟動搶資源。 */
 const SLACK_BACKFILL_DELAY_MS = 4000
 
+/**
+ * 安裝的 desktop entry 檔名。
+ *
+ * **實測**：不設 `setDesktopName` 時通知的 `desktop-entry` 提示是 `electron`，與安裝的 entry
+ * 對不上 ⇒ 通知拿到 Electron 的預設圖示。而 `agent-intake` 對通知的整條論證建立在
+ * 「它看起來像作業系統在替**這個 app** 說話」。
+ *
+ * 值與 `scripts/lib/desktop-entry.mjs` 的 `ENTRY_NAME` 必須一致 —— 主行程 import 不了
+ * `scripts/`（那是建置腳本），因此由 `scripts/desktop-name.test.mjs` 釘住兩者相同。
+ */
+const DESKTOP_ENTRY_NAME = 'spekterm.desktop'
+
+/**
+ * 把主視窗帶到前景。
+ *
+ * **三個都要**：實測在帶有 window manager 的環境下，單獨 `focus()` 對最小化的視窗
+ * 完全無效（`isMinimized()` 維持為真）。
+ *
+ * **視窗由 `getAllWindows()` 取得而不是持有一份參考** —— `createWindow()` 在這個檔案裡有
+ * 兩個呼叫點（`whenReady` 與 `activate`），持有第一個的模組層級參考在 close → activate
+ * 之後會指向一個已銷毀的物件。
+ */
+function bringToFront(): void {
+  const window = BrowserWindow.getAllWindows().find((candidate) => !candidate.isDestroyed())
+  if (!window) return
+  if (window.isMinimized()) window.restore()
+  window.show()
+  window.focus()
+}
+
+/**
+ * 這一次執行是不是跑在一個**命令列指定的拋棄式 profile** 上。
+ *
+ * 用途只有一個：決定通知走真實的作業系統，還是走驗收用的替身。
+ *
+ * **判準不能只是「沒有打包」**：`npm run dev` 也沒有打包，而 dogfood 正是在 dev 裡進行的
+ * —— 那時要的是真通知。驗收與 dev 的差別在於**驗收一律以 `--user-data-dir` 指定一個丟完就
+ * 刪的 profile**，dev 走的是 `XDG_CONFIG_HOME`。
+ *
+ * **判準也不能是 `--remote-debugging-port`**：dogfood 期間的效能診斷工具就帶著它。
+ *
+ * 出貨的產物一律為否（打包之後這條路徑組不出來），因此替身在使用者手上不存在。
+ */
+function usingThrowawayProfile(): boolean {
+  if (app.isPackaged) return false
+  return process.argv.some((arg) => arg.startsWith('--user-data-dir='))
+}
+
 void app.whenReady().then(() => {
+  // 通知的應用程式身分 —— 見 `DESKTOP_ENTRY_NAME` 的註解。
+  app.setDesktopName?.(DESKTOP_ENTRY_NAME)
+
   // workspace 設定隨使用者資料目錄走，因此 `--user-data-dir` 可指向暫存 profile，
   // 讓驗收得以反覆重啟應用程式而不污染真實設定。
   const store = new WorkspaceStore(join(app.getPath('userData'), 'workspace.json'))
@@ -240,6 +294,23 @@ void app.whenReady().then(() => {
     requestRound: () => void slackRuntime.runRound(),
   })
   registerPanelHandlers(panelStore)
+  /**
+   * 通知 —— 決策層在 `intake-notify.ts`，碰作業系統的只有 `intake-notify-electron.ts`。
+   *
+   * **替身以 `app.isPackaged` 為閘，不用環境變數**：`ptyEnv()` 展開 `process.env`，於是一個
+   * 環境變數會進到每一個 pty，而 pty 裡跑的正是被不受信任內容驅動的 agent —— 它寫一個檔案
+   * 就能讓視窗搶到前景並打開收件匣。改以 userData 推導路徑之後，出貨的產物裡這條路徑
+   * 根本組不出來（探針本來就傳 `--user-data-dir`）。
+   */
+  const notifyBackend = usingThrowawayProfile()
+    ? createStubBackend({ root: stubNotifyRoot(app.getPath('userData')) })
+    : electronNotifyBackend()
+  const notifier = new IntakeNotifier({ backend: notifyBackend })
+  // **接在到達上，不是接在「有東西變了」或 `DeliverOutcome.notify` 上** —— 後兩者會讓
+  // 每一次拒絕跳一則桌面通知、每一則真正進來的都不跳（見 `intake-service.ts` 的 `onArrival`）。
+  intakeService.onArrival((record) => notifier.arrived(record))
+
+  let openInbox: (() => void) | null = null
   registerIntakeHandlers({
     service: intakeService,
     routing: routingStore,
@@ -247,6 +318,13 @@ void app.whenReady().then(() => {
     contextRoot: contextRoot(app.getPath('userData')),
     // 未設定＝啟用（與 gpuAcceleration 同一條規則）。
     agentEventsEnabled: () => preferencesStore.get().agentEvents !== false,
+    onInboxOpened: () => notifier.inboxOpened(),
+    registerOpenInbox: (open) => { openInbox = open },
+  })
+
+  notifyBackend.onActivate(() => {
+    bringToFront()
+    openInbox?.()
   })
 
   const insights = createInsightsService({

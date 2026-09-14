@@ -81,6 +81,7 @@ export class IntakeService {
   readonly #maxPending: number
   #notices: IntakeNotice[] = []
   #listeners = new Set<() => void>()
+  #arrivals = new Set<(record: IntakeRecord) => void>()
 
   constructor({ store, archiveRoot, maxPending = MAX_PENDING }: IntakeServiceOptions) {
     this.#store = store
@@ -108,6 +109,31 @@ export class IntakeService {
 
   #emit(): void {
     for (const listener of this.#listeners) listener()
+  }
+
+  /**
+   * 訂閱**到達** —— 「一則新的 intake 進來了，它是哪一則」。
+   *
+   * ## 為什麼不能沿用既有的兩個
+   *
+   * `subscribe()` 的語意是「有東西變了」（不帶參數，收件匣靠它重新拉取），它對「拒絕」
+   * 與「到達」一視同仁。而 `DeliverOutcome.notify` 的語意**與這裡所需恰好相反** ——
+   * 它是「這則**拒絕**要不要讓使用者看到」，成功路徑上恆為 `false`。
+   * 照字面接上去，結果會是：每一次拒絕跳一則桌面通知、每一則真正進來的都不跳。
+   *
+   * ## 為什麼在這裡而不是讓呼叫端自己判斷
+   *
+   * `deliver()` 是投遞的唯一入口，兩個 producer 都走它。讓每個呼叫端自己看 `outcome.ok`
+   * 再決定，就是把同一個判斷複製成兩份 —— 本檔檔頭正是在警告這件事（兩條路會演化成兩份
+   * 寬嚴不同的實作，而那是完全靜默的）。
+   */
+  onArrival(listener: (record: IntakeRecord) => void): () => void {
+    this.#arrivals.add(listener)
+    return () => this.#arrivals.delete(listener)
+  }
+
+  #emitArrival(record: IntakeRecord): void {
+    for (const listener of this.#arrivals) listener(record)
   }
 
   #notice(code: IntakeRejection, key: string, detail?: string): void {
@@ -186,8 +212,31 @@ export class IntakeService {
     }
 
     await saveDelivery(this.#archiveRoot, intake.id, contents)
+
+    // **重複檢查與記錄之間隔著一個 await —— 這裡要再檢查一次。**
+    //
+    // 檔案 adapter 刻意做「先建立監看、再掃描落點」的雙重讀取，於是同一份投遞的兩次
+    // `deliver()` 可以**都**通過上面那個 `existing` 檢查，然後各自往下走。`store.add` 以
+    // 主鍵覆寫，所以收件匣裡仍然只有一筆 —— 但**到達會發出兩次**，而那是使用者看得到的：
+    // 計數說 10、合併的通知說 11。（是探針抓到的，單元測試的兩次 deliver 是循序的。）
+    const raced = this.#store.get(adapter, intake.id)
+    if (raced) {
+      // 與上面那段同樣的分流：**同內容靜默、不同內容可見**。只擋同內容是不夠的 ——
+      // 一次識別碼搶佔賽進來時，後到的那一份會覆寫紀錄並**再發一次到達**，
+      // 於是計數說 N、合併的通知說 N+1（就是這麼被抓到的）。
+      if (raced.digest === digestOf(intake.authored, intake.verified)) {
+        return { ok: false, code: 'DUPLICATE', consume: true, notify: false }
+      }
+      this.#notice('DUPLICATE', intake.id)
+      this.#emit()
+      return { ok: false, code: 'DUPLICATE', consume: true, notify: true }
+    }
+
     const record = this.#store.add(intake)
     this.#emit()
+    // **到達 —— 唯一的發出點。** 它在成功新增紀錄之後，因此六條非成功的返回路徑
+    // （上面每一個 early return）都不會走到這裡。
+    this.#emitArrival(record)
     return { ok: true, consume: true, notify: false, record }
   }
 }

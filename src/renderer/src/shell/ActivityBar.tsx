@@ -1,7 +1,8 @@
-import { useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { InsightsOverlay } from './insights/InsightsOverlay'
 import { IntakeOverlay } from './intake/IntakeOverlay'
+import { useIntake } from './intake/intake-state'
 import { TerminalFontDialog } from './settings/TerminalFontDialog'
 
 const ICON_PROPS = {
@@ -103,10 +104,32 @@ const ITEMS: ActivityItem[] = [
 
 export function ActivityBar(): React.JSX.Element {
   const { t } = useTranslation()
+  const { pendingCount } = useIntake()
   const [settingsOpen, setSettingsOpen] = useState(false)
   // 開啟 overlay 的那個按鈕 —— 關閉時焦點要還給它，否則落回 `<body>`，下一次按鍵什麼都不發生。
   const [insightsOpener, setInsightsOpener] = useState<HTMLElement | null>(null)
   const [intakeOpener, setIntakeOpener] = useState<HTMLElement | null>(null)
+  const handoffsRef = useRef<HTMLButtonElement>(null)
+
+  /**
+   * **穩定的 identity 是承重的。** 寫成 inline arrow 的話，這個元件每重繪一次，overlay 那邊
+   * 以它為依賴的 effect 就重跑一次 —— 而這個元件現在訂閱了收件匣狀態。
+   */
+  const closeIntake = useCallback(() => setIntakeOpener(null), [])
+  const closeInsights = useCallback(() => setInsightsOpener(null), [])
+
+  /**
+   * 使用者觸發了通知 ⇒ 打開收件匣。
+   *
+   * **已開啟時必須是無操作** —— 以純函式 updater 保證。寫成「先讀 state 再判斷」的話，
+   * 這個註冊在 `[]` 依賴的 effect 裡讀到的是一個**永遠為 null 的 stale closure**；
+   * 把 state 加進依賴又會讓每次開關都重訂閱，而重訂閱的空窗會吃掉一則訊息。
+   */
+  useEffect(() => {
+    return window.workspace.intake.onOpenInbox(() => {
+      setIntakeOpener((current) => current ?? handoffsRef.current)
+    })
+  }, [])
 
   // Sessions 恆為當前 view；**Search 仍是停用的 placeholder**
   //（`workspace-layout`：尚未實作的入口為停用狀態）。Handoffs 已由 `agent-intake-inbox` 接上。
@@ -130,6 +153,7 @@ export function ActivityBar(): React.JSX.Element {
           <div key={item.id} className={item.atBottom ? 'mt-auto' : undefined}>
             <button
               type="button"
+              ref={item.id === 'handoffs' ? handoffsRef : undefined}
               disabled={!item.enabled}
               // `aria-label` 同時是探針的選擇器（自字典取字串，不硬編）—— 見「aria-label 是選擇器」。
               aria-label={label}
@@ -137,23 +161,56 @@ export function ActivityBar(): React.JSX.Element {
               onClick={item.enabled ? (event) => activate(item.id, event.currentTarget) : undefined}
               title={item.enabled ? label : t('activityBar.comingSoon', { label })}
               className={
-                'flex h-9 w-9 items-center justify-center rounded-md transition-colors ' +
+                'relative flex h-9 w-9 items-center justify-center rounded-md transition-colors ' +
                 (item.enabled
                   ? 'bg-accent/10 text-accent'
                   : 'text-ink-faint opacity-40 hover:bg-transparent')
               }
             >
               {item.icon}
+              {item.id === 'handoffs' ? <CountBadge total={pendingCount} /> : null}
             </button>
           </div>
         )
       })}
 
       {settingsOpen && <TerminalFontDialog onClose={() => setSettingsOpen(false)} />}
-      {insightsOpener && (
-        <InsightsOverlay opener={insightsOpener} onClose={() => setInsightsOpener(null)} />
-      )}
-      {intakeOpener && <IntakeOverlay opener={intakeOpener} onClose={() => setIntakeOpener(null)} />}
+      {insightsOpener && <InsightsOverlay opener={insightsOpener} onClose={closeInsights} />}
+      {intakeOpener && <IntakeOverlay opener={intakeOpener} onClose={closeIntake} />}
     </nav>
+  )
+}
+
+/**
+ * 入口上的計數標示。
+ *
+ * **三件事是承重的：**
+ *
+ * 1. **入口按鈕自己的無障礙標籤一個字都不改。** 在本 repo 中那個標籤同時是驗收定位元素的
+ *    手段，併進計數會讓既有指名該入口的每一條斷言**選不到元素** —— 徵狀是求值得空值，
+ *    不是斷言失敗。
+ * 2. **它是 `<span>` 不是 `<button>`。** 活動列的入口是以 `nav … button` 列舉出來驗收的，
+ *    多一顆按鈕會讓那份列舉從「入口」變成「入口＋裝飾」。
+ * 3. **它需要自己的 role 才會被朗讀。** `role="button"` 的後代在無障礙樹中是呈現性的，
+ *    而入口帶著顯式的標籤 ⇒ 巢狀元素上的標籤不會被讀出來。「分成兩個元素就同時滿足
+ *    無障礙」是錯的。
+ *
+ * 絕對定位（父層按鈕帶 `relative`，無 offset 的 `relative` 不改變版面）——
+ * 活動列是固定寬度的版面契約，標示不得改變入口的尺寸。字級只能用尺度的地板 `text-2xs`
+ * （arbitrary 的字級會被 `typography.test.mjs` 擋下 —— **而那道守衛是行掃描，連註解一起吃**，
+ * 所以這一段不能把那個字面形式寫出來），並明寫 `leading-none` 釘住行框。
+ */
+function CountBadge({ total }: { total: number }): React.JSX.Element | null {
+  const { t } = useTranslation()
+  // **為零時不渲染** —— 一個恆常存在的標示不構成提示。
+  if (total <= 0) return null
+  return (
+    <span
+      role="status"
+      aria-label={t('intake.badge', { total })}
+      className="pointer-events-none absolute -right-0.5 -top-0.5 min-w-[1.05rem] rounded-full bg-accent px-1 text-center text-2xs leading-none text-shell"
+    >
+      {total > 99 ? '99+' : total}
+    </span>
   )
 }

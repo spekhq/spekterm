@@ -21,6 +21,7 @@
  */
 import { spawn } from 'node:child_process'
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -33,7 +34,8 @@ import {
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 import { check, connectToApp, pollFor } from './lib/cdp.mjs'
-import { label } from './lib/copy.mjs'
+import { copy, label } from './lib/copy.mjs'
+import { retryAction } from './lib/instrument.mjs'
 import { awaitMounted } from './lib/mounted.mjs'
 import { electronExtraArgs } from './lib/display.mjs'
 import { runSections } from './lib/sections.mjs'
@@ -214,6 +216,111 @@ function dismissExpression(title) {
     if (!button) return false
     button.click()
     return true
+  })()`
+}
+
+/**
+ * 直接 seed 落盤的收件匣狀態。
+ *
+ * **「帶著待處理項目啟動」這個前提只能這樣造。** 在落點放檔案造出來的是**到達**，
+ * 而到達是會通知的 —— 那正好是相反的前提（見 `runNotifyBackfill`）。
+ *
+ * 另注意：`CAPACITY` 與 `MALFORMED` 的投遞檔刻意不被消費，它們在下次啟動會重新 deliver
+ * ⇒ 那是一次合法的新到達。seed 時不要在落點留下任何東西。
+ */
+function seedStore(profile, items) {
+  const entries = items.map((item) => ({
+    adapter: 'file',
+    id: item.id,
+    state: 'pending',
+    digest: `seed-${item.id}`,
+    content: {
+      verified: { adapter: 'file', originKind: 'slack', originId: 'C1' },
+      authored: {
+        title: item.title,
+        body: item.body ?? 'seeded body',
+        actor: item.actor ?? 'someone',
+        originLabel: '#dev',
+      },
+      receivedAt: 1_700_000_000_000,
+    },
+  }))
+  writeFileSync(join(profile, 'intake.json'), JSON.stringify({ version: 1, entries }))
+}
+
+/** 替身通知後端的落點 —— 與主行程的 `stubNotifyRoot()` 同一個推導。 */
+function notifyRoot(profile) {
+  return join(profile, 'notify-stub')
+}
+
+function notifications(profile) {
+  const file = join(notifyRoot(profile), 'notifications.jsonl')
+  if (!existsSync(file)) return []
+  return readFileSync(file, 'utf8').split('\n').filter(Boolean).map((line) => JSON.parse(line))
+}
+
+function receipts(profile) {
+  const file = join(notifyRoot(profile), 'receipts.jsonl')
+  if (!existsSync(file)) return []
+  return readFileSync(file, 'utf8').split('\n').filter(Boolean)
+}
+
+/** 模擬一次「使用者觸發了通知」。 */
+function fireNotification(profile, nth) {
+  const root = notifyRoot(profile)
+  mkdirSync(root, { recursive: true })
+  // 同一個路徑寫第二次只會 emit `change`，替身兩種事件都訂了。
+  writeFileSync(join(root, 'trigger'), String(nth))
+}
+
+/** 合併窗 + 一點餘裕。產品的窗是秒級的，探針**真的等** —— 少一個注入點就少一條會分岔的路。 */
+const WINDOW_WAIT_MS = 6000
+
+/** 入口上的計數標示 —— **由入口的標籤定位到按鈕，再讀它子樹內的標示**。 */
+const BADGE_TEXT = `(() => {
+  const button = document.querySelector('${label('activityBar.handoffs')}')
+  if (!button) return null
+  const badge = button.querySelector('[role="status"]')
+  return badge ? badge.textContent : ''
+})()`
+
+/** 入口按鈕自己的尺寸 —— **不是 nav 的寬度**（那是寫死的，量它恆真）。 */
+const HANDOFFS_RECT = `(() => {
+  const button = document.querySelector('${label('activityBar.handoffs')}')
+  if (!button) return null
+  const rect = button.getBoundingClientRect()
+  const badge = button.querySelector('[role="status"]')
+  return { w: Math.round(rect.width), h: Math.round(rect.height), badge: badge ? badge.textContent : null }
+})()`
+
+/** 活動列的入口列舉 —— 與 `probe:workspace` 的同一個形狀。 */
+const ACTIVITY_ENTRIES = `document.querySelectorAll('nav${label('activityBar.label')} button').length`
+
+const ACTIVE_LABEL = `document.activeElement ? (document.activeElement.getAttribute('aria-label') ?? document.activeElement.tagName) : null`
+
+/**
+ * 收件匣 overlay 的分頁**沒有無障礙標籤**（它們的名字來自文字節點），所以要以文字定位。
+ * 照既有紀律，那段文字仍然自字典取得。
+ */
+function tabClick(keyPath) {
+  return `(() => {
+    const list = document.querySelector('[role="tablist"]${label('intake.label')}')
+    const tab = [...(list?.querySelectorAll('[role="tab"]') ?? [])]
+      .find((candidate) => candidate.textContent === ${JSON.stringify(copy(keyPath))})
+    if (!tab) return false
+    tab.click()
+    return true
+  })()`
+}
+
+function tabFocus(keyPath) {
+  return `(() => {
+    const list = document.querySelector('[role="tablist"]${label('intake.label')}')
+    const tab = [...(list?.querySelectorAll('[role="tab"]') ?? [])]
+      .find((candidate) => candidate.textContent === ${JSON.stringify(copy(keyPath))})
+    if (!tab) return false
+    tab.focus()
+    return document.activeElement === tab
   })()`
 }
 
@@ -598,12 +705,483 @@ async function runDismiss(_mode, _modeConfig, context) {
   )
 }
 
+/**
+ * 活動列上的計數 —— **本段從頭到尾不打開收件匣，直到最後一條**。
+ *
+ * 第一條是這一段存在的主要理由：主行程的收件者集合是在 renderer 第一次呼叫 `list()` 時
+ * 才註冊的，而在常駐的 provider 出現之前那只發生在 overlay 掛載時 —— 也就是**一個從來
+ * 沒有被打開過的收件匣，其變化不會推給任何人**。順序不能動：一旦打開過，這條就失去前提。
+ */
+async function runBadge(_mode, _modeConfig, context) {
+  const { profile, folders } = seedProfile()
+  // **刻意不設 fallback**：本段要有一則 routing 解析不出來的項目，而設了 fallback 之後
+  // 每一則都解析得出來 —— 那條「仍計入」的斷言就沒有被驗到的機會。
+  seedRouting(profile, {
+    rules: [{ id: 'r1', criterion: 'originId', contains: 'C1', folderId: folders[0].id }],
+  })
+  const configDir = mkTemp('spekterm-intake-config-')
+  const marker = `spek-intake-${process.pid}-${Date.now()}`
+  const stub = makeStubAgent(mkTemp, configDir)
+
+  const app = await freshApp(context, { profile, configDir, stub, marker })
+
+  const emptyRect = await app.client.evaluate(HANDOFFS_RECT)
+  check(results, '前置：沒有待處理項目時不存在計數標示', emptyRect?.badge === null, JSON.stringify(emptyRect))
+
+  drop(profile, 'b1', intake({ id: 'badge-1', title: 'BADGE-ONE' }))
+  const one = await pollFor({
+    read: () => app.client.evaluate(BADGE_TEXT),
+    settled: (text) => text === '1',
+    timeoutMs: 15_000,
+    label: '計數變成 1',
+  })
+  check(results, '從未打開過收件匣時仍呈現計數', one === '1', `得到 ${JSON.stringify(one)}`)
+
+  drop(profile, 'b2', intake({ id: 'badge-2', title: 'BADGE-TWO' }))
+  drop(profile, 'b3', intake({ id: 'badge-3', title: 'BADGE-THREE', originId: 'CNOPE' }))
+  const three = await pollFor({
+    read: () => app.client.evaluate(BADGE_TEXT),
+    settled: (text) => text === '3',
+    timeoutMs: 15_000,
+    label: '計數變成 3',
+  })
+  check(results, '計數等於待處理的則數', three === '3', `得到 ${JSON.stringify(three)}`)
+
+  // **尺寸不變。** 量的是入口按鈕，不是活動列 —— 後者是寫死的寬度，量它恆真。
+  const withBadge = await app.client.evaluate(HANDOFFS_RECT)
+  check(
+    results,
+    '帶計數時入口本身的尺寸不變（且量測時標示確實存在）',
+    withBadge?.badge === '3' && withBadge.w === emptyRect?.w && withBadge.h === emptyRect?.h,
+    `空 ${JSON.stringify(emptyRect)}｜帶計數 ${JSON.stringify(withBadge)}`,
+  )
+  check(
+    results,
+    '入口的無障礙標籤不因計數而改變',
+    (await app.client.evaluate(
+      `document.querySelector('${label('activityBar.handoffs')}')?.getAttribute('aria-label') ?? null`,
+    )) === copy('activityBar.handoffs'),
+    '以入口的標籤定位得到它，且標籤與不帶計數時逐字元相同（本段每一次定位都倚賴這件事）',
+  )
+  check(
+    results,
+    '計數標示不使入口的列舉多出一項',
+    (await app.client.evaluate(ACTIVITY_ENTRIES)) === 5,
+    `得到 ${await app.client.evaluate(ACTIVITY_ENTRIES)}`,
+  )
+
+  // routing 解析不出來的那一則也計入 —— 打開收件匣確認它確實是「解析不出來」的那種。
+  await openInbox(app)
+  const rows = await pollFor({
+    read: () =>
+      app.client.evaluate(
+        `document.querySelectorAll('[role="dialog"]${label('intake.label')} li').length`,
+      ),
+    settled: (count) => count === 3,
+    timeoutMs: 15_000,
+    label: '收件匣裡有三列',
+  })
+  check(results, '打開之後列出的待處理項目數與計數相同', rows === 3, `得到 ${rows}`)
+  const unresolved = await app.client.evaluate(itemTextExpression('BADGE-THREE'))
+  check(
+    results,
+    '前置：其中一則的 routing 確實解析不出來（否則「仍計入」沒有被驗到）',
+    unresolved.includes(copy('intake.unresolved')),
+    unresolved.slice(0, 120),
+  )
+
+  // 處理掉一則 ⇒ 計數減少；全部處理完 ⇒ 標示消失。
+  await retryAction({
+    act: () => app.client.evaluate(dismissExpression('BADGE-ONE')),
+    read: () => app.client.evaluate(BADGE_TEXT),
+    settled: (text) => text === '2',
+    attemptWindowMs: 3000,
+    timeoutMs: 15_000,
+    label: '忽略一則',
+  })
+  check(results, '處理掉一則之後計數隨即減少', true, '2')
+
+  for (const title of ['BADGE-TWO', 'BADGE-THREE']) {
+    await retryAction({
+      act: () => app.client.evaluate(dismissExpression(title)),
+      read: () => app.client.evaluate(`!document.querySelector(${JSON.stringify(itemSelector(title))})`),
+      settled: (gone) => gone === true,
+      attemptWindowMs: 3000,
+      timeoutMs: 15_000,
+      label: `忽略 ${title}`,
+    })
+  }
+  const gone = await pollFor({
+    read: () => app.client.evaluate(BADGE_TEXT),
+    settled: (text) => text === '',
+    timeoutMs: 15_000,
+    label: '標示消失',
+  })
+  check(results, '沒有待處理項目時不呈現計數標示（不是 0）', gone === '', `得到 ${JSON.stringify(gone)}`)
+}
+
+/** 計數跨重啟保留 —— **本探針的第一個重啟段落**（`RESTART_PORT` 保留已久但一直沒有被用到）。 */
+async function runBadgeRestart(_mode, _modeConfig, context) {
+  const { profile, folders } = seedProfile()
+  seedRouting(profile, { fallbackFolderId: folders[0].id })
+  const configDir = mkTemp('spekterm-intake-config-')
+  const marker = `spek-intake-${process.pid}-${Date.now()}`
+  const stub = makeStubAgent(mkTemp, configDir)
+
+  const first = await freshApp(context, { profile, configDir, stub, marker })
+  drop(profile, 'r1', intake({ id: 'restart-1', title: 'RESTART-ONE' }))
+  drop(profile, 'r2', intake({ id: 'restart-2', title: 'RESTART-TWO' }))
+  await pollFor({
+    read: () => first.client.evaluate(BADGE_TEXT),
+    settled: (text) => text === '2',
+    timeoutMs: 15_000,
+    label: '前置：重啟之前計數是 2',
+  })
+
+  // 同一個 profile 重開。**計數來自非同步的 IPC，必須輪詢而不是量一次。**
+  const second = await freshApp(context, { profile, configDir, stub, marker, port: RESTART_PORT })
+  const after = await pollFor({
+    read: () => second.client.evaluate(BADGE_TEXT),
+    settled: (text) => text === '2',
+    timeoutMs: 20_000,
+    label: '重啟後計數仍是 2',
+  })
+  check(results, '計數跨重啟保留', after === '2', `得到 ${JSON.stringify(after)}`)
+}
+
+/**
+ * 通知 —— **回補要通知，落盤中既有的不重新通知**。
+ *
+ * 這兩半在同一段裡，因為它們互為對方的錨：只驗後半的話，一個「啟動後一律靜默」的實作全綠，
+ * 而那正好掏空這個能力最主要的使用情境（app 關著的期間被提及）。
+ *
+ * 兩半的**前提造法不同**：回補用落點放檔案（那是到達），既有的用直接 seed 落盤狀態
+ * （在落點放檔案造出來的是到達，會通知）。
+ */
+async function runNotifyBackfill(_mode, _modeConfig, context) {
+  const { profile, folders } = seedProfile()
+  seedRouting(profile, { fallbackFolderId: folders[0].id })
+  const configDir = mkTemp('spekterm-intake-config-')
+  const marker = `spek-intake-${process.pid}-${Date.now()}`
+  const stub = makeStubAgent(mkTemp, configDir)
+
+  // 落盤中已有三則待處理項目 —— 它們**不是**到達。
+  seedStore(profile, [
+    { id: 'seeded-1', title: 'SEEDED-ONE' },
+    { id: 'seeded-2', title: 'SEEDED-TWO' },
+    { id: 'seeded-3', title: 'SEEDED-THREE' },
+  ])
+  // 而落點裡有一份 app 沒執行時投遞的 —— 它**是**到達。
+  drop(profile, 'backfill', intake({ id: 'backfill-1', title: 'BACKFILL-TITLE' }))
+
+  const app = await freshApp(context, { profile, configDir, stub, marker })
+  await pollFor({
+    read: () => app.client.evaluate(BADGE_TEXT),
+    settled: (text) => text === '4',
+    timeoutMs: 20_000,
+    label: '前置：三則既有 + 一則回補都進來了',
+  })
+
+  await new Promise((resolve) => setTimeout(resolve, WINDOW_WAIT_MS))
+  const sent = notifications(profile)
+  check(
+    results,
+    '關閉期間投遞的項目於啟動時進來仍然通知，而落盤中既有的不重新通知（恰一則）',
+    sent.length === 1,
+    `發出 ${sent.length} 則：${JSON.stringify(sent).slice(0, 200)}`,
+  )
+  check(
+    results,
+    '通知的標題不含投遞提供的任何值',
+    sent.length === 1 && !sent[0].title.includes('BACKFILL-TITLE'),
+    JSON.stringify(sent[0] ?? null),
+  )
+  check(
+    results,
+    '通知的內文帶得出那一則（反向的錨）',
+    sent.length === 1 && sent[0].body.includes('BACKFILL-TITLE'),
+    JSON.stringify(sent[0] ?? null),
+  )
+}
+
+/** 合併、拒絕不通知，以及縮減。 */
+async function runNotifyContent(_mode, _modeConfig, context) {
+  const { profile, folders } = seedProfile()
+  seedRouting(profile, { fallbackFolderId: folders[0].id })
+  const configDir = mkTemp('spekterm-intake-config-')
+  const marker = `spek-intake-${process.pid}-${Date.now()}`
+  const stub = makeStubAgent(mkTemp, configDir)
+
+  const app = await freshApp(context, { profile, configDir, stub, marker })
+
+  // 一次投十則 —— 全部落在同一個窗裡。
+  for (let i = 0; i < 10; i += 1) {
+    drop(profile, `m${i}`, intake({ id: `merge-${i}`, title: `MERGE-${i}` }))
+  }
+  // 外加兩則會被拒絕的：識別碼不合法，以及識別碼搶佔。
+  drop(profile, 'bad', { id: '..', origin: { kind: 'slack', id: 'C1' }, title: 'x', body: 'y' })
+  drop(profile, 'seize', intake({ id: 'merge-0', title: 'SEIZED-TITLE' }))
+
+  await pollFor({
+    read: () => app.client.evaluate(BADGE_TEXT),
+    settled: (text) => text === '10',
+    timeoutMs: 25_000,
+    label: '前置：十則都進來了',
+  })
+  await new Promise((resolve) => setTimeout(resolve, WINDOW_WAIT_MS))
+
+  const sent = notifications(profile)
+  check(
+    results,
+    '窗內的多則合併為一則，且被拒絕的投遞不發出通知',
+    sent.length === 1,
+    `發出 ${sent.length} 則：${JSON.stringify(sent).slice(0, 200)}`,
+  )
+  const whole = sent.map((one) => `${one.title}\n${one.body}`).join('\n')
+  check(
+    results,
+    '合併的那一則不含任何第三方文字',
+    !/MERGE-|SEIZED-TITLE/.test(whole),
+    whole.slice(0, 160),
+  )
+
+  // 縮減：標記字元與 URL 都不得抵達作業系統那一層。
+  drop(
+    profile,
+    'reduce',
+    intake({ id: 'reduce-1', title: 'BEFORE <b>BOLD</b> https://evil.example/beacon AFTER' }),
+  )
+  await new Promise((resolve) => setTimeout(resolve, WINDOW_WAIT_MS))
+  const reduced = notifications(profile).at(-1)
+  check(
+    results,
+    '交給作業系統的字串不含標記字元，也不含 URL',
+    Boolean(reduced) &&
+      !/[<>&]/.test(reduced.body) &&
+      !reduced.body.includes('evil.example') &&
+      reduced.body.includes('BEFORE') &&
+      reduced.body.includes('AFTER'),
+    JSON.stringify(reduced ?? null),
+  )
+}
+
+/**
+ * 觸發通知 ⇒ 視窗到前景 ＋ 打開收件匣。
+ *
+ * 「已開啟時是無操作」這條**需要收據**：第二次觸發若根本沒抵達 renderer，分頁當然還在
+ * routing —— 綠的。收據把「規格要求的無操作」與「訊息根本沒送到」分開。
+ */
+async function runNotifyActivate(_mode, _modeConfig, context) {
+  const { profile, folders } = seedProfile()
+  seedRouting(profile, { fallbackFolderId: folders[0].id })
+  const configDir = mkTemp('spekterm-intake-config-')
+  const marker = `spek-intake-${process.pid}-${Date.now()}`
+  const stub = makeStubAgent(mkTemp, configDir)
+
+  const app = await freshApp(context, { profile, configDir, stub, marker })
+  drop(profile, 'a1', intake({ id: 'activate-1', title: 'ACTIVATE-TITLE' }))
+  await pollFor({
+    read: () => app.client.evaluate(BADGE_TEXT),
+    settled: (text) => text === '1',
+    timeoutMs: 15_000,
+    label: '前置：那一則進來了',
+  })
+  check(
+    results,
+    '前置：收件匣此刻未開啟',
+    (await app.client.evaluate(`!document.querySelector('[role="dialog"]${label('intake.label')}')`)) === true,
+    '未開啟',
+  )
+
+  fireNotification(profile, 1)
+  const opened = await pollFor({
+    read: () =>
+      app.client.evaluate(`!!document.querySelector('[role="dialog"]${label('intake.label')}')`),
+    settled: (open) => open === true,
+    timeoutMs: 15_000,
+    label: '觸發之後收件匣打開',
+  })
+  check(results, '觸發通知後收件匣呈現', opened === true, String(opened))
+
+  // 切到 routing 規則分頁，並在某個欄位輸入一半。
+  await retryAction({
+    act: () => app.client.evaluate(tabClick('intake.rules.label')),
+    read: () => app.client.evaluate(`!!document.querySelector('${label('intake.rules.add')}')`),
+    settled: (present) => present === true,
+    attemptWindowMs: 3000,
+    timeoutMs: 15_000,
+    label: '切到 routing 規則分頁',
+  })
+  await retryAction({
+    act: () => app.client.evaluate(`(() => {
+      const add = document.querySelector('${label('intake.rules.add')}')
+      if (!add) return false
+      add.click()
+      return true
+    })()`),
+    read: () => app.client.evaluate(`!!document.querySelector('${label('intake.rules.contains')}')`),
+    settled: (present) => present === true,
+    attemptWindowMs: 3000,
+    timeoutMs: 15_000,
+    label: '新增一條規則',
+  })
+  const typed = await app.client.evaluate(`(() => {
+    const input = document.querySelector('${label('intake.rules.contains')}')
+    if (!input) return 'no-input'
+    // React 的受控輸入不吃直接指派 —— 要走原型上的 setter 再送一次 input 事件。
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set
+    setter.call(input, 'HALF-TYPED')
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+    input.focus()
+    return input.value
+  })()`)
+  check(results, '前置：規則的欄位裡確實輸入了一半', typed === 'HALF-TYPED', String(typed))
+
+  const before = receipts(profile).length
+  fireNotification(profile, 2)
+  await pollFor({
+    read: () => receipts(profile).length,
+    settled: (count) => count > before,
+    timeoutMs: 15_000,
+    label: '第二次觸發確實抵達了主行程',
+  })
+  await new Promise((resolve) => setTimeout(resolve, 800))
+
+  const state = await app.client.evaluate(`(() => {
+    const input = document.querySelector('${label('intake.rules.contains')}')
+    return {
+      onRules: !!document.querySelector('${label('intake.rules.add')}'),
+      value: input ? input.value : null,
+      active: ${ACTIVE_LABEL},
+    }
+  })()`)
+  check(
+    results,
+    '收件匣已開啟時觸發通知不重設分頁、不清掉輸入中的內容、不改變焦點',
+    state?.onRules === true && state.value === 'HALF-TYPED' && state.active === copy('intake.rules.contains'),
+    `${JSON.stringify(state)}｜收據 ${receipts(profile).length} 筆`,
+  )
+
+  // 關閉之後焦點回到入口。
+  await retryAction({
+    act: () =>
+      app.client.evaluate(`(() => {
+        const close = document.querySelector('[role="dialog"]${label('intake.label')} ${label('intake.close')}')
+        if (!close) return false
+        close.click()
+        return true
+      })()`),
+    read: () =>
+      app.client.evaluate(`!document.querySelector('[role="dialog"]${label('intake.label')}')`),
+    settled: (closed) => closed === true,
+    attemptWindowMs: 3000,
+    timeoutMs: 15_000,
+    label: '關閉收件匣',
+  })
+  check(
+    results,
+    '由通知開啟並關閉之後焦點回到活動列的入口',
+    (await app.client.evaluate(ACTIVE_LABEL)) === copy('activityBar.handoffs'),
+    String(await app.client.evaluate(ACTIVE_LABEL)),
+  )
+}
+
+/**
+ * **收件匣開著時，一次收件匣變動不得把焦點搶走。**
+ *
+ * 這一條擋的是一個既有的、被這個 change 引爆的缺陷：overlay 的「聚焦關閉鈕」effect 若跟著
+ * 父層每次渲染重建的回呼走，活動列一旦訂閱收件匣狀態（計數），每一次變動都會把焦點搶回去
+ * —— 而使用者可能正在編輯 routing 規則。
+ */
+async function runFocusStability(_mode, _modeConfig, context) {
+  const { profile, folders } = seedProfile()
+  seedRouting(profile, { fallbackFolderId: folders[0].id })
+  const configDir = mkTemp('spekterm-intake-config-')
+  const marker = `spek-intake-${process.pid}-${Date.now()}`
+  const stub = makeStubAgent(mkTemp, configDir)
+
+  const app = await freshApp(context, { profile, configDir, stub, marker })
+  await openInbox(app)
+
+  // 把焦點放到一個**不是關閉鈕**的地方。
+  const moved = await app.client.evaluate(tabFocus('intake.rules.label'))
+  const anchored = await app.client.evaluate(
+    `document.activeElement ? (document.activeElement.getAttribute('aria-label') ?? document.activeElement.textContent) : null`,
+  )
+  check(
+    results,
+    '前置：焦點確實被移到別的地方',
+    moved === true && anchored !== copy('intake.close'),
+    `moved=${moved} active=${anchored}`,
+  )
+
+  // 投一則 —— 這會讓計數改變，於是活動列重繪。
+  drop(profile, 'f1', intake({ id: 'focus-1', title: 'FOCUS-TITLE' }))
+  await pollFor({
+    read: () => app.client.evaluate(itemTextExpression('FOCUS-TITLE')),
+    settled: (text) => text.includes('FOCUS-TITLE'),
+    timeoutMs: 15_000,
+    label: '那一則已呈現（前置：變動確實抵達了畫面）',
+  })
+  await new Promise((resolve) => setTimeout(resolve, 500))
+
+  const after = await app.client.evaluate(
+    `document.activeElement ? (document.activeElement.getAttribute('aria-label') ?? document.activeElement.textContent) : null`,
+  )
+  check(
+    results,
+    '收件匣變動不把焦點搶回關閉鈕',
+    after === anchored,
+    `變動前 ${anchored}｜變動後 ${after}`,
+  )
+}
+
+/**
+ * 位數超出可容納範圍 —— 三位數以 `99+` 呈現，且入口的尺寸不變。
+ *
+ * **以 seed 落盤狀態造出前提**：待處理總量上限是 200，靠真的投遞一百多份檔案既慢又沒有
+ * 多驗到任何東西。
+ */
+async function runBadgeOverflow(_mode, _modeConfig, context) {
+  const { profile, folders } = seedProfile()
+  seedRouting(profile, { fallbackFolderId: folders[0].id })
+  const configDir = mkTemp('spekterm-intake-config-')
+  const marker = `spek-intake-${process.pid}-${Date.now()}`
+  const stub = makeStubAgent(mkTemp, configDir)
+
+  const many = []
+  for (let i = 0; i < 123; i += 1) many.push({ id: `many-${i}`, title: `MANY-${i}` })
+  seedStore(profile, many)
+
+  const app = await freshApp(context, { profile, configDir, stub, marker })
+  const rect = await pollFor({
+    read: () => app.client.evaluate(HANDOFFS_RECT),
+    settled: (value) => value?.badge != null && value.badge !== '',
+    timeoutMs: 20_000,
+    label: '計數標示出現',
+  })
+  check(results, '三位數以不改變尺寸的形式呈現', rect?.badge === '99+', JSON.stringify(rect))
+  check(
+    results,
+    '三位數時入口的尺寸與個位數時相同',
+    rect?.w === 36 && rect.h === 36,
+    JSON.stringify(rect),
+  )
+}
+
 const SECTIONS = [
   { name: 'runIngest', run: runIngest },
   { name: 'runPlainText', run: runPlainText },
   { name: 'runRouting', run: runRouting },
   { name: 'runAcceptPrefill', run: runAcceptPrefill },
   { name: 'runDismiss', run: runDismiss },
+  { name: 'runBadge', run: runBadge },
+  { name: 'runBadgeOverflow', run: runBadgeOverflow },
+  { name: 'runBadgeRestart', run: runBadgeRestart },
+  { name: 'runNotifyBackfill', run: runNotifyBackfill },
+  { name: 'runNotifyContent', run: runNotifyContent },
+  { name: 'runNotifyActivate', run: runNotifyActivate },
+  { name: 'runFocusStability', run: runFocusStability },
 ]
 
 const outcome = await runSections({
@@ -619,5 +1197,4 @@ const outcome = await runSections({
   },
 })
 
-void RESTART_PORT
 process.exit(outcome ? 0 : 1)

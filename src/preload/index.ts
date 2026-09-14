@@ -520,6 +520,13 @@ const workspaceApi = {
       ipcRenderer.on('workspace:intake:changed', handler)
       return () => ipcRenderer.removeListener('workspace:intake:changed', handler)
     },
+    /** 使用者打開了收件匣 —— 通知上界的重置點。無回應通道。 */
+    opened: (): void => ipcRenderer.send('workspace:intake:opened'),
+    onOpenInbox: (listener: () => void): (() => void) => {
+      const handler = (): void => listener()
+      ipcRenderer.on('workspace:intake:openInbox', handler)
+      return () => ipcRenderer.removeListener('workspace:intake:openInbox', handler)
+    },
     onPrefill: (listener: (sessionId: string, state: 'pending' | 'sent' | 'timedOut') => void): (() => void) => {
       const handler = (
         _event: IpcRendererEvent,

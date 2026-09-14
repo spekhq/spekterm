@@ -9,6 +9,7 @@ import { DirtyBuffersProvider } from './files/dirty-buffers'
 import { OpenSpecProvider } from './openspec/data'
 import { PanelCoordinateProvider } from './panel-coordinate'
 import { SessionsProvider } from './terminal/sessions'
+import { IntakeProvider } from './intake/intake-state'
 import { PrefillProvider } from './intake/prefill-state'
 import { folderSelection } from './types'
 import { useWorkspaceFolders } from './useWorkspaceFolders'
@@ -29,6 +30,12 @@ export function AppShell(): React.JSX.Element {
       <DirtyBuffersProvider folders={folders}>
         <SessionsProvider>
           <PrefillProvider>
+          {/*
+            收件匣的狀態是**常駐**的 —— 活動列的計數要在收件匣沒被打開時也正確，而且主行程的
+            收件者集合是在第一次 `list()` 時才註冊的（見 `intake-state.tsx` 的檔頭）。
+            必須在 `SessionsProvider` 之內：overlay 用 `useSessions()`。
+          */}
+          <IntakeProvider>
           {/*
             側欄座標的 Provider 與 SessionsProvider 同一層 —— 它有兩個消費者（MainStage 與
             StatusBar），兩者都在這一層之下。座標隸屬於 rail 的項目而非 session，但它與 session
@@ -100,6 +107,7 @@ export function AppShell(): React.JSX.Element {
             </div>
           </OpenSpecProvider>
           </PanelCoordinateProvider>
+          </IntakeProvider>
           </PrefillProvider>
         </SessionsProvider>
       </DirtyBuffersProvider>

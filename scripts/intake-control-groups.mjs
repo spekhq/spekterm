@@ -14,6 +14,12 @@
  * 探針跑的是 `out/` 的產物。`PROBE_SKIP_BUILD=1` 之下還原原始碼**不等於**還原產物 ——
  * 這支腳本不跳過建置，於是每一輪都是被出貨的那份程式碼。
  *
+ * ## 載體有兩種，而指名錯的代價是一個紅不起來的對照組
+ *
+ * `command: 'test'` 的 mutation 走 `npm test`，其餘走 `npm run probe:intake`。
+ * **只跑 probe 的執行器會把每一個單元測試級的 mutation 判成「沒有變紅」** —— 於是那些對照組
+ * 看起來有人管，實際上從來沒有證明過任何事。
+ *
  * 用法：`node scripts/intake-control-groups.mjs [名稱…]`
  */
 import { execFileSync } from 'node:child_process'
@@ -29,6 +35,123 @@ const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..')
  * 沒有指名的話，一個「因為別的理由紅了」的 mutation 會被當成通過 —— 而那正是這支腳本要防的。
  */
 export const MUTATIONS = [
+  {
+    name: 'count-only-when-open',
+    file: 'src/renderer/src/shell/intake/intake-state.tsx',
+    from: `    const unsubscribe = window.workspace.intake.onChanged(refresh)
+    refresh()
+    return unsubscribe`,
+    to: `    const unsubscribe = window.workspace.intake.onChanged(refresh)
+    return unsubscribe`,
+    expectRed: '從未打開過收件匣時仍呈現計數',
+    why: '**退回現況：只在收件匣被打開時才拉一次清單。**\n'
+      + '> 主行程的收件者集合是在 renderer 第一次呼叫 `list()` 時才註冊的，於是一個從來沒有被\n'
+      + '> 打開過的收件匣，其變化不會推給任何人。\n'
+      + '> **不要用「把 `list()` 整個拿掉」當 mutation** —— 那會讓這一段的每一條都變紅，\n'
+      + '> 證明的只是「provider 有在拉資料」，不是那個既有缺陷。',
+  },
+  {
+    name: 'focus-follows-rerender',
+    file: 'src/renderer/src/shell/intake/IntakeOverlay.tsx',
+    from: `  useEffect(() => {
+    closeRef.current?.focus()
+  }, [])`,
+    to: `  useEffect(() => {
+    closeRef.current?.focus()
+  }, [snapshot])`,
+    expectRed: '收件匣變動不把焦點搶回關閉鈕',
+    why: '**把一次性的初始聚焦綁到一個會變的值上。**\n'
+      + '> 「掛載」不是「改變」—— 收件匣每更新一次，焦點就被搶回關閉鈕，而使用者可能正在\n'
+      + '> 編輯 routing 規則。\n'
+      + '> **第一版的 mutation 是把依賴改回 `close`，而它紅不起來** —— 因為修法有兩處（overlay 的\n'
+      + '> 依賴陣列、以及父層把回呼改成穩定的 identity），任一處單獨還原都不足以重現。\n'
+      + '> 對照組於是抓到一個不是假綠、但也證明不了東西的 mutation：**一個跨兩個檔案的缺陷，\n'
+      + '> 單點替換表達不出來**。改成這個等價而單點的形狀。',
+  },
+  {
+    name: 'badge-label-merged',
+    file: 'src/renderer/src/shell/ActivityBar.tsx',
+    from: `              aria-label={label}`,
+    to: `              aria-label={item.id === 'handoffs' && pendingCount > 0 ? label + ' (' + pendingCount + ')' : label}`,
+    expectRed: '從未打開過收件匣時仍呈現計數',
+    why: '**把計數併進入口的無障礙標籤。** 在本 repo 中那個標籤同時是驗收定位元素的手段 ——\n'
+      + '> 徵狀不是斷言失敗，是**選不到元素**（求值得空值）。這個 mutation 會讓整段的定位\n'
+      + '> 一起失效，而那正是它要示範的代價。',
+  },
+  {
+    name: 'merge-debounce',
+    command: 'test',
+    file: 'src/main/intake-notify.ts',
+    from: `    if (this.#cancel !== null) return
+    this.#cancel = this.#clock.after(this.#windowMs, () => this.#flush())`,
+    to: `    if (this.#cancel !== null) this.#cancel()
+    this.#cancel = this.#clock.after(this.#windowMs, () => this.#flush())`,
+    expectRed: '**持續到達時通知不被無限延後**',
+    why: '**固定窗口換成 debounce**（每次到達都把計時器往後推）。\n'
+      + '> 兩種實作在「單則到達」與「一次批次」下的結果**完全相同** —— 只有持續到達時才分岔，\n'
+      + '> 而那時 debounce 的計時器永遠不會到期。這個對照組是那條 requirement 唯一的鑑別力來源。',
+  },
+  {
+    name: 'burst-unbounded',
+    command: 'test',
+    file: 'src/main/intake-notify.ts',
+    from: `    if (this.#presented.length >= this.#burstMax) return`,
+    to: `    if (false && this.#presented.length >= this.#burstMax) return`,
+    expectRed: '**逾越上界之後不再各自發出，打開收件匣即重置**',
+    why: '**拿掉窗與窗之間的上界。** 合併只防批次、不防節奏 —— 每個窗恰好一則時合併完全不介入。',
+  },
+  {
+    name: 'title-carries-authored',
+    command: 'test',
+    file: 'src/main/intake-notify.ts',
+    from: `    title: t('intake.notify.title'),`,
+    to: `    title: \`${'${'}t('intake.notify.title')} — ${'${'}title}\`,`,
+    expectRed: '**標題不含投遞提供的任何值**',
+    why: '**讓投遞者的標題進到通知的標題。** 桌面上於是出現一則與本應用程式自己發出的別無二致'
+      + '的訊息，而使用者沒有任何線索分辨。',
+  },
+  {
+    name: 'reduce-truncate-only',
+    command: 'test',
+    file: 'src/main/intake-notify.ts',
+    from: `  const withoutUrls = value.replace(URL_SHAPE, t('intake.notify.link'))
+  const withoutMarkup = withoutUrls.replace(/[<>&]/g, '')`,
+    to: `  const withoutMarkup = value`,
+    expectRed: '**會被詮釋為標記的字元被移除**',
+    why: '**縮減只做截短。** 第三方於是取得桌面上的排版控制權，而 URL 會被通知服務變成可點的'
+      + '連結（點在那一塊上還不會觸發「打開收件匣」）。',
+  },
+  {
+    name: 'arrival-from-state',
+    command: 'test',
+    file: 'src/main/intake-service.ts',
+    from: `    this.#maxPending = maxPending`,
+    to: `    this.#maxPending = maxPending
+    queueMicrotask(() => {
+      for (const record of store.list()) if (record.state === 'pending') this.#emitArrival(record)
+    })`,
+    expectRed: '**以已有待處理項目的狀態檔建構，不發出任何到達**',
+    why: '**把觸發從「到達」改寫成「存在待處理項目」。** 那個改寫在程式碼上更短、看起來像簡化，'
+      + '而它會讓每一次開機把收件匣裡積著的東西重新通知一遍。',
+  },
+  {
+    name: 'arrival-on-notice',
+    command: 'test',
+    file: 'src/main/intake-service.ts',
+    from: `  #emit(): void {
+    for (const listener of this.#listeners) listener()
+  }`,
+    to: `  #emit(): void {
+    for (const listener of this.#listeners) listener()
+    for (const listener of this.#arrivals) listener(undefined as never)
+  }`,
+    expectRed: '**識別碼不合法（INVALID_ID）不發出到達**',
+    why: '**把到達接到「有東西變了」那個既有通道上。**\n'
+      + '> 這同時就是「接到 `DeliverOutcome.notify`」那個 mutation —— 兩者在程式碼上是同一件事：\n'
+      + '> `#emit()` 恰好只在四條拒絕路徑上被呼叫，而那四條**正是** `notify: true` 的那四條\n'
+      + '> （`MALFORMED` 與內容相同的重複兩條直接 return，不經 `#emit()`）。\n'
+      + '> 所以這個 mutation 讓四條變紅，不是六條 —— 而那四條就是使用者會看到桌面跳通知的那些。',
+  },
   {
     name: 'prefill-no-wait',
     file: 'src/main/intake-prefill.ts',
@@ -100,7 +223,11 @@ function run(names) {
     writeFileSync(full, mutated)
     let output
     try {
-      output = execFileSync('npm', ['run', 'probe:intake'], {
+      // **有些 mutation 的載體是單元測試而不是 probe**，而那不是瑕疵：一條「決策層在什麼
+      // 時候做了什麼」的性質，在 probe 的一次操作裡表達不出來（畫面上看不到那個決策）。
+      // 指名錯載體的代價是一個**紅不起來的對照組** —— 那比沒有對照組更糟，因為它看起來有人管。
+      const command = mutation.command === 'test' ? ['test'] : ['run', 'probe:intake']
+      output = execFileSync('npm', command, {
         cwd: repoRoot,
         encoding: 'utf8',
         stdio: ['ignore', 'pipe', 'pipe'],
@@ -112,7 +239,19 @@ function run(names) {
       writeFileSync(full, original)
     }
 
-    const wentRed = output.includes(`✗ ${mutation.expectRed}`)
+    // probe 的紅是 `✗ <斷言>`，node:test 的紅是 `not ok N - <測試名>` —— 兩種格式都認。
+    // **node:test 的紅燈必須整行比對。** 它的 TAP 對每一個子測試都印出名稱 ——
+    // 通過的是 `    ok N - <名稱>`、失敗的是 `    not ok N - <名稱>`，而且**是縮排的**。
+    // 因此 `includes(expectRed)` 會對「那條測試通過、但檔案裡別的測試失敗」一併成立，
+    // 而 `/^not ok/m` 只匹配得到最外層那一行（它是**檔案**層級的，不帶測試名）。
+    // 兩者相乘的結果是：只要檔案裡有任何一條紅，指名任何一條測試都會被判成「如預期變紅」。
+    const notOkLine = new RegExp(
+      `^\\s*not ok \\d+ - ${mutation.expectRed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*$`,
+      'm',
+    )
+    const wentRed =
+      output.includes(`✗ ${mutation.expectRed}`) ||
+      (mutation.command === 'test' && notOkLine.test(output))
     console.log(wentRed ? `  ✓ 如預期變紅` : `  ✗ **沒有變紅** —— 那條斷言沒有鑑別力`)
     if (!wentRed) failures.push(`${mutation.name}：${mutation.expectRed} 沒有變紅`)
   }

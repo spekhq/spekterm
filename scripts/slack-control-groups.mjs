@@ -257,9 +257,18 @@ function run(names) {
     }
 
     // probe 的紅是 `✗ <斷言>`，node:test 的紅是 `not ok N - <測試名>` —— 兩種格式都認。
+    // **node:test 的紅燈必須整行比對。** 它的 TAP 對每一個子測試都印出名稱 ——
+    // 通過的是 `    ok N - <名稱>`、失敗的是 `    not ok N - <名稱>`，而且**是縮排的**。
+    // 因此 `includes(expectRed)` 會對「那條測試通過、但檔案裡別的測試失敗」一併成立，
+    // 而 `/^not ok/m` 只匹配得到最外層那一行（它是**檔案**層級的，不帶測試名）。
+    // 兩者相乘的結果是：只要檔案裡有任何一條紅，指名任何一條測試都會被判成「如預期變紅」。
+    const notOkLine = new RegExp(
+      `^\\s*not ok \\d+ - ${mutation.expectRed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*$`,
+      'm',
+    )
     const wentRed =
       output.includes(`✗ ${mutation.expectRed}`) ||
-      (mutation.command === 'test' && output.includes(mutation.expectRed) && /^not ok/m.test(output))
+      (mutation.command === 'test' && notOkLine.test(output))
     console.log(wentRed ? `  ✓ 如預期變紅` : `  ✗ **沒有變紅** —— 那條斷言沒有鑑別力`)
     if (!wentRed) failures.push(`${mutation.name}：${mutation.expectRed} 沒有變紅`)
   }

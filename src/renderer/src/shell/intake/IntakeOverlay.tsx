@@ -2,9 +2,10 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useTranslation } from 'react-i18next'
 
-import type { IntakeSnapshot, IntakeView } from '../../../../main/ipc/intake'
+import type { IntakeView } from '../../../../main/ipc/intake'
 import { useSessions } from '../terminal/sessions'
 import { useWorkspaceFolders } from '../useWorkspaceFolders'
+import { useIntake } from './intake-state'
 import { RulesEditor } from './RulesEditor'
 import { SlackSettings } from './SlackSettings'
 
@@ -52,22 +53,18 @@ export function IntakeOverlay({ onClose, opener }: IntakeOverlayProps): React.JS
   // **folder 的名字住在 renderer。** 主行程的投影刻意只給識別碼（送路徑會破壞邊界語彙），
   // 而「Opens in <uuid>」對使用者不構成資訊 —— 那個字串要回答的是「它會開在我的哪個 repo」。
   const { folders } = useWorkspaceFolders()
-  const [snapshot, setSnapshot] = useState<IntakeSnapshot | null>(null)
+  // **快照來自常駐的 provider，不是這裡自己拉的。** 兩份的話，計數與內容可以無聲分岔
+  // （見 `intake-state.tsx` 的檔頭）。`reload` 仍然保留 —— 主行程那幾條路徑都有推送，
+  // 但顯式的重新拉取是第二條防線。
+  const { snapshot, refresh: reload } = useIntake()
   const [tab, setTab] = useState<Tab>('inbox')
   const [failure, setFailure] = useState<string | null>(null)
   const closeRef = useRef<HTMLButtonElement>(null)
 
-  const reload = useCallback(() => {
-    void window.workspace.intake
-      .list()
-      .then(setSnapshot)
-      .catch(() => setSnapshot({ items: [], notices: [] }))
-  }, [])
-
+  // 使用者打開了收件匣 —— 通知上界的重置點。**掛載時一次**，不隨重繪。
   useEffect(() => {
-    reload()
-    return window.workspace.intake.onChanged(reload)
-  }, [reload])
+    window.workspace.intake.opened()
+  }, [])
 
   const close = useCallback(() => {
     onClose()
@@ -79,9 +76,20 @@ export function IntakeOverlay({ onClose, opener }: IntakeOverlayProps): React.JS
       if (event.key === 'Escape') close()
     }
     window.addEventListener('keydown', onKeyDown)
-    closeRef.current?.focus()
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [close])
+
+  /**
+   * 初始焦點 —— **掛載時的一次性動作，因此依賴陣列是空的**。
+   *
+   * 併進上面那個 effect 的話它會跟著 `close` 走，而 `close` 跟著父層每次渲染重建的 `onClose`
+   * 走 ⇒ **父層每重繪一次，焦點就被搶回關閉鈕一次**。活動列一旦訂閱收件匣狀態（計數），
+   * 儲存一次 routing 規則就會觸發它 —— 使用者正在編輯的欄位當場失去焦點。
+   * 「掛載」不是「改變」。
+   */
+  useEffect(() => {
+    closeRef.current?.focus()
+  }, [])
 
   const accept = useCallback(
     async (item: IntakeView) => {
@@ -108,8 +116,8 @@ export function IntakeOverlay({ onClose, opener }: IntakeOverlayProps): React.JS
     [close, sessions, t],
   )
 
-  const items = (snapshot?.items ?? []).filter((item) => item.state === 'pending')
-  const notices = snapshot?.notices ?? []
+  const items = snapshot.items.filter((item) => item.state === 'pending')
+  const notices = snapshot.notices
 
   return createPortal(
     <div

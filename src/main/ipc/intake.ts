@@ -48,6 +48,16 @@ export const INTAKE_CHANNELS = {
   changed: 'workspace:intake:changed',
   /** 主行程 → renderer：某個 session 的預填狀態（等待送出／已送出／未能填入）。 */
   prefill: 'workspace:intake:prefill',
+  /**
+   * renderer → 主行程：使用者打開了收件匣。
+   *
+   * **這是通知上界的重置點**，而它必須是一個獨立的訊號 —— 不能拿 `list` 頂替：
+   * 常駐的計數 provider 在啟動時就會呼叫 `list`，拿它當「使用者看過了」會讓那個上界
+   * 每次開機自動重置，也就是形同沒有上界。
+   */
+  opened: 'workspace:intake:opened',
+  /** 主行程 → renderer：把收件匣打開（使用者觸發了通知）。 */
+  openInbox: 'workspace:intake:openInbox',
 } as const
 
 /** 送往 renderer 的投影 —— **逐欄位建構，不原樣轉手**。 */
@@ -161,10 +171,19 @@ export interface IntakeHandlerDeps {
   contextRoot: string
   /** 事件回報是否啟用。**關閉時預填永遠不會發生，因此接受之前就要告知。** */
   agentEventsEnabled(): boolean
+  /** 使用者打開了收件匣 —— 通知上界的重置點。 */
+  onInboxOpened?: () => void
+  /**
+   * 把「打開收件匣」這個動作交出去，供通知被觸發時呼叫。
+   *
+   * **以回呼交出而不是導出一個函式**：送出的對象是這一層持有的 `senders`，而那個集合的
+   * 生命週期綁在這次註冊上。
+   */
+  registerOpenInbox?: (open: () => void) => void
 }
 
 export function registerIntakeHandlers(deps: IntakeHandlerDeps): void {
-  const { service, routing, folders, contextRoot, agentEventsEnabled } = deps
+  const { service, routing, folders, contextRoot, agentEventsEnabled, onInboxOpened } = deps
   const senders = new Set<WebContents>()
 
   const knownIds = (): ReadonlySet<string> => new Set(folders.list().map((f) => f.id))
@@ -189,6 +208,23 @@ export function registerIntakeHandlers(deps: IntakeHandlerDeps): void {
       notices: service.notices(),
     }
   })
+
+  // 無回應通道 —— 沒有負載，因此不需要型別 guard（`clipboard:writeText` 那條的成因是它收字串）。
+  ipcMain.on(INTAKE_CHANNELS.opened, () => {
+    onInboxOpened?.()
+  })
+
+  /**
+   * 把收件匣打開。**重用既有的 `senders` 集合與其銷毀剪除** —— 另外持有一份參考的話，
+   * renderer 重新載入之後那份就指向一個已銷毀的 `WebContents`。
+   */
+  const openInbox = (): void => {
+    for (const sender of senders) {
+      if (sender.isDestroyed()) senders.delete(sender)
+      else sender.send(INTAKE_CHANNELS.openInbox)
+    }
+  }
+  deps.registerOpenInbox?.(openInbox)
 
   ipcMain.handle(INTAKE_CHANNELS.dismissNotices, () => {
     service.clearNotices()

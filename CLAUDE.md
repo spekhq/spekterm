@@ -45,6 +45,11 @@ OpenSpec 結構的側欄，讓使用者不必另外開 IDE 就能一邊駕駛 ag
   它**交付不了多租戶**（Socket Mode 上不了 Marketplace、
   app-level token 一個 app 一份），能交付的是邊界位置：adapter 只是收件匣的一個 producer。
   **不需要任何新依賴**（Node 22 與 Electron 43 內的 Node 24 都有全域 `fetch` 與 `WebSocket`）。
+  活動列的入口帶**待處理數的計數標示**，新項目到達時發一則**作業系統原生通知**，觸發它把視窗
+  帶到前景並打開收件匣。**通知不是一個被動的純文字平面** —— 桌面服務會把內文當標記解析、
+  會把其中的 URL 變成可點的連結（而點在那一塊上不會觸發我們自己的效果），因此第三方欄位
+  進入通知之前要**縮減**（不是轉義 —— 轉義的正確性取決於目的地，而執行環境沒有暴露它的能力
+  宣告）。完整的實測見 `docs/lessons/intake.md` 第七節。
 - **鍵盤** —— 見下文「快捷鍵」。
 
 **Linux 打包已可用**（`npm run dist:linux` → AppImage，`npm run install:desktop` 裝進應用程式
@@ -74,7 +79,7 @@ tmux 與自寫 daemon 取捨。**不要把「重建」誤當成「常駐」**：
 | 任何一支 `scripts/probe-*.mjs`、`scripts/lib/` 的儀器（`instrument` / `cdp` / `mounted`）、加一條驗收斷言或一種等待、追一個 flaky | **`docs/lessons/probes.md`** |
 | pty、`src/renderer/src/shell/terminal/`、session 持久化與重建 | **`docs/lessons/terminal.md`** |
 | `src/renderer/src/side-panel/`、`@spekjs/core` 或 `@spekjs/ui` 升級 | **`docs/lessons/side-panel.md`** |
-| `src/main/intake-*`、`src/main/ipc/intake.ts`、`scripts/probe-intake.mjs`、`scripts/lib/stub-agent.mjs`、或任何會動到「呈現給人看的文字」與「交給 agent 的文字」其中一端的東西 | **`docs/lessons/intake.md`** |
+| `src/main/intake-*`（**含 `intake-notify*`**）、`src/main/ipc/intake.ts`、`scripts/probe-intake.mjs`、`scripts/lib/stub-agent.mjs`、或任何會動到「呈現給人看的文字」與「交給 agent 的文字」其中一端的東西、**或任何會把文字送到作業系統通知的東西** | **`docs/lessons/intake.md`** |
 | `src/main/slack-*`、`src/main/secret-store.ts`、`scripts/probe-slack.mjs`、`scripts/lib/stub-slack.mjs`、或任何會把憑證交給第三方的東西 | **`docs/lessons/slack.md`** |
 | `src/main/transcript-*`、`src/main/agent-events.ts`、`src/main/agent-injection.ts`、`src/main/insights*`、**`src/main/report.ts` 與 `src/main/report-*`**、`scripts/probe-insights.mjs`、`scripts/probe-agent-view.mjs`，或任何會讀 `~/.claude/projects`、**注入 `--settings`**、**或委派 `claude` CLI** 的東西 | **`docs/lessons/transcript.md`** |
 
@@ -112,7 +117,7 @@ SPEKTERM_SCAN_PATH=../spek npm run dev
 | | 是什麼 | 什麼時候跑 |
 |---|---|---|
 | `npm test`（＝ `test:unit`） | node:test —— headless、秒級、可平行、無副作用 | **隨時**。改完就跑 |
-| `npm run test:e2e` | 全部 10 支探針，走 CDP 或真 Electron 主行程，驗**被出貨的那份程式碼** | **驗收時**。約十幾分鐘 |
+| `npm run test:e2e` | 全部 13 支探針，走 CDP 或真 Electron 主行程，驗**被出貨的那份程式碼** | **驗收時**。約二十分鐘 |
 | `npm run test:all` | 兩層都跑 | 封存前 |
 
 **探針不併進 `npm test` 是刻意的**：它們不可平行（各自佔 debugging port、各自起 Electron 還要收屍）。
@@ -146,7 +151,14 @@ npm run probe:insights  # conversation-archive / conversation-insights / convers
                         #   要網路、會花錢、回覆不可重現；產生路徑以注入的替身驗，
                         #   真實那段由 dogfood 認定，這條缺口寫在規格裡）
 npm run probe:intake    # agent-intake / intake-routing（收件匣的兩條入口、純文字呈現、
-                        #   routing 解析、接受→預填、忽略不建 session）
+                        #   routing 解析、接受→預填、忽略不建 session、活動列的計數標示、
+                        #   通知的合併與內容、觸發通知→打開收件匣）
+                        #   **通知走注入的替身後端**（以 `app.isPackaged` 為閘、路徑自 userData
+                        #   推導 —— 不用環境變數：`ptyEnv()` 展開 `process.env`，一個環境變數
+                        #   會進到每一個 pty）。少了它，**跑一次探針就會往開發者真實的桌面
+                        #   噴一排通知**（`xvfb-run` 只換 `DISPLAY`，匯流排位址原封繼承）。
+                        #   「通知真的出現在桌面上」「視窗真的浮到前景」兩條**沒有載體**，
+                        #   由 dogfood 認定，缺口寫在規格裡
                         #   **唯一跨行程的那條斷言住在這裡**：畫面上那一列的 textContent 與
                         #   磁碟上 context 檔界線之內的內容必須逐字元相同 —— 主行程裡的單元
                         #   測試看不見呈現那一端，於是「正規化被搬到呈現層」對它是透明的。
@@ -176,8 +188,8 @@ PROBE_SKIP_BUILD=1 npm run probe:keyboard         # 只改探針腳本時跳過�
 PROBE_DISPLAY=physical npm run probe:terminal     # 逃生口：畫在實體螢幕上
 ```
 
-**`probe:package` 自成第三個成本層級 —— 它不在上面那十支裡，也刻意不併進 `test:e2e`。**
-它會先跑一次**完整打包**再啟動**真正的 AppImage**（其餘十支驗的都是 `electron .` 載入 `out/`，
+**`probe:package` 自成第三個成本層級 —— 它不在上面那十三支裡，也刻意不併進 `test:e2e`。**
+它會先跑一次**完整打包**再啟動**真正的 AppImage**（其餘十三支驗的都是 `electron .` 載入 `out/`，
 那不是被出貨的東西）。層級是「**換版前跑一次**」。
 
 ```bash

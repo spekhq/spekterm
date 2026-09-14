@@ -222,11 +222,25 @@ const PROBE_EXPRESSION = `(async () => {
     // **介面上沒有任何路徑詞彙**：收件匣的目錄、原始投遞的保存處、context 檔的位置都不經這裡；
     // accept 回的是一個已解析好的 folderId（renderer 既有的合法詞彙），
     // 而 session 的建立仍由 renderer 走它既有的 create 路徑。
+    // opened / onOpenInbox 於 intake-badge-and-notify 引入：前者是通知上界的重置點
+    // （renderer → 主行程，無負載），後者是使用者觸發通知之後把收件匣打開的指示
+    // （主行程 → renderer，無負載）。兩者都不給 renderer 任何新的詞彙。
+    // （這一段在 template literal 之內 —— 不能寫反引號，會把它提前關閉。）
     surplusIntakeKeys: Object.keys(api?.intake ?? {}).filter(
       (key) =>
-        !['list', 'accept', 'attach', 'dismiss', 'dismissNotices', 'rules', 'setRules', 'onChanged', 'onPrefill'].includes(
-          key,
-        ),
+        ![
+          'list',
+          'accept',
+          'attach',
+          'dismiss',
+          'dismissNotices',
+          'rules',
+          'setRules',
+          'onChanged',
+          'onPrefill',
+          'opened',
+          'onOpenInbox',
+        ].includes(key),
     ),
     // slack 於 slack-mention-intake 引入（slack-intake-source / secret-scope 規格）：
     // 連線設定的讀寫。**逐成員列舉的理由與 insights／intake 同** —— 只登記頂層的話，
