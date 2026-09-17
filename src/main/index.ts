@@ -29,6 +29,9 @@ import { electronNotifyBackend } from './intake-notify-electron'
 import { createStubBackend, stubNotifyRoot } from './intake-notify-stub'
 import { IntakeService } from './intake-service'
 import { IntakeSource, inboxRoot } from './intake-source'
+import { configureHandoff, liveSessions } from './handoff-outbox'
+import { refreshIntros } from './handoff-injection'
+import { HandoffService, registerHandoffService } from './handoff-service'
 import { RoutingStore, routingFile } from './intake-routing'
 import { IntakeStore } from './intake-store'
 import { PanelStore } from './panel-store'
@@ -311,6 +314,8 @@ void app.whenReady().then(() => {
   intakeService.onArrival((record) => notifier.arrived(record))
 
   let openInbox: (() => void) | null = null
+  let requestAutoAccept: ((adapter: string, id: string, folderId: string) => void) | null = null
+  let focusSession: ((sessionId: string) => void) | null = null
   registerIntakeHandlers({
     service: intakeService,
     routing: routingStore,
@@ -320,11 +325,33 @@ void app.whenReady().then(() => {
     agentEventsEnabled: () => preferencesStore.get().agentEvents !== false,
     onInboxOpened: () => notifier.inboxOpened(),
     registerOpenInbox: (open) => { openInbox = open },
+    registerAutoAccept: (request) => { requestAutoAccept = request },
+    registerFocusSession: (focus) => { focusSession = focus },
   })
 
-  notifyBackend.onActivate(() => {
+  /**
+   * 觸發一則通知 —— **目的地在觸發的當下才決定**。
+   *
+   * 呈現與觸發之間隔著使用者的時間，項目的狀態在那段時間內會改變（一則交接到達時是待處理，
+   * renderer 建好 session 之後才轉為已接受）。因此通知帶的是主鍵，這裡才查狀態。
+   *
+   * - **恰一則、已接受、且它建立的 session 還在** ⇒ 聚焦那個 session。它在收件匣裡沒有任何
+   *   待辦動作；送使用者去收件匣等於要他再點一次。
+   * - **其餘一律打開收件匣** —— 包含合併的那一則（它只陳述數量，使用者無從得知涵蓋了什麼；
+   *   若其中有待處理項，把他送去一個 session 會讓那些項目從這條通道上消失）、失敗的項目
+   *   （那些仍是待處理），以及**該 session 已被關閉**的情形（SHALL NOT 重建它）。
+   */
+  notifyBackend.onActivate((keys) => {
     bringToFront()
-    openInbox?.()
+    const single = keys.length === 1 ? intakeService.store.get(keys[0].adapter, keys[0].id) : undefined
+    const sessionId = single?.state === 'accepted' ? single.sessionId : undefined
+    // **「那個 session 還在不在」由 renderer 判定，不在這裡判。**
+    //
+    // session 清單的權威在 renderer，而主行程這一份是它**去抖動地**落盤的副本 ——
+    // 以它為閘會在「剛建好、還沒落盤」的窗口裡誤判成不存在，而症狀是通知偶爾改去打開收件匣
+    // （實測三次有一次）。renderer 那側已經有一道「找不到就什麼都不做」，那才是對的位置。
+    if (sessionId) focusSession?.(sessionId)
+    else openInbox?.()
   })
 
   const insights = createInsightsService({
@@ -364,6 +391,48 @@ void app.whenReady().then(() => {
     .catch((error) => {
       console.error(`[intake] failed to start inbox: ${String(error)}`)
     })
+
+  /**
+   * 交接 —— 收件匣的第二個 producer。
+   *
+   * 它與共用落點**共用同一份落點實作**（`IntakeSource`），差別只在 `depth` 與 `deliver`：
+   * 交接的落點是每個 session 一層，而它的來源與目標是**投遞內容表達不出來**的東西，
+   * 只能經參數供應。
+   */
+  configureHandoff(app.getPath('userData'))
+  const handoffService = new HandoffService({
+    service: intakeService,
+    sourceOf: (sessionId) => {
+      const session = sessionStore.get(sessionId)
+      if (!session) return null
+      const folder = session.folderId === null ? null : store.list().find((f) => f.id === session.folderId)
+      return {
+        folderId: session.folderId,
+        label: session.folderId === null ? 'Global' : (folder?.name ?? session.folderId),
+      }
+    },
+    // **與自我介紹的清單同源** —— 分成兩份的話，agent 手上的選項與接收端認得的選項會分岔。
+    candidates: () => store.list().map((folder) => ({ id: folder.id, name: folder.name, path: folder.path })),
+    agentEventsEnabled: () => preferencesStore.get().agentEvents !== false,
+    // 未設定＝啟用（與另外兩個開關同一條規則）。
+    enabled: () => preferencesStore.get().agentHandoff !== false,
+    requestAutoAccept: (adapter, id, folderId) => requestAutoAccept?.(adapter, id, folderId),
+  })
+  registerHandoffService(handoffService)
+  void handoffService.start().catch((error) => {
+    console.error(`[handoff] failed to start: ${String(error)}`)
+  })
+
+  /**
+   * folder 清單變動時重寫每一個活著的 session 的自我介紹。
+   *
+   * **少了它，「清單取當下的值」只在 spawn 那一刻成立** —— hook 會在續接、壓縮、清除時重跑，
+   * 那些時刻讀到的就是一份過期的清單，而失效是靜默的（agent 交接給一個剛被移除的 repo，
+   * 得到一次它看不到的拒絕）。
+   */
+  store.subscribe(() => {
+    refreshIntros(liveSessions(), store.list())
+  })
 
   /**
    * 啟動後跑一輪 Slack 的回補。
@@ -421,6 +490,48 @@ void app.whenReady().then(() => {
     .catch((error) => {
       console.error(`[intake] failed to start inbox: ${String(error)}`)
     })
+
+  /**
+   * 交接 —— 收件匣的第二個 producer。
+   *
+   * 它與共用落點**共用同一份落點實作**（`IntakeSource`），差別只在 `depth` 與 `deliver`：
+   * 交接的落點是每個 session 一層，而它的來源與目標是**投遞內容表達不出來**的東西，
+   * 只能經參數供應。
+   */
+  configureHandoff(app.getPath('userData'))
+  const handoffService = new HandoffService({
+    service: intakeService,
+    sourceOf: (sessionId) => {
+      const session = sessionStore.get(sessionId)
+      if (!session) return null
+      const folder = session.folderId === null ? null : store.list().find((f) => f.id === session.folderId)
+      return {
+        folderId: session.folderId,
+        label: session.folderId === null ? 'Global' : (folder?.name ?? session.folderId),
+      }
+    },
+    // **與自我介紹的清單同源** —— 分成兩份的話，agent 手上的選項與接收端認得的選項會分岔。
+    candidates: () => store.list().map((folder) => ({ id: folder.id, name: folder.name, path: folder.path })),
+    agentEventsEnabled: () => preferencesStore.get().agentEvents !== false,
+    // 未設定＝啟用（與另外兩個開關同一條規則）。
+    enabled: () => preferencesStore.get().agentHandoff !== false,
+    requestAutoAccept: (adapter, id, folderId) => requestAutoAccept?.(adapter, id, folderId),
+  })
+  registerHandoffService(handoffService)
+  void handoffService.start().catch((error) => {
+    console.error(`[handoff] failed to start: ${String(error)}`)
+  })
+
+  /**
+   * folder 清單變動時重寫每一個活著的 session 的自我介紹。
+   *
+   * **少了它，「清單取當下的值」只在 spawn 那一刻成立** —— hook 會在續接、壓縮、清除時重跑，
+   * 那些時刻讀到的就是一份過期的清單，而失效是靜默的（agent 交接給一個剛被移除的 repo，
+   * 得到一次它看不到的拒絕）。
+   */
+  store.subscribe(() => {
+    refreshIntros(liveSessions(), store.list())
+  })
     }
   })
 })

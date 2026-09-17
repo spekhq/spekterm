@@ -4,7 +4,7 @@ import os from 'node:os'
 import { type IPty, spawn } from 'node-pty'
 import { clearAgentStatus, prepareInjection } from './agent-status'
 import { clearAgentEvents, prepareEventInjection } from './agent-events'
-import { type Injection, composeInjection } from './agent-injection'
+import { type Injection, type InjectionContribution, composeInjection } from './agent-injection'
 import { isWithin } from './fs-boundary'
 import { isUuid } from './session-store'
 import { getUserEnv, whenUserEnvReady } from './user-env'
@@ -312,8 +312,23 @@ export class TerminalService {
      * 使另一個失效（`claude-status-bridge` 的合成條款）。
      */
     private readonly agentEventsEnabled: () => boolean = () => false,
-    /** 合成後的設定檔落點。兩個功能共用同一份（接縫只有一個）。 */
+    /** 合成後的設定檔落點。各功能共用同一份（接縫只有一個）。 */
     private readonly settingsFile: () => string = () => '',
+    /**
+     * 交接的注入貢獻（自我介紹 ＋ 投遞落點）。
+     *
+     * **以回呼而非旗標傳入**：它要 workspace 的 folder 清單與 userData 的位置，而 pty 的服務
+     * 不該認得那兩樣東西。與其餘貢獻者一樣**在 spawn 的當下求值**。
+     */
+    private readonly prepareHandoff: (sessionId: string) => InjectionContribution | null = () => null,
+    /**
+     * session 結束 —— 交接的落點要清掉，**而清掉之前要先把裡面既有的項目處理完**。
+     *
+     * **以回呼傳入而不是直接 import `clearOutbox`**：那個順序（先處理、再清除）住在
+     * `handoff-service`，pty 的服務不該知道它。直接清會讓一則已經投遞、尚未被讀到的交接
+     * 隨 session 的結束而消失，而投遞端與使用者兩邊都不會知道。
+     */
+    private readonly endHandoff: (sessionId: string) => void = () => {},
   ) {}
 
   /**
@@ -463,11 +478,19 @@ export class TerminalService {
     const { cwd, cols, rows, healed, global } = options
     // 注入只對 agent 目標有意義。**兩個功能合成為單一份設定** —— 接縫只有一個，
     // 各寫各的會讓後寫的蓋掉先寫的，而兩者都會回報自己已啟用（`agent-injection`）。
+    // **註冊順序是承重的，而承重的不是正確性 —— 是對照組的鑑別力。**
+    // 合成器現在會把同一個 hook 事件的命令串接（`agent-injection`），所以順序不影響結果。
+    // 但「把合成改回逐鍵覆蓋」這個 mutation 必須讓 `probe:agent-view` 的
+    // 「注入的 hook 真的被執行」變紅 —— 而覆蓋語意下**勝出的是最後一個**。
+    // 事件橋接若排在最後，覆蓋之後它仍然勝出，**對照組不會紅，而 bug 還在**。
+    // 因此：**事件橋接排在任何其他也貢獻 `SessionStart` 的功能之前。**
     const injection =
       target === 'claude'
         ? composeInjection(this.settingsFile(), [
             prepareInjection(sessionId, this.agentStatusEnabled()),
             prepareEventInjection(sessionId, this.agentEventsEnabled()),
+            // **排在事件橋接之後** —— 見上方註解：對照組的鑑別力取決於這個順序。
+            this.prepareHandoff(sessionId),
           ])
         : null
     let pty: IPty
@@ -635,6 +658,8 @@ export class TerminalService {
     // **只由 pty 的結束觸發。** agent 回報的「對話結束」不是這個訊號（實測 `/clear` 就會發它，
     // 而 pty 還活著）—— 接上去的話，使用者清一次對話，等待狀態就此永遠停在未知。
     clearAgentEvents(sessionId)
+    // 交接的落點同理 —— 但它多一步：清除之前先把裡面既有的項目處理完（見 `endHandoff`）。
+    this.endHandoff(sessionId)
     try {
       session.pty.kill()
     } catch {

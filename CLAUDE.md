@@ -50,11 +50,21 @@ OpenSpec 結構的側欄，讓使用者不必另外開 IDE 就能一邊駕駛 ag
   會把其中的 URL 變成可點的連結（而點在那一塊上不會觸發我們自己的效果），因此第三方欄位
   進入通知之前要**縮減**（不是轉義 —— 轉義的正確性取決於目的地，而執行環境沒有暴露它的能力
   宣告）。完整的實測見 `docs/lessons/intake.md` 第七節。
+- **交接** —— **收件匣的第二個 producer 是 agent 自己**（`agent-initiated-handoff`）。
+  spekterm 經 `SessionStart` hook 的 `additionalContext` 告訴 agent 自己的存在與可交接的對象，
+  agent 寫一份 JSON 到**它自己的**投遞落點，spekterm 由**目錄名**推出來源、以 folder 清單
+  **查表**解析目標，然後**到達即建立 session**（不經接受閘 —— 那道閘的前提是「本文為第三方
+  逐字撰寫」，而這裡的本文是使用者自己 session 的 agent 寫的）。**prompt 仍然填好而不送出。**
+  **它不是安全邊界**：agent 有 shell，落點的位置它算得出來，因此交接次數的上限是**全域**的。
+  完整的實測見 `docs/lessons/handoff.md`。
 - **鍵盤** —— 見下文「快捷鍵」。
 
 **Linux 打包已可用**（`npm run dist:linux` → AppImage，`npm run install:desktop` 裝進應用程式
 選單）。**版號逐次遞增**且產物與執行中的 app 說得出同一個建置身分（Settings 的「About」段）。
-**尚未開始**：macOS／Windows 產物、自動更新與簽章（Phase 6 其餘）、handoff（Phase 7+）。
+**尚未開始**：macOS／Windows 產物、自動更新與簽章（Phase 6 其餘）。
+**交接已交付第一段**（agent → 另一個 repo）；**回程**（接手的 repo 做完回報發起者）與
+**以工具而非寫檔投遞**（MCP）仍未做 —— 後者的代價是 agent **收不到投遞的結果**，而那條缺口
+明文寫在 `agent-handoff-source` 的規格裡。
 **session 常駐**（讓 pty 活過 app 的生命）已排入路線圖但**刻意不做** —— 見 `docs/PRD.md` §11 的
 tmux 與自寫 daemon 取捨。**不要把「重建」誤當成「常駐」**：關掉 app，pty 一定會死（master fd
 必須有人持有），跑到一半的 build 或 dev server 救不回來。
@@ -81,6 +91,7 @@ tmux 與自寫 daemon 取捨。**不要把「重建」誤當成「常駐」**：
 | `src/renderer/src/side-panel/`、`@spekjs/core` 或 `@spekjs/ui` 升級 | **`docs/lessons/side-panel.md`** |
 | `src/main/intake-*`（**含 `intake-notify*`**）、`src/main/ipc/intake.ts`、`scripts/probe-intake.mjs`、`scripts/lib/stub-agent.mjs`、或任何會動到「呈現給人看的文字」與「交給 agent 的文字」其中一端的東西、**或任何會把文字送到作業系統通知的東西** | **`docs/lessons/intake.md`** |
 | `src/main/slack-*`、`src/main/secret-store.ts`、`scripts/probe-slack.mjs`、`scripts/lib/stub-slack.mjs`、或任何會把憑證交給第三方的東西 | **`docs/lessons/slack.md`** |
+| `src/main/handoff-*`、`src/main/handoff-service.ts` 的落點與上限、`scripts/probe-intake.mjs` 的 `runHandoff*` 段落、或任何**倚賴「注入的內容真的進入 agent 脈絡」**的東西 | **`docs/lessons/handoff.md`** |
 | `src/main/transcript-*`、`src/main/agent-events.ts`、`src/main/agent-injection.ts`、`src/main/insights*`、**`src/main/report.ts` 與 `src/main/report-*`**、`scripts/probe-insights.mjs`、`scripts/probe-agent-view.mjs`，或任何會讀 `~/.claude/projects`、**注入 `--settings`**、**或委派 `claude` CLI** 的東西 | **`docs/lessons/transcript.md`** |
 
 ## 開發指令
@@ -162,7 +173,10 @@ npm run probe:intake    # agent-intake / intake-routing（收件匣的兩條入�
                         #   **唯一跨行程的那條斷言住在這裡**：畫面上那一列的 textContent 與
                         #   磁碟上 context 檔界線之內的內容必須逐字元相同 —— 主行程裡的單元
                         #   測試看不見呈現那一端，於是「正規化被搬到呈現層」對它是透明的。
-                        #   對照組見 `scripts/intake-control-groups.mjs`（四個 mutation，
+                        #   **交接的三段也在這裡**（`runHandoff` / `runHandoffFailure` /
+                        #   `runHandoffDisabled`）—— 它是收件匣的第二個 producer，共用同一套
+                        #   替身與落點佈置。
+                        #   對照組見 `scripts/intake-control-groups.mjs`（十個 mutation，
                         #   每一個都指名哪一條斷言必須變紅）
 npm run probe:slack     # slack-intake-source / secret-scope（替身是**真的 HTTPS 伺服器** ——
                         #   產品的端點白名單只認 https，而那條不為驗收放寬。信任錨走

@@ -225,6 +225,10 @@ const PROBE_EXPRESSION = `(async () => {
     // opened / onOpenInbox 於 intake-badge-and-notify 引入：前者是通知上界的重置點
     // （renderer → 主行程，無負載），後者是使用者觸發通知之後把收件匣打開的指示
     // （主行程 → renderer，無負載）。兩者都不給 renderer 任何新的詞彙。
+    // onAutoAccept / onFocusSession 於 agent-initiated-handoff 引入，**兩者都是主行程 → renderer**：
+    // 前者帶 adapter／intake 識別碼／**已解析好的 folderId**（renderer 既有的合法詞彙），
+    // 因為建立 session 仍由 renderer 走它既有的 create 路徑（session 清單的權威在它那裡）；
+    // 後者只帶一個 session 識別碼。**兩者都不含任何檔案系統路徑，也不給 renderer 新的詞彙。**
     // （這一段在 template literal 之內 —— 不能寫反引號，會把它提前關閉。）
     surplusIntakeKeys: Object.keys(api?.intake ?? {}).filter(
       (key) =>
@@ -240,6 +244,8 @@ const PROBE_EXPRESSION = `(async () => {
           'onPrefill',
           'opened',
           'onOpenInbox',
+          'onAutoAccept',
+          'onFocusSession',
         ].includes(key),
     ),
     // slack 於 slack-mention-intake 引入（slack-intake-source / secret-scope 規格）：

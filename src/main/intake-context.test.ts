@@ -126,12 +126,27 @@ describe('prompt 完全由系統組成', () => {
     assert.equal(buildPrompt('/tmp/x.md', createNonce()).includes('\n'), false)
   })
 
-  it('要求照抄而非判斷，且禁止取得外部資源', () => {
+  it('prompt 指出那就是要做的事', () => {
     const prompt = buildPrompt('/tmp/x.md', createNonce()).toLowerCase()
-    assert.ok(prompt.includes('word for word'), '要求逐字照抄')
-    assert.ok(prompt.includes('do not judge'), '不要求它判斷是否針對自己')
+    assert.ok(prompt.includes('carry it out'), '指出那就是要執行的工作')
+    // **前一版要求它先逐字照抄、先不要動手** —— 那把這條管線廢掉了（使用者按下送出之後
+    // 拿到一份清單，得再交代兩三次才會開始做）。人類閘門在別處：接受之前看得到本文全文，
+    // 而 prompt 填好而不送出。
+    assert.equal(prompt.includes('word for word'), false, '不要求先逐字照抄')
+    assert.equal(prompt.includes('do not act'), false, '不要求先不要動手')
+  })
+
+  it('第三方的本文另外聲明來源與不取得外部資源', () => {
+    const prompt = buildPrompt('/tmp/x.md', createNonce()).toLowerCase()
+    assert.ok(prompt.includes('written by someone else'), '聲明它來自他人')
     assert.ok(prompt.includes('do not fetch anything outside'), '禁止取得外部資源')
-    assert.equal(prompt.includes('summarize'), false, '摘要式的問法不算滿足本條')
+  })
+
+  it('非第三方的本文不套用那兩句 —— 使用者自己交辦的工作本來就可能要求去看某個東西', () => {
+    const prompt = buildPrompt('/tmp/x.md', createNonce(), true).toLowerCase()
+    assert.ok(prompt.includes('carry it out'))
+    assert.equal(prompt.includes('written by someone else'), false)
+    assert.equal(prompt.includes('do not fetch anything outside'), false)
   })
 
   it('引用的位置就是 context 檔', () => {

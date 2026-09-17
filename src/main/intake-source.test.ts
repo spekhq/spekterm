@@ -330,3 +330,131 @@ describe('保存失敗不得靜默', () => {
     )
   })
 })
+
+/**
+ * 一般化：同一份落點實作同時服務兩種結構。
+ *
+ * **巢狀那一半是交接的落點**（每個來源 session 一層子目錄）。第一版的實作把 `depth: 0` 與
+ * 扁平的 `readdir` 寫死，而漏掉它的失效**不是一眼看得出來的**：啟動掃描照樣把檔案撈進來，
+ * 只有 watcher 收不到事件 —— 症狀是「即時不進來、重啟才出現」。
+ */
+describe('落點的一般化', () => {
+  it('depth=1 時，啟動掃描撈得到子目錄裡既有的投遞', async () => {
+    const h = harness()
+    fs.mkdirSync(path.join(h.inbox, 'sess-a'), { recursive: true })
+    fs.writeFileSync(path.join(h.inbox, 'sess-a', 'x.json'), payload())
+
+    const source = new IntakeSource({ root: h.inbox, adapter: 'file', service: h.service, depth: 1 })
+    sources.push(source)
+    await source.start()
+
+    assert.equal(h.store.pendingCount(), 1)
+  })
+
+  it('depth=1 時，投遞進子目錄的新檔案由 watcher 收到（不必重啟）', async () => {
+    const h = harness()
+    const dir = path.join(h.inbox, 'sess-a')
+    fs.mkdirSync(dir, { recursive: true })
+
+    const processed: string[] = []
+    const source = new IntakeSource({
+      root: h.inbox,
+      adapter: 'file',
+      service: h.service,
+      depth: 1,
+      onProcessed: (file) => processed.push(file),
+    })
+    sources.push(source)
+    await source.start()
+
+    fs.writeFileSync(path.join(dir, 'y.json'), payload())
+    await waitFor('watcher 收到子目錄中的新增', () => processed.length > 0)
+
+    assert.equal(h.store.pendingCount(), 1)
+  })
+
+  it('depth=0 時不下鑽 —— 子目錄裡的東西不被當成投遞', async () => {
+    const h = harness()
+    fs.mkdirSync(path.join(h.inbox, 'nested'), { recursive: true })
+    fs.writeFileSync(path.join(h.inbox, 'nested', 'x.json'), payload())
+
+    const source = new IntakeSource({ root: h.inbox, adapter: 'file', service: h.service })
+    sources.push(source)
+    await source.start()
+
+    assert.equal(h.store.pendingCount(), 0)
+  })
+
+  it('注入的 deliver 收得到投遞檔的位置 —— 來源身分只能從那裡推導', async () => {
+    const h = harness()
+    const dir = path.join(h.inbox, 'sess-b')
+    fs.mkdirSync(dir, { recursive: true })
+    fs.writeFileSync(path.join(dir, 'z.json'), payload())
+
+    const seen: string[] = []
+    const source = new IntakeSource({
+      root: h.inbox,
+      adapter: 'handoff',
+      service: h.service,
+      depth: 1,
+      deliver: async (contents, file) => {
+        seen.push(file)
+        return h.service.deliver(contents, 'handoff')
+      },
+    })
+    sources.push(source)
+    await source.start()
+
+    assert.equal(seen.length, 1)
+    assert.equal(path.basename(path.dirname(seen[0])), 'sess-b')
+  })
+
+  it('不注入 deliver 時沿用 service.deliver 與宣告的 adapter', async () => {
+    const h = harness()
+    fs.mkdirSync(h.inbox, { recursive: true })
+    fs.writeFileSync(path.join(h.inbox, 'a.json'), payload())
+
+    const source = new IntakeSource({ root: h.inbox, adapter: 'file', service: h.service })
+    sources.push(source)
+    await source.start()
+
+    assert.equal(h.store.list()[0]?.adapter, 'file')
+  })
+})
+
+describe('寫到一半的暫存檔', () => {
+  it('以點開頭的檔案不被當成投遞 —— 即使它以 .json 結尾', async () => {
+    const h = harness()
+    fs.mkdirSync(h.inbox, { recursive: true })
+    fs.writeFileSync(path.join(h.inbox, '.tmp-a.json'), payload())
+
+    const source = new IntakeSource({ root: h.inbox, adapter: 'file', service: h.service })
+    sources.push(source)
+    await source.start()
+
+    assert.equal(h.store.pendingCount(), 0)
+    // **且不被消費** —— 它不是我們的東西，producer 還要改名。
+    assert.equal(fs.existsSync(path.join(h.inbox, '.tmp-a.json')), true)
+  })
+
+  it('改名之後那一份正常被採納', async () => {
+    const h = harness()
+    fs.mkdirSync(h.inbox, { recursive: true })
+    const processed: string[] = []
+    const source = new IntakeSource({
+      root: h.inbox,
+      adapter: 'file',
+      service: h.service,
+      onProcessed: (file) => processed.push(file),
+    })
+    sources.push(source)
+    await source.start()
+
+    const tmp = path.join(h.inbox, '.tmp-b.json')
+    fs.writeFileSync(tmp, payload())
+    fs.renameSync(tmp, path.join(h.inbox, 'b.json'))
+    await waitFor('改名之後被處理', () => processed.length > 0)
+
+    assert.equal(h.store.pendingCount(), 1)
+  })
+})

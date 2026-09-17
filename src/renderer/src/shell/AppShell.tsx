@@ -10,6 +10,7 @@ import { OpenSpecProvider } from './openspec/data'
 import { PanelCoordinateProvider } from './panel-coordinate'
 import { SessionsProvider } from './terminal/sessions'
 import { IntakeProvider } from './intake/intake-state'
+import { IntakeAutoAccept } from './intake/IntakeAutoAccept'
 import { PrefillProvider } from './intake/prefill-state'
 import { folderSelection } from './types'
 import { useWorkspaceFolders } from './useWorkspaceFolders'
@@ -47,6 +48,16 @@ export function AppShell(): React.JSX.Element {
               必須在 `SessionsProvider` 之內（它要 `useSessions()`），而 `AppShell` 本身正是渲染
               那個 Provider 的元件 —— 掛在這一層才拿得到 context。它不渲染任何東西。
             */}
+            {/*
+              到達即接受，以及「通知把我帶到那個 session」。**常駐** —— 交接在使用者沒有打開
+              收件匣的時候到達，而 overlay 只在被打開時掛載。
+            */}
+            <IntakeAutoAccept
+              onReveal={(folderId) =>
+                folderId === null ? select({ kind: 'global' }) : select(folderSelection(folderId))
+              }
+            />
+
             <KeyboardNavigation
               folders={folders}
               selection={selection}

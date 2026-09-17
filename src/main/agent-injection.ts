@@ -25,6 +25,14 @@ import path from 'node:path'
  * **這個差異是每個貢獻者自己的事，不是合成器的事。**
  */
 
+/** hooks 在設定 JSON 中的 key。**貢獻者不得經 `settings` 使用它。** */
+const HOOKS_KEY = 'hooks'
+
+interface HookEntry {
+  matcher: string
+  hooks: { type: 'command'; command: string }[]
+}
+
 /** 合成後的設定檔落點。由 `configureAgentInjection()` 指定，主行程啟動時設定一次。 */
 let injectionRoot: string | null = null
 
@@ -37,9 +45,27 @@ export function agentSettingsFile(): string {
   return injectionRoot ? path.join(injectionRoot, 'settings.json') : ''
 }
 
+/**
+ * 一個貢獻者要註冊的 hook 命令：事件名 → 命令清單。
+ *
+ * **hooks 與 `settings` 分開是結構性的，不是整理上的偏好。** 它是**已知會被多個功能貢獻**的
+ * 設定項（事件橋接佔著 `SessionStart`，自我介紹也要用它），而逐鍵覆蓋的合成會讓後者把前者
+ * 整份丟掉 —— **兩個功能仍然都會回報自己已啟用**，症狀與「各自注入」完全相同。
+ *
+ * 拉成獨立欄位之後，「兩個貢獻者各寫一份 hooks 而後者蓋掉前者」**在型別上表達不出來**：
+ * 貢獻者交出的是命令，巢狀的 matcher 結構由合成器產生，它們沒有詞彙可以覆蓋彼此。
+ *
+ * **CLI 端會把同一事件的多條命令都跑完**（2026-09-17、CLI 2.1.274 實測，見
+ * `docs/lessons/handoff.md`）—— 但那與本欄位是兩件事：合成器若覆蓋，第二條命令根本不會出現在
+ * 送出去的設定裡，**CLI 沒有機會執行一條它沒收到的命令**。兩邊都要對。
+ */
+export type HookContribution = Record<string, readonly string[]>
+
 export interface InjectionContribution {
-  /** 併入設定 JSON 的頂層片段。不同貢獻者不得使用同一個 key。 */
+  /** 併入設定 JSON 的頂層片段。**同一個 key 被貢獻兩次即為不變式違反**（見 `composeInjection`）。 */
   settings: Record<string, unknown>
+  /** 要註冊的 hook 命令。**不要寫進 `settings.hooks`** —— 那條路徑會被合成器拒絕。 */
+  hooks?: HookContribution
   /** 併入 pty 環境的變數。 */
   env: Record<string, string>
 }
@@ -72,11 +98,31 @@ export function composeInjection(
   if (active.length === 0) return null
 
   const settings: Record<string, unknown> = {}
+  const hooks: Record<string, HookEntry[]> = {}
   const env: Record<string, string> = {}
   for (const part of active) {
-    Object.assign(settings, part.settings)
-    Object.assign(env, part.env)
+    for (const [key, value] of Object.entries(part.settings)) {
+      // `hooks` 有自己的欄位，而它的合併語意與其餘設定項相反（串接 vs 獨佔）。
+      // 走 `settings` 進來的一律拒絕 —— 否則同一個 key 會有兩種語意，而分不清是哪一種。
+      if (key === HOOKS_KEY) throw new Error(`injection: contribute hooks via the hooks field, not settings.${HOOKS_KEY}`)
+      // **型別上的分開只涵蓋今天已知的那一項。** 明天某個尚未存在的設定項也成為多人貢獻的
+      // 對象時，它在分類上仍在「單一功能持有」那一邊，而覆蓋會再次靜默發生。
+      // 當場失敗的代價遠低於一個安靜失效的功能。
+      if (key in settings) throw new Error(`injection: setting "${key}" contributed twice`)
+      settings[key] = value
+    }
+    for (const [event, commands] of Object.entries(part.hooks ?? {})) {
+      // 一個事件一組 matcher，多個貢獻者的命令**串接**進同一組。
+      const entry = (hooks[event] ??= [{ matcher: '', hooks: [] }])
+      for (const command of commands) entry[0].hooks.push({ type: 'command', command })
+    }
+    for (const [key, value] of Object.entries(part.env)) {
+      // 與設定項同一條理由：同名的環境變數被貢獻兩次，其中一個功能會安靜地拿到別人的值。
+      if (key in env) throw new Error(`injection: env "${key}" contributed twice`)
+      env[key] = value
+    }
   }
+  if (Object.keys(hooks).length > 0) settings[HOOKS_KEY] = hooks
 
   try {
     fs.mkdirSync(path.dirname(settingsFile), { recursive: true })

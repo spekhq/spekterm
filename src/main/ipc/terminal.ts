@@ -4,6 +4,8 @@ import { SessionStatusService } from '../session-status'
 import type { RendererSession, SessionStore } from '../session-store'
 import { type SpawnTarget, TerminalError, TerminalService } from '../terminal'
 import { agentSettingsFile } from '../agent-injection'
+import { prepareHandoffInjection } from '../handoff-injection'
+import { endHandoffSession } from '../handoff-service'
 import type { FolderLookup } from '../workspace-store'
 import { worktreesFor } from './openspec'
 import { pickCreateWorktree, pickWorktree } from '../worktree-pick'
@@ -128,6 +130,12 @@ function serviceFor(
   // SHALL NOT 連帶關掉對話 view 的輸入能力（`claude-status-bridge` 的合成條款）。
   () => preferences.get().agentEvents !== false,
   agentSettingsFile,
+  // 交接的注入貢獻。**排在事件橋接之後**（見 `terminal.ts` 的註冊順序註解）。
+  // 未設定＝啟用，與另外兩個同一條規則，且三者的啟用狀態彼此獨立。
+  (sessionId) =>
+    prepareHandoffInjection(sessionId, preferences.get().agentHandoff !== false, store.list()),
+  // 交接的落點於 session 結束時收掉 —— **先處理完裡面既有的項目，再清除**（順序住在服務裡）。
+  endHandoffSession,
   )
   services.set(contents.id, service)
 

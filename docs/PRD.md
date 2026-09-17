@@ -627,7 +627,22 @@ session 脈絡裡送出的，彙整成一份跨數十天、跨數十個專案的
 > 接受它，就在 routing 解析出的 folder 得到一個開好、context 備妥、第一則 prompt 已填但
 > **尚未送出**的 agent session。
 >
-> **Slack 已是第一個真實 producer**（`slack-mention-intake`）：有人在 Slack 提及使用者本人時，
+> **agent 自己是第二個 producer**（`agent-initiated-handoff`）—— 而那正是「handoff」這個字
+> 原本的意思：a repo 的 session 把工作交接給 b repo。spekterm 經 `SessionStart` hook 的
+> `additionalContext` 告訴 agent 自己的存在與可交接的對象，agent 寫一份 JSON 到**它自己的**
+> 投遞落點；來源由**目錄名**推導（payload 自稱的一律不採信），目標由 folder 清單**查表**解析
+> （完整相等，歧義與查無皆拒絕）。**交接到達即建立 session，不經接受閘** —— 那道閘的前提明寫著
+> 「本文為第三方逐字撰寫」，而這裡的本文是使用者自己 session 的 agent 寫的、且由他當下的交辦
+> 觸發。**prompt 仍然填好而不送出。**
+>
+> **它不是安全邊界，而那有一個實際的下游後果**：agent 有 shell，投遞落點的位置它算得出來 ——
+> 於是交接次數的上限必須是**全域**的（per 來源 session 的計數只要輪流寫進別人的落點就繞過了）。
+>
+> **已交付的是第一段。** 未做：**回程**（接手的 repo 做完回報發起者）、以及**以工具而非寫檔投遞**
+> （MCP）—— 後者的代價是 agent **收不到投遞的結果**（目標查無、格式不合、被上限降級一律不知道），
+> 那條缺口明文寫在 `agent-handoff-source` 的規格裡，失敗對**使用者**可見、對 agent 不可見。
+>
+> **Slack 是第一個外部 producer**（`slack-mention-intake`）：有人在 Slack 提及使用者本人時，
 > 那件事成為收件匣的一則待處理項目，帶著該提及所在討論串的內容（**上界固定於被提及的那一則**）。
 >
 > **回補是主幹，即時是加速器。** 桌面應用程式大多數時間是關著的，而 Socket Mode 沒有重送佇列

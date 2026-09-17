@@ -2,6 +2,7 @@ import {
   chmodSync,
   existsSync,
   mkdirSync,
+  readdirSync,
   readFileSync,
   writeFileSync,
 } from 'node:fs'
@@ -71,6 +72,9 @@ export function makeStubAgent(
   const byteLog = join(home, 'agent-input.bytes')
   /** `fire SessionStart` 的當下寫下 —— 呼叫端據它界定「就緒之前」那一段。 */
   const readyReceipt = join(home, 'ready-at')
+  /** 每條 hook 命令的 stdout，各自一個檔（`<事件>-<第幾條>`）。 */
+  const hookOutDir = join(home, 'hook-stdout')
+  mkdirSync(hookOutDir, { recursive: true })
 
   const script = [
     '#!/bin/sh',
@@ -106,11 +110,29 @@ export function makeStubAgent(
     // `honorHooks: false` 的替身完全不觸發事件 —— 用來驗「內容與輸入是兩條獨立的路」：
     // 沒有事件 ⇒ 等待狀態恆為未知 ⇒ 送不出去，**但內容照樣讀得到**。
     honorHooks ? '  [ -n "$settings" ] || return 0' : '  return 0',
-    `  cmd=$(node -e 'const s=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));`
-      + `const g=(s.hooks||{})[process.argv[2]];process.stdout.write(g&&g[0]&&g[0].hooks&&g[0].hooks[0]?g[0].hooks[0].command:"")' `
-      + `"$settings" "$1")`,
-    '  [ -n "$cmd" ] || return 0',
-    `  printf '{"hook_event_name":"%s","session_id":"%s","transcript_path":"%s","cwd":"%s"}' "$1" "$sid" "$tp" "$PWD" | sh -c "$cmd" >/dev/null 2>&1`,
+    /*
+      **一個事件上的每一條命令都要跑，而且各自的 stdout 要分別留下。**
+
+      此前這裡只取 `hooks[event][0].hooks[0].command` 並把 stdout 丟進 `/dev/null`。
+      那讓兩條 requirement **結構上沒有載體**：「兩個功能貢獻同一組 hook 事件時皆被執行」
+      （`claude-status-bridge`）與「自我介紹的內容取當下的值」（`agent-handoff-source`）——
+      前者只跑第一條、後者的可觀察值就是 stdout。**而它們照樣會是綠的**，因為斷言碰不到。
+
+      真實的 CLI 確實會把同一事件的多條命令都跑完（2026-09-17、CLI 2.1.274 實測，見
+      `docs/lessons/handoff.md`）—— 替身在這件事上必須與它一致，否則驗收與現實分岔。
+
+      **命令經 base64 傳遞**：它們含分號、引號，且原則上可以含換行 —— 逐行讀取原文會把一條
+      命令拆成兩條，而症狀是「hook 每次都失敗而事件目錄安靜地空著」（這個坑 repo 踩過一次，
+      見 `agent-events` 的 `EVENT_COMMAND` 註解）。
+    */
+    `  node -e 'const s=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));`
+      + `const g=(s.hooks||{})[process.argv[2]]||[];`
+      + `for(const grp of g)for(const h of (grp.hooks||[]))process.stdout.write(Buffer.from(String(h.command),"utf8").toString("base64")+String.fromCharCode(10))' `
+      + `"$settings" "$1" | { n=0; while IFS= read -r b64; do`,
+    '    n=$((n+1))',
+    '    cmd=$(printf %s "$b64" | base64 -d)',
+    `    printf '{"hook_event_name":"%s","session_id":"%s","transcript_path":"%s","cwd":"%s"}' "$1" "$sid" "$tp" "$PWD" | sh -c "$cmd" > "${hookOutDir}/$1-$n" 2>/dev/null`,
+    '  done; }',
     '}',
     'read_loop() {',
     '  stty -icanon min 1 time 0 < /dev/tty 2>/dev/null',
@@ -196,6 +218,26 @@ export function makeStubAgent(
   return {
     home,
     bin,
+    /**
+     * 某個 hook 事件上**第 n 條**命令的 stdout（n 自 1 起算）。
+     *
+     * 這是「注入的內容真的被交出去了」唯一的可觀察值 —— 設定檔裡有那條命令只證明我們寫了它。
+     */
+    hookStdout: (event, index = 1) => {
+      try {
+        return readFileSync(join(hookOutDir, `${event}-${index}`), 'utf8')
+      } catch {
+        return ''
+      }
+    },
+    /** 某個事件上被執行的命令條數。 */
+    hookCommandCount: (event) => {
+      try {
+        return readdirSync(hookOutDir).filter((name) => name.startsWith(`${event}-`)).length
+      } catch {
+        return 0
+      }
+    },
     cols: () => Number(readFileSync(sizeReceipt, 'utf8').trim().split(/\s+/)[1] ?? 0),
     input: () => {
       try {

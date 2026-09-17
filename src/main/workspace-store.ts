@@ -281,7 +281,24 @@ export class WorkspaceStore {
     this.save()
   }
 
+  /**
+   * 清單變動的訂閱者。
+   *
+   * **存在的理由只有一個**：agent 的自我介紹列著可交接的對象，而它必須取當下的值
+   * （`handoff-injection` 的 `refreshIntros`）。沒有這個訊號，那份清單只在 session 建立的
+   * 那一刻正確，而失效是靜默的。
+   */
+  readonly #listeners = new Set<() => void>()
+
+  subscribe(listener: () => void): () => void {
+    this.#listeners.add(listener)
+    return () => {
+      this.#listeners.delete(listener)
+    }
+  }
+
   private save(): void {
     writeWorkspaceFileAtomic(this.filePath, { version: WORKSPACE_VERSION, folders: this.folders })
+    for (const listener of this.#listeners) listener()
   }
 }

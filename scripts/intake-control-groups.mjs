@@ -180,9 +180,9 @@ export const MUTATIONS = [
   {
     name: 'system-names-session',
     file: 'src/renderer/src/shell/intake/IntakeOverlay.tsx',
-    from: `      await window.workspace.intake.attach(item.id, item.adapter, outcome.sessionId)`,
-    to: `      sessions.rename(outcome.sessionId, item.title)\n`
-      + `      await window.workspace.intake.attach(item.id, item.adapter, outcome.sessionId)`,
+    from: `      await window.workspace.intake.attach(item.id, item.adapter, sessionId)`,
+    to: `      sessions.rename(sessionId, item.title)\n`
+      + `      await window.workspace.intake.attach(item.id, item.adapter, sessionId)`,
     expectRed: 'session 的名稱未被系統指定（agent 宣告的標題呈現得出來）',
     why: '系統代為命名＝使用者永久接管命名權，此後 agent 宣告的標題被靜默地不予呈現。',
   },
@@ -194,6 +194,66 @@ export const MUTATIONS = [
     expectRed: '接受之前看得到將開在哪個 folder（第二個，不是選中的或第一個）',
     why: '規則不生效即落到 fallback（第一個 folder）。fixture 的形狀'
       + '（三個 folder、選第三、規則指第二、fallback 指第一）正是為了讓這種錯誤實作紅。',
+  },
+  {
+    name: 'handoff-hooks-overwrite',
+    file: 'src/main/agent-injection.ts',
+    from: `      const entry = (hooks[event] ??= [{ matcher: '', hooks: [] }])`,
+    to: `      const entry = (hooks[event] = [{ matcher: '', hooks: [] }])`,
+    expectRed: 'SessionStart 上兩條注入的命令都被執行',
+    why: '**hooks 的合成改回逐鍵覆蓋。** 事件橋接與自我介紹都貢獻 `SessionStart`，覆蓋之下只剩\n'
+      + '> 最後註冊的那一個 —— 而兩個功能仍然都會回報自己已啟用。\n'
+      + '> **註冊順序是這個對照組鑑別力的前提**（`terminal.ts` 有註解釘住它）。',
+  },
+  {
+    name: 'handoff-target-prefix',
+    file: 'src/main/handoff-target.ts',
+    from: `  const byName = candidates.filter((candidate) => candidate.name.toLowerCase() === wanted.toLowerCase())`,
+    to: `  const byName = candidates.filter((candidate) => candidate.name.toLowerCase().startsWith(wanted.toLowerCase()))`,
+    expectRed: '前綴不算命中（模糊比對的實作會在這裡開出一個 session）',
+    why: '**完整相等換成前綴比對。** 這條路徑上沒有使用者在看 —— 一個「猜得很有把握」的結果會讓\n'
+      + '> session 開在他沒有指名的 repo 裡，而他不會知道。',
+  },
+  {
+    name: 'handoff-payload-target',
+    command: 'test',
+    file: 'src/main/intake-schema.ts',
+    from: `        ...(provenance ? { targetFolderId: provenance.targetFolderId } : {}),`,
+    to: `        ...(typeof (source as { targetFolderId?: unknown }).targetFolderId === 'string'
+          ? { targetFolderId: String((source as { targetFolderId: string }).targetFolderId) }
+          : provenance
+            ? { targetFolderId: provenance.targetFolderId }
+            : {}),`,
+    expectRed: '投遞內容自稱的目標不被採信 —— 目標只由查表決定',
+    why: '**讓 payload 的 `targetFolderId` 被採信。** 共用投遞落點明文是給應用程式之外的 producer\n'
+      + '> 用的 —— 這個欄位一旦讀得到，**任何**放進落點的檔案都能繞過 routing 自選 folder。',
+  },
+  {
+    name: 'handoff-stays-pending',
+    file: 'src/main/handoff-service.ts',
+    from: `    if (this.#throttle.take()) {`,
+    to: `    if (false && this.#throttle.take()) {`,
+    expectRed: '交接於到達時直接建立 session（使用者未執行任何接受動作）',
+    why: '**拿掉自動接受。** 交接退回成一則普通的待處理項目 —— 使用者剛親口交辦的事，他得再同意一次。',
+  },
+  {
+    name: 'handoff-steals-focus',
+    file: 'src/renderer/src/shell/intake/IntakeAutoAccept.tsx',
+    from: `          if (outcome.status !== 'created') return`,
+    to: `          if (outcome.status !== 'created') return
+          latest.current.onReveal(folderId)`,
+    expectRed: 'rail 上選中的項目未因交接而改變',
+    why: '**建立之後把焦點切過去。** 這條 requirement **零實作即綠**（不寫任何焦點程式碼，焦點自然\n'
+      + '> 不動），它的鑑別力**完全**來自這個對照組。',
+  },
+  {
+    name: 'handoff-notify-always-inbox',
+    file: 'src/main/index.ts',
+    from: `    if (sessionId) focusSession?.(sessionId)`,
+    to: `    if (false && sessionId) focusSession?.(sessionId)`,
+    expectRed: '觸發交接的通知不打開收件匣',
+    why: '**通知的效果不再分流。** 一則已接受的交接在收件匣裡沒有任何待辦動作 —— 把使用者送去那裡，\n'
+      + '> 等於要他再點一次才到得了他真正要去的地方。',
   },
 ]
 

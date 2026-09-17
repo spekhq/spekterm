@@ -30,9 +30,24 @@ export interface NotifyPayload {
   body: string
 }
 
+/**
+ * 一則通知涵蓋了哪些項目。
+ *
+ * **通知的效果因項目而異**（待處理者打開收件匣、已建立 session 者聚焦那個 session），
+ * 而觸發發生在呈現之後 —— 中間隔著使用者的時間，項目的狀態在那段時間內會改變。
+ * 因此這裡帶的是**主鍵**而不是當下的狀態：目的地在**觸發的當下**才決定。
+ *
+ * 舊的簽章 `onActivate(handler: () => void)` **不帶任何識別**，於是「聚焦這則交接建立的
+ * session」在介面上表達不出來 —— 那是一次介面變更，不是一個參數。
+ */
+export interface IntakeKeyRef {
+  adapter: string
+  id: string
+}
+
 export interface NotifyBackend {
-  /** 呈現一則。 */
-  present(payload: NotifyPayload): void
+  /** 呈現一則。`keys` 是這一則涵蓋的項目，供觸發時決定目的地。 */
+  present(payload: NotifyPayload, keys: readonly IntakeKeyRef[]): void
   /** 這個執行環境送得出通知嗎。**注意它守不到真正的失效**，見 `docs/lessons/intake.md` 第七節。 */
   usable(): boolean
   /**
@@ -41,7 +56,7 @@ export interface NotifyBackend {
    * **不得改名為那個 HTTP 伺服器慣用的動詞** —— `probe-core.mjs` 的「主行程未建立 server」
    * 守衛是純文字比對，而且連註解一起吃（`agent-wait.ts` 的檔頭記過同一個坑）。
    */
-  onActivate(handler: () => void): void
+  onActivate(handler: (keys: readonly IntakeKeyRef[]) => void): void
 }
 
 /** 時鐘與計時器 —— 注入它，驗收才不必真的等。 */
@@ -192,7 +207,10 @@ export class IntakeNotifier {
     if (this.#presented.length >= this.#burstMax) return
 
     this.#presented.push(now)
-    this.#backend.present(buildPayload(batch))
+    this.#backend.present(
+      buildPayload(batch),
+      batch.map((record) => ({ adapter: record.adapter, id: record.id })),
+    )
   }
 
   /** 測試用：目前窗內累積了幾則。 */

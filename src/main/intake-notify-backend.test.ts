@@ -37,7 +37,7 @@ describe('已顯示的通知被持有至其結束', () => {
   it('**顯示之後仍被持有** —— 不持有的話它會在使用者伸手去點之前被回收', () => {
     const os = fakeOs()
     const backend = createHoldingBackend({ create: os.create, supported: () => true })
-    backend.present({ title: 't', body: 'b' })
+    backend.present({ title: 't', body: 'b' }, [])
     assert.equal(os.made[0].shown, true, '前置：它真的被顯示了')
     assert.equal(backend.liveCount(), 1)
   })
@@ -45,7 +45,7 @@ describe('已顯示的通知被持有至其結束', () => {
   it('回報結束之後才放開', () => {
     const os = fakeOs()
     const backend = createHoldingBackend({ create: os.create, supported: () => true })
-    backend.present({ title: 't', body: 'b' })
+    backend.present({ title: 't', body: 'b' }, [])
     os.made[0].fire('close')
     assert.equal(backend.liveCount(), 0)
   })
@@ -53,7 +53,7 @@ describe('已顯示的通知被持有至其結束', () => {
   it('回報失敗之後也放開', () => {
     const os = fakeOs()
     const backend = createHoldingBackend({ create: os.create, supported: () => true })
-    backend.present({ title: 't', body: 'b' })
+    backend.present({ title: 't', body: 'b' }, [])
     os.made[0].fire('failed')
     assert.equal(backend.liveCount(), 0)
   })
@@ -62,7 +62,7 @@ describe('已顯示的通知被持有至其結束', () => {
     // 某些通知服務可能不回報結束 —— 一個無界的集合就是一次洩漏。
     const os = fakeOs()
     const backend = createHoldingBackend({ create: os.create, supported: () => true, maxLive: 3 })
-    for (let i = 0; i < 10; i += 1) backend.present({ title: `t${i}`, body: 'b' })
+    for (let i = 0; i < 10; i += 1) backend.present({ title: `t${i}`, body: 'b' }, [])
     assert.equal(backend.liveCount(), 3)
     assert.equal(os.made.length, 10, '超過上界的仍然被顯示，只是不被持有')
     assert.ok(os.made.every((made) => made.shown))
@@ -75,7 +75,7 @@ describe('觸發的回呼', () => {
     const backend = createHoldingBackend({ create: os.create, supported: () => true })
     let activations = 0
     backend.onActivate(() => { activations += 1 })
-    backend.present({ title: 't', body: 'b' })
+    backend.present({ title: 't', body: 'b' }, [])
     os.made[0].fire('click')
     assert.equal(activations, 1)
     assert.equal(backend.liveCount(), 0)

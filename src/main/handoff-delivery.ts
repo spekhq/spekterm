@@ -1,0 +1,119 @@
+import { createHash } from 'node:crypto'
+
+import type { DeliveryProvenance } from './intake-schema'
+
+/** 交接的 adapter 名。去重的主鍵之一（`(adapter, id)`）。 */
+export const HANDOFF_ADAPTER = 'handoff'
+
+/** 來源座標的種類。**不是列舉的一員** —— 收件匣對不認得的種類一律放行。 */
+export const HANDOFF_ORIGIN_KIND = 'session'
+
+/** 摘要取前這麼多個 hex 字元。碰撞在這個用途上不具意義（同一個 session 之內的區辨）。 */
+const DIGEST_CHARS = 16
+
+export interface HandoffPayload {
+  target: string
+  title: string
+  body: string
+}
+
+export type PayloadResult =
+  | { ok: true; value: HandoffPayload }
+  | { ok: false; reason: 'MALFORMED' | 'FIELD_TYPE' }
+
+/**
+ * 讀出 agent 寫下的那三個欄位。
+ *
+ * **只讀這三個**，其餘一律不看 —— 尤其是任何自稱來源或自稱目標的欄位：來源由投遞落在哪個目錄
+ * 決定、目標由查表解析，兩者都不能是投遞內容說了算。
+ */
+export function parseHandoffPayload(contents: string): PayloadResult {
+  let raw: unknown
+  try {
+    raw = JSON.parse(contents)
+  } catch {
+    // **不消費** —— 可能只是寫到一半（與共用落點同一條處置）。
+    return { ok: false, reason: 'MALFORMED' }
+  }
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+    return { ok: false, reason: 'MALFORMED' }
+  }
+  const source = raw as Record<string, unknown>
+  const target = source.target
+  const body = source.body
+  if (typeof target !== 'string' || typeof body !== 'string') {
+    return { ok: false, reason: 'FIELD_TYPE' }
+  }
+  const title = typeof source.title === 'string' ? source.title : ''
+  return { ok: true, value: { target, title, body } }
+}
+
+/**
+ * 交接的識別碼 —— 由**來源 session ＋ 投遞內容的摘要**推導。
+ *
+ * **不由檔名推導，也不由 payload 的某個欄位指定。** 兩者是同一件事：檔名同樣由 agent 挑選，
+ * 於是唯一性被丟回給它 —— 而它沒有依據可循。同一個 session 兩次交接若用了同一個檔名，第二則
+ * 會成為重複（同內容靜默丟棄、不同內容拒絕且不建 session），**而 agent 已經回報它交接出去了**。
+ *
+ * **也不於接收時隨機產生**：落點的「先建立監看、再掃描」會讓同一份投遞被讀兩次，隨機 id 使它
+ * 成為兩則交接、**開出兩個 session**，而既有的去重完全看不見。
+ *
+ * 內容摘要同時滿足兩端：重送冪等、不同內容自然不同。摘要**取自正規化後的三個欄位而非原始
+ * 位元組** —— 否則同一份內容改一個空白就變成另一則交接。
+ */
+export function handoffIntakeId(sessionId: string, payload: HandoffPayload): string {
+  const digest = createHash('sha256')
+    .update(JSON.stringify([payload.target, payload.title, payload.body]), 'utf8')
+    .digest('hex')
+    .slice(0, DIGEST_CHARS)
+  return `${sessionId}-${digest}`
+}
+
+export interface DeliveryInput {
+  sessionId: string
+  payload: HandoffPayload
+  /** 原始投遞的文字 —— 保存用，供日後診斷（含 agent 寫下的 `target` 原字串）。 */
+  contents: string
+  /** 來源的座標識別碼：來源 folder，全域 session 則為保留字。 */
+  originId: string
+  /** 來源的標籤（folder 名稱 / `Global` / 已結束）。 */
+  originLabel: string
+  /** 查表解析出的目標。 */
+  targetFolderId: string
+}
+
+/** 交給 `deliver()` 的兩樣東西：投遞的文字，以及接收端算出來的 provenance。 */
+export function buildDelivery(input: DeliveryInput): {
+  contents: string
+  provenance: DeliveryProvenance
+} {
+  let original: Record<string, unknown> = {}
+  try {
+    const parsed: unknown = JSON.parse(input.contents)
+    if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
+      original = parsed as Record<string, unknown>
+    }
+  } catch {
+    // 走到這裡表示上游已經解析成功過，這裡不可能失敗；失敗也只是少了保存用的原始欄位。
+  }
+
+  return {
+    // **原始欄位一併保留**（`target` 會被 `parseIntake` 當成未知欄位丟棄，但它留在保存處，
+    // 而「agent 當初寫的是哪個字串」正是診斷一次查無時唯一有用的東西）。
+    // 我們指定的 `id` 覆蓋 payload 裡任何自稱的 id。
+    contents: JSON.stringify({
+      ...original,
+      id: handoffIntakeId(input.sessionId, input.payload),
+      title: input.payload.title,
+      body: input.payload.body,
+      actor: input.originLabel,
+    }),
+    provenance: {
+      origin: { kind: HANDOFF_ORIGIN_KIND, id: input.originId, label: input.originLabel },
+      targetFolderId: input.targetFolderId,
+      // 本文由使用者自己 session 裡的 agent 撰寫 —— 它就是那件要做的事，
+      // 不是一份要 agent 先抄一遍的第三方文字。
+      firstPartyBody: true,
+    },
+  }
+}

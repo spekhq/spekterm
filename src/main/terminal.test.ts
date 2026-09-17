@@ -660,3 +660,26 @@ describe('由 intake 建立的 session 其啟動參數與手動建立者等價',
     assert.notDeepEqual(withFlag, without)
   })
 })
+
+describe('交接的落點', () => {
+  it('session 結束時通知交接收掉它的落點', async () => {
+    const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'spekterm-terminal-'))
+    const ended: string[] = []
+    const service = new TerminalService(
+      lookup([{ id: 'f1', path: repo, status: 'ok' }]),
+      sink(),
+      () => false,
+      () => false,
+      () => '',
+      () => null,
+      (sessionId) => ended.push(sessionId),
+    )
+    const id = (await service.create('f1', 'shell')).sessionId
+    service.kill(id)
+    // **這條釘住的是「有人呼叫它」** —— `clearOutbox` 自己有單元測試，而那個測試在
+    // 「產品從來沒接上它」時照樣是綠的（實測：接線漏了一整輪驗收都沒紅）。
+    assert.deepEqual(ended, [id])
+    service.dispose()
+    fs.rmSync(repo, { recursive: true, force: true })
+  })
+})

@@ -58,6 +58,16 @@ export const INTAKE_CHANNELS = {
   opened: 'workspace:intake:opened',
   /** 主行程 → renderer：把收件匣打開（使用者觸發了通知）。 */
   openInbox: 'workspace:intake:openInbox',
+  /**
+   * 主行程 → renderer：這一則到達時即被接受，請在該 folder 建立 session。
+   *
+   * **建立仍然由 renderer 做** —— session 清單的權威在它那裡（見檔頭），主行程自己建的
+   * session 會在下一次 replace 時被抹掉，**而 pty 還活著**。於是「到達即接受」與「使用者
+   * 按下接受」走的是**同一條建立路徑**，那正是既有條款要求的。
+   */
+  autoAccept: 'workspace:intake:autoAccept',
+  /** 主行程 → renderer：把焦點移到某個 session（使用者觸發了一則已建立 session 的通知）。 */
+  focusSession: 'workspace:intake:focusSession',
 } as const
 
 /** 送往 renderer 的投影 —— **逐欄位建構，不原樣轉手**。 */
@@ -153,9 +163,12 @@ export interface IntakeSnapshot {
   notices: { key: string; code: string; count: number; detail?: string }[]
 }
 
-/** `accept` 的回傳形狀 —— 成功時只帶一個**指示**（在哪個 folder 建立）。 */
+/**
+ * `accept` 的回傳形狀 —— 成功時帶一個**指示**（在哪個 folder 建立），外加「它是不是已經
+ * 建過一個」（預填逾時退回待處理時，那個 session 仍然存在）。
+ */
 export type IntakeAcceptResult =
-  | { ok: true; folderId: string }
+  | { ok: true; folderId: string; existingSessionId?: string }
   | { ok: false; reason: 'unknown' | 'prefillUnavailable' | 'NO_MATCH' | 'FOLDER_GONE' }
 
 /** routing 規則的回傳形狀。 */
@@ -180,6 +193,10 @@ export interface IntakeHandlerDeps {
    * 生命週期綁在這次註冊上。
    */
   registerOpenInbox?: (open: () => void) => void
+  /** 把「請 renderer 在某個 folder 自動建立 session」交出去，供交接的 producer 呼叫。 */
+  registerAutoAccept?: (request: (adapter: string, id: string, folderId: string) => void) => void
+  /** 把「把焦點移到某個 session」交出去，供通知被觸發時呼叫。 */
+  registerFocusSession?: (focus: (sessionId: string) => void) => void
 }
 
 export function registerIntakeHandlers(deps: IntakeHandlerDeps): void {
@@ -225,6 +242,23 @@ export function registerIntakeHandlers(deps: IntakeHandlerDeps): void {
     }
   }
   deps.registerOpenInbox?.(openInbox)
+
+  /**
+   * 送一則往 renderer。**重用 `senders` 與其銷毀剪除**，理由與 `openInbox` 相同。
+   */
+  const send = (channel: string, ...args: unknown[]): void => {
+    for (const sender of senders) {
+      if (sender.isDestroyed()) senders.delete(sender)
+      else sender.send(channel, ...args)
+    }
+  }
+
+  deps.registerAutoAccept?.((adapter, id, folderId) => {
+    send(INTAKE_CHANNELS.autoAccept, adapter, id, folderId)
+  })
+  deps.registerFocusSession?.((sessionId) => {
+    send(INTAKE_CHANNELS.focusSession, sessionId)
+  })
 
   ipcMain.handle(INTAKE_CHANNELS.dismissNotices, () => {
     service.clearNotices()
@@ -276,7 +310,16 @@ export function registerIntakeHandlers(deps: IntakeHandlerDeps): void {
     const resolved = resolveRouting(routing.get(), intake, knownIds())
     if (!resolved.ok) return { ok: false, reason: resolved.reason }
 
-    return { ok: true, folderId: resolved.folderId }
+    /**
+     * **這一則已經建過 session 了嗎。**
+     *
+     * 預填逾時會把它退回待處理（見 `onTimeout`），而**那個 session 仍然存在** —— 再次接受
+     * 時若又建一個，每處理一次就多一個空的 session，**沒有上界**，而每一個看起來都正常。
+     *
+     * 回傳既有的識別碼，由 renderer 判斷它還在不在：還在就直接 attach（重新排一次預填），
+     * 不在才建新的。判斷放在 renderer 是因為 session 清單的權威在它那裡。
+     */
+    return { ok: true, folderId: resolved.folderId, existingSessionId: record.sessionId }
   })
 
   /**
@@ -302,7 +345,7 @@ export function registerIntakeHandlers(deps: IntakeHandlerDeps): void {
       }
       const nonce = createNonce()
       const target = await writeContext(contextRoot, record.id, buildContext(bodyOf(intake), nonce))
-      const prompt = buildPrompt(target, nonce)
+      const prompt = buildPrompt(target, nonce, record.content.verified.firstPartyBody === true)
 
       service.store.setState(adapter, id, 'accepted', sessionId)
       broadcast()

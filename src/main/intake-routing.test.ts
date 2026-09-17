@@ -171,3 +171,40 @@ describe('規則落在本能力自己的檔案', () => {
     assert.equal(parseRoutingFile('{nope'), null)
   })
 })
+
+describe('已由接收端解析出目標的 intake', () => {
+  const addressed = (folderId: string): Intake => ({
+    id: 'h1',
+    verified: { adapter: 'handoff', originKind: 'session', originId: 'f1', targetFolderId: folderId },
+    authored: { title: 't', body: 'b', actor: 'a', originLabel: 'alpha' },
+    receivedAt: 0,
+  })
+
+  it('不比對規則 —— 一條會命中並指向別處的規則不影響結果', () => {
+    const config: RoutingConfig = {
+      rules: [{ id: 'r1', criterion: 'body', contains: 'b', folderId: 'fB' }],
+      fallbackFolderId: null,
+    }
+    assert.deepEqual(resolveRouting(config, addressed('fA'), new Set(['fA', 'fB'])), {
+      ok: true,
+      folderId: 'fA',
+    })
+  })
+
+  it('不落到 fallback', () => {
+    const config: RoutingConfig = { rules: [], fallbackFolderId: 'fB' }
+    assert.deepEqual(resolveRouting(config, addressed('fA'), new Set(['fA', 'fB'])), {
+      ok: true,
+      folderId: 'fA',
+    })
+  })
+
+  it('目標已被移出 workspace 時拒絕，即使 fallback 可用', () => {
+    const config: RoutingConfig = { rules: [], fallbackFolderId: 'fB' }
+    assert.deepEqual(resolveRouting(config, addressed('fGone'), new Set(['fB'])), {
+      ok: false,
+      reason: 'FOLDER_GONE',
+      folderId: 'fGone',
+    })
+  })
+})

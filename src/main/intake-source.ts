@@ -3,7 +3,7 @@ import path from 'node:path'
 import type { FSWatcher } from 'chokidar'
 
 import { createWatcher } from './watcher'
-import type { IntakeService } from './intake-service'
+import type { DeliverOutcome, IntakeService } from './intake-service'
 
 /**
  * 檔案落點 —— `deliver()` 的 adapter。
@@ -85,6 +85,21 @@ export interface IntakeSourceOptions {
   service: IntakeService
   /** 供測試觀察每一次處理的結果。 */
   onProcessed?: (file: string, consumed: boolean) => void
+  /**
+   * 落點的層數。`0` ＝ 扁平（共用投遞落點），`1` ＝ 每個來源一層子目錄（交接的落點）。
+   *
+   * **監看與掃描兩邊都要吃它，而漏掉監看那一邊的失效特別惡劣**：啟動掃描照常運作，只有
+   * watcher 收不到事件 —— 症狀是「即時不進來、重啟才出現」，看起來完全像一個時序問題。
+   */
+  depth?: number
+  /**
+   * 如何把一份讀回來的內容變成一次投遞。預設是 `service.deliver(contents, adapter)`。
+   *
+   * **它存在是因為有些 adapter 的投遞帶著只有接收端算得出來的參數** —— 交接的來源由它落在
+   * 哪個子目錄決定、目標由查表解析，兩者都**不能**是投遞內容裡的欄位（否則任何放進落點的
+   * 檔案都能自選 folder）。於是那些值只能經這條路徑以參數供應。
+   */
+  deliver?: (contents: string, file: string) => Promise<DeliverOutcome>
 }
 
 export class IntakeSource {
@@ -93,13 +108,17 @@ export class IntakeSource {
   readonly #adapter: string
   readonly #service: IntakeService
   readonly #onProcessed?: (file: string, consumed: boolean) => void
+  readonly #depth: number
+  readonly #deliver: (contents: string, file: string) => Promise<DeliverOutcome>
   #inflight = new Set<string>()
 
-  constructor({ root, adapter, service, onProcessed }: IntakeSourceOptions) {
+  constructor({ root, adapter, service, onProcessed, depth = 0, deliver }: IntakeSourceOptions) {
     this.#root = root
     this.#adapter = adapter
     this.#service = service
     this.#onProcessed = onProcessed
+    this.#depth = depth
+    this.#deliver = deliver ?? ((contents) => this.#service.deliver(contents, this.#adapter))
   }
 
   /** mkdir → 建立監看 → 掃描既有內容。**順序是承重的，見檔頭。** */
@@ -110,8 +129,8 @@ export class IntakeSource {
       target: this.#root,
       label: this.#root,
       // 一對一監看：**不傳 `pollingRoot`**（那是給服務多目標的 watcher 的例外）。
-      // `depth: 0` —— 落點是扁平的，不需要遞迴。
-      depth: 0,
+      // 深度由呼叫端決定：共用落點是扁平的（`0`），交接的落點每個來源一層（`1`）。
+      depth: this.#depth,
     })
     // **`add` 與 `change` 都要**：補寫發生在同一個路徑上，不會再產生一次 `add`。
     this.#watcher.on('add', (file) => void this.#handle(file))
@@ -127,17 +146,38 @@ export class IntakeSource {
 
   /** 掃描落點既有的內容。**分批，每批之間讓出 event loop。** */
   async scan(): Promise<void> {
-    let names: string[]
-    try {
-      names = await fs.promises.readdir(this.#root)
-    } catch {
-      return
-    }
-    for (let i = 0; i < names.length; i += SCAN_BATCH) {
-      const batch = names.slice(i, i + SCAN_BATCH)
-      for (const name of batch) await this.#handle(path.join(this.#root, name))
+    const files = await this.#collect(this.#root, this.#depth)
+    for (let i = 0; i < files.length; i += SCAN_BATCH) {
+      const batch = files.slice(i, i + SCAN_BATCH)
+      for (const file of batch) await this.#handle(file)
       await new Promise((resolve) => setImmediate(resolve))
     }
+  }
+
+  /**
+   * 收集落點中的候選檔案，最多下探 `depth` 層。
+   *
+   * **只在 `dirent.isDirectory()` 為真時下鑽** —— 不跟隨 symlink 目錄，與 `listFiles` 的手寫
+   * 遞迴同一條理由（`fs.readdirSync` 與 `fs/promises.readdir` 對 `{ recursive: true }` 的行為
+   * 不一致，而那個差異未見於文件）。
+   */
+  async #collect(dir: string, depth: number): Promise<string[]> {
+    let entries: fs.Dirent[]
+    try {
+      entries = await fs.promises.readdir(dir, { withFileTypes: true })
+    } catch {
+      return []
+    }
+    const files: string[] = []
+    for (const entry of entries) {
+      const full = path.join(dir, entry.name)
+      if (entry.isDirectory()) {
+        if (depth > 0) files.push(...(await this.#collect(full, depth - 1)))
+        continue
+      }
+      if (entry.isFile()) files.push(full)
+    }
+    return files
   }
 
   async dispose(): Promise<void> {
@@ -147,6 +187,18 @@ export class IntakeSource {
 
   async #handle(file: string): Promise<void> {
     if (!file.endsWith(ACCEPTED_EXTENSION)) return
+    /**
+     * **以點開頭的一律跳過** —— 那是「還沒寫完」的慣例。
+     *
+     * 只看副檔名是不夠的：producer 依指示「先寫暫存檔再改名」時，它挑的暫存檔名很可能仍以
+     * `.json` 結尾（實測：agent 取的是 `.tmp-<x>.json`）。於是我們會把一份**寫到一半**的檔案
+     * 當成正式投遞讀走，而更糟的是**它若恰好解析成功就會被消費掉** —— 與 producer 的改名互相
+     * 競爭，結果不可預測。
+     *
+     * **這道守衛不倚賴 producer 照著做。** 指示仍然會說「暫存檔名不要以 `.json` 結尾」，但
+     * 一個依賴對方守規矩的協定不是協定 —— 尤其對方是一個 agent。
+     */
+    if (path.basename(file).startsWith('.')) return
     if (this.#inflight.has(file)) return
     this.#inflight.add(file)
     try {
@@ -165,7 +217,7 @@ export class IntakeSource {
       //（dogfood 第一次投遞就踩到 —— 保存處的目錄尚未建立）。
       let outcome
       try {
-        outcome = await this.#service.deliver(read.contents, this.#adapter)
+        outcome = await this.#deliver(read.contents, file)
       } catch (error) {
         console.error(`[intake] delivery failed ${file}: ${String(error)}`)
         return

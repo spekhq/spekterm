@@ -1,6 +1,6 @@
 import { digestOf, IntakeStore, MAX_PENDING, type IntakeRecord } from './intake-store'
 import { isValidIntakeId } from './intake-id'
-import { parseIntake, type IntakeRejection } from './intake-schema'
+import { parseIntake, type DeliveryProvenance, type IntakeRejection } from './intake-schema'
 import { saveDelivery } from './intake-archive'
 
 /**
@@ -156,6 +156,18 @@ export class IntakeService {
    * 超出大小上限的投遞 —— **由 adapter 判定**（它才看得到檔案），但拒絕的呈現仍走這裡，
    * 於是「拒絕必須可見」只有一個實作，而它的合併與上限也只有一份。
    */
+  /**
+   * 一次由 adapter 判定的拒絕，走**共用的**彙整呈現。
+   *
+   * 與 `rejectOversize` 同一個姿態：判定發生在 adapter（只有它算得出「目標查無」），
+   * 但**呈現不另開一條路** —— 否則「面向使用者的拒絕與警示 SHALL 有界」會被繞過。
+   */
+  reject(code: IntakeRejection, label: string, detail?: string): DeliverOutcome {
+    this.#notice(code, label, detail)
+    this.#emit()
+    return { ok: false, code, consume: true, notify: true, detail }
+  }
+
   rejectOversize(label: string): DeliverOutcome {
     this.#notice('TOO_LARGE', label)
     this.#emit()
@@ -167,8 +179,16 @@ export class IntakeService {
    *
    * `contents` 是**原始的 JSON 文字**（保存用），`adapter` 由接收端決定 —— payload 自稱的
    * 來源一律不採信，檔案落點中的 `source` / `origin` 是自稱，不是 provenance。
+   *
+   * `provenance` 是**接收端算得出來、投遞內容表達不出來**的那些值（交接的來源與已解析的目標）。
+   * 它與 `adapter` 同一個姿態：**是參數，不是欄位**。做成欄位的話，任何放進共用投遞落點的
+   * 檔案都能繞過 routing 自選 folder。
    */
-  async deliver(contents: string, adapter: string): Promise<DeliverOutcome> {
+  async deliver(
+    contents: string,
+    adapter: string,
+    provenance?: DeliveryProvenance,
+  ): Promise<DeliverOutcome> {
     let raw: unknown
     try {
       raw = JSON.parse(contents)
@@ -177,7 +197,7 @@ export class IntakeService {
       return { ok: false, code: 'MALFORMED', consume: false, notify: false }
     }
 
-    const parsed = parseIntake(raw, adapter)
+    const parsed = parseIntake(raw, adapter, provenance)
     if (!parsed.ok) {
       this.#notice(parsed.code, typeof (raw as { id?: unknown })?.id === 'string' ? String((raw as { id: string }).id) : '(unknown)', parsed.detail)
       this.#emit()

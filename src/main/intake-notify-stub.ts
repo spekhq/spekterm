@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 
-import type { NotifyBackend, NotifyPayload } from './intake-notify'
+import type { IntakeKeyRef, NotifyBackend, NotifyPayload } from './intake-notify'
 import { notificationOptions } from './intake-notify-backend'
 import { createWatcher } from './watcher'
 
@@ -46,14 +46,16 @@ export function createStubBackend({ root }: StubBackendOptions): NotifyBackend {
   const logPath = path.join(root, LOG)
   const triggerPath = path.join(root, TRIGGER)
   const receiptsPath = path.join(root, RECEIPTS)
-  let activated: (() => void) | null = null
+  let activated: ((keys: readonly IntakeKeyRef[]) => void) | null = null
   let fired = 0
+  /** 最後呈現的那一則涵蓋的項目 —— 觸發檔模擬的就是「點了最新的那一則」。 */
+  let lastKeys: readonly IntakeKeyRef[] = []
 
   const fire = (): void => {
     fired += 1
     // **收據** —— 少了它，「規格要求的無操作」與「訊息根本沒送到」在畫面上長得一模一樣。
     fs.appendFileSync(receiptsPath, `${JSON.stringify({ at: Date.now(), n: fired })}\n`, 'utf8')
-    activated?.()
+    activated?.(lastKeys)
   }
 
   const watcher = createWatcher({ target: root, depth: 0, label: 'notify-stub' })
@@ -70,10 +72,17 @@ export function createStubBackend({ root }: StubBackendOptions): NotifyBackend {
 
   return {
     usable: () => true,
-    present(payload: NotifyPayload): void {
-      fs.appendFileSync(logPath, `${JSON.stringify(notificationOptions(payload))}\n`, 'utf8')
+    present(payload: NotifyPayload, keys: readonly IntakeKeyRef[]): void {
+      lastKeys = keys
+      // **keys 一併落盤** —— 驗收要分辨「這一則涵蓋的是待處理項還是已建立 session 的交接」，
+      // 而那個分別決定了觸發的目的地。
+      fs.appendFileSync(
+        logPath,
+        `${JSON.stringify({ ...notificationOptions(payload), keys })}\n`,
+        'utf8',
+      )
     },
-    onActivate(handler: () => void): void {
+    onActivate(handler: (keys: readonly IntakeKeyRef[]) => void): void {
       activated = handler
     },
   }

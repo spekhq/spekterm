@@ -1,4 +1,4 @@
-import type { NotifyBackend, NotifyPayload } from './intake-notify'
+import type { IntakeKeyRef, NotifyBackend, NotifyPayload } from './intake-notify'
 
 /**
  * 通知後端的**可測那一半** —— 持有、上界、以及交給作業系統的選項。
@@ -59,12 +59,12 @@ export function createHoldingBackend(deps: HoldingBackendDeps): NotifyBackend & 
 } {
   const live = new Set<NotificationHandle>()
   const maxLive = deps.maxLive ?? MAX_LIVE_NOTIFICATIONS
-  let activated: (() => void) | null = null
+  let activated: ((keys: readonly IntakeKeyRef[]) => void) | null = null
 
   return {
     usable: () => deps.supported(),
 
-    present(payload: NotifyPayload): void {
+    present(payload: NotifyPayload, keys: readonly IntakeKeyRef[]): void {
       const handle = deps.create(notificationOptions(payload))
       // **先持有，再顯示。** 反過來的話，`show()` 與加入集合之間就有一個窗口。
       if (live.size >= maxLive) {
@@ -78,7 +78,8 @@ export function createHoldingBackend(deps: HoldingBackendDeps): NotifyBackend & 
       handle.on('failed', release)
       handle.on('click', () => {
         release()
-        activated?.()
+        // **keys 綁在這一則通知上** —— 同時亮著數則時，觸發的是哪一則決定去哪裡。
+        activated?.(keys)
       })
       handle.show()
     },
@@ -89,7 +90,7 @@ export function createHoldingBackend(deps: HoldingBackendDeps): NotifyBackend & 
      * **這個方法不得改用那個 HTTP 伺服器慣用的動詞命名** —— `probe-core.mjs` 的守衛是純文字
      * 比對，而且連註解一起吃。
      */
-    onActivate(handler: () => void): void {
+    onActivate(handler: (keys: readonly IntakeKeyRef[]) => void): void {
       activated = handler
     },
 

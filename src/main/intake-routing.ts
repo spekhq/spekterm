@@ -92,6 +92,21 @@ export function resolveRouting(
   intake: Intake,
   knownFolderIds: ReadonlySet<string>,
 ): RoutingResult {
+  // **已由接收端解析出目標者不比對規則、也不落 fallback。**
+  //
+  // 規則是**使用者**用來決定「一件外部的事該在哪裡處理」的工具；而這種 intake 的目標是使用者
+  // 自己指名的（交接時他說了「交給 b repo」）。讓規則有機會改寫它，等於讓一條為別的用途寫的
+  // 規則把他的指名蓋掉。
+  //
+  // **該 folder 已不在 workspace 時仍然拒絕**，理由與「命中規則所指向的 folder 已移除」完全
+  // 相同：明確指定的目標不可用時，正確的處置是告訴他，不是悄悄換一個地方。
+  const addressed = intake.verified.targetFolderId
+  if (addressed !== undefined) {
+    return knownFolderIds.has(addressed)
+      ? { ok: true, folderId: addressed }
+      : { ok: false, reason: 'FOLDER_GONE', folderId: addressed }
+  }
+
   for (const rule of config.rules) {
     const haystack = valueOf(intake, rule.criterion).toLowerCase()
     if (!haystack.includes(rule.contains.toLowerCase())) continue

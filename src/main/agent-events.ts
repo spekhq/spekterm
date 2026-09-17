@@ -102,10 +102,10 @@ export function prepareEventInjection(sessionId: string, enabled: boolean): Inje
     return null
   }
 
-  const hooks = Object.fromEntries(
-    HOOKED_EVENTS.map((name) => [name, [{ matcher: '', hooks: [{ type: 'command', command: EVENT_COMMAND }] }]]),
-  )
-  return { settings: { hooks }, env: { SPEKTERM_EVENT_DIR: dir } }
+  // **命令交給合成器，巢狀的 matcher 結構由它產生** —— 我們不是這個事件唯一的貢獻者
+  // （自我介紹也用 `SessionStart`），而自己組一份 `settings.hooks` 會讓後註冊的把我們蓋掉。
+  const hooks = Object.fromEntries(HOOKED_EVENTS.map((name) => [name, [EVENT_COMMAND]]))
+  return { settings: {}, hooks, env: { SPEKTERM_EVENT_DIR: dir } }
 }
 
 /** session 結束時清除落點。**agent 回報的「對話結束」不是這個訊號** —— 見 `WaitState`。 */

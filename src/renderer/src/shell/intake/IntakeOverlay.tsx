@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
+
+import { sessionToReuse } from './reuse-session'
 import { useTranslation } from 'react-i18next'
 
 import type { IntakeView } from '../../../../main/ipc/intake'
@@ -105,18 +107,44 @@ export function IntakeOverlay({ onClose, opener }: IntakeOverlayProps): React.JS
         )
         return
       }
-      const outcome = await sessions.create(decision.folderId, 'claude')
-      if (outcome.status !== 'created') {
-        setFailure(outcome.failure.message)
-        return
-      }
-      await window.workspace.intake.attach(item.id, item.adapter, outcome.sessionId)
+      /**
+       * **這一則已經建過 session 了嗎。**
+       *
+       * 預填逾時會把它退回待處理，而**那個 session 仍然存在** —— 再次接受時若又建一個，
+       * 每處理一次就多一個空的 session，沒有上界，而每一個看起來都正常。
+       * 還在就沿用它（`attach` 會重新排一次預填），不在才建新的。
+       */
+      const reusable = sessionToReuse(
+        decision.existingSessionId,
+        sessions.all().map((session) => session.id),
+      )
+      const sessionId = reusable
+        ? reusable
+        : await (async () => {
+            const outcome = await sessions.create(decision.folderId, 'claude')
+            if (outcome.status !== 'created') {
+              setFailure(outcome.failure.message)
+              return null
+            }
+            return outcome.sessionId
+          })()
+      if (!sessionId) return
+      await window.workspace.intake.attach(item.id, item.adapter, sessionId)
       close()
     },
     [close, sessions, t],
   )
 
   const items = snapshot.items.filter((item) => item.state === 'pending')
+  /**
+   * 已經開好 session 的那些。
+   *
+   * **它們在收件匣裡沒有任何待辦動作，但不呈現它們是錯的** —— 到達即接受的交接
+   * （`agent-handoff-source`）從不經過待處理：少了這一段，使用者看到一則通知、打開收件匣、
+   * 什麼都沒有。既有的 requirement 早就要求「這個 session 從哪來」在收件匣中看得見，
+   * 而那條此前沒有任何載體（`intake.fromSession` 這個字串在字典裡躺著沒人用）。
+   */
+  const opened = snapshot.items.filter((item) => item.state === 'accepted' && item.sessionId)
   const notices = snapshot.notices
 
   return createPortal(
@@ -212,20 +240,58 @@ export function IntakeOverlay({ onClose, opener }: IntakeOverlayProps): React.JS
           <SlackSettings />
         ) : tab === 'rules' ? (
           <RulesEditor />
-        ) : items.length === 0 ? (
+        ) : items.length === 0 && opened.length === 0 ? (
           <p className="text-2xs text-ink-faint">{t('intake.empty')}</p>
         ) : (
-          <ul className="flex flex-col gap-3">
-            {items.map((item) => (
-              <IntakeCard
-                key={`${item.adapter} ${item.id}`}
-                item={item}
-                folderName={folders.find((folder) => folder.id === item.folderId)?.name ?? null}
-                onAccept={accept}
-                onChanged={reload}
-              />
-            ))}
-          </ul>
+          <>
+            <ul className="flex flex-col gap-3">
+              {items.map((item) => (
+                <IntakeCard
+                  key={`${item.adapter} ${item.id}`}
+                  item={item}
+                  folderName={folders.find((folder) => folder.id === item.folderId)?.name ?? null}
+                  onAccept={accept}
+                  onChanged={reload}
+                />
+              ))}
+            </ul>
+            {opened.length > 0 ? (
+              <ul aria-label={t('intake.openedLabel')} className="mt-4 flex flex-col gap-1">
+                {opened.map((item) => (
+                  <li
+                    key={`${item.adapter} ${item.id}`}
+                    className="flex flex-col gap-1 rounded border border-hairline px-3 py-1.5"
+                  >
+                    <div className="flex items-baseline gap-2">
+                    <span className="text-2xs text-ink">{item.title}</span>
+                    <span className="text-2xs text-ink-faint">
+                      {t('intake.fromOrigin', { origin: item.originLabel })}
+                    </span>
+                    <span className="flex-1" />
+                    <span className="text-2xs text-ink-muted">
+                      {t('intake.fromSession', {
+                        name:
+                          folders.find((folder) => folder.id === item.folderId)?.name ??
+                          item.folderId ??
+                          '',
+                      })}
+                    </span>
+                    </div>
+                    {/*
+                      **本文要看得見。**
+
+                      到達即接受的交接沒有經過接受閘 —— 於是「按下送出」是唯一的閘，而使用者
+                      要能讀到他正要送出的是什麼。呈現方式與待處理項完全相同（純文字、不渲染
+                      任何標記、不產生連結）：那條約束的作用域是**本文**，不是**狀態**。
+                    */}
+                    <p className="whitespace-pre-wrap break-words text-2xs text-ink-faint">
+                      {item.body}
+                    </p>
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+          </>
         )}
       </div>
     </div>,

@@ -35,6 +35,14 @@ export interface TerminalPreferences {
    */
   agentEvents?: boolean
   /**
+   * agent 發起的交接（見 `handoff-service.ts`）。**未設定＝啟用**，與上面同一條規則。
+   *
+   * **與另外兩個開關彼此獨立**（同一條合成條款）：關掉它不影響狀態列與事件回報；關掉事件回報
+   * 時本能力**仍然運作**，只是每一則交接都走「預填不可能發生」那條**可見的拒絕**
+   * —— 那與靜默失效是兩回事。
+   */
+  agentHandoff?: boolean
+  /**
    * agent session 以哪一種 view 呈現（`agent-conversation-view`）。**未設定＝終端**。
    *
    * **它是全域的，不是 per-session** —— 使用者同時開著數個 agent session 時從不希望它們不一樣，
@@ -172,6 +180,8 @@ const PREFERENCE_FIELDS = {
   gpuAcceleration: { sanitize: sanitizeBoolean, group: 'other', toRenderer: true },
   agentStatus: { sanitize: sanitizeBoolean, group: 'other', toRenderer: true },
   agentEvents: { sanitize: sanitizeBoolean, group: 'other', toRenderer: false },
+  // renderer 不讀它（只有主行程的注入與投遞路徑讀）—— 與 `agentEvents` 同一條理由。
+  agentHandoff: { sanitize: sanitizeBoolean, group: 'other', toRenderer: false },
   agentView: { sanitize: sanitizeAgentView, group: 'other', toRenderer: true },
 } satisfies {
   [K in keyof Required<TerminalPreferences>]: FieldSpec<Required<TerminalPreferences>[K]>

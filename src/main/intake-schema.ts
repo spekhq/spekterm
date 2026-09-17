@@ -47,6 +47,40 @@ export interface IntakeVerified {
   originKind: string
   /** 來源座標的識別碼（Slack 的 channel id、GitHub 的 repo…）。 */
   originId: string
+  /**
+   * 接收端**已經解析出**的目標 folder。可不存在（一般的投遞由 routing 規則決定目標）。
+   *
+   * **它 SHALL NOT 能由投遞內容表達**，而那不是紀律、是這個型別的形狀：`parseIntake()` 只從
+   * `provenance` 參數取它，payload 裡同名的欄位走的是「未知欄位一律丟棄」那條路。
+   *
+   * 若它能被投遞內容表達，則**任何**放進共用投遞落點的檔案都能繞過 routing 自行選擇 folder ——
+   * 而那個落點明文是給應用程式之外的 producer 用的。
+   */
+  targetFolderId?: string
+  /**
+   * 本文**不是**第三方逐字撰寫的。
+   *
+   * 今天唯一的來源是交接：本文由使用者自己 session 裡的 agent 撰寫、且由他當下的交辦觸發。
+   * 它決定的是**交給 agent 的那一行 prompt**：第三方的本文要求 agent 逐字照抄其中的祈使句
+   * 而**先不要動手**（那是人類閘門的另一半）；非第三方的本文**就是那件要做的事**。
+   *
+   * 與 `targetFolderId` 同一個姿態：**payload 表達不出來**。少了這個區分，一則使用者親口
+   * 交辦的工作會變成一份「請把裡面的祈使句抄一遍」的清單 —— 使用者按下送出之後什麼也沒發生。
+   */
+  firstPartyBody?: boolean
+}
+
+/**
+ * 接收端供應的來源與目標 —— 與 `adapter` 同一個姿態：**payload 自稱的一律不採信**。
+ *
+ * 只有算得出這些值的 adapter 會傳它（交接由投遞落在哪個 session 的目錄推出來源、由查表解析
+ * 目標）。不傳時，來源座標沿用投遞內容中的值 —— 那是外部 producer 的既有契約。
+ */
+export interface DeliveryProvenance {
+  origin: { kind: string; id: string; label: string }
+  targetFolderId: string
+  /** 見 `IntakeVerified.firstPartyBody`。 */
+  firstPartyBody?: boolean
 }
 
 /** 第三方逐字撰寫的欄位 —— 投遞者完全控制其內容。 */
@@ -66,6 +100,16 @@ export interface Intake {
 }
 
 export type IntakeRejection =
+  /**
+   * 交接專屬的三種拒絕。**它們與其餘的差別是：這條路徑上沒有人在等著按接受**，於是
+   * 「什麼都沒發生」與成功在畫面上完全相同 —— 因此它們**會發通知**（`agent-intake` 的
+   * 「被拒絕的投遞不發通知」在此有一條明寫的例外）。
+   *
+   * `MALFORMED` **不在其中**：那種項目刻意不被消費，每次補寫都會再被讀到，逐次通知沒有上界。
+   */
+  | 'TARGET_NOT_FOUND'
+  | 'TARGET_AMBIGUOUS'
+  | 'PREFILL_UNAVAILABLE'
   | 'MALFORMED'
   | 'MISSING_ID'
   | 'INVALID_ID'
@@ -137,7 +181,11 @@ function readString(source: Record<string, unknown>, key: string): string | null
  * `adapter` 由**呼叫端**供應（接收端決定），payload 裡自稱的來源一律不採信。
  * 回傳值不含原始內容 —— 那由呼叫端另行保存。
  */
-export function parseIntake(raw: unknown, adapter: string): ParseResult {
+export function parseIntake(
+  raw: unknown,
+  adapter: string,
+  provenance?: DeliveryProvenance,
+): ParseResult {
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
     return { ok: false, code: 'MALFORMED', detail: 'payload is not an object' }
   }
@@ -146,16 +194,27 @@ export function parseIntake(raw: unknown, adapter: string): ParseResult {
   const id = readString(source, 'id')
   if (id === null || id === '') return { ok: false, code: 'MISSING_ID' }
 
-  const origin = source.origin
-  if (typeof origin !== 'object' || origin === null || Array.isArray(origin)) {
-    return { ok: false, code: 'FIELD_TYPE', detail: 'origin' }
+  // **接收端供應來源時，投遞內容裡的 `origin` 完全不被讀取** —— 連格式都不檢查，因為它不會
+  // 被使用。這比「讀進來再覆蓋」強：後者讓「忘記覆蓋」變成一個可能的實作。
+  const originFields: Record<string, unknown> = provenance
+    ? {}
+    : ((): Record<string, unknown> => {
+        const origin = source.origin
+        return typeof origin === 'object' && origin !== null && !Array.isArray(origin)
+          ? (origin as Record<string, unknown>)
+          : {}
+      })()
+  if (!provenance) {
+    const origin = source.origin
+    if (typeof origin !== 'object' || origin === null || Array.isArray(origin)) {
+      return { ok: false, code: 'FIELD_TYPE', detail: 'origin' }
+    }
   }
-  const originFields = origin as Record<string, unknown>
 
   // **`originKind` 不以列舉白名單判定。** 一個不認得的來源種類仍須放行 —— 否則新增一種來源
   // 就要改這裡，而 D3 的「新增來源不改收件匣以內任何判斷」即失效。
-  const originKind = readString(originFields, 'kind')
-  const originId = readString(originFields, 'id')
+  const originKind = provenance ? provenance.origin.kind : readString(originFields, 'kind')
+  const originId = provenance ? provenance.origin.id : readString(originFields, 'id')
   if (originKind === null || originId === null) {
     return { ok: false, code: 'FIELD_TYPE', detail: 'origin.kind / origin.id' }
   }
@@ -165,7 +224,7 @@ export function parseIntake(raw: unknown, adapter: string): ParseResult {
 
   const title = readString(source, 'title') ?? ''
   const actor = readString(source, 'actor') ?? ''
-  const originLabel = readString(originFields, 'label') ?? ''
+  const originLabel = provenance ? provenance.origin.label : (readString(originFields, 'label') ?? '')
 
   const authored: IntakeAuthored = {
     title: normalizeAuthored(title),
@@ -189,7 +248,14 @@ export function parseIntake(raw: unknown, adapter: string): ParseResult {
     ok: true,
     value: {
       id,
-      verified: { adapter, originKind: normalizeAuthored(originKind), originId },
+      verified: {
+        adapter,
+        originKind: normalizeAuthored(originKind),
+        originId,
+        // **只從 `provenance` 取** —— payload 裡的同名欄位從未被讀到。
+        ...(provenance ? { targetFolderId: provenance.targetFolderId } : {}),
+        ...(provenance?.firstPartyBody ? { firstPartyBody: true } : {}),
+      },
       authored,
       receivedAt: Date.now(),
     },

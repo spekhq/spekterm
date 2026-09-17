@@ -527,6 +527,25 @@ const workspaceApi = {
       ipcRenderer.on('workspace:intake:openInbox', handler)
       return () => ipcRenderer.removeListener('workspace:intake:openInbox', handler)
     },
+    /** 主行程：這一則到達時即被接受，請在該 folder 建立 session 並回報 sessionId。 */
+    onAutoAccept: (
+      listener: (adapter: string, id: string, folderId: string) => void,
+    ): (() => void) => {
+      const handler = (
+        _event: IpcRendererEvent,
+        adapter: string,
+        id: string,
+        folderId: string,
+      ): void => listener(adapter, id, folderId)
+      ipcRenderer.on('workspace:intake:autoAccept', handler)
+      return () => ipcRenderer.removeListener('workspace:intake:autoAccept', handler)
+    },
+    /** 主行程：把焦點移到某個 session（使用者觸發了一則已建立 session 的通知）。 */
+    onFocusSession: (listener: (sessionId: string) => void): (() => void) => {
+      const handler = (_event: IpcRendererEvent, sessionId: string): void => listener(sessionId)
+      ipcRenderer.on('workspace:intake:focusSession', handler)
+      return () => ipcRenderer.removeListener('workspace:intake:focusSession', handler)
+    },
     onPrefill: (listener: (sessionId: string, state: 'pending' | 'sent' | 'timedOut') => void): (() => void) => {
       const handler = (
         _event: IpcRendererEvent,

@@ -107,3 +107,12 @@ describe('normalizeAuthored 是白名單', () => {
     assert.equal(result.ok, true)
   })
 })
+
+describe('本文是否為第三方撰寫', () => {
+  it('沒有 provenance 時不存在 —— 共用落點的投遞永遠是第三方的', () => {
+    const result = parseIntake(payload({ firstPartyBody: true }), ADAPTER)
+    assert.equal(result.ok, true)
+    if (!result.ok) return
+    assert.equal(result.value.verified.firstPartyBody, undefined)
+  })
+})

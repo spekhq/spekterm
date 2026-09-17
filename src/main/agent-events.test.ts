@@ -11,6 +11,7 @@ import {
   drainEvents,
   encodeInput, encodePrefill,
   EVENT_COMMAND,
+  HOOKED_EVENTS,
   nextWaitState,
   parseEvent,
   prepareEventInjection,
@@ -101,7 +102,9 @@ test('啟用時注入 hooks 並以環境變數指定落點', () => {
   configureAgentEvents(root)
   const part = prepareEventInjection('s1', true)
   assert.ok(part)
-  assert.ok('hooks' in part.settings)
+  // hooks 走獨立欄位，不進 `settings` —— 見 `agent-injection` 的 `HookContribution`。
+  assert.equal('hooks' in part.settings, false)
+  assert.deepEqual(Object.keys(part.hooks ?? {}).sort(), [...HOOKED_EVENTS].sort())
   assert.ok(part.env.SPEKTERM_EVENT_DIR.endsWith(path.join('agent-events', 's1')))
   assert.equal(fs.existsSync(part.env.SPEKTERM_EVENT_DIR), true)
 })
@@ -173,7 +176,7 @@ test('合成器：兩者皆參與 ⇒ 一份設定含兩者', () => {
   const file = path.join(tmp(), 'settings.json')
   const injection = composeInjection(file, [
     { settings: { statusLine: { type: 'command', command: 'a' } }, env: { A: '1' } },
-    { settings: { hooks: { Stop: [] } }, env: { B: '2' } },
+    { settings: {}, hooks: { Stop: ['cmd'] }, env: { B: '2' } },
   ])
   assert.ok(injection)
   const written = JSON.parse(fs.readFileSync(file, 'utf8'))
@@ -184,7 +187,7 @@ test('合成器：兩者皆參與 ⇒ 一份設定含兩者', () => {
 
 test('合成器：其一不參與時另一者仍注入（啟用狀態彼此獨立）', () => {
   const file = path.join(tmp(), 'settings.json')
-  const injection = composeInjection(file, [null, { settings: { hooks: {} }, env: { B: '2' } }])
+  const injection = composeInjection(file, [null, { settings: {}, hooks: { Stop: ['cmd'] }, env: { B: '2' } }])
   assert.ok(injection)
   const written = JSON.parse(fs.readFileSync(file, 'utf8'))
   assert.deepEqual(Object.keys(written), ['hooks'])
