@@ -153,8 +153,29 @@ Electron，目標產出 macOS / Windows / Linux 三平台安裝檔。
 | F5 | OpenSpec 側欄 | **本 change**（每個 artifact 一個分頁）＋ **瀏覽**（Specs / Changes 兩棵樹），經 `IpcAdapter` 取自主行程；跟隨 focused session 錨定的 change。Graph 與 Timeline 另在全視窗 overlay，來自 `@spekjs/ui` | Phase 5 ✅ |
 | F6 | 交叉導覽 | spec/change ↔ 底層檔案互跳 | Phase 5 |
 | F7 | 打包發佈 | electron-builder 三平台安裝檔、主題、持久化 layout | Phase 6 |
+| F7b | UI 語言 | 介面文案可切換語言（`en` / `zh-TW`），立即生效且跨重啟保留；首次啟動取自作業系統的偏好語言。**寫給 agent 讀的文字不在地化**（見下） | Phase 6 ✅ |
 | F8 | Handoff（本機免費） | 寫 handoff → daemon probe → 同機自動開 session + context 注入 | Phase 7（moat）|
 | F9 | Handoff（跨機/跨人/編排，付費） | relay、跨人核准、自動編排 Claude→Codex→Gemini、稽核、遠端核准 | Phase 8+ |
+
+---
+
+### 5.1 UI 語言的邊界
+
+**受支援語言為 `en` 與 `zh-TW`**，清單本身是資料（`SUPPORTED_LANGUAGES`），日後增加不需要
+改變任何機制。語言是使用者偏好的一部分，落盤於 `preferences.json`；**首次啟動**（＝偏好檔
+不存在）取自作業系統回報的偏好語言順序，其後一律以使用者的選擇為準 —— 既有使用者**不會**
+在升級後被改變語言。
+
+**寫給 agent 讀或執行的文字不在地化，恆為英文**，即使它出現在畫面上：
+
+- 經 `SessionStart` 注入 agent 脈絡的自我介紹
+- 交給 agent 的 context 檔中，界線**之外**的抬頭
+- **被填入 agent 輸入處而尚未送出的第一則 prompt** —— 使用者確實會讀到它，但它承載 prompt
+  injection 的措辭，而**翻譯後的效力沒有任何載體能驗**。使用者需要理解的「這則交接來自誰、
+  內容是什麼」由收件匣的介面承擔，那一側在地化。
+
+**已知缺口**：`conversation-report` 的讀後感由 `claude` CLI 產生，其 prompt 是硬編英文的模型
+指令，因此中文介面下產出的 claims 仍為英文。
 
 ---
 

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { SUPPORTED_LANGUAGES, type Language, languageLabel } from '@shared/i18n'
 import { usePreferences } from '../PreferencesProvider'
 import { buildInfo } from '../../build-info'
 
@@ -31,6 +32,8 @@ export function TerminalFontDialog({ onClose }: { onClose: () => void }): React.
     gpuEnabled,
     updateAgentStatus,
     agentStatusEnabled,
+    language,
+    updateLanguage,
   } = usePreferences()
   const [family, setFamily] = useState(terminal.fontFamily ?? '')
   const [size, setSize] = useState(terminal.fontSize != null ? String(terminal.fontSize) : '')
@@ -116,6 +119,33 @@ export function TerminalFontDialog({ onClose }: { onClose: () => void }): React.
         }}
       >
         <p className="text-ink">{t('settings.title')}</p>
+
+        <label className="mt-3 block text-xs text-ink-faint" htmlFor="settings-language">
+          {t('settings.language')}
+        </label>
+        {/*
+          選項的標籤是各語言的**自稱**，且不隨當前 UI 語言改變（`languageLabel` 走
+          `getFixedT`）—— 一個看不懂當前語言的使用者，必須能在清單裡認出自己的語言。
+
+          **語言不經「儲存」按鈕**：它立即生效，而一個要按儲存才變的語言選單，
+          在使用者眼裡與壞掉無法區分（他會先看到選單變了、介面沒變）。
+        */}
+        <select
+          id="settings-language"
+          value={language}
+          aria-label={t('settings.language')}
+          onChange={(event) => {
+            void updateLanguage(event.target.value as Language)
+          }}
+          className={`${INPUT_CLASS} block w-full`}
+        >
+          {SUPPORTED_LANGUAGES.map((code) => (
+            <option key={code} value={code}>
+              {languageLabel(code)}
+            </option>
+          ))}
+        </select>
+        <p className="mt-1 text-xs text-ink-faint">{t('settings.languageHint')}</p>
 
         <label className="mt-3 block text-xs text-ink-faint" htmlFor="settings-font-family">
           {t('settings.fontFamily')}

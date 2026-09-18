@@ -18,6 +18,7 @@ import { copy } from './lib/copy.mjs'
 import { electronExtraArgs } from './lib/display.mjs'
 import { quitAndWait } from './lib/quit.mjs'
 import { PROBE_PORTS } from './lib/ports.mjs'
+import { seedLanguage } from './lib/probe-language.mjs'
 
 const DEBUG_PORT = PROBE_PORTS.shell.main
 const STARTUP_TIMEOUT_MS = 30_000
@@ -161,11 +162,19 @@ const PROBE_EXPRESSION = `(async () => {
     // 值是兩個字面值之一，白名單判定在主行程的 store，介面上同樣沒有路徑詞彙。
     // setAgentStatus 於 panel-drive-and-shell-affordances 引入（terminal-preferences 規格）：
     // 與 GPU 加速同型的布林偏好，值同樣由主行程的 store 承接，介面上沒有路徑詞彙。
+    // setLanguage 於 ui-language-switch 引入（ui-localization 規格）：值由主行程的 store 以
+    // **白名單查表**接受（不在受支援清單中即視為未設定），介面上同樣沒有路徑詞彙。
     surplusSettingsKeys: Object.keys(api?.settings ?? {}).filter(
       (key) =>
-        !['get', 'setTerminalFont', 'setGpuAcceleration', 'setAgentStatus', 'setAgentView', 'listMonospaceFonts'].includes(
-          key,
-        ),
+        ![
+          'get',
+          'setTerminalFont',
+          'setGpuAcceleration',
+          'setAgentStatus',
+          'setAgentView',
+          'setLanguage',
+          'listMonospaceFonts',
+        ].includes(key),
     ),
     // **頂層 namespace 的守衛。** 上面每一條 surplus*Keys 都只看某個既有 namespace 的內部
     // —— 於是「加一整個新的 namespace」在此前是**完全沒有守衛**的（folders 與 terminal 當年
@@ -277,6 +286,9 @@ const PROBE_EXPRESSION = `(async () => {
 })()`
 
 const profileDir = mkdtempSync(join(tmpdir(), 'spekterm-probe-shell-'))
+// 被測 app 的語言是**被指定的**：全新的 profile 會觸發首次啟動的語言偵測，
+// 而在一台非英文的機器上，那會讓每一條 `aria-label` 選擇器選不到元素。
+seedLanguage(profileDir)
 
 const electron = spawn(
   process.platform === 'win32' ? 'electron.cmd' : 'electron',

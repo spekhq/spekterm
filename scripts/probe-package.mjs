@@ -61,6 +61,7 @@ import { electronExtraArgs } from './lib/display.mjs'
 import { copy } from './lib/copy.mjs'
 import { MOUNTED_WITHOUT_VISIBILITY as MOUNTED, awaitMounted, describeMounted } from './lib/mounted.mjs'
 import { PROBE_PORTS } from './lib/ports.mjs'
+import { seedLanguage } from './lib/probe-language.mjs'
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..')
 
@@ -322,6 +323,10 @@ try {
   // production CSP 的前提是「沒有 dev server」。`electron-vite dev` 會把這個變數洩漏到 shell，
   // 而繼承到它的話，打包產物會拿到 **dev 政策** —— 那條斷言就會以最難解讀的方式紅掉。
   delete env.ELECTRON_RENDERER_URL
+
+  // 被測 app 的語言是**被指定的**：全新的 profile 會觸發首次啟動的語言偵測，
+  // 而在一台非英文的機器上，那會讓每一條 `aria-label` 選擇器選不到元素。
+  seedLanguage(profileDir)
 
   const child = spawn(
     appImage,

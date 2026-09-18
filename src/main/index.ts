@@ -1,6 +1,7 @@
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { app, BrowserWindow, Menu, session } from 'electron'
+import { DEFAULT_LANGUAGE, resolveInitialLanguage, setLanguage } from '@shared/i18n'
 import { applyContentSecurityPolicy } from './content-security-policy'
 import { DirtyStateStore } from './dirty-state'
 import { registerAppHandlers } from './ipc/app'
@@ -195,7 +196,46 @@ function usingThrowawayProfile(): boolean {
   return process.argv.some((arg) => arg.startsWith('--user-data-dir='))
 }
 
-void app.whenReady().then(() => {
+/**
+ * 決定並套用這次啟動的 UI 語言。**必須在建立視窗之前完成** —— 主行程的每一個文案出口
+ *（原生對話框、作業系統通知、經 IPC 送達畫面的錯誤）都晚於此。
+ *
+ * ## 偵測的判準是「偏好檔不存在」，不是「語言欄位未設定」
+ *
+ * 兩者差在升級路徑上：既有使用者的偏好檔已經存在（裡面有他的字型設定），若以欄位未設定為
+ * 判準，**他的 app 會在升級後自己變成作業系統的語言** —— 一次沒有人要求過的行為改變。
+ *
+ * 而「偏好檔不存在」之所以嚴格等同於「從未啟動過」，靠的是隔離路徑會立刻回寫一份預設檔
+ *（見 `PreferencesStore.load()`）。少了那次回寫，「壞過一次偏好檔」也會被當成首次啟動。
+ *
+ * ## 偵測到的語言**要寫回去**
+ *
+ * 否則使用者在首次啟動被正確地帶到中文之後，只要他改一次字型（偏好檔因此被寫出、而語言
+ * 欄位仍是空的），**下一次啟動就會退回英文** —— 而他從來沒有動過語言。
+ *
+ * ## 來源是 `getPreferredSystemLanguages()`
+ *
+ * 它是一個**有序清單**，而我們要回答的正是「第一個我們支援的是哪個」。`getLocale()` 是
+ * Chromium 解析後的單一值；`getSystemLocale()` 實測會回 `en-US@posix` 這種帶 modifier 的字串。
+ */
+async function applyStartupLanguage(preferences: PreferencesStore): Promise<void> {
+  const stored = preferences.ui().language
+  if (stored) {
+    await setLanguage(stored)
+    return
+  }
+
+  if (preferences.existed()) {
+    await setLanguage(DEFAULT_LANGUAGE)
+    return
+  }
+
+  const detected = resolveInitialLanguage(app.getPreferredSystemLanguages())
+  preferences.setLanguage(detected)
+  await setLanguage(detected)
+}
+
+void app.whenReady().then(async () => {
   // 通知的應用程式身分 —— 見 `DESKTOP_ENTRY_NAME` 的註解。
   app.setDesktopName?.(DESKTOP_ENTRY_NAME)
 
@@ -216,6 +256,7 @@ void app.whenReady().then(() => {
   // 使用者偏好與 workspace 同一個落點，理由也一樣（`--user-data-dir` 可隔離驗收）。
   const preferencesStore = new PreferencesStore(join(app.getPath('userData'), 'preferences.json'))
   preferencesStore.load()
+  await applyStartupLanguage(preferencesStore)
 
   // 側欄座標（來源 repo／工作目錄／錨定的 change）。**刻意不與 folder 清單同居於
   // `workspace.json`**：那份檔案的解析是 all-or-nothing，而它損毀的代價是「使用者失去所有 repo」

@@ -1,4 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
+import { DEFAULT_LANGUAGE, i18n, type Language, setLanguage } from '@shared/i18n'
 import type { TerminalPreferences } from './types'
 
 export interface PreferencesApi {
@@ -42,6 +43,15 @@ export interface PreferencesApi {
    */
   updateAgentView: (view: 'terminal' | 'conversation') => Promise<void>
   /**
+   * 切換 UI 語言。**它是一次 IPC 往返，且主行程會先套用到它自己的 i18n。**
+   *
+   * 順序是承重的：反過來的話，套用在主行程失敗的那一刻畫面已是新語言，而原生對話框與
+   * 作業系統通知還是舊語言 —— **而那個分岔不會產生任何錯誤**。
+   */
+  updateLanguage: (language: Language) => Promise<void>
+  /** 當前的 UI 語言 —— **未設定即為英文**（同 `gpuEnabled` 那條「把預設收在一處」）。 */
+  language: Language
+  /**
    * 當前的呈現方式 —— **未設定即為終端**。
    *
    * 與 `gpuEnabled` 同一條理由：把「undefined 代表什麼」收在一處，呼叫端就不會各自寫一次
@@ -64,7 +74,28 @@ export function PreferencesProvider({ children }: { children: React.ReactNode })
   const [terminal, setTerminal] = useState<TerminalPreferences>({})
 
   useEffect(() => {
-    void window.workspace.settings.get().then(setTerminal)
+    void window.workspace.settings.get().then((next) => {
+      setTerminal(next)
+      // **renderer 以基準語言初始化，偏好抵達後才切換** —— 因此非英文的使用者會看到一瞬的
+      // 英文。這與「先以預設字型起、偏好到達再套用」是同一條先例（見本檔開頭）。
+      void setLanguage(next.language ?? DEFAULT_LANGUAGE)
+    })
+  }, [])
+
+  /**
+   * 文件宣告的語言跟著 UI 語言走。
+   *
+   * `index.html` 的靜態 `lang="en"` 是第一次繪製的值（那一瞬本來就是英文）；這裡在語言
+   * 確定之後覆寫它。訂閱 `languageChanged` 而非在切換處各寫一次 —— 語言有兩個改變來源
+   *（啟動時套用偏好、使用者切換），漏掉任一個都不會有紅燈。
+   */
+  useEffect(() => {
+    const apply = (): void => {
+      document.documentElement.lang = i18n.language || DEFAULT_LANGUAGE
+    }
+    apply()
+    i18n.on('languageChanged', apply)
+    return () => i18n.off('languageChanged', apply)
   }, [])
 
   // 主行程回傳套用後的偏好（已清理／夾制）—— 直接以它更新本地 state，renderer 與磁碟一致。
@@ -96,6 +127,21 @@ export function PreferencesProvider({ children }: { children: React.ReactNode })
     [],
   )
 
+  const updateLanguage = useCallback(
+    (language: Language) =>
+      window.workspace.settings
+        .setLanguage(language)
+        .then(async (next) => {
+          setTerminal(next)
+          // 主行程已經套用到它自己的 i18n 了 —— 這一步只讓 renderer 跟上。
+          await setLanguage(next.language ?? DEFAULT_LANGUAGE)
+        })
+        .catch((error: unknown) =>
+          console.error(`[preferences] setLanguage failed: ${String(error)}`),
+        ),
+    [],
+  )
+
   const api = useMemo<PreferencesApi>(
     () => ({
       terminal,
@@ -103,13 +149,22 @@ export function PreferencesProvider({ children }: { children: React.ReactNode })
       updateGpuAcceleration,
       updateAgentStatus,
       updateAgentView,
+      updateLanguage,
+      language: terminal.language ?? DEFAULT_LANGUAGE,
       gpuEnabled: terminal.gpuAcceleration ?? true,
       // 未設定＝啟用（與 GPU 加速同一條規則）。
       agentStatusEnabled: terminal.agentStatus !== false,
       // 未設定＝終端（同一條規則，見上方的欄位說明）。
       agentView: terminal.agentView ?? 'terminal',
     }),
-    [terminal, updateTerminalFont, updateGpuAcceleration, updateAgentStatus, updateAgentView],
+    [
+      terminal,
+      updateTerminalFont,
+      updateGpuAcceleration,
+      updateAgentStatus,
+      updateAgentView,
+      updateLanguage,
+    ],
   )
 
   return <PreferencesContext.Provider value={api}>{children}</PreferencesContext.Provider>

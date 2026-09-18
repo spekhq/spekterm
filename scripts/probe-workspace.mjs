@@ -16,11 +16,12 @@ import { homedir, tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { check, connectToApp, dragMouse, pollFor, pollUntil, pressKey, retryAction } from './lib/cdp.mjs'
-import { copy, patternOf, prefixOf, suffixOf } from './lib/copy.mjs'
+import { copy, copyIn, patternOf, prefixOf, suffixOf } from './lib/copy.mjs'
 import { awaitMounted, describeMounted, mountedExpression } from './lib/mounted.mjs'
 import { electronExtraArgs } from './lib/display.mjs'
 import { quitAndWait } from './lib/quit.mjs'
 import { PROBE_PORTS } from './lib/ports.mjs'
+import { seedLanguage } from './lib/probe-language.mjs'
 
 const DEBUG_PORT = PROBE_PORTS.workspace.main
 const results = []
@@ -112,11 +113,22 @@ const MOUNTED = mountedExpression({
   },
 })
 
-async function launch(profileDir) {
+/**
+ * @param {string} profileDir
+ * @param {{ seed?: boolean, env?: Record<string,string> }} [options]
+ *   `seed: false` 只給**驗證語言偵測機制本身**的那一段用 —— 它要的正是「偏好檔不存在」。
+ *   `env` 用來驅動作業系統回報的偏好語言（實測：`LANGUAGE` 才是驅動者，見該段的註解）。
+ */
+async function launch(profileDir, { seed = true, env: envOverride } = {}) {
+  // 被測 app 的語言是**被指定的**：全新的 profile 會觸發首次啟動的語言偵測，
+  // 而在一台非英文的機器上，那會讓每一條 `aria-label` 選擇器選不到元素。
+  // 既有的 `preferences.json` 不動（損毀韌性與舊檔那兩段自己佈置它）。
+  if (seed) seedLanguage(profileDir)
+
   const electron = spawn(
     process.platform === 'win32' ? 'electron.cmd' : 'electron',
     [`--remote-debugging-port=${DEBUG_PORT}`, `--user-data-dir=${profileDir}`, ...electronExtraArgs(), '.'],
-    { stdio: ['ignore', 'pipe', 'pipe'], env: process.env, shell: process.platform === 'win32' },
+    { stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, ...envOverride }, shell: process.platform === 'win32' },
   )
   let stderr = ''
   electron.stderr.on('data', (chunk) => (stderr += chunk))
@@ -1736,6 +1748,133 @@ try {
   const keptPrefs = readdirSync(badPrefsProfile).filter((n) => n.includes('preferences.json.corrupt-'))
   check(results, '損毀的偏好原檔改名保留而非刪除', keptPrefs.length === 1, keptPrefs[0] ?? '(無)')
   await app.close()
+
+  // ── ui-localization：語言 ────────────────────────────────────────────────
+  //
+  // **這一段的前提與其他每一段相反。** 其餘段落都在基準語言下執行（profile 被種入
+  // `ui.language = 'en'`），因為 `copy()` 組出的 `aria-label` 選擇器讀的是那份字典；
+  // 這裡要驗的正是「語言真的會變」，所以它是唯一一段會用 `copyIn('zh-TW', …)` 的。
+  console.log('\nUI 語言')
+  const langProfile = mkTemp('spekterm-language-')
+  app = await launch(langProfile)
+
+  /**
+   * rail 的標題文字，**以指定語言的 `aria-label` 定位**。
+   *
+   * **`aria-label` 同時是選擇器，而它自己也會被翻譯** —— 切成中文之後，以英文標籤組出的
+   * 那個 `aside` 選擇器就選不到任何東西了。這不是缺陷，是這個 repo 的結構性
+   * 事實在多語之下的直接後果：驗收在哪一種語言下執行，選擇器就得用哪一種語言的字典。
+   * （第一版寫死英文的選擇器，四條斷言一起回 `null` —— 而 `null` 看起來像「介面沒變」，
+   * 不像「選不到元素」。）
+   */
+  const railHeading = (language) =>
+    `document.querySelector('aside[aria-label="${copyIn(language, 'rail.label')}"] h2')?.textContent ?? null`
+  const railHeadingText = railHeading('en')
+  check(results, '種入的語言生效：介面為基準語言',
+    (await app.client.evaluate(railHeadingText)) === copy('rail.heading'),
+    String(await app.client.evaluate(railHeadingText)))
+
+  // 語言選項的標籤是各語言的**自稱**，且不隨當前 UI 語言改變 —— 一個看不懂當前語言的
+  // 使用者，必須能在清單裡認出自己的語言。
+  const optionLabels = `(() => {
+    const select = document.querySelector('[aria-label="${copy('settings.language')}"]')
+    return select ? [...select.options].map((o) => o.textContent) : null
+  })()`
+
+  await app.client.evaluate(`document.querySelector('[aria-label="${copy('activityBar.settings')}"]')?.click()`)
+  const labelsInEnglish = await pollUntil(app.client, optionLabels, (v) => Array.isArray(v), 5_000)
+  check(results, '語言選項以各自語言的自稱呈現',
+    JSON.stringify(labelsInEnglish) === JSON.stringify(['English', '繁體中文']),
+    JSON.stringify(labelsInEnglish))
+
+  // 切換語言 —— 走產品自己的入口（`updateLanguage` → IPC → 主行程先套用 → renderer 跟上）。
+  await app.client.evaluate(`(() => {
+    const select = document.querySelector('[aria-label="${copy('settings.language')}"]')
+    select.value = 'zh-TW'
+    select.dispatchEvent(new Event('change', { bubbles: true }))
+  })()`)
+
+  const railHeadingZh = await pollUntil(
+    app.client, railHeading('zh-TW'), (v) => v === copyIn('zh-TW', 'rail.heading'), 10_000)
+  check(results, '切換語言後介面文字立即改變',
+    railHeadingZh === copyIn('zh-TW', 'rail.heading'), String(railHeadingZh))
+
+  const optionLabelsZh = `(() => {
+    const select = document.querySelector('[aria-label="${copyIn('zh-TW', 'settings.language')}"]')
+    return select ? [...select.options].map((o) => o.textContent) : null
+  })()`
+  check(results, '語言選項的自稱不隨當前 UI 語言改變',
+    JSON.stringify(await app.client.evaluate(optionLabelsZh)) === JSON.stringify(labelsInEnglish),
+    JSON.stringify(await app.client.evaluate(optionLabelsZh)))
+
+  check(results, '文件宣告的語言與 UI 一致',
+    (await app.client.evaluate('document.documentElement.lang')) === 'zh-TW',
+    String(await app.client.evaluate('document.documentElement.lang')))
+
+  // **語言必須抵達主行程。** 這條訊息由主行程產生、經 IPC 送達畫面 —— 漏掉傳播的話，
+  // 畫面是中文而這一句仍是英文，**而那不會產生任何錯誤**。
+  const fsFailure = await app.client.evaluate(
+    "window.workspace.fs.listDir('no-such-folder-id', '').then((r) => r.ok ? null : r.message)")
+  check(results, '主行程送達畫面的訊息隨語言改變',
+    typeof fsFailure === 'string' && fsFailure.includes(copyIn('zh-TW', 'fsError.unknownFolder', { folderId: 'no-such-folder-id' })),
+    String(fsFailure))
+
+  await app.close()
+
+  // 跨重啟保留。
+  app = await launch(langProfile)
+  check(results, '語言選擇跨重啟保留',
+    (await app.client.evaluate(railHeading('zh-TW'))) === copyIn('zh-TW', 'rail.heading'),
+    String(await app.client.evaluate(railHeading('zh-TW'))))
+  await app.close()
+
+  // ── ui-localization：首次啟動的語言取自作業系統 ───────────────────────────
+  //
+  // **驅動的是 `LANGUAGE` 而不是 `LANG`**（實測 2026-09-18、Electron 43，Linux）：
+  // `LANGUAGE` 有值時 `app.getPreferredSystemLanguages()` 一律跟它走，`LANG` 只剩
+  // `getSystemLocale()` 在看，而 `--lang` 連 `getLocale()` 都蓋不掉。兩者一起設成一致的值，
+  // 免得這段驗收自己重演開發機上「兩個變數互相矛盾」的狀態。
+  console.log('\n首次啟動的語言偵測')
+  const detectZh = mkTemp('spekterm-detect-zh-')
+  app = await launch(detectZh, { seed: false, env: { LANG: 'zh_TW.UTF-8', LANGUAGE: 'zh_TW:zh' } })
+  check(results, '首次啟動採用作業系統的偏好語言',
+    (await app.client.evaluate(railHeading('zh-TW'))) === copyIn('zh-TW', 'rail.heading'),
+    String(await app.client.evaluate(railHeading('zh-TW'))))
+  await app.close()
+
+  const detectEn = mkTemp('spekterm-detect-en-')
+  app = await launch(detectEn, { seed: false, env: { LANG: 'en_US.UTF-8', LANGUAGE: 'en_US:en' } })
+  check(results, '作業系統的偏好語言為英文時以英文啟動',
+    (await app.client.evaluate(railHeadingText)) === copy('rail.heading'),
+    String(await app.client.evaluate(railHeadingText)))
+  await app.close()
+
+  // **既有偏好不因升級而改變語言。** 判準是「偏好檔存不存在」而不是「語言欄位有沒有設定」
+  // —— 以後者為判準的話，既有使用者升級之後 app 會自己變成他作業系統的語言。
+  const legacyProfile = mkTemp('spekterm-legacy-prefs-')
+  writeFileSync(join(legacyProfile, 'preferences.json'),
+    JSON.stringify({ version: 1, terminal: { fontSize: 15 } }))
+  app = await launch(legacyProfile, { seed: false, env: { LANG: 'zh_TW.UTF-8', LANGUAGE: 'zh_TW:zh' } })
+  check(results, '沒有 ui 區塊的既有偏好檔不觸發偵測',
+    (await app.client.evaluate(railHeadingText)) === copy('rail.heading'),
+    String(await app.client.evaluate(railHeadingText)))
+  check(results, '既有偏好的其餘欄位照常生效',
+    (await app.client.evaluate('window.workspace.settings.get()'))?.fontSize === 15,
+    JSON.stringify(await app.client.evaluate('window.workspace.settings.get()')))
+  await app.close()
+
+  // **偏好被隔離之後也不得觸發偵測。** 隔離是把原檔改名保留，於是那個路徑就不存在了 ——
+  // 而「不存在」正是偵測的判準。少了回寫，壞過一次偏好檔的使用者會莫名其妙換了語言。
+  const quarantinedProfile = mkTemp('spekterm-quarantined-')
+  writeFileSync(join(quarantinedProfile, 'preferences.json'), '{ not json at all')
+  app = await launch(quarantinedProfile, { seed: false, env: { LANG: 'zh_TW.UTF-8', LANGUAGE: 'zh_TW:zh' } })
+  await app.close()
+  app = await launch(quarantinedProfile, { seed: false, env: { LANG: 'zh_TW.UTF-8', LANGUAGE: 'zh_TW:zh' } })
+  check(results, '偏好被隔離後的下一次啟動不觸發偵測',
+    (await app.client.evaluate(railHeadingText)) === copy('rail.heading'),
+    String(await app.client.evaluate(railHeadingText)))
+  await app.close()
+  app = null
 
   // ── workspace-folders：設定檔損毀 ────────────────────────────────────────
   console.log('\n設定檔損毀降級')

@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 
 import type { GenerateResult, ReportPreview } from '../../../../main/report'
 import type { Report, ReportMeta } from '../../../../main/report-store'
+import { formatDate, formatDateTime, formatNumber } from '@shared/i18n/locale'
 
 /**
  * 讀後感分頁。
@@ -18,7 +19,7 @@ import type { Report, ReportMeta } from '../../../../main/report-store'
  * 一趟委派會產生實際費用。開啟即觸發等於替使用者花錢。
  */
 
-const fmtDate = (t: number): string => new Date(t).toLocaleDateString()
+const fmtDate = (t: number): string => formatDate(new Date(t))
 const fmtRange = (from: number | null, to: number | null): string =>
   from === null || to === null ? '—' : `${fmtDate(from)} – ${fmtDate(to)}`
 
@@ -140,8 +141,8 @@ function AuthorizeDialog({
   const rows: [string, string][] = [
     [t('insights.report.authorize.period'), fmtRange(preview.from, preview.to)],
     [t('insights.report.authorize.projects'), String(preview.projects)],
-    [t('insights.report.authorize.messages'), preview.messages.toLocaleString()],
-    [t('insights.report.authorize.chars'), preview.chars.toLocaleString()],
+    [t('insights.report.authorize.messages'), formatNumber(preview.messages)],
+    [t('insights.report.authorize.chars'), formatNumber(preview.chars)],
     [t('insights.report.authorize.model'), preview.requestedModel],
   ]
   return (
@@ -205,7 +206,7 @@ function ReportBody({
   // 不能只做在版面上而不做在標示上。
   const mismatched = selectedFrom !== undefined && report.from !== null && Math.abs(selectedFrom - report.from) > 86_400_000
   const meta: [string, string][] = [
-    [t('insights.report.meta.generatedAt'), new Date(report.generatedAt).toLocaleString()],
+    [t('insights.report.meta.generatedAt'), formatDateTime(new Date(report.generatedAt))],
     [
       t('insights.report.meta.period'),
       `${fmtRange(report.from, report.to)}${report.truncated ? ` · ${t('insights.report.meta.truncated')}` : ''}`,

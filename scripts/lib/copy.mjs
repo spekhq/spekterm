@@ -17,8 +17,18 @@
  * `scripts/*.mjs` import 不了 TypeScript）。
  */
 import en from '../../src/shared/i18n/en.json' with { type: 'json' }
+import zhTW from '../../src/shared/i18n/zh-TW.json' with { type: 'json' }
 
 export { en }
+
+/**
+ * 其餘語言的字典。
+ *
+ * **只有一段驗收會用到它** —— 驗證「首次啟動的語言取自作業系統」的那一段，因為它必須斷言
+ * 介面真的變成了另一種語言。其餘每一段都在基準語言下執行（見 `scripts/lib/probe-language.mjs`），
+ * **那是它們的前提而不是巧合**：`copy()` 與 `label()` 兩個既有入口因此維持只讀 `en`。
+ */
+const DICTIONARIES = { en, 'zh-TW': zhTW }
 
 /**
  * 以字典中的文案組出 `aria-label` 選擇器。
@@ -42,14 +52,34 @@ export function copy(keyPath, vars = {}) {
   })
 }
 
-function raw(keyPath) {
-  const value = keyPath.split('.').reduce((node, key) => node?.[key], en)
+function raw(keyPath, language = 'en') {
+  const dictionary = DICTIONARIES[language]
+  if (!dictionary) throw new Error(`沒有這種語言的字典：${language}`)
+
+  const value = keyPath.split('.').reduce((node, key) => node?.[key], dictionary)
 
   if (typeof value !== 'string') {
-    throw new Error(`字典中沒有這個 key（或它不是字串）：${keyPath}`)
+    throw new Error(`${language} 的字典中沒有這個 key（或它不是字串）：${keyPath}`)
   }
 
   return value
+}
+
+/**
+ * 指定語言的取文案入口。
+ *
+ * `copyIn('zh-TW', 'rail.heading')` → 該語言字典中的那一則。變數的插值與 `copy()` 相同。
+ */
+export function copyIn(language, keyPath, vars = {}) {
+  return raw(keyPath, language).replace(/\{\{(\w+)\}\}/g, (match, name) => {
+    if (!(name in vars)) throw new Error(`文案 ${keyPath} 需要變數 ${name}`)
+    return String(vars[name])
+  })
+}
+
+/** 指定語言的 `aria-label` 選擇器。 */
+export function labelIn(language, keyPath, vars) {
+  return `[aria-label="${copyIn(language, keyPath, vars)}"]`
 }
 
 /**

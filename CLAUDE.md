@@ -92,6 +92,7 @@ tmux 與自寫 daemon 取捨。**不要把「重建」誤當成「常駐」**：
 | `src/main/intake-*`（**含 `intake-notify*`**）、`src/main/ipc/intake.ts`、`scripts/probe-intake.mjs`、`scripts/lib/stub-agent.mjs`、或任何會動到「呈現給人看的文字」與「交給 agent 的文字」其中一端的東西、**或任何會把文字送到作業系統通知的東西** | **`docs/lessons/intake.md`** |
 | `src/main/slack-*`、`src/main/secret-store.ts`、`scripts/probe-slack.mjs`、`scripts/lib/stub-slack.mjs`、或任何會把憑證交給第三方的東西 | **`docs/lessons/slack.md`** |
 | `src/main/handoff-*`、`src/main/handoff-service.ts` 的落點與上限、`scripts/probe-intake.mjs` 的 `runHandoff*` 段落、或任何**倚賴「注入的內容真的進入 agent 脈絡」**的東西 | **`docs/lessons/handoff.md`** |
+| `src/shared/i18n/`（含 `locale.ts`、`languages.ts`、任一份字典）、`scripts/dictionary-completeness.test.mjs` / `locale-source.test.mjs` / `probe-language.test.mjs`、任何探針的**啟動路徑**、或任何會**格式化時間／數字／排序字串**的東西 | **`docs/lessons/i18n.md`** |
 | `src/main/transcript-*`、`src/main/agent-events.ts`、`src/main/agent-injection.ts`、`src/main/insights*`、**`src/main/report.ts` 與 `src/main/report-*`**、`scripts/probe-insights.mjs`、`scripts/probe-agent-view.mjs`，或任何會讀 `~/.claude/projects`、**注入 `--settings`**、**或委派 `claude` CLI** 的東西 | **`docs/lessons/transcript.md`** |
 
 ## 開發指令
@@ -682,8 +683,10 @@ session 開得進 worktree 之後，邊界保證從「renderer 沒有路徑詞�
 
 ## UI 文案與 i18n
 
-**使用者看得到的每一個字都來自字典 `src/shared/i18n/en.json`，語言是英文。** 主行程與 renderer
-**共用同一份字典**（兩個 realm 各持有一份 i18next 實例，`resources` 指向同一個 JSON）。
+**使用者看得到的每一個字都來自字典，且以使用者選擇的語言呈現。** 受支援語言的單一來源是
+`src/shared/i18n/languages.ts` 的 `SUPPORTED_LANGUAGES`（目前 `en` 與 `zh-TW`），每種語言一份
+字典（`en.json` / `zh-TW.json`）。主行程與 renderer **共用同一批字典**（兩個 realm 各持有一份
+i18next 實例，`resources` 指向同一批 JSON）。
 
 **「使用者可見的文案」有四類，後兩類最容易漏 —— 它們住在主行程，看起來像內部錯誤：**
 
@@ -694,16 +697,24 @@ session 開得進 worktree 之後，邊界保證從「renderer 沒有路徑詞�
 4. **寫進 pty 串流給人讀的訊息**（session 重建的重播分隔線；只有**文字**進字典，ANSI 與框線字元
    留在程式碼）
 
+**而第 4 類有一條反直覺的例外：寫給 agent 執行的指令不屬於使用者可見的文案，即使它出現在
+畫面上。** 被填入 agent 輸入處而尚未送出的那一則 prompt 的確被寫進 pty、使用者也的確在讀它，
+但它承載 prompt injection 的措辭，**翻譯後的效力沒有任何載體能驗**。它與 `handoff-intro.ts`
+的自我介紹、`continuation.ts` 的續寫命令同一側：住在 `src/main/agent-protocol-copy.ts`，
+**不進字典、恆為英文、仍受 CJK 守衛約束**。
+
 **`console.*` 與內部不變式的 `throw` 不進字典**（沒有使用者會讀到），**但一律英文** —— 守衛是一刀
 切的，而一刀切是對的：「這個字串會不會被顯示」**無法靜態判定**（見第 3 類）。
 
 - **字典是 `.json` 而不是 `.ts`，因為 probe 要 import 它**（`scripts/*.mjs` import 不了 TypeScript；
   Node 22 的 import attributes 讀得到 JSON）。**而「JSON ⇒ key 沒有型別安全」是錯的**：把
   `typeof en` 餵進 i18next 的 `CustomTypeOptions`，`t('rail.emty')` 就會**編譯失敗**並提示正確拼法。
-  **不需要任何型別產生器。**
+  **不需要任何型別產生器。**（型別只看 `en` —— 其餘語言的結構允許不同，`zh` 的複數類別只有
+  `other`，於是它少了 12 個 `_one`。）
 - **i18n 於模組載入時初始化，不是導出一個「請記得呼叫」的 init。** **未初始化的 `t()` 不會拋錯，
-  它回傳 `undefined`** —— 畫面上就只是什麼都沒有。而「誰先載入」在三個環境裡並不一致（主行程於
-  `whenReady`、renderer 於進入點、**單元測試根本沒有進入點**）。
+  它回傳 `undefined`** —— 畫面上就只是什麼都沒有。初始語言恆為 `en`，其後由各自的 realm 套用
+  偏好（主行程於 `whenReady` 建立視窗之前；renderer 於偏好抵達時，**因此非英文的使用者會看到
+  一瞬的英文**，與字型偏好同一條先例）。
 - **`i18next` 必須在 `dependencies`，不是 `devDependencies`。** main 的 build 用
   `externalizeDepsPlugin()` —— 它在**執行期 require**，而 electron-builder 只把 `dependencies` 打進
   asar。**放錯區塊時 dev 模式完全正常，打包後一啟動就 `MODULE_NOT_FOUND`。**
@@ -712,31 +723,40 @@ session 開得進 worktree 之後，邊界保證從「renderer 沒有路徑詞�
   `Expand/Collapse sessions in {{name}}` **沒有共同的固定後綴**。`copy.mjs` 因此提供
   `prefixOf` / `suffixOf` / `patternOf`；**`prefixOf` 在前綴為空時拋錯** —— `[aria-label^=""]` 會
   匹配**每一個**元素，那比選不到更糟，因為它會靜默地通過。
+- **一切 locale 衍生的呈現只有一個來源**：`src/shared/i18n/locale.ts`（相對時間、時刻、日期、
+  數字、以及**使用者看得到的排序**）。僅為確定性而存在的內部定序（同分時的 tie-break、
+  列舉順序的收斂、對識別碼的比較）**不在其中**，且在守衛裡逐一具名豁免、各帶理由。
 
-### 三道守衛，缺一不可（它們互補，不重複）
+### 五道守衛，缺一不可（它們互補，不重複）
 
 | 守衛 | 擋什麼 | 少了它會怎樣 |
 |---|---|---|
-| `copy-language.test.mjs` | 產品原始碼的字串字面值含 **CJK** | 文案慢慢變回中文（沒有東西擋著） |
-| `aria-label-source.test.mjs` | **硬編**的 `aria-label`（**含本來就是英文的**） | 改文案時探針**靜默地選不到元素**；`Ctrl+T` 連紅燈都沒有 |
+| `copy-language.test.mjs` | 產品原始碼的字串字面值含 **CJK** | 文案被寫死在程式碼裡（與支援幾種語言無關） |
+| `aria-label-source.test.mjs` | **硬編**的 `aria-label`（**含本來就是英文的**、**含樣板合成的**） | 改文案時探針**靜默地選不到元素**；`Ctrl+T` 連紅燈都沒有 |
 | `i18n-key-safety.test.mjs` | 字典 key 的**編譯期**型別安全 | 打錯的 key 在執行期把 `rail.emty` 印在畫面上 |
+| `dictionary-completeness.test.mjs` | 各語言字典的**基底 key／CLDR 複數類別／插值變數** | 少一條翻譯＝那一格靜默變回英文；漏一個變數＝少了檔名的句子 |
+| `locale-source.test.mjs` | locale 在單一模組之外被取得 | 排序與時刻各走各的（**這條已經失效過三次**） |
 
-- **第一道必須走語法樹（`ts.createSourceFile`），不能 regex 掃行** —— **豁免註解正是它的核心語意**
-  （repo 慣例是繁中註解），而註解與字串在同一行裡分不開。豁免 `*.test.ts` 與 `scripts/`。
-- **第二道是第一道抓不到的**：`Side panel`、`Change artifact`、`Specs`、`Tasks` 這些 `aria-label`
-  本來就是英文，CJK 守衛看不見它們 —— 第一輪實作正好漏掉了它們。
-  （注意：這道守衛走**行掃描**，在註解裡寫出該屬性的字面形式也會被判違規。）
-- **第三道守的是一份 ambient declaration。** `i18next.d.ts` 的 `CustomTypeOptions` **沒有任何模組
-  import 它** —— **拿掉那個檔案，`npm run typecheck` 照樣 exit 0**（已實測）。**一個「拿掉之後沒有
-  任何東西會紅」的防護，就是一個遲早會被拿掉的防護。**
+第六道 `probe-language.test.mjs` 守的是驗收本身：每一支會傳遞 `--user-data-dir` 的探針，其啟動
+路徑上都要種入 UI 語言 —— **漏種的徵狀是「選不到元素」，看起來像產品壞掉**。
 
-### **`aria-label` 同時是選擇器** —— 這是本 repo 的結構性事實
+- **CJK 守衛必須走語法樹（`ts.createSourceFile`），不能 regex 掃行** —— **豁免註解正是它的核心
+  語意**（repo 慣例是繁中註解），而註解與字串在同一行裡分不開。豁免 `*.test.ts` 與 `scripts/`。
+- **`aria-label` 守衛走行掃描**，在註解裡寫出該屬性的字面形式也會被判違規。
+- **key 型別安全守的是一份 ambient declaration。** `i18next.d.ts` 的 `CustomTypeOptions` **沒有任何
+  模組 import 它** —— **拿掉那個檔案，`npm run typecheck` 照樣 exit 0**（已實測）。
+
+### **`aria-label` 同時是選擇器** —— 而多語讓它更尖銳
 
 驗收不得為此在產品 UI 上掛 `data-*`（既有紀律），於是 probe 只能靠 `role` 與 `aria-label` 定位元素
-（**6 支 probe、數百處**），而 `Ctrl+T` 的實作也靠 `querySelector` 找到既有的建立入口。
+（**11 支 probe、555 處**），而 `Ctrl+T` 的實作也靠 `querySelector` 找到既有的建立入口。
 **兩者都從字典取字串**（`scripts/lib/copy.mjs` 的 `copy()` / `label()`；`KeyboardNavigation.tsx` 用
 `t(...)`）。文案與選擇器一旦分離為兩份字面值，就會在某一次改文案時失去同步 —— **而失去同步的徵狀是
 「選不到元素」，不是「斷言失敗」**；`Ctrl+T` 更是連紅燈都不會有。
+
+**而標籤自己也會被翻譯**：切成中文之後，以英文標籤組出的選擇器選不到任何東西，回的是 `null`
+—— 而 `null` 看起來像「介面沒變」。驗收在哪一種語言下執行，選擇器就得用哪一種語言的字典
+（`copyIn` / `labelIn`）。探針一律在基準語言下執行，**那是它們的前提而不是巧合**。
 
 推論出來的日常規則：
 
@@ -752,9 +772,9 @@ session 開得進 worktree 之後，邊界保證從「renderer 沒有路徑詞�
   那顆按鈕必須叫 `New session`，spec 說的是「觸發它會建立一個 session」。`aria-label` 在 probe 裡的
   角色是**定位手段**，與 `role` 或 CSS class 沒有差別。文案內容的正確性由人擔保 —— 它就印在畫面上。
 
-### dev 模式下，改 `en.json` 或 preload／主行程**不會**熱套用
+### dev 模式下，改字典或 preload／主行程**不會**熱套用
 
-- **`en.json` 一改，vite 觸發 full page reload，而導航防護會擋掉它** —— renderer 於是**留著舊字典**，
+- **字典一改，vite 觸發 full page reload，而導航防護會擋掉它** —— renderer 於是**留著舊字典**，
   新增的 key 會變成 `t()` 回傳 key 字面。**必須重啟 dev。**
 - **`electron-vite dev` 實測沒有在主行程／preload 改動時重啟 electron** —— 新的 preload 方法不會出現
   在 `window.workspace`。**同樣必須重啟 dev。**
@@ -954,7 +974,7 @@ probe 的。**要看 exit code。**
   **它們全都躲過了** `openspec validate --strict`（scenario 存在且格式合法）、
   delta 與主 spec 的 header 稽核（那支腳本不看驗收），以及探針全綠（沒有人在看那條）。
   **而後兩次是在寫下前兩條教訓之後犯的 —— 所以「記得要小心」顯然不是機制。**
-  **能結構性擋住它的做法已經落地**（issue #12 的處置）：`scripts/intake-coverage.test.mjs`
+  **能結構性擋住它的做法已經落地**（issue #12 的處置）：`scripts/scenario-coverage.test.mjs`
   是一份 scenario → 載體的對照表，由**兩道機械守衛**釘住 —— 每一條 `#### Scenario:` 在表上恰有
   一列，且**每一個載體標籤必須真的存在於原始碼中**。它另有兩欄比「哪支探針哪條斷言」值錢：
   `greenIfAbsent`（若實作完全沒做，這條會不會照樣綠）與 `mutation`（使它變紅的那個錯誤實作）。

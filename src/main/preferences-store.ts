@@ -1,6 +1,8 @@
 import fs from 'node:fs'
 import path from 'node:path'
 
+import { type Language, isSupportedLanguage } from '@shared/i18n/languages'
+
 /**
  * 偏好設定檔的結構版本。從第一天就寫入 —— 沒有版本欄位的舊檔日後無法安全遷移。
  * 比照 `workspace-store` / `session-store`。
@@ -56,9 +58,24 @@ export interface TerminalPreferences {
   agentView?: 'terminal' | 'conversation'
 }
 
+/**
+ * 與終端無關的應用程式偏好。
+ *
+ * **它是一個與 `terminal` 並列的區塊，而不是塞進 `TerminalPreferences` 的一個欄位** ——
+ * 語言不是終端的偏好，而一個開始說謊的區塊名會讓下一個非終端偏好沿著同一條路再塞一個。
+ *
+ * **加入這個區塊 SHALL NOT 遞增 `PREFERENCES_VERSION`**：版本不符時 `parsePreferences`
+ * 隔離整檔，一次遞增等於每個使用者既有的字型設定歸零。舊檔沒有 `ui` ⇒ 該區塊為空。
+ */
+export interface UiPreferences {
+  /** UI 語言。**未設定＝英文** —— 而「未設定」同時是「首次啟動時要不要偵測」的判準之一。 */
+  language?: Language
+}
+
 interface PersistedPreferences {
   version: number
   terminal: TerminalPreferences
+  ui: UiPreferences
 }
 
 /**
@@ -131,7 +148,17 @@ function sanitizeBoolean(value: unknown): boolean | undefined {
   return typeof value === 'boolean' ? value : undefined
 }
 
-/** 一個偏好欄位必須回答的三件事。**沒有任何一個有預設值** —— 見 `PREFERENCE_FIELDS`。 */
+/**
+ * 語言的清理器：**白名單查表**，不在受支援清單中即視為未設定。
+ *
+ * 與 `sanitizeAgentView` 同一條理由 —— 「檔案壞了」與「使用者選了英文」不是同一件事。
+ * 前者的正確處置是回到未設定，讓「未設定＝英文」那條規則去決定，於是只有一個地方在決定。
+ */
+function sanitizeLanguage(value: unknown): Language | undefined {
+  return isSupportedLanguage(value) ? value : undefined
+}
+
+/** 一個偏好欄位必須回答的兩件事。**沒有任何一個有預設值** —— 見 `PREFERENCE_FIELDS`。 */
 interface FieldSpec<T> {
   /**
    * 不受信任的值 → 該欄位的值，或未設定。
@@ -141,13 +168,22 @@ interface FieldSpec<T> {
    * （表是單一來源，但每一格接錯無人知）換掉舊的那個。
    */
   sanitize: (value: unknown) => T | undefined
+  /** 送往 renderer 嗎？ */
+  toRenderer: boolean
+}
+
+/**
+ * 終端偏好額外要回答的一件事。
+ *
+ * **群組的概念只屬於終端這個區塊** —— `setTerminalFont` 自空物件重建它時需要分辨哪些欄位
+ * 由參數決定。把它提到共用的 `FieldSpec` 上，等於要求每一個新區塊都回答一個與它無關的問題。
+ */
+interface TerminalFieldSpec<T> extends FieldSpec<T> {
   /**
    * 屬於字型群組嗎？`setTerminalFont` 自空物件重建 `terminal` 時，**只有字型群組的欄位由參數
    * 決定，其餘一律自當前偏好保留**。
    */
   group: 'font' | 'other'
-  /** 送往 renderer 嗎？ */
-  toRenderer: boolean
 }
 
 /**
@@ -184,8 +220,26 @@ const PREFERENCE_FIELDS = {
   agentHandoff: { sanitize: sanitizeBoolean, group: 'other', toRenderer: false },
   agentView: { sanitize: sanitizeAgentView, group: 'other', toRenderer: true },
 } satisfies {
-  [K in keyof Required<TerminalPreferences>]: FieldSpec<Required<TerminalPreferences>[K]>
+  [K in keyof Required<TerminalPreferences>]: TerminalFieldSpec<Required<TerminalPreferences>[K]>
 }
+
+/**
+ * UI 偏好的**單一來源**，與 `PREFERENCE_FIELDS` 平行。
+ *
+ * **兩張表刻意不併成一張。** 併成一張 `Record<string, FieldSpec>` 讀起來等價，但 `Record`
+ * 的鍵型別是 `keyof any` 而非 `keyof T`，於是它不是 homomorphic mapped type，`FieldSpec`
+ * 拿不到逐欄位的 `T` —— **把清理器接到錯的欄位上就不再是型別錯誤**。那個逐欄位的繫結正是
+ * 這張表擋得住「漏一個欄位」的原因（issue #39），不能為了容納新區塊而鬆掉。
+ */
+const UI_PREFERENCE_FIELDS = {
+  language: { sanitize: sanitizeLanguage, toRenderer: true },
+} satisfies {
+  [K in keyof Required<UiPreferences>]: FieldSpec<Required<UiPreferences>[K]>
+}
+
+type UiPreferenceKey = keyof typeof UI_PREFERENCE_FIELDS
+
+const UI_PREFERENCE_KEYS = Object.keys(UI_PREFERENCE_FIELDS) as UiPreferenceKey[]
 
 type PreferenceKey = keyof typeof PREFERENCE_FIELDS
 
@@ -208,7 +262,11 @@ const PREFERENCE_KEYS = Object.keys(PREFERENCE_FIELDS) as PreferenceKey[]
  * **這是唯一需要放寬型別的地方，而放寬是安全的**：`PREFERENCE_FIELDS` 已經在型別上把每個
  * 欄位的清理器與該欄位的值型別繫在一起，這裡只是把「走訪一個物件時失去的鍵—值關聯」補回來。
  */
-function assignField(target: TerminalPreferences, key: PreferenceKey, value: unknown): void {
+function assignField(
+  target: TerminalPreferences & UiPreferences,
+  key: PreferenceKey | UiPreferenceKey,
+  value: unknown,
+): void {
   if (value === undefined) return
   ;(target as Record<string, unknown>)[key] = value
 }
@@ -225,7 +283,12 @@ type RendererField = {
  * 執行期的白名單擋得住「欄位被送出去」，擋不住「有人寫了讀它的程式碼、而它永遠是 undefined」
  * —— 後者的症狀是一個安靜地永遠走 else 分支的判斷。
  */
-export type ProjectedPreferences = Pick<TerminalPreferences, RendererField>
+type UiRendererField = {
+  [K in UiPreferenceKey]: (typeof UI_PREFERENCE_FIELDS)[K]['toRenderer'] extends true ? K : never
+}[UiPreferenceKey]
+
+export type ProjectedPreferences = Pick<TerminalPreferences, RendererField> &
+  Pick<UiPreferences, UiRendererField>
 
 /**
  * 送往 renderer 的投影：**逐欄位白名單**，且保持「未設定即省略」。
@@ -239,11 +302,18 @@ export type ProjectedPreferences = Pick<TerminalPreferences, RendererField>
  * 「未設定即省略」不是風格：`probe:workspace` 有一條以「空偏好的鍵數為 0」為判準的斷言，
  * 把未設定欄位寫成 `undefined` 會讓它當場變紅。
  */
-export function projectPreferences(preferences: TerminalPreferences): ProjectedPreferences {
-  const projected: TerminalPreferences = {}
+export function projectPreferences(
+  preferences: TerminalPreferences,
+  ui: UiPreferences,
+): ProjectedPreferences {
+  const projected: TerminalPreferences & UiPreferences = {}
   for (const key of PREFERENCE_KEYS) {
     if (!PREFERENCE_FIELDS[key].toRenderer) continue
     assignField(projected, key, preferences[key])
+  }
+  for (const key of UI_PREFERENCE_KEYS) {
+    if (!UI_PREFERENCE_FIELDS[key].toRenderer) continue
+    assignField(projected, key, ui[key])
   }
   return projected
 }
@@ -263,10 +333,14 @@ export function parsePreferences(raw: string): PersistedPreferences | null {
   }
 
   if (typeof data !== 'object' || data === null) return null
-  const { version, terminal } = data as Record<string, unknown>
+  const { version, terminal, ui } = data as Record<string, unknown>
 
   if (version !== PREFERENCES_VERSION) return null
   if (typeof terminal !== 'object' || terminal === null) return null
+  // **`ui` 缺席是合法的**（本區塊加入之前寫下的檔案就沒有它），但**存在而形狀不對就是整檔
+  // 不可信** —— 與 `terminal` 同一條規則。缺席與壞掉是兩件事，不可混為一談：把後者也當成
+  // 「沒設定」會讓一份被外部程式改壞的檔案靜默地以預設繼續，而使用者的其餘偏好也一併失效。
+  if (ui !== undefined && (typeof ui !== 'object' || ui === null)) return null
 
   // 讀入的白名單**自 `PREFERENCE_FIELDS` 推導**，不是一份手寫的解構清單。此前它是手寫的，
   // 而型別檢查對它零感知 —— 漏在那裡的欄位寫得進磁碟卻讀不回來，症狀是「這個偏好不跨重啟」，
@@ -277,7 +351,13 @@ export function parsePreferences(raw: string): PersistedPreferences | null {
     assignField(parsed, key, PREFERENCE_FIELDS[key].sanitize(source[key]))
   }
 
-  return { version: PREFERENCES_VERSION, terminal: parsed }
+  const uiSource = (ui ?? {}) as Record<string, unknown>
+  const parsedUi: UiPreferences = {}
+  for (const key of UI_PREFERENCE_KEYS) {
+    assignField(parsedUi, key, UI_PREFERENCE_FIELDS[key].sanitize(uiSource[key]))
+  }
+
+  return { version: PREFERENCES_VERSION, terminal: parsed, ui: parsedUi }
 }
 
 /**
@@ -307,6 +387,15 @@ function quarantine(filePath: string): string | null {
 
 export class PreferencesStore {
   private preferences: TerminalPreferences = {}
+  private uiPreferences: UiPreferences = {}
+  /**
+   * 這次啟動時，磁碟上**原本有沒有**偏好檔。
+   *
+   * **它不是「`ui.language` 有沒有設定」的同義詞，而首次啟動的語言偵測正是以它為判準。**
+   * 以欄位未設定為判準的話，既有使用者升級之後 app 會自己變成他作業系統的語言 ——
+   * 一次沒有人要求過的行為改變。
+   */
+  private existedOnLoad = false
 
   constructor(private readonly filePath: string) {}
 
@@ -319,12 +408,18 @@ export class PreferencesStore {
     try {
       raw = fs.readFileSync(this.filePath, 'utf8')
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+      const missing = (error as NodeJS.ErrnoException).code === 'ENOENT'
+      if (!missing) {
         console.error(`[preferences] config unreadable, starting with defaults: ${String(error)}`)
       }
+      // 讀不到但**不是**因為它不存在（權限、I/O）—— 檔案仍在磁碟上，因此這不是首次啟動。
+      this.existedOnLoad = !missing
       this.preferences = {}
+      this.uiPreferences = {}
       return
     }
+
+    this.existedOnLoad = true
 
     const parsed = parsePreferences(raw)
     if (!parsed) {
@@ -334,10 +429,47 @@ export class PreferencesStore {
           (kept ? `; the original was kept at ${kept}` : `; the original could not be kept`),
       )
       this.preferences = {}
+      this.uiPreferences = {}
+      // **隔離之後立刻回寫一份預設檔。** 隔離是把原檔改名保留，於是**檔案就不存在了** ——
+      // 而「偏好檔不存在」是首次啟動語言偵測的判準。少了這次回寫，一個曾經壞過一次偏好檔的
+      // 使用者，會在下一次啟動時莫名其妙換了語言，而他從來沒有動過語言設定。
+      this.save()
       return
     }
 
     this.preferences = parsed.terminal
+    this.uiPreferences = parsed.ui
+  }
+
+  /**
+   * 這次啟動之前，偏好檔存不存在。
+   *
+   * **「不存在」嚴格等同於「從未啟動過」** —— 隔離路徑會立刻回寫一份預設檔來維持這個等式
+   *（見 `load()`）。少了那次回寫，「偏好檔壞過一次」的使用者會在下一次啟動時莫名其妙換了語言。
+   */
+  existed(): boolean {
+    return this.existedOnLoad
+  }
+
+  /** 當前的 UI 偏好（複本）。 */
+  ui(): UiPreferences {
+    return { ...this.uiPreferences }
+  }
+
+  /**
+   * 設定 UI 語言。`null` ＝清為預設（＝英文）。
+   *
+   * **回傳整個 `ui` 區塊而非整份偏好** —— 呼叫端要把它交給投影，而投影逐區塊白名單。
+   */
+  setLanguage(language: Language | null): UiPreferences {
+    const next: UiPreferences = { ...this.uiPreferences }
+    const sanitized = language === null ? undefined : sanitizeLanguage(language)
+    if (sanitized === undefined) delete next.language
+    else next.language = sanitized
+
+    this.uiPreferences = next
+    this.save()
+    return this.ui()
   }
 
   /** 當前的終端偏好（複本）。 */
@@ -428,6 +560,8 @@ export class PreferencesStore {
     writePreferencesFileAtomic(this.filePath, {
       version: PREFERENCES_VERSION,
       terminal: this.preferences,
+      ui: this.uiPreferences,
     })
+    this.existedOnLoad = true
   }
 }

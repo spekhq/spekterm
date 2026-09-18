@@ -62,6 +62,21 @@ const env = { ...process.env }
 const cleaned = LEAKED_DEV_ENV.filter((k) => k in env)
 cleaned.forEach((k) => delete env[k])
 
+/**
+ * **語言環境正規化。**
+ *
+ * 探針的 profile 會被種入 UI 語言（見 `lib/probe-language.mjs`），但驗證「首次啟動的語言
+ * 取自作業系統」的那一段刻意不種 —— 它讀的是 `app.getPreferredSystemLanguages()`，而那個
+ * 值的驅動者是 **`LANGUAGE`**，不是 `LANG`（實測：Electron 43，`LANGUAGE` 有值時 `LANG`
+ * 只剩 `getSystemLocale()` 在看，連 `--lang` 都蓋不掉它）。
+ *
+ * 開發機上這兩個變數**可能互相矛盾**（`LANG=zh_TW.UTF-8` 配 `LANGUAGE=zh_TW:zh` 是常態，
+ * 而只改其一就會得到與宣稱相反的結果）。在這裡釘成一致的值，讓「完整驗收」與「單支入口」
+ * 不會在不同的語言環境下跑同一段 —— 需要另一種語言的段落自己在子行程的 env 裡覆寫。
+ */
+env.LANG = 'en_US.UTF-8'
+env.LANGUAGE = 'en_US:en'
+
 // 探針以裸名 `electron` spawn（靠 npm script 把 `node_modules/.bin` 塞進 PATH）。這支 runner
 // 可能不是經 npm 起的 —— 自己補上，否則會是一句沒頭沒腦的 `spawn electron ENOENT`。
 env.PATH = `${join(root, 'node_modules', '.bin')}:${env.PATH ?? ''}`

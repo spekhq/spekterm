@@ -25,6 +25,7 @@ import { awaitMounted } from './lib/mounted.mjs'
 import { electronExtraArgs } from './lib/display.mjs'
 import { runSections } from './lib/sections.mjs'
 import { PROBE_PORTS } from './lib/ports.mjs'
+import { seedLanguage } from './lib/probe-language.mjs'
 
 const PORT = PROBE_PORTS.insights.main
 const EMPTY_PORT = PROBE_PORTS.insights.empty
@@ -113,6 +114,11 @@ function seedReport(profile) {
 }
 
 async function launch({ configDir, profile, port = PORT }) {
+  // 被測 app 的語言是**被指定的**：全新的 profile 會觸發首次啟動的語言偵測，
+  // 而在一台非英文的機器上，那會讓每一條 `aria-label` 選擇器選不到元素。
+  // 既有的 `preferences.json` 不動（損毀韌性與舊檔那兩段自己佈置它）。
+  seedLanguage(profile)
+
   const child = spawn(
     'electron',
     [`--remote-debugging-port=${port}`, `--user-data-dir=${profile}`, ...electronExtraArgs(), '.'],

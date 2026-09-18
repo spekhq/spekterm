@@ -306,12 +306,13 @@ function ChangeGroup({
   onAnchor: (slug: string) => void
   defaultOpen: boolean
 }): React.JSX.Element | null {
+  const { t } = useTranslation()
   const [open, setOpen] = useState(defaultOpen)
 
   if (changes.length === 0) return null
 
   return (
-    <section aria-label={`${label} changes`}>
+    <section aria-label={t('openspec.changeGroup', { group: label })}>
       <Row
         depth={1}
         expandable

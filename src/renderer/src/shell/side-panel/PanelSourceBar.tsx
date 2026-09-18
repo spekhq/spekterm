@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { ContextMenu, type MenuItem } from '../files/dialogs'
 import type { WorkspaceFolder } from '../types'
+import { collator } from '@shared/i18n/locale'
 
 interface PanelSourceBarProps {
   /** workspace 的所有 folder —— 下拉的候選。 */
@@ -74,7 +75,7 @@ export function PanelSourceBar({
       label: folder.name,
       onSelect: () => onSelect(folder.id),
     }))
-    .sort((a, b) => a.label.localeCompare(b.label, undefined, { sensitivity: 'base' }))
+    .sort((a, b) => collator().compare(a.label, b.label))
 
   /**
    * 「回到這個項目的預設座標」——**一顆按鈕，兩種項目各自的預設不同**。

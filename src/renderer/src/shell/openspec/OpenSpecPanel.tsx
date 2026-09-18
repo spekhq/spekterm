@@ -234,7 +234,7 @@ function Crumb({
   if (tab === 'change') {
     return (
       <>
-        <span>changes</span>
+        <span>{t('openspec.breadcrumbChanges')}</span>
         {anchoredChange && (
           <>
             <span className="px-1">/</span>
@@ -250,7 +250,7 @@ function Crumb({
   if (openSpec) {
     return (
       <>
-        <span>specs</span>
+        <span>{t('openspec.breadcrumbSpecs')}</span>
         <span className="px-1">/</span>
         <span className="font-bold text-accent" title={openSpec}>
           {openSpec}

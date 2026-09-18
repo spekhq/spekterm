@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import type { DirEntry, DirEntryKind, FsFailure } from '../types'
 import { joinRelPath, parentOf } from './paths'
 import { t } from '@shared/i18n'
+import type { Language } from '@shared/i18n'
+import { collator } from '@shared/i18n/locale'
 
 export interface TreeRow {
   relPath: string
@@ -11,14 +14,25 @@ export interface TreeRow {
   depth: number
   expanded: boolean
   loading: boolean
-  error: string | null
+  error: FsFailure | null
 }
 
 interface TreeState {
   children: Record<string, DirEntry[]>
   expanded: Record<string, true>
   loading: Record<string, true>
-  errors: Record<string, string>
+  /**
+   * **存的是失敗本身，不是翻好的訊息。**
+   *
+   * 翻好的字串一旦進了 state，它就停在寫入當下的語言 —— 切換語言之後，樹上既有的錯誤訊息
+   * 會維持舊語言直到該目錄被重新請求，而畫面上不會有任何錯誤。`t()` 於呼叫時解析當前語言，
+   * 所以答案是**晚一點才呼叫它**：翻譯留到呈現那一刻（`FileTree` 以 `useTranslation`
+   * 訂閱語言改變，於是它會自己重繪）。
+   *
+   * 同一個形狀在這個 repo 另有先例：「主行程拋出的錯誤帶不了 `code` 到 renderer」——
+   * 需要結構化的失敗資訊時就別把它壓成字串。
+   */
+  errors: Record<string, FsFailure>
 }
 
 /** 根目錄自第一幀起就在載入中 —— 於初始狀態表達，而非在 effect 裡同步 setState。 */
@@ -31,19 +45,26 @@ function initialState(folderId: string | null, rootPrefix: string): TreeState {
   }
 }
 
-/** 目錄優先、其次名稱 —— 與雛型一致（`packages/` 在 `CLAUDE.md` 之前）。 */
-const collator = new Intl.Collator('zh-TW', { numeric: true, sensitivity: 'base' })
-
-function sortEntries(entries: DirEntry[]): DirEntry[] {
+/**
+ * 目錄優先、其次名稱 —— 與雛型一致（`packages/` 在 `CLAUDE.md` 之前）。
+ *
+ * **比較器由呼叫端傳入，不在這裡取。** 它跟著 UI 語言走，而「語言變了要重新排序」這條規則
+ * 的載體是 `useMemo` 的依賴陣列 —— 一個在函式內部取全域狀態的寫法，那條依賴在語法上
+ * **看不見**（`exhaustive-deps` 會說它是多餘的），於是規則就只能靠註解維持。
+ */
+function sortEntries(entries: DirEntry[], compare: Intl.Collator): DirEntry[] {
   return [...entries].sort((a, b) => {
     const aIsDir = a.kind === 'directory'
     const bIsDir = b.kind === 'directory'
     if (aIsDir !== bIsDir) return aIsDir ? -1 : 1
-    return collator.compare(a.name, b.name)
+    return compare.compare(a.name, b.name)
   })
 }
 
-function describeFailure(failure: FsFailure): string {
+/**
+ * 把一次失敗翻成一句話。**於呈現時呼叫，不要把結果存進 state**（見 `TreeState.errors`）。
+ */
+export function describeFailure(failure: FsFailure): string {
   if (failure.code === 'ESCAPES_ROOT') return t('files.failure.expandEscapesRoot')
   if (failure.code === 'NOT_FOUND') return t('files.failure.expandNotFound')
   if (failure.code === 'FOLDER_UNAVAILABLE') return t('files.failure.folderUnavailable')
@@ -51,11 +72,17 @@ function describeFailure(failure: FsFailure): string {
 }
 
 /** 只走「可見的」展開目錄 —— 祖先收合的子樹雖然仍在快取中，但不該被畫出來，也不該被監看。 */
-function buildRows(state: TreeState, dir: string, depth: number, rows: TreeRow[]): void {
+function buildRows(
+  state: TreeState,
+  dir: string,
+  depth: number,
+  rows: TreeRow[],
+  compare: Intl.Collator,
+): void {
   const entries = state.children[dir]
   if (!entries) return
 
-  for (const entry of sortEntries(entries)) {
+  for (const entry of sortEntries(entries, compare)) {
     const relPath = joinRelPath(dir, entry.name)
     const expanded = Boolean(state.expanded[relPath])
 
@@ -70,7 +97,7 @@ function buildRows(state: TreeState, dir: string, depth: number, rows: TreeRow[]
       error: state.errors[relPath] ?? null,
     })
 
-    if (expanded) buildRows(state, relPath, depth + 1, rows)
+    if (expanded) buildRows(state, relPath, depth + 1, rows, compare)
   }
 }
 
@@ -87,7 +114,7 @@ export interface FileTreeState {
   rows: TreeRow[]
   visibleCount: number
   rootLoading: boolean
-  rootError: string | null
+  rootError: FsFailure | null
   /** 點一列。目錄展開／收合；檔案交給 `onOpenFile`；symlink 先試著當目錄。 */
   activate: (row: TreeRow) => void
 }
@@ -145,7 +172,7 @@ export function useFileTree(
                 ...current,
                 loading,
                 expanded,
-                errors: { ...current.errors, [relPath]: describeFailure(result) },
+                errors: { ...current.errors, [relPath]: result },
               }
             }
 
@@ -173,15 +200,29 @@ export function useFileTree(
       delete loading[relPath]
       const expanded = { ...current.expanded }
       delete expanded[relPath]
-      return { ...current, loading, expanded, errors: { ...current.errors, [relPath]: describeFailure(failure) } }
+      return { ...current, loading, expanded, errors: { ...current.errors, [relPath]: failure } }
     })
   }, [])
 
+  /**
+   * **語言是排序的觸發條件之一，而它不是自動來的。**
+   *
+   * 列的順序由跟著 UI 語言走的比較器決定，但 `state` 與 `rootPrefix` 在語言改變時一個都沒有
+   * 變 —— 少了這條依賴，整棵樹會維持舊語言的排序**直到下一次目錄重新載入**，而畫面上不會有
+   * 任何錯誤：它只是排得跟它宣稱的規則不一樣。
+   *
+   * 比較器以**值**的形式進入依賴陣列（而不是在 `buildRows` 內部取全域狀態）—— 那條依賴因此
+   * 是語法上看得見的，`exhaustive-deps` 守得住它。
+   */
+  const { i18n } = useTranslation()
+  const language = i18n.language as Language
+  const compare = useMemo(() => collator(language), [language])
+
   const rows = useMemo(() => {
     const collected: TreeRow[] = []
-    buildRows(state, rootPrefix, 0, collected)
+    buildRows(state, rootPrefix, 0, collected, compare)
     return collected
-  }, [state, rootPrefix])
+  }, [state, rootPrefix, compare])
 
   const watchTargets = useMemo(() => collectWatchTargets(rows, rootPrefix), [rows, rootPrefix])
   // 以 JSON 當 effect 的相依 key，不用分隔符串接 —— Linux 的檔名可以含換行字元，
@@ -271,7 +312,7 @@ export function useFileTree(
       }
       setState((current) => ({
         ...current,
-        errors: { ...current.errors, [relPath]: describeFailure(result) },
+        errors: { ...current.errors, [relPath]: result },
       }))
     },
     [folderId, onOpenFile],

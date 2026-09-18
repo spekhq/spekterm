@@ -7,6 +7,7 @@ import { usePanelCoordinate } from './panel-coordinate'
 import { useSessions } from './terminal/sessions'
 import { sessionTitle, statusTitle } from './terminal/session-badge'
 import { type RailSelection, type SessionStatus, type WorkspaceFolder, selectedFolderId } from './types'
+import { formatDate, formatTime } from '@shared/i18n/locale'
 
 /**
  * 主視窗底部的狀態列 —— `docs/workspace-mockup.html` 早已定義（`.statusbar`），但從未實作。
@@ -266,8 +267,8 @@ function formatReset(epochSeconds: number | undefined, form: 'clock' | 'dateCloc
   const at = new Date(epochSeconds * 1000)
   if (Number.isNaN(at.getTime())) return ''
 
-  const clock = at.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
+  const clock = formatTime(at, { hour: '2-digit', minute: '2-digit' })
   if (form === 'clock') return `·↻${clock}`
-  const date = at.toLocaleDateString(undefined, { month: 'numeric', day: 'numeric' })
+  const date = formatDate(at, { month: 'numeric', day: 'numeric' })
   return `·↻${date} ${clock}`
 }

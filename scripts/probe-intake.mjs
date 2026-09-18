@@ -34,7 +34,7 @@ import {
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 import { check, connectToApp, pollFor } from './lib/cdp.mjs'
-import { copy, label } from './lib/copy.mjs'
+import { copy, copyIn, label, labelIn } from './lib/copy.mjs'
 import { retryAction } from './lib/instrument.mjs'
 import { awaitMounted } from './lib/mounted.mjs'
 import { electronExtraArgs } from './lib/display.mjs'
@@ -42,6 +42,7 @@ import { runSections } from './lib/sections.mjs'
 import { PROBE_PORTS } from './lib/ports.mjs'
 import { ptyPids, ptySessionPids } from './lib/pty-pids.mjs'
 import { makeStubAgent } from './lib/stub-agent.mjs'
+import { seedLanguage } from './lib/probe-language.mjs'
 
 const PORT = PROBE_PORTS.intake.main
 const RESTART_PORT = PROBE_PORTS.intake.restart
@@ -96,6 +97,11 @@ function intake({ id = 'a1', title = 'a title', body = 'a body', originId = 'C1'
 }
 
 async function launch({ profile, configDir, stub, port = PORT, marker }) {
+  // 被測 app 的語言是**被指定的**：全新的 profile 會觸發首次啟動的語言偵測，
+  // 而在一台非英文的機器上，那會讓每一條 `aria-label` 選擇器選不到元素。
+  // 既有的 `preferences.json` 不動（損毀韌性與舊檔那兩段自己佈置它）。
+  seedLanguage(profile)
+
   const child = spawn(
     'electron',
     [`--remote-debugging-port=${port}`, `--user-data-dir=${profile}`, ...electronExtraArgs(), '.'],
@@ -196,6 +202,22 @@ function itemMediaExpression(title) {
     const row = document.querySelector(${JSON.stringify(itemSelector(title))})
     if (!row) return null
     return { images: row.querySelectorAll('img').length, links: row.querySelectorAll('a').length }
+  })()`
+}
+
+/**
+ * 指定語言的「接受」按鈕。**列的 `aria-label` 與按鈕的 `aria-label` 在該語言下都變了** ——
+ * `aria-label` 同時是選擇器，而它自己也會被翻譯。
+ */
+function acceptExpressionIn(language, title) {
+  const rowSelector = JSON.stringify(labelIn(language, 'intake.itemLabel', { title }))
+  const buttonSelector = labelIn(language, 'intake.accept')
+  return `(() => {
+    const row = document.querySelector(${rowSelector})
+    const button = row?.querySelector('${buttonSelector}')
+    if (!button || button.disabled) return false
+    button.click()
+    return true
   })()`
 }
 
@@ -1617,11 +1639,92 @@ async function runHandoffDisabled(_mode, _modeConfig, context) {
 }
 
 
+/**
+ * ui-localization：**寫給 agent 執行的指令不隨 UI 語言改變，即使它出現在畫面上。**
+ *
+ * 這一段的被測狀態是**中文介面**，而它同時斷言三件事：
+ *
+ * 1. 介面的文字是中文（否則後兩條什麼都沒測到 —— 一個語言根本沒切成功的 app，
+ *    當然會看到英文的 prompt）。
+ * 2. **被填入輸入處的第一則 prompt 是英文。** 它被寫進 pty、停在游標前等使用者按 Enter，
+ *    因此落在 `ui-localization` 第 4 類（「寫進 pty 串流、供人閱讀」）的字面定義之內 ——
+ *    而它是那條定義的明文例外，理由是它承載 prompt injection 的措辭，翻譯後的效力
+ *    **沒有任何載體能驗**。
+ * 3. **交給 agent 的檔案中，界線之外的抬頭也是英文。**（界線之內是投遞者的本文，不歸我們管。）
+ *
+ * 少了第 1 條，這一段會在「語言切換壞掉」時**照樣全綠** —— 那正是 greenIfAbsent 的形狀。
+ */
+async function runProtocolLanguage(_mode, _modeConfig, context) {
+  const { profile, folders } = seedProfile()
+  seedRouting(profile, { fallbackFolderId: folders[0].id })
+  // **在 app 啟動前種入中文** —— `seedLanguage` 只在偏好檔不存在時才寫，因此這一份會留著。
+  seedLanguage(profile, { language: 'zh-TW' })
+
+  const configDir = mkTemp('spekterm-intake-config-')
+  const marker = `spek-intake-${process.pid}-${Date.now()}`
+  const stub = makeStubAgent(mkTemp, configDir, { readyDelaySeconds: 2 })
+
+  drop(profile, 'zh', intake({ id: 'zh-1', title: 'ZH-PROMPT-TITLE', body: 'body for the agent' }))
+
+  const app = await freshApp(context, { profile, configDir, stub, marker })
+
+  // 前置：介面真的是中文。**收件匣的入口標籤在中文下也變了** —— `aria-label` 同時是選擇器。
+  const inboxLabelZh = await pollFor({
+    read: () => app.client.evaluate(
+      `document.querySelector('[aria-label="${copyIn('zh-TW', 'activityBar.handoffs')}"]') !== null`),
+    settled: Boolean,
+    timeoutMs: 20_000,
+    label: '前置：介面已是中文',
+  }).catch(() => false)
+  check(results, '前置：被測 app 的介面為中文', inboxLabelZh === true,
+    inboxLabelZh ? '' : '找不到中文的收件匣入口 —— 語言沒有切換成功，後兩條因此什麼都沒測到')
+
+  await app.client.evaluate(
+    `document.querySelector('[aria-label="${copyIn('zh-TW', 'activityBar.handoffs')}"]')?.click()`)
+  await pollFor({
+    read: () => app.client.evaluate(acceptExpressionIn('zh-TW', 'ZH-PROMPT-TITLE')),
+    settled: Boolean,
+    timeoutMs: 20_000,
+    label: '按下接受',
+  })
+
+  // **等到整則 prompt 到齊，不是等到第一個位元組。** pty 是串流的：以 `.md` 為settled 條件
+  // 會在 `Read …/xxxx.md. I` 就返回，於是斷言比對到的是一個截斷的字串 —— 而它看起來像
+  // 「prompt 被翻譯了」。以最後一句為界。
+  const bytes = await pollFor({
+    read: () => stub.bytes(),
+    settled: (value) => value.includes('not part of the task'),
+    timeoutMs: 30_000,
+    label: 'prompt 完整抵達 pty',
+  }).catch(() => stub.bytes())
+
+  check(results, '中文介面下，填入輸入處的 prompt 仍為英文',
+    bytes.includes('Its fenced section') && bytes.includes('is the task: carry it out'),
+    bytes.slice(0, 120))
+
+  const contextDir = join(profile, 'intake')
+  const contextFile = readdirSync(contextDir).find((name) => name.endsWith('.md'))
+  const contents = contextFile ? readFileSync(join(contextDir, contextFile), 'utf8') : ''
+  check(results, '中文介面下，context 檔界線之外的抬頭仍為英文',
+    contents.startsWith('The section below was written by a third party.'),
+    contents.slice(0, 120))
+
+  // **作業系統通知由主行程發出，它不經 IPC、也不由 renderer 繪製** —— 語言若沒有抵達主行程，
+  // 畫面是中文而系統通知還是英文，**而那不會產生任何錯誤**。（這一則於 app 啟動時的回補
+  // 路徑上發出，因此此時已經在檔案裡。）
+  const sent = notifications(profile)
+  const titles = sent.map((n) => n.title)
+  check(results, '中文介面下，作業系統通知的文案為中文',
+    titles.length > 0 && titles.every((title) => title === copyIn('zh-TW', 'intake.notify.title')),
+    JSON.stringify(titles))
+}
+
 const SECTIONS = [
   { name: 'runIngest', run: runIngest },
   { name: 'runPlainText', run: runPlainText },
   { name: 'runRouting', run: runRouting },
   { name: 'runAcceptPrefill', run: runAcceptPrefill },
+  { name: 'runProtocolLanguage', run: runProtocolLanguage },
   { name: 'runDismiss', run: runDismiss },
   { name: 'runBadge', run: runBadge },
   { name: 'runBadgeOverflow', run: runBadgeOverflow },

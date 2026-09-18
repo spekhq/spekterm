@@ -52,7 +52,7 @@
     "probe:native": "node scripts/run-probe.mjs native",
     "probe:identity": "node scripts/run-probe.mjs identity",
     "test": "npm run test:unit",
-    "test:unit": "node --import tsx --test src/main/*.test.ts src/renderer/src/shell/*.test.ts src/renderer/src/shell/*/*.test.ts scripts/*.test.mjs",
+    "test:unit": "node --import tsx --test src/shared/*/*.test.ts src/main/*.test.ts src/renderer/src/shell/*.test.ts src/renderer/src/shell/*/*.test.ts scripts/*.test.mjs",
     "test:e2e": "npm run build && node scripts/run-probes.mjs",
     "test:all": "npm run test:unit && npm run test:e2e",
     "typecheck:node": "tsc --noEmit -p tsconfig.node.json",

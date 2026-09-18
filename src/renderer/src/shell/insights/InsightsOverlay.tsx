@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
+import { type TFunction } from 'i18next'
 import { useTranslation } from 'react-i18next'
 
 import type { Insights, CueCategoryView, CueClause } from '../../../../main/insights-aggregate'
 import type { InsightsSnapshot } from '../../../../main/insights'
 import { Bars, Heatmap, Histogram, Marks, Proportion, type BarDatum } from './charts'
 import { ReportTab } from './ReportTab'
+import { formatNumber } from '@shared/i18n/locale'
 
 /**
  * 對話計量的全視窗 overlay。
@@ -261,10 +263,26 @@ function View({ title, blurb, source, children }: { title: string; blurb: string
   )
 }
 
-const LENGTH_LABELS = ['<10', '10–20', '20–40', '40–80', '80–160', '160–400', '0.4–1K', '1K+']
-const ROUND_LABELS = ['1', '2–4', '5–9', '10–19', '20–49', '50–99', '100+']
-const SIT_LABELS = ['<5m', '5–15', '15–30', '30–60', '1–2h', '2–4h', '4h+']
-const PER_SIT_LABELS = ['0', '1', '2', '3–5', '6–10', '11–20', '21+']
+/**
+ * 直方圖的分桶標籤。**它們是使用者看得到的文字，因此來自字典** —— 單位字母（`m`、`h`、`K`）
+ * 隨語言而不同，而它們從來沒進過字典：完整性守衛看不見從未被納入的字，於是一個中文介面
+ * 會把這幾排標籤原樣留在英文，**而每一道守衛都是綠的**。
+ */
+const BUCKET_COUNTS = {
+  messageLength: 8,
+  rounds: 7,
+  sitDown: 7,
+  perSitDown: 7,
+} as const
+
+function bucketLabels(
+  t: TFunction,
+  group: keyof typeof BUCKET_COUNTS,
+): string[] {
+  return Array.from({ length: BUCKET_COUNTS[group] }, (_, index) =>
+    t(`insights.bucket.${group}.${index}` as 'insights.bucket.sitDown.0'),
+  )
+}
 
 function Views({ insights }: { insights: Insights }): React.JSX.Element {
   const { t } = useTranslation()
@@ -294,12 +312,12 @@ function Views({ insights }: { insights: Insights }): React.JSX.Element {
           blurb={`${t('insights.sitDown.blurb', { minutes: view.sitDown.thresholdMinutes })} ${t('insights.sitDown.activity')}`}
           source={t('insights.sitDown.source', { minutes: view.sitDown.thresholdMinutes })}
         >
-          <Histogram buckets={view.sitDown.buckets} labels={SIT_LABELS} marks={stat(view.sitDown, minutes)} />
+          <Histogram buckets={view.sitDown.buckets} labels={bucketLabels(t, 'sitDown')} marks={stat(view.sitDown, minutes)} />
           <div className="mt-3">
             <p className="mb-1 text-2xs text-ink-faint">{t('insights.sitDown.perSitDown')}</p>
             <Histogram
               buckets={view.sitDown.messagesPerSitDown.buckets}
-              labels={PER_SIT_LABELS}
+              labels={bucketLabels(t, 'perSitDown')}
               marks={stat(view.sitDown.messagesPerSitDown)}
             />
           </div>
@@ -308,10 +326,10 @@ function Views({ insights }: { insights: Insights }): React.JSX.Element {
 
       <Section title={t('insights.section.habits')} note={t('insights.section.habitsNote')}>
         <View title={t('insights.length.title')} blurb={`${t('insights.length.blurb')} ${t('insights.stat.noMean')}`} source={t('insights.length.source')}>
-          <Histogram buckets={view.messageLength.buckets} labels={LENGTH_LABELS} marks={stat(view.messageLength)} />
+          <Histogram buckets={view.messageLength.buckets} labels={bucketLabels(t, 'messageLength')} marks={stat(view.messageLength)} />
         </View>
         <View title={t('insights.rounds.title')} blurb={t('insights.rounds.blurb')} source={t('insights.rounds.source')}>
-          <Histogram buckets={view.roundsPerSession.buckets} labels={ROUND_LABELS} marks={stat(view.roundsPerSession)} />
+          <Histogram buckets={view.roundsPerSession.buckets} labels={bucketLabels(t, 'rounds')} marks={stat(view.roundsPerSession)} />
         </View>
         <View title={t('insights.interrupts.title')} blurb={t('insights.interrupts.blurb')} source={t('insights.interrupts.source')}>
           <Bars
@@ -396,7 +414,7 @@ function Totals({ insights }: { insights: Insights }): React.JSX.Element {
         {items.map(([label, value]) => (
           <div key={label} className="bg-panel px-3 py-2">
             <dt className="text-2xs uppercase text-ink-faint">{label}</dt>
-            <dd className="font-mono text-lg text-ink">{value.toLocaleString('en-US')}</dd>
+            <dd className="font-mono text-lg text-ink">{formatNumber(value)}</dd>
           </div>
         ))}
       </dl>

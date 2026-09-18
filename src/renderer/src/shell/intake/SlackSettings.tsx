@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { SlackState, SlackTokenKind } from '../types'
+import { formatTime } from '@shared/i18n/locale'
 
 /**
  * Slack 連線設定。**不置於終端偏好對話框之內** —— 那個對話框的內容由 `terminal-preferences`
@@ -67,7 +68,7 @@ function statusCopy(state: SlackState): {
         ? { key: 'slack.statusRateLimitedSoon' }
         : {
             key: 'slack.statusRateLimited',
-            options: { time: new Date(retryAt).toLocaleTimeString() },
+            options: { time: formatTime(new Date(retryAt)) },
           }
     }
     return failure.kind === 'auth'

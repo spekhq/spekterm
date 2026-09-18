@@ -1,6 +1,7 @@
 import { useTranslation } from 'react-i18next'
 import type { TreeRow } from './useFileTree'
 import { formatRelativeTime } from './relative-time'
+import { describeFailure } from './useFileTree'
 
 const INDENT_PX = 18
 
@@ -31,7 +32,7 @@ function FileRow({ row, now, dirty, onActivate, onContextMenu }: FileRowProps): 
       aria-level={row.depth + 1}
       aria-selected={false}
       tabIndex={0}
-      title={row.error ?? row.relPath}
+      title={row.error ? describeFailure(row.error) : row.relPath}
       onClick={() => onActivate(row)}
       onContextMenu={(event) => {
         event.preventDefault()
@@ -66,7 +67,7 @@ function FileRow({ row, now, dirty, onActivate, onContextMenu }: FileRowProps): 
         </span>
       )}
       {row.error ? (
-        <span className="shrink-0 text-2xs text-danger">{row.error}</span>
+        <span className="shrink-0 text-2xs text-danger">{describeFailure(row.error)}</span>
       ) : (
         <span className="shrink-0 font-mono text-2xs text-ink-faint opacity-65">
           {formatRelativeTime(row.mtimeMs, now)}

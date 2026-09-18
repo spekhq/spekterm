@@ -263,6 +263,14 @@ const workspaceApi = {
      */
     setAgentView: (view: 'terminal' | 'conversation' | null): Promise<ProjectedPreferences> =>
       ipcRenderer.invoke('workspace:settings:setAgentView', view),
+    /**
+     * UI 語言。`null` ＝清為預設（＝英文）。
+     *
+     * **主行程會先套用到它自己的 i18n，再回傳投影** —— 呼叫端要 await 它之後才改 renderer 的
+     * 語言。反過來的話，套用失敗的那一刻畫面已是新語言而原生對話框與通知還是舊語言。
+     */
+    setLanguage: (language: string | null): Promise<ProjectedPreferences> =>
+      ipcRenderer.invoke('workspace:settings:setLanguage', language),
     /** 系統的等寬字型清單，給設定對話框的下拉選單（Linux 走 fontconfig；其他平台回空陣列）。 */
     listMonospaceFonts: (): Promise<string[]> =>
       ipcRenderer.invoke('workspace:settings:listMonospaceFonts'),

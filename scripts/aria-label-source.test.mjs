@@ -30,6 +30,17 @@ const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..')
 const HARDCODED = /aria-label="(?!\$\{)([^"]*)"/g
 
 /**
+ * **以樣板字面值合成的 `aria-label`**（`` aria-label={`${label} changes`} ``）。
+ *
+ * 上面那條 pattern 只認 `aria-label="…"`，對 JSX 的 `aria-label={…}` 完全不匹配 ——
+ * 於是一個把字典的值與一段**硬編的英文**拼起來的標籤整個逃掉了，而驗收腳本另一頭
+ * 硬編著同一個後綴。**兩份字面值就此各自為政，而它們失去同步的徵狀是「選不到元素」。**
+ *
+ * `${…}` 之外的每一段字面文字都算硬編 —— 含字母才回報（只有空白與標點的分隔符不算）。
+ */
+const TEMPLATE_LABEL = /aria-label=\{`([^`]*)`\}/g
+
+/**
  * **來自 `@spekjs/ui` 套件內部的 `aria-label`。**
  *
  * 那不是我們的文案，不歸我們的字典管 —— 它是外部套件的契約，探針硬編它是對的。
@@ -62,6 +73,13 @@ export function findHardcodedAriaLabels(source) {
     for (const match of line.matchAll(HARDCODED)) {
       if (FROM_PACKAGE.has(match[1])) continue
       found.push({ line: index + 1, label: match[1] })
+    }
+    for (const match of line.matchAll(TEMPLATE_LABEL)) {
+      for (const literal of match[1].split(/\$\{[^}]*\}/)) {
+        if (!/\p{L}/u.test(literal)) continue
+        if (FROM_PACKAGE.has(literal.trim())) continue
+        found.push({ line: index + 1, label: literal.trim() })
+      }
     }
   })
 
@@ -113,4 +131,15 @@ test('對照組：自字典取得的 aria-label 不被誤報', () => {
   ].join('\n')
 
   assert.deepEqual(findHardcodedAriaLabels(source), [])
+})
+
+test('對照組：以樣板合成的 aria-label 中，`${}` 之外的英文被回報', () => {
+  const found = findHardcodedAriaLabels('    <section aria-label={`${label} changes`}>')
+  assert.deepEqual(found, [{ line: 1, label: 'changes' }])
+})
+
+test('對照組：完全來自字典的樣板不被回報', () => {
+  // 分隔符（空白、標點）不含字母 —— 它們不是文案。
+  assert.deepEqual(findHardcodedAriaLabels('<b aria-label={`${a} — ${b}`}>'), [])
+  assert.deepEqual(findHardcodedAriaLabels("<b aria-label={t('rail.label')}>"), [])
 })

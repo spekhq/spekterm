@@ -4,7 +4,7 @@ import path from 'node:path'
 
 import { openNoFollow, resolveNewWithin } from './fs-boundary'
 import { intakeFileStem, isValidIntakeId } from './intake-id'
-import { t } from '@shared/i18n'
+import { contextHeader, firstPartyPrompt, thirdPartyPrompt } from './agent-protocol-copy'
 
 /**
  * 交給 agent 的那份檔案，與填進輸入處的那一行 prompt。
@@ -70,7 +70,7 @@ export interface ContextDocument {
  * `body` 必須是**攝入時正規化過的那一份** —— 也就是呈現給使用者的同一個字串。
  */
 export function buildContext(body: string, nonce: string): ContextDocument {
-  const header = t('intake.contextHeader', { nonce })
+  const header = contextHeader(nonce)
   // **界線之內不增減任何字元。** `body` 原樣夾在兩個界線之間。
   const contents = `${header}\n\n${fenceOpen(nonce)}\n${body}\n${fenceClose(nonce)}\n`
   return { nonce, contents }
@@ -147,6 +147,6 @@ export function buildPrompt(contextPath: string, nonce: string, firstPartyBody =
   // **界線與 nonce 仍然保留**：本文仍可能被來源 agent 讀過的東西塑形，標示不會因此失去意義。
   // 被換掉的只有「要不要動手」。
   return firstPartyBody
-    ? t('intake.promptFirstParty', { path: contextPath, nonce })
-    : t('intake.prompt', { path: contextPath, nonce })
+    ? firstPartyPrompt(contextPath, nonce)
+    : thirdPartyPrompt(contextPath, nonce)
 }

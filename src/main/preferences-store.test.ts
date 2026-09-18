@@ -38,6 +38,8 @@ describe('parsePreferences：結構嚴格', () => {
     assert.deepEqual(parsePreferences(raw), {
       version: 1,
       terminal: { fontFamily: 'Fira Code', fontSize: 15 },
+      // 本區塊加入之前寫下的檔案沒有 `ui` —— 缺席是合法的，讀入為空區塊。
+      ui: {},
     })
   })
 
@@ -58,6 +60,7 @@ describe('parsePreferences：結構嚴格', () => {
     assert.deepEqual(parsePreferences(JSON.stringify({ version: 1, terminal: {} })), {
       version: 1,
       terminal: {},
+      ui: {},
     })
   })
 })
@@ -221,6 +224,7 @@ describe('PreferencesStore：讀寫與持久化', () => {
     writePreferencesFileAtomic(configPath, {
       version: PREFERENCES_VERSION,
       terminal: { agentEvents: false },
+      ui: {},
     })
     const store = new PreferencesStore(configPath)
     store.load()
@@ -369,7 +373,20 @@ describe('PreferencesStore：損毀韌性', () => {
 
     assert.deepEqual(store.get(), {})
     assert.equal(corruptFiles().length, 1, '原檔須改名保留而非刪除')
-    assert.equal(fs.existsSync(configPath), false)
+
+    // **隔離之後必須立刻回寫一份預設檔。**
+    //
+    // 隔離是把原檔**改名**保留，於是那個路徑就不存在了 —— 而「偏好檔不存在」正是首次啟動
+    // 語言偵測的判準（見 `ui-localization` 的「首次啟動的語言取自作業系統的偏好語言」）。
+    // 少了這次回寫，一個曾經壞過一次偏好檔的使用者會在下一次啟動時莫名其妙換了語言，
+    // 而他從來沒有動過語言設定。
+    assert.equal(fs.existsSync(configPath), true, '隔離之後必須回寫，否則下次啟動會被當成首次啟動')
+    assert.deepEqual(parsePreferences(fs.readFileSync(configPath, 'utf8')), {
+      version: PREFERENCES_VERSION,
+      terminal: {},
+      ui: {},
+    })
+    assert.equal(store.existed(), true, '這一次載入不得被視為首次啟動')
   })
 
   it('版本無法辨識：以預設啟動並保留原檔', () => {
@@ -400,7 +417,7 @@ describe('PreferencesStore：損毀韌性', () => {
 
   it('writePreferencesFileAtomic 會建立缺少的目錄', () => {
     const nested = path.join(base, 'deep', 'preferences.json')
-    writePreferencesFileAtomic(nested, { version: PREFERENCES_VERSION, terminal: {} })
+    writePreferencesFileAtomic(nested, { version: PREFERENCES_VERSION, terminal: {}, ui: {} })
     assert.equal(fs.existsSync(nested), true)
   })
 })
@@ -447,11 +464,10 @@ describe('projectPreferences：送往 renderer 的逐欄位白名單', () => {
   it('未宣告送往 renderer 的欄位不出現在投影中', () => {
     // `agentEvents` 的 `toRenderer` 是 `false` —— renderer 從不讀它（只有主行程的注入路徑讀）。
     // **這條是白名單真的在做事的證據**：它在主行程的偏好裡，卻不在投影裡。
-    const projected = projectPreferences({
-      fontFamily: 'Fira Code',
-      agentStatus: false,
-      agentEvents: false,
-    })
+    const projected = projectPreferences(
+      { fontFamily: 'Fira Code', agentStatus: false, agentEvents: false },
+      {},
+    )
 
     assert.equal('agentEvents' in projected, false, 'agentEvents 不該送到 renderer')
     assert.deepEqual(projected, { fontFamily: 'Fira Code', agentStatus: false })
@@ -461,15 +477,113 @@ describe('projectPreferences：送往 renderer 的逐欄位白名單', () => {
     // **不是風格問題**：`probe:workspace` 有一條以「空偏好的鍵數為 0」為判準的斷言
     // （`scripts/probe-workspace.mjs` 的「損毀的偏好以預設啟動（空偏好）」），
     // 把未設定欄位寫成 `undefined` 會讓它當場變紅。
-    assert.equal(Object.keys(projectPreferences({})).length, 0)
+    assert.equal(Object.keys(projectPreferences({}, {})).length, 0)
 
-    const partial = projectPreferences({ fontSize: 14 })
+    const partial = projectPreferences({ fontSize: 14 }, {})
     assert.deepEqual(Object.keys(partial), ['fontSize'])
   })
 
   it('投影不是同一個物件 —— 改它不影響主行程持有的偏好', () => {
     const source = { fontFamily: 'Fira Code' }
-    const projected = projectPreferences(source)
+    const projected = projectPreferences(source, {})
     assert.notEqual(projected, source)
+  })
+})
+
+describe('UI 偏好：與終端並列的第二個區塊', () => {
+  it('不含 ui 區塊的既有偏好檔照常讀入，其餘欄位原封保留', () => {
+    // **這是升級路徑。** 本區塊加入之前寫下的檔案沒有 `ui` —— 它必須照常讀入，
+    // 且 `PREFERENCES_VERSION` 不得因為多一個區塊而遞增（版本不符會隔離整檔，
+    // 等於每個使用者既有的字型設定歸零）。
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({ version: 1, terminal: { fontFamily: 'Fira Code', gpuAcceleration: false } }),
+    )
+
+    const store = new PreferencesStore(configPath)
+    store.load()
+
+    assert.equal(store.get().fontFamily, 'Fira Code')
+    assert.equal(store.get().gpuAcceleration, false)
+    assert.deepEqual(store.ui(), {})
+    assert.equal(corruptFiles().length, 0, '缺少 ui 區塊不是損毀')
+  })
+
+  it('ui 存在但形狀不對 → 整檔不可信', () => {
+    // 缺席與壞掉是兩件事。把後者也當成「沒設定」會讓一份被外部程式改壞的檔案靜默地
+    // 以預設繼續，而使用者的**其餘**偏好也一併失效 —— 卻沒有任何人被告知。
+    assert.equal(parsePreferences(JSON.stringify({ version: 1, terminal: {}, ui: 5 })), null)
+    assert.equal(parsePreferences(JSON.stringify({ version: 1, terminal: {}, ui: null })), null)
+  })
+
+  it('不受支援的語言值視為未設定，而不是一個合法的選擇', () => {
+    // 「檔案壞了」與「使用者選了英文」不是同一件事 —— 前者回到未設定，讓「未設定＝英文」
+    // 那條規則去決定，於是只有一個地方在決定。同 `agentView` 那條白名單。
+    for (const bad of ['fr-FR', 'zh', '', 42, null, { language: 'zh-TW' }]) {
+      const raw = JSON.stringify({ version: 1, terminal: {}, ui: { language: bad } })
+      assert.deepEqual(parsePreferences(raw)?.ui, {}, `不該接受 ${JSON.stringify(bad)}`)
+    }
+
+    const good = JSON.stringify({ version: 1, terminal: {}, ui: { language: 'zh-TW' } })
+    assert.deepEqual(parsePreferences(good)?.ui, { language: 'zh-TW' })
+  })
+
+  it('改語言不影響任何終端偏好', () => {
+    const store = new PreferencesStore(configPath)
+    store.load()
+    store.setTerminalFont('Fira Code', 15, 1.2)
+    store.setGpuAcceleration(false)
+    store.setAgentStatus(false)
+
+    store.setLanguage('zh-TW')
+
+    assert.deepEqual(store.get(), {
+      fontFamily: 'Fira Code',
+      fontSize: 15,
+      lineHeight: 1.2,
+      gpuAcceleration: false,
+      agentStatus: false,
+    })
+    assert.deepEqual(store.ui(), { language: 'zh-TW' })
+
+    // 反向：改字型不得抹掉語言（`setTerminalFont` 自空物件重建 `terminal`）。
+    store.setTerminalFont('Monospace', null, null)
+    assert.deepEqual(store.ui(), { language: 'zh-TW' })
+  })
+
+  it('語言跨重啟保留，null 清為預設', () => {
+    const first = new PreferencesStore(configPath)
+    first.load()
+    first.setLanguage('zh-TW')
+
+    const second = new PreferencesStore(configPath)
+    second.load()
+    assert.deepEqual(second.ui(), { language: 'zh-TW' })
+
+    second.setLanguage(null)
+    const third = new PreferencesStore(configPath)
+    third.load()
+    assert.deepEqual(third.ui(), {})
+  })
+
+  it('語言出現在送往 renderer 的投影中', () => {
+    assert.deepEqual(projectPreferences({ fontSize: 14 }, { language: 'zh-TW' }), {
+      fontSize: 14,
+      language: 'zh-TW',
+    })
+    // 「未設定即省略」的語意對新區塊同樣適用。
+    assert.deepEqual(Object.keys(projectPreferences({}, {})).length, 0)
+  })
+
+  it('existed()：偏好檔不存在時為 false，其餘一律為 true', () => {
+    // **這是首次啟動偵測的判準，而它不是「語言欄位未設定」的同義詞。**
+    const fresh = new PreferencesStore(configPath)
+    fresh.load()
+    assert.equal(fresh.existed(), false, '真正的首次啟動')
+
+    fresh.setLanguage(null) // 觸發一次寫入
+    const second = new PreferencesStore(configPath)
+    second.load()
+    assert.equal(second.existed(), true, '檔案已存在（即使語言欄位是空的）')
   })
 })

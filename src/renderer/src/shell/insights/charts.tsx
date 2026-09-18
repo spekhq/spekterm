@@ -1,3 +1,4 @@
+import { type TFunction } from 'i18next'
 import { useTranslation } from 'react-i18next'
 
 /**
@@ -83,7 +84,11 @@ export function Marks({ marks }: { marks: { label: string; value: string }[] }):
   )
 }
 
-const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+
+/** 星期的簡稱。索引 0 為星期一 —— 與 `grid` 的列序一致。 */
+function weekday(t: TFunction, day: number): string {
+  return t(`insights.weekday.${day}` as 'insights.weekday.0')
+}
 
 /** 星期 × 小時。列是星期一到日，行是本機時區的 0–23 時。 */
 export function Heatmap({ grid }: { grid: number[][] }): React.JSX.Element {
@@ -102,7 +107,7 @@ export function Heatmap({ grid }: { grid: number[][] }): React.JSX.Element {
             </span>
           ))}
           {grid.map((row, day) => (
-            <Row key={WEEKDAYS[day]} day={day} row={row} shade={shade} />
+            <Row key={day} day={day} row={row} shade={shade} />
           ))}
         </div>
       </div>
@@ -121,15 +126,19 @@ export function Heatmap({ grid }: { grid: number[][] }): React.JSX.Element {
 }
 
 function Row({ day, row, shade }: { day: number; row: number[]; shade: (n: number) => string }): React.JSX.Element {
+  // **`useTranslation` 而非 module-level 的 `t`** —— 它訂閱語言改變，於是切換語言時這一列
+  // 會自己重繪。熱力圖有 7 列，每列都掛一次 hook 是可接受的成本。
+  const { t } = useTranslation()
+
   return (
     <>
-      <span className="pr-1 text-right text-2xs leading-4 text-ink-dim">{WEEKDAYS[day]}</span>
+      <span className="pr-1 text-right text-2xs leading-4 text-ink-dim">{weekday(t, day)}</span>
       {row.map((n, hour) => (
         <span
           key={hour}
           className="h-4"
           style={{ background: shade(n) }}
-          title={`${WEEKDAYS[day]} ${hour}:00 — ${n}`}
+          title={`${weekday(t, day)} ${hour}:00 — ${n}`}
         />
       ))}
     </>

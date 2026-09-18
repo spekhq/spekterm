@@ -39,6 +39,7 @@ import { electronExtraArgs } from './lib/display.mjs'
 import { quitAndWait } from './lib/quit.mjs'
 import { runSections } from './lib/sections.mjs'
 import { PROBE_PORTS } from './lib/ports.mjs'
+import { seedLanguage } from './lib/probe-language.mjs'
 
 const BUILD_PORT = PROBE_PORTS.openspec.build
 const DEV_PORT = PROBE_PORTS.openspec.dev
@@ -375,6 +376,11 @@ async function startRendererDevServer() {
 }
 
 async function launch({ port, profileDir, rendererUrl, stub }) {
+  // 被測 app 的語言是**被指定的**：全新的 profile 會觸發首次啟動的語言偵測，
+  // 而在一台非英文的機器上，那會讓每一條 `aria-label` 選擇器選不到元素。
+  // 既有的 `preferences.json` 不動（損毀韌性與舊檔那兩段自己佈置它）。
+  seedLanguage(profileDir)
+
   const child = spawn(
     'electron',
     [`--remote-debugging-port=${port}`, `--user-data-dir=${profileDir}`, ...electronExtraArgs(), '.'],
@@ -572,7 +578,7 @@ const ACTIVATE_TREE_ROW = (title) => `(() => {
   return true
 })()`
 
-const CHANGE_TREE_ROWS = (group) => `[...document.querySelectorAll('section[aria-label="${group} changes"] [role="treeitem"][aria-level="3"]')]
+const CHANGE_TREE_ROWS = (group) => `[...document.querySelectorAll('section[aria-label="${copy('openspec.changeGroup', { group })}"] [role="treeitem"][aria-level="3"]')]
   .map((r) => ({
     slug: r.getAttribute('title'),
     anchored: r.getAttribute('aria-selected') === 'true',

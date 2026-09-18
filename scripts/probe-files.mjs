@@ -28,11 +28,12 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { check, connectToApp, pollFor, pollUntil } from './lib/cdp.mjs'
-import { copy } from './lib/copy.mjs'
+import { copy, copyIn } from './lib/copy.mjs'
 import { awaitMounted, describeMounted } from './lib/mounted.mjs'
 import { electronExtraArgs } from './lib/display.mjs'
 import { quitAndWait } from './lib/quit.mjs'
 import { PROBE_PORTS } from './lib/ports.mjs'
+import { seedLanguage } from './lib/probe-language.mjs'
 
 const BUILD_PORT = PROBE_PORTS.files.build
 const DEV_PORT = PROBE_PORTS.files.dev
@@ -93,6 +94,15 @@ function makeFixture() {
   mkdirSync(outside, { recursive: true })
   writeFileSync(join(outside, 'secret.txt'), 'do not read\n')
   symlinkSync(outside, join(repo, 'escape-link'))
+
+  // **能分辨兩個 collator 的檔名。**
+  //
+  // 實測：`Intl.Collator('en')` 把漢字排在拉丁字母**之後**，`zh-TW` 排在**之前**。
+  // **純 ASCII 的檔名在兩個 locale 下順序完全相同** —— 若 fixture 只種三個 ASCII 檔名，
+  // 「排序隨語言改變」那條斷言會恆真，而它看起來跟通過一模一樣。
+  writeFileSync(join(repo, 'zebra-sort.txt'), 'z\n')
+  writeFileSync(join(repo, '中文排序.txt'), 'zh\n')
+  writeFileSync(join(repo, 'apple-sort.txt'), 'a\n')
 
   const plain = join(base, 'repo-plain')
   mkdirSync(plain, { recursive: true })
@@ -158,6 +168,11 @@ async function startRendererDevServer() {
 }
 
 async function launch({ port, profileDir, rendererUrl }) {
+  // 被測 app 的語言是**被指定的**：全新的 profile 會觸發首次啟動的語言偵測，
+  // 而在一台非英文的機器上，那會讓每一條 `aria-label` 選擇器選不到元素。
+  // 既有的 `preferences.json` 不動（損毀韌性與舊檔那兩段自己佈置它）。
+  seedLanguage(profileDir)
+
   const child = spawn(
     'electron',
     [`--remote-debugging-port=${port}`, `--user-data-dir=${profileDir}`, ...electronExtraArgs(), '.'],
@@ -1147,6 +1162,66 @@ async function probeBuild(fixture, profile) {
       `quick open=${JSON.stringify(quickOpenUnderDialog)}；對話框仍開著=${dialogStillOpen}`)
     await pressEsc(app.client)
     await sleep(400)
+
+    // ── ui-localization：排序與相對時間隨 UI 語言 ──────────────────────────
+    console.log('\n排序與相對時間的 locale')
+    const sortOrder = `[...document.querySelectorAll('[role="treeitem"]')]
+      .map((r) => r.getAttribute('title'))
+      .filter((t) => t && t.endsWith('-sort.txt') || t === '中文排序.txt')`
+
+    const orderInEnglish = await pollUntil(app.client, sortOrder, (v) => Array.isArray(v) && v.length === 3, 8000)
+    check(results, '前置：三個能分辨 collator 的檔名都在樹上',
+      Array.isArray(orderInEnglish) && orderInEnglish.length === 3, JSON.stringify(orderInEnglish))
+
+    // 相對時間以當前語言呈現 —— 檔案樹的每一列都在顯示它。
+    const relativeInEnglish = await app.client.evaluate(
+      `document.querySelector('[role="treeitem"][title="README.md"]')?.textContent ?? ''`)
+
+    /**
+     * 切換語言 —— **必須走產品自己的入口（設定對話框的選單）**。
+     *
+     * 直接呼叫 `window.workspace.settings.setLanguage(...)` 只會改**主行程**的語言：
+     * renderer 自己那份 i18n 是由 `PreferencesProvider` 在 IPC resolve 之後才套用的。
+     * 以 preload 的方法驅動，畫面一個字都不會變，而斷言看起來就像「排序沒有隨語言改變」。
+     */
+    const switchLanguageTo = async (language) => {
+      await app.client.evaluate(`document.querySelector('[aria-label="${copy('activityBar.settings')}"]')?.click()`)
+      await pollUntil(app.client,
+        `document.querySelector('[aria-label="${copy('settings.language')}"]') !== null`, (v) => v === true, 8000)
+      await app.client.evaluate(`(() => {
+        const select = document.querySelector('[aria-label="${copy('settings.language')}"]')
+        select.value = ${JSON.stringify(language)}
+        select.dispatchEvent(new Event('change', { bubbles: true }))
+      })()`)
+      await pollUntil(app.client, 'document.documentElement.lang', (v) => v === language, 8000)
+      await pressEsc(app.client)
+    }
+    await switchLanguageTo('zh-TW')
+
+    const orderInChinese = await pollUntil(
+      app.client, sortOrder, (v) => Array.isArray(v) && v.length === 3 && JSON.stringify(v) !== JSON.stringify(orderInEnglish), 8000)
+    check(results, '檔名的排序隨 UI 語言改變',
+      JSON.stringify(orderInChinese) !== JSON.stringify(orderInEnglish),
+      `en=${JSON.stringify(orderInEnglish)} zh=${JSON.stringify(orderInChinese)}`)
+
+    const relativeInChinese = await app.client.evaluate(
+      `document.querySelector('[role="treeitem"][title="README.md"]')?.textContent ?? ''`)
+    check(results, '相對修改時間隨 UI 語言改變',
+      relativeInChinese !== relativeInEnglish && relativeInChinese.length > 0,
+      `en=${JSON.stringify(relativeInEnglish.slice(-24))} zh=${JSON.stringify(relativeInChinese.slice(-24))}`)
+
+    // 切回基準語言 —— **此後的段落全部以英文的選擇器定位元素**。
+    // 注意選單本身的 `aria-label` 現在是中文的，因此這裡的選擇器也要是中文的。
+    await app.client.evaluate(`document.querySelector('[aria-label="${copyIn('zh-TW', 'activityBar.settings')}"]')?.click()`)
+    await pollUntil(app.client,
+      `document.querySelector('[aria-label="${copyIn('zh-TW', 'settings.language')}"]') !== null`, (v) => v === true, 8000)
+    await app.client.evaluate(`(() => {
+      const select = document.querySelector('[aria-label="${copyIn('zh-TW', 'settings.language')}"]')
+      select.value = 'en'
+      select.dispatchEvent(new Event('change', { bubbles: true }))
+    })()`)
+    await pollUntil(app.client, 'document.documentElement.lang', (v) => v === 'en', 8000)
+    await pressEsc(app.client)
   } finally {
     await app.close()
   }

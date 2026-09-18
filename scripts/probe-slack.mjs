@@ -26,11 +26,12 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, unlinkSync, writeFileSync
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { check, connectToApp, pollFor } from './lib/cdp.mjs'
-import { copy, label } from './lib/copy.mjs'
+import { copy, copyIn, label } from './lib/copy.mjs'
 import { electronExtraArgs } from './lib/display.mjs'
 import { awaitMounted } from './lib/mounted.mjs'
 import { PROBE_PORTS, STUB_PORTS } from './lib/ports.mjs'
 import { runSections } from './lib/sections.mjs'
+import { seedLanguage } from './lib/probe-language.mjs'
 import {
   STUB_CHANNEL_NAME,
   seedSlackSettings,
@@ -73,6 +74,11 @@ function seedProfile() {
 }
 
 async function launch({ profile, env, port = PORT }) {
+  // 被測 app 的語言是**被指定的**：全新的 profile 會觸發首次啟動的語言偵測，
+  // 而在一台非英文的機器上，那會讓每一條 `aria-label` 選擇器選不到元素。
+  // 既有的 `preferences.json` 不動（損毀韌性與舊檔那兩段自己佈置它）。
+  seedLanguage(profile)
+
   const child = spawn(
     'electron',
     [`--remote-debugging-port=${port}`, `--user-data-dir=${profile}`, ...electronExtraArgs(), '.'],
@@ -247,6 +253,80 @@ async function runDelivery(_mode, context) {
       authCalls.every((e) => e.authorization.startsWith('Bearer ') && !e.body.includes('xoxp-')),
       '憑證只出現在 header',
     )
+  })
+}
+
+/**
+ * ui-localization：**已持久化的文字，其語言於寫入當下固定。**
+ *
+ * Slack 的本文由投遞者的訊息與**我們自己寫的抬頭**組成，而本文是唯一「呈現給使用者的那一份
+ * 逐字元就是交給 agent 的那一份」的欄位。它在**攝入的那一刻**組好並存進磁碟，之後不再重算
+ * —— 於是使用者以中文介面收下的項目，在他切成英文之後**仍然是中文**。
+ *
+ * **那是對的**（本文是一份已交付的記錄），但它要求一條明文的禁令：呈現時 SHALL NOT 重新翻譯。
+ * 一個「順手在呈現層再 `t()` 一次」的實作會讓畫面變英文而磁碟上還是中文 —— 正是
+ * `agent-intake` 那條逐字元不變式在防的分岔，**而它只在使用者改變過語言之後才會出現**：
+ * 一輪不曾改變語言的驗收碰不到它，所以這一段自己造出那個動作。
+ */
+async function runPersistedLanguage(_mode, context) {
+  const { profile } = seedProfile()
+  // **以中文攝入** —— 抬頭因此是中文的，而它會被寫進本文。
+  seedLanguage(profile, { language: 'zh-TW' })
+
+  const mention = stubMention({ secondsAgo: 60, text: 'PERSISTED-BODY' })
+  const stub = await startStubSlack({
+    port: STUB_PORT,
+    state: { messages: [mention], threads: { [mention.ts]: [mention] } },
+  })
+  seedSlackSettings(profile, { baseUrl: stub.baseUrl })
+  seedSlackToken(profile)
+  context.stub = stub
+
+  await withApp(context, { profile, stub }, async (app) => {
+    await app.client.evaluate(
+      `document.querySelector('[aria-label="${copyIn('zh-TW', 'activityBar.handoffs')}"]')?.click()`)
+
+    const zhHeader = copyIn('zh-TW', 'slack.bodyHeader', { channel: STUB_CHANNEL_NAME })
+    const bodyInChinese = await pollFor({
+      read: () => app.client.evaluate('document.body.textContent ?? \'\''),
+      settled: (text) => text.includes('PERSISTED-BODY'),
+      timeoutMs: 30_000,
+      label: '卡片已呈現',
+    }).catch(() => '')
+    check(results, '前置：以中文攝入的本文帶著中文的抬頭',
+      bodyInChinese.includes(zhHeader), zhHeader)
+
+    // 切成英文 —— 走產品自己的入口。
+    await app.client.evaluate(
+      `document.querySelector('[aria-label="${copyIn('zh-TW', 'activityBar.settings')}"]')?.click()`)
+    await pollFor({
+      read: () => app.client.evaluate(
+        `document.querySelector('[aria-label="${copyIn('zh-TW', 'settings.language')}"]') !== null`),
+      settled: Boolean,
+      timeoutMs: 10_000,
+      label: '設定對話框開啟',
+    })
+    await app.client.evaluate(`(() => {
+      const select = document.querySelector('[aria-label="${copyIn('zh-TW', 'settings.language')}"]')
+      select.value = 'en'
+      select.dispatchEvent(new Event('change', { bubbles: true }))
+    })()`)
+    await pollFor({
+      read: () => app.client.evaluate('document.documentElement.lang'),
+      settled: (value) => value === 'en',
+      timeoutMs: 10_000,
+      label: '介面已切成英文',
+    })
+
+    const afterSwitch = await app.client.evaluate('document.body.textContent ?? \'\'')
+    check(results, '前置：介面確實切成了英文',
+      afterSwitch.includes(copy('activityBar.settings')) || afterSwitch.includes(copy('settings.title')),
+      afterSwitch.slice(0, 120))
+    check(results, '改變語言後，既有項目的本文仍為攝入當下的語言',
+      afterSwitch.includes(zhHeader),
+      afterSwitch.includes(copy('slack.bodyHeader', { channel: STUB_CHANNEL_NAME }))
+        ? '本文被呈現層重新翻譯了 —— 它與磁碟上交給 agent 的那一份已經分岔'
+        : afterSwitch.slice(0, 200))
   })
 }
 
@@ -517,6 +597,7 @@ async function runEndpointVisible(_mode, context) {
 
 const SECTIONS = [
   { name: 'runDelivery', run: runDelivery },
+  { name: 'runPersistedLanguage', run: runPersistedLanguage },
   { name: 'runAuthFailure', run: runAuthFailure },
   { name: 'runRateLimited', run: runRateLimited },
   { name: 'runNoDuplicate', run: runNoDuplicate, deps: ['runDelivery'] },

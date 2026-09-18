@@ -1,7 +1,9 @@
 import { execFile } from 'node:child_process'
 import { ipcMain } from 'electron'
+import { DEFAULT_LANGUAGE, isSupportedLanguage, setLanguage } from '@shared/i18n'
 import { type ProjectedPreferences, projectPreferences } from '../preferences-store'
 import type { PreferencesStore } from '../preferences-store'
+import { collator } from '@shared/i18n/locale'
 
 export const SETTINGS_CHANNELS = {
   get: 'workspace:settings:get',
@@ -9,6 +11,7 @@ export const SETTINGS_CHANNELS = {
   setGpuAcceleration: 'workspace:settings:setGpuAcceleration',
   setAgentStatus: 'workspace:settings:setAgentStatus',
   setAgentView: 'workspace:settings:setAgentView',
+  setLanguage: 'workspace:settings:setLanguage',
   listMonospaceFonts: 'workspace:settings:listMonospaceFonts',
 } as const
 
@@ -43,7 +46,7 @@ function listMonospaceFonts(): Promise<string[]> {
           const name = line.split(',')[0].trim()
           if (name) families.add(name)
         }
-        resolve([...families].sort((a, b) => a.localeCompare(b)))
+        resolve([...families].sort((a, b) => collator().compare(a, b)))
       },
     )
   })
@@ -67,7 +70,7 @@ function listMonospaceFonts(): Promise<string[]> {
  */
 export function registerSettingsHandlers(store: PreferencesStore): void {
   ipcMain.handle(SETTINGS_CHANNELS.get, (): ProjectedPreferences =>
-    projectPreferences(store.get()),
+    projectPreferences(store.get(), store.ui()),
   )
 
   ipcMain.handle(
@@ -78,29 +81,47 @@ export function registerSettingsHandlers(store: PreferencesStore): void {
       fontSize: number | null,
       lineHeight: number | null,
     ): ProjectedPreferences =>
-      projectPreferences(store.setTerminalFont(fontFamily, fontSize, lineHeight)),
+      projectPreferences(store.setTerminalFont(fontFamily, fontSize, lineHeight), store.ui()),
   )
 
   // 值的驗證同樣在 store（只認真正的布林；其餘一律當成未設定＝預設啟用）。
   ipcMain.handle(
     SETTINGS_CHANNELS.setAgentStatus,
     (_event, enabled: unknown): ProjectedPreferences =>
-      projectPreferences(store.setAgentStatus(typeof enabled === 'boolean' ? enabled : null)),
+      projectPreferences(store.setAgentStatus(typeof enabled === 'boolean' ? enabled : null), store.ui()),
   )
 
   // 值的白名單同樣在 store（只認那兩個字面值；其餘一律當成未設定＝預設的終端 view）。
+  /**
+   * UI 語言。
+   *
+   * **主行程先套用，再回傳投影 —— 順序是承重的。** 反過來的話，套用在主行程失敗的那一刻
+   * 畫面已經是新語言，而原生對話框與作業系統通知還是舊語言，**而那個分岔不會產生任何錯誤**。
+   *
+   * 值的白名單在 store（`sanitizeLanguage` 只認受支援的語言）。
+   */
+  ipcMain.handle(
+    SETTINGS_CHANNELS.setLanguage,
+    async (_event, language: unknown): Promise<ProjectedPreferences> => {
+      const applied = store.setLanguage(isSupportedLanguage(language) ? language : null)
+      await setLanguage(applied.language ?? DEFAULT_LANGUAGE)
+      return projectPreferences(store.get(), applied)
+    },
+  )
+
   ipcMain.handle(
     SETTINGS_CHANNELS.setAgentView,
     (_event, view: unknown): ProjectedPreferences =>
       projectPreferences(
         store.setAgentView(view === 'terminal' || view === 'conversation' ? view : null),
+        store.ui(),
       ),
   )
 
   ipcMain.handle(
     SETTINGS_CHANNELS.setGpuAcceleration,
     (_event, enabled: boolean | null): ProjectedPreferences =>
-      projectPreferences(store.setGpuAcceleration(typeof enabled === 'boolean' ? enabled : null)),
+      projectPreferences(store.setGpuAcceleration(typeof enabled === 'boolean' ? enabled : null), store.ui()),
   )
 
   ipcMain.handle(SETTINGS_CHANNELS.listMonospaceFonts, (): Promise<string[]> =>

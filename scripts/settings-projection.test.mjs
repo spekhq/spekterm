@@ -57,10 +57,11 @@ const WIDE_TYPE = 'TerminalPreferences'
  */
 const PROJECTION_RULES = [
   {
-    file: join('src', 'main', 'ipc', 'settings.ts'),
+    files: [join('src', 'main', 'ipc', 'settings.ts')],
     storeModule: join('src', 'main', 'preferences-store.ts'),
     receiver: 'store',
     projector: 'projectPreferences',
+    fullObjectTypes: ['TerminalPreferences'],
     fullObjectMethods: [
       'get',
       'setTerminalFont',
@@ -70,11 +71,16 @@ const PROJECTION_RULES = [
     ],
   },
   {
-    file: join('src', 'main', 'slack-state.ts'),
+    // **兩個檔案，而那不是為了周全。** `state()` 的組裝在 `slack-state.ts`，但三個 setter 的
+    // IPC 處理常式在 `ipc/slack.ts` —— 只掃前者的話，後者裡一個直接 `return
+    // input.settings.setApiBaseUrl(...)` 的實作**不會被任何東西擋下**。目前那三個處理常式
+    // 都丟棄回傳值改呼叫 `state()`（因此沒有外洩），但那是實作恰好如此，不是被守著。
+    files: [join('src', 'main', 'slack-state.ts'), join('src', 'main', 'ipc', 'slack.ts')],
     storeModule: join('src', 'main', 'slack-settings-store.ts'),
     receiver: 'settings',
     projector: 'projectSlackSettings',
-    fullObjectMethods: ['get'],
+    fullObjectTypes: ['SlackSettings'],
+    fullObjectMethods: ['get', 'setLookbackDays', 'setApiBaseUrl'],
   },
 ]
 
@@ -84,6 +90,13 @@ const PROJECTION_RULES = [
  * 判準是**父節點**：合法的唯一位置是投影函式的引數。不看「檔案裡有沒有出現投影函式」——
  * 那種寫法對 `project(store.get()); return store.get()` 一樣會通過。
  */
+/** 接收者運算式的最後一段名稱：`store` → `store`、`input.settings` → `settings`。 */
+function receiverNameOf(node) {
+  if (ts.isIdentifier(node)) return node.text
+  if (ts.isPropertyAccessExpression(node)) return node.name.text
+  return null
+}
+
 export function findUnprojectedStoreReads(
   source,
   fileName = 'settings.ts',
@@ -97,8 +110,11 @@ export function findUnprojectedStoreReads(
     if (
       ts.isCallExpression(node) &&
       ts.isPropertyAccessExpression(node.expression) &&
-      ts.isIdentifier(node.expression.expression) &&
-      node.expression.expression.text === receiver &&
+      // **接收者比對到最後一段，不要求它是一個裸識別碼。** `ipc/slack.ts` 的持有者是
+      // `input.settings` 而非 `settings` —— 只認識別碼的判定對那整個檔案零命中，
+      // 而那不是「沒有違規」，是「沒有在看」。（實測：把一個處理常式改成原樣轉手，
+      // 守衛照樣全綠。）
+      receiverNameOf(node.expression.expression) === receiver &&
       (fullObjectMethods === null || fullObjectMethods.includes(node.expression.name.text))
     ) {
       const parent = node.parent
@@ -108,7 +124,12 @@ export function findUnprojectedStoreReads(
         ts.isIdentifier(parent.expression) &&
         parent.expression.text === projector &&
         parent.arguments.includes(node)
-      if (!wrapped) {
+      // **回傳值被丟棄的呼叫不是違規。** `input.settings.setLookbackDays(days)` 自成一個
+      // 陳述式、其後另行 `return state()` —— 沒有任何東西抵達 renderer。少了這個判斷，
+      // 守衛會要求呼叫端把一個**根本沒有被使用的值**包進投影裡，那是噪音而不是保護，
+      // 而噪音最後會以「把這個檔案從清單裡拿掉」收場。
+      const discarded = parent !== undefined && ts.isExpressionStatement(parent)
+      if (!wrapped && !discarded) {
         found.push({ line: at(node), kind: 'unprojected-store-read', method: node.expression.name.text })
       }
     }
@@ -147,19 +168,21 @@ export function findWideTypeUses(source, fileName = 'index.ts') {
 
 test('設定送往 renderer 的每一條路都經逐欄位投影', () => {
   for (const rule of PROJECTION_RULES) {
-    const source = readFileSync(join(repoRoot, rule.file), 'utf8')
-    const offenders = findUnprojectedStoreReads(source, rule.file, rule)
+    for (const file of rule.files) {
+    const source = readFileSync(join(repoRoot, file), 'utf8')
+    const offenders = findUnprojectedStoreReads(source, file, rule)
 
     assert.deepEqual(
       offenders,
       [],
-      `${rule.file} 中每一個回傳整份設定的呼叫都必須被 ${rule.projector}() 包住 ——\n` +
+      `${file} 中每一個回傳整份設定的呼叫都必須被 ${rule.projector}() 包住 ——\n` +
         '含 setter：它們同樣把套用後的設定回傳給 renderer。原樣轉手的話，\n' +
         '日後加進那個物件的任何欄位（包含機密）都會零改動、零紅燈地送到 renderer。\n\n' +
         offenders
-          .map((hit) => `${rule.file}:${hit.line}: ${rule.receiver}.${hit.method}()`)
+          .map((hit) => `${file}:${hit.line}: ${rule.receiver}.${hit.method}()`)
           .join('\n'),
     )
+    }
   }
 })
 
@@ -179,6 +202,64 @@ test('守衛自己沒有失效：列出的方法都真的存在於 store 模組�
         '所以請更新這份清單（而不是讓它繼續全綠）。',
     )
   }
+})
+
+/**
+ * store 模組中**每一個回傳整份設定的方法**。
+ *
+ * 判準：方法的回傳型別就是那份設定的型別（而非純量或 `void`）。以語法樹判定 ——
+ * 逐行比對會被註解裡的型別名誤導。
+ */
+export function findFullObjectMethods(source, typeNames) {
+  const file = ts.createSourceFile('store.ts', source, ts.ScriptTarget.Latest, true)
+  const found = []
+
+  const visit = (node) => {
+    if (ts.isMethodDeclaration(node) && node.type && ts.isIdentifier(node.name)) {
+      const returnType = node.type.getText(file).trim()
+      if (typeNames.includes(returnType)) found.push(node.name.text)
+    }
+    ts.forEachChild(node, visit)
+  }
+  visit(file)
+
+  return found
+}
+
+test('守衛的清單是完整的：store 中每一個回傳整份設定的方法都被列出', () => {
+  // **這是上一條的反向。** 上一條確保清單裡的名字真的存在；少了這一條，**新增一個
+  // setter 而忘了登記**，它就成為一條沒有白名單的出口 —— 而守衛照樣全綠，因為它
+  // 只檢查它自己列出來的那幾個。
+  //
+  // 兩條互補而非重複：一條防改名，一條防遺漏。這個 repo 兩種失效都發生過
+  //（`agentStatus` 曾同時漏在讀入與保留兩份清單裡，見 issue #39）。
+  for (const rule of PROJECTION_RULES) {
+    const storeSource = readFileSync(join(repoRoot, rule.storeModule), 'utf8')
+    const actual = findFullObjectMethods(storeSource, rule.fullObjectTypes)
+    const unlisted = actual.filter((name) => !rule.fullObjectMethods.includes(name))
+
+    assert.deepEqual(
+      unlisted,
+      [],
+      `${rule.storeModule} 中這些方法回傳整份設定，卻不在守衛的 fullObjectMethods 裡：\n` +
+        `${unlisted.join('、')}\n` +
+        '未登記的方法不會被檢查 —— 它若原樣轉手，整份設定（含日後加進去的機密）\n' +
+        '就會零紅燈地送到 renderer。把它加進清單。',
+    )
+  }
+})
+
+test('對照組：一個未登記的回傳整份設定的方法會被抓到', () => {
+  const source = [
+    'export class Store {',
+    '  get(): TerminalPreferences { return this.value }',
+    '  setLanguage(language: string | null): TerminalPreferences { return this.get() }',
+    '  lookbackDays(): number { return 30 }',
+    '}',
+  ].join('\n')
+
+  const found = findFullObjectMethods(source, ['TerminalPreferences'])
+  assert.deepEqual(found.sort(), ['get', 'setLanguage'], '回傳純量的方法不該被列入')
 })
 
 test('preload 宣告窄的投影型別，於是窄化抵達 renderer', () => {
@@ -274,4 +355,24 @@ test('對照組：合法的寫法不被誤報', () => {
     ].join('\n'),
   )
   assert.deepEqual(preloadOk, [], `合法的 preload 宣告被誤報：${JSON.stringify(preloadOk)}`)
+})
+
+test('對照組：持有者為屬性存取時同樣被抓到', () => {
+  // `ipc/slack.ts` 的持有者是 `input.settings`。只認裸識別碼的判定對它零命中 ——
+  // 而零命中與「沒有違規」在測試輸出上長得一模一樣。
+  const hits = findUnprojectedStoreReads(
+    'ipcMain.handle(C.set, () => input.settings.setApiBaseUrl(url))',
+    'slack.ts',
+    { receiver: 'settings', projector: 'projectSlackSettings', fullObjectMethods: ['setApiBaseUrl'] },
+  )
+  assert.equal(hits.length, 1, '持有者為 input.settings 時必須照樣被抓到')
+})
+
+test('對照組：回傳值被丟棄的呼叫不是違規', () => {
+  const discarded = findUnprojectedStoreReads(
+    'ipcMain.handle(C.set, () => { input.settings.setApiBaseUrl(url); return state() })',
+    'slack.ts',
+    { receiver: 'settings', projector: 'projectSlackSettings', fullObjectMethods: ['setApiBaseUrl'] },
+  )
+  assert.deepEqual(discarded, [], '沒有任何東西抵達 renderer 的呼叫不該被要求投影')
 })

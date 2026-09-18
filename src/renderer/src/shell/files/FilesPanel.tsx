@@ -11,7 +11,7 @@ import { FileViewer } from './FileViewer'
 import { WorktreePicker } from './WorktreePicker'
 import { useDirtyBuffers } from './dirty-buffers'
 import { ROOT_PATH, baseNameOf, joinRelPath, parentOf, stripRoot } from './paths'
-import { type TreeRow, useFileTree } from './useFileTree'
+import { type TreeRow, useFileTree, describeFailure } from './useFileTree'
 
 /** 相對時間會過期。面板開著的時候，每分鐘讓它重算一次。 */
 function useNow(intervalMs = 60_000): number {
@@ -303,7 +303,7 @@ export function FilesPanel({
           />
           {worktrees.length > 1 && <span className="px-1">/</span>}
           {openPath === null ? (
-            <span className="text-ink">files</span>
+            <span className="text-ink">{t('files.breadcrumbRoot')}</span>
           ) : (
             <>
               {/* `aria-label` 不只是無障礙 —— 麵包屑裡現在有兩顆按鈕（工作目錄選擇器排在前面），
@@ -314,7 +314,7 @@ export function FilesPanel({
                 onClick={() => setOpenPath(null)}
                 className="shrink-0 text-ink-dim underline decoration-dotted underline-offset-2 hover:text-accent"
               >
-                files
+                {t('files.breadcrumbRoot')}
               </button>
               <span className="px-1">/</span>
               {/* 顯示剝掉樹根前綴，**`title` 留完整路徑** —— 它同時是探針的選擇器，而對使用者
@@ -387,7 +387,7 @@ export function FilesPanel({
         {openPath === null ? (
           <div className="h-full overflow-auto px-1 py-1">
             {tree.rootError ? (
-              <p className="px-3 py-2 text-sm text-danger">{tree.rootError}</p>
+              <p className="px-3 py-2 text-sm text-danger">{describeFailure(tree.rootError)}</p>
             ) : tree.rootLoading && tree.rows.length === 0 ? (
               <p className="px-3 py-2 text-sm text-ink-faint">{t('common.loading')}</p>
             ) : (
