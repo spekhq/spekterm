@@ -1954,6 +1954,118 @@ async function runProtocolLanguage(_mode, _modeConfig, context) {
     JSON.stringify(titles))
 }
 
+/**
+ * **落點被重新準備之後仍被偵測** —— 而這一段唯一的形狀是「session 是被還原的」。
+ *
+ * 落點的監看是 app 啟動時對 `outbox/` 根掛一次的，它綁定的是目錄這個**對象**。此前
+ * `prepareOutbox()` 在每次 spawn 把落點刪掉再建立 —— 啟動時掛上的監看於是留在一個死掉的
+ * 對象上，該 session 的投遞從此石沉大海，而來源 agent 回報它已經交接出去了。
+ *
+ * **`runHandoff` 驗不到它**：那一段的來源 session 是 app 跑起來**之後**才建立的，它的落點
+ * 是全新的目錄（監看以 `addDir` 接上），正好是唯一不受影響的情形。因此這裡必須種一份
+ * `sessions.json` 與**對應的落點目錄**，讓監看在啟動時就掛在一個既有的落點上。
+ */
+async function runHandoffRestored(_mode, _modeConfig, context) {
+  const { profile, folders } = seedProfile()
+  seedRouting(profile, { fallbackFolderId: folders[0].id })
+  const configDir = mkTemp('spekterm-intake-config-')
+  const marker = `spek-intake-${process.pid}-${Date.now()}`
+  const stub = makeStubAgent(mkTemp, configDir, { readyDelaySeconds: 2 })
+
+  // **識別碼由探針指定**（而不是像 `runHandoff` 那樣等 renderer 產生）—— 這一段要的正是
+  // 「這個落點在 app 啟動之前就存在」，而那要求我們先知道它叫什麼。
+  const RESTORED = '3f5a9c11-7d42-4b8e-9a10-5c6d7e8f9a0b'
+  const ORPHAN = '7b2e4d08-1c33-4a55-8f66-9d0e1f2a3b4c'
+  writeFileSync(
+    join(profile, 'sessions.json'),
+    JSON.stringify({
+      version: 1,
+      sessions: [
+        { id: RESTORED, folderId: folders[0].id, spawnTarget: 'claude', ordinal: 1, customTitle: 'restored' },
+      ],
+    }),
+  )
+  const restoredOutbox = join(outboxRootOf(profile), RESTORED)
+  const orphanOutbox = join(outboxRootOf(profile), ORPHAN)
+  mkdirSync(restoredOutbox, { recursive: true })
+  mkdirSync(orphanOutbox, { recursive: true })
+
+  const app = await freshApp(context, { profile, configDir, stub, marker })
+
+  /**
+   * **前置：監看真的掛在「啟動時就已經存在」的落點上。**
+   *
+   * 少了它，這一段在舊實作下**可能照樣全綠** —— 本缺陷的必要條件是「監看先掛上、落點才被
+   * 重新準備」，而那個順序在探針裡只靠時序成立（`handoffService.start()` 不被 await，
+   * 失敗時也只寫診斷輸出）。監看若根本沒起來，重新準備就毀不掉任何東西。
+   *
+   * 用的是**孤兒落點**（沒有對應的 session）：它走完整條事件路徑直到一次可見的拒絕，
+   * 而且不會多開一個 session 去污染後面的計數。投遞寫在畫面就緒之後 —— 啟動掃描那時
+   * 早已跑完，因此讀到它的只可能是監看。
+   */
+  const quiet = await settledNotifications(profile, '通知落定（前置之前）')
+  writeFileSync(
+    join(orphanOutbox, 'precondition.json'),
+    JSON.stringify({ target: '__no_such_repo__', title: 'PRECONDITION', body: 'x' }),
+  )
+  const reason = copy('intake.rejectReason.TARGET_NOT_FOUND')
+  const arrived = await pollFor({
+    read: () => notifications(profile),
+    settled: (list) => list.slice(quiet.length).some((n) => `${n.title ?? ''} ${n.body ?? ''}`.includes(reason)),
+    timeoutMs: 25_000,
+    label: '啟動時既有的落點上，監看讀到了新投遞',
+  }).catch(() => notifications(profile))
+  check(
+    results,
+    '前置：監看掛在啟動時就已存在的落點上',
+    arrived.slice(quiet.length).some((n) => `${n.title ?? ''} ${n.body ?? ''}`.includes(reason)),
+    `新增=${JSON.stringify(arrived.slice(quiet.length).map((n) => n.body ?? n.title))}`,
+  )
+
+  // ── 喚醒被還原的 session：`prepareOutbox()` 對一個**既有的**落點跑一次 ──
+  const sourceName = basename(folders[0].path)
+  await pollFor({
+    read: () => app.client.evaluate(`(() => { ${railRowClick(sourceName)} return ${RAIL_SELECTION} === ${JSON.stringify(sourceName)} })()`),
+    settled: Boolean,
+    timeoutMs: 15_000,
+    label: '被還原的 session 所屬的 folder 已被選中',
+  })
+  const sessionsBefore = await pollFor({
+    read: () => ptySessionPids(marker).length,
+    settled: (count) => count >= 1,
+    timeoutMs: 30_000,
+    label: '被還原的 session 已喚醒（pty 起來了）',
+  }).catch(() => ptySessionPids(marker).length)
+  check(results, '前置：被還原的 session 真的被喚醒', sessionsBefore >= 1, `pty=${sessionsBefore}`)
+
+  /**
+   * **等監看把那次替換處理完再投遞。**
+   *
+   * 重新準備之後**立刻**寫進去的檔案，會在監看重新讀取那個新目錄時被一併撿走 —— 於是一個
+   * 監看已死的實作照樣全綠（單元測試那一側的第一版對照組就是這樣過的）。現場的投遞是在
+   * spawn 之後好幾分鐘才寫的。這個間隔在重現那件事，順帶讓上面那則通知的合併窗結算。
+   */
+  await new Promise((resolve) => setTimeout(resolve, WINDOW_WAIT_MS))
+
+  writeFileSync(
+    join(restoredOutbox, 'restored.json'),
+    JSON.stringify({ target: basename(folders[1].path), title: 'RESTORED-HANDOFF', body: HANDOFF_BODY }),
+  )
+
+  const sessionsAfter = await pollFor({
+    read: () => ptySessionPids(marker).length,
+    settled: (count) => count > sessionsBefore,
+    timeoutMs: 30_000,
+    label: '被還原的 session 其交接建立了目標 folder 的 session',
+  }).catch(() => ptySessionPids(marker).length)
+  check(
+    results,
+    '落點被重新準備之後（session 被還原），其後寫入的交接仍被偵測並建立 session',
+    sessionsAfter > sessionsBefore,
+    `前=${sessionsBefore} 後=${sessionsAfter}`,
+  )
+}
+
 const SECTIONS = [
   { name: 'runIngest', run: runIngest },
   { name: 'runPlainText', run: runPlainText },
@@ -1969,6 +2081,7 @@ const SECTIONS = [
   { name: 'runNotifyActivate', run: runNotifyActivate },
   { name: 'runFocusStability', run: runFocusStability },
   { name: 'runHandoff', run: runHandoff },
+  { name: 'runHandoffRestored', run: runHandoffRestored },
   { name: 'runHandoffFailure', run: runHandoffFailure },
   { name: 'runHandoffDisabled', run: runHandoffDisabled },
 ]

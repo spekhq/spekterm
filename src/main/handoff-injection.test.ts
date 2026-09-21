@@ -82,12 +82,18 @@ test('清單變動時重寫活著的 session 的自我介紹', () => {
   assert.ok(introContext('s1').includes('/repos/beta'))
 })
 
-test('上一輪的殘留不會在重建後被重新投遞', () => {
+test('上一輪未被消費的投遞不會在重建時被清掉', () => {
+  // **這條原本是反過來寫的**（「殘留不會在重建後被重新投遞」），而它釘住的理由不成立：
+  // 已經處理過的投遞早就被消費，即使沒有，去重也會在建立 session 之前擋下它。
+  // 清得到的只有「同一個 session 上一輪的殘留」，而那正是啟動掃描本來就會讀到的；
+  // 代價卻是真的 —— 一則**尚未被消費**的待處理交接被銷毀，而投遞端與使用者兩邊都不會知道。
+  //
+  // 落點不被刪除同時是「重新準備之後仍被偵測」的前提，見 `handoff-outbox.test.ts`。
   setup()
   prepareHandoffInjection('s1', true, folders)
   fs.writeFileSync(path.join(outboxDir('s1'), 'leftover.json'), '{}')
 
   prepareHandoffInjection('s1', true, folders)
 
-  assert.deepEqual(fs.readdirSync(outboxDir('s1')), [])
+  assert.deepEqual(fs.readdirSync(outboxDir('s1')), ['leftover.json'])
 })

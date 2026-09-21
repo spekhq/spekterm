@@ -292,6 +292,49 @@ export const MUTATIONS = [
       + '> 打開過收件匣 —— 而促使他去打開收件匣的那個訊號（通知）正是同一條路徑上的東西。\n'
       + '> 兩者同時只在一次執行之內有效時，「可見」在實際使用中等於「不可見」。',
   },
+  // ── handoff-outbox-watch-survives-restore ───────────────────────────────
+  {
+    name: 'outbox-recreated-on-prepare',
+    file: 'src/main/handoff-outbox.ts',
+    command: 'test',
+    from: `    // \`lstat\` 而非 \`stat\`：指向別處的 symlink 也要當成「不是我們的落點」而重建。
+    const existing = fs.lstatSync(dir, { throwIfNoEntry: false })
+    if (!existing?.isDirectory()) {
+      fs.rmSync(dir, { recursive: true, force: true })
+      fs.mkdirSync(dir, { recursive: true })
+    }`,
+    to: `    fs.rmSync(dir, { recursive: true, force: true })
+    fs.mkdirSync(dir, { recursive: true })`,
+    expectRed: '落點被重新準備之後，其後寫入的投遞仍被偵測',
+    why: '**退回「準備落點＝刪掉再重建」。** 落點的監看綁定的是目錄這個**對象**，刪掉再建立之後\n'
+      + '> 它留在一個不再有動靜的舊對象上 —— 該 session 的投遞從此石沉大海，而來源 agent 回報\n'
+      + '> 它已經交接出去了。**這個 mutation 同時讓另外兩條變紅**（「未被消費的投遞不被清掉」\n'
+      + '> 與 fd 判準），那是刻意的：後者沒有專屬的 mutation（同步函式裡讓不出 event loop\n'
+      + '> tick，「rm → 讓出一個 tick → mkdir」那個變體寫不出來），它獨立的價值在於**與時序\n'
+      + '> 無關**。\n'
+      + '> **若某天這條不再變紅**，那是 chokidar 換了行為的警報，不是把對照組刪掉的理由 ——\n'
+      + '> 屆時要重新論證「不碰那個目錄」這個不變式還承不承重。',
+  },
+  {
+    name: 'outbox-recreated-on-prepare-probe',
+    file: 'src/main/handoff-outbox.ts',
+    section: 'runHandoffRestored',
+    from: `    // \`lstat\` 而非 \`stat\`：指向別處的 symlink 也要當成「不是我們的落點」而重建。
+    const existing = fs.lstatSync(dir, { throwIfNoEntry: false })
+    if (!existing?.isDirectory()) {
+      fs.rmSync(dir, { recursive: true, force: true })
+      fs.mkdirSync(dir, { recursive: true })
+    }`,
+    to: `    fs.rmSync(dir, { recursive: true, force: true })
+    fs.mkdirSync(dir, { recursive: true })`,
+    expectRed: '落點被重新準備之後（session 被還原），其後寫入的交接仍被偵測並建立 session',
+    why: '**同一個 mutation，另一個載體。** 單元測試證明得了「監看路徑在重新準備之後還通」，\n'
+      + '> 證明不了被出貨的那份程式碼在真實的**還原**路徑上也是如此（`sessions.json` 被還原、\n'
+      + '> 休眠的 session 被喚醒、落點在那一刻被重新準備）。\n'
+      + '> **只登記其中一條的代價是另一個載體從來沒有被證明有鑑別力。**\n'
+      + '> 這一段的兩條**前置**在這個 mutation 之下仍然是綠的，而那是它們存在的理由：\n'
+      + '> 它們證明監看確實掛上了、session 確實被喚醒了，於是唯一紅的那條就是規格說的那件事。',
+  },
   {
     name: 'handoff-notify-always-inbox',
     file: 'src/main/index.ts',

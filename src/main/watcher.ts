@@ -15,6 +15,26 @@ import { type FSWatcher, watch as chokidarWatch } from 'chokidar'
  * 「建立一個沒有錯誤處理的 watcher」表達不出來。這道約束由 eslint（擋靜態 import）與
  * `scripts/watcher-source.test.mjs`（擋動態 import、擋本模組再導出 chokidar 的值）共同維持。
  *
+ * ## 被監看的目錄被「刪掉再重建」，監看就死了 —— 而**檔案撐得住，目錄不撐**
+ *
+ * 監看綁定的是目錄這個**對象**，不是它的路徑。把一個被監看的目錄 `rmSync` 之後 `mkdirSync`，
+ * 路徑同名而對象已換，監看留在一個不再有任何動靜的舊對象上 —— **其後寫進那個目錄的東西
+ * 一律收不到事件**，直到監看被重建（通常是下次重啟）。
+ *
+ * **它不發出任何目錄事件**（沒有 `unlinkDir`、沒有 `addDir`），於是「在 `unlinkDir` 時重新
+ * 掛上」這條補救路徑結構上不存在。目錄裡若有檔案，刪除它們**會**發 `unlink` ——
+ * **看到事件不代表監看還活著**，那曾經讓診斷往完全錯誤的方向走。
+ *
+ * **與檔案的不對稱是這一段最該記住的一句。** 這份文件另一處寫著「`git checkout` 是寫
+ * `HEAD.lock` 再 rename 上去，HEAD 的 inode 每次都變，而 chokidar 撐得住（會重新 attach）」
+ * —— 那是**檔案**。目錄沒有那個待遇。**從檔案的實測推論到目錄會得到相反的結論。**
+ *
+ * 因此：**往一個被監看的目錄寫 `rmSync` 之前，先問誰在監看它**。要清內容就只清項目、
+ * 保留目錄本身；那個目錄確實該消失時（例如它的生命週期結束了）才刪它。
+ * 交接的投遞落點踩過這個坑（`handoff-outbox.ts` 的 `prepareOutbox`，實測與鑑別診斷見
+ * `docs/lessons/handoff.md` 第十節）；`agent-events.ts` 至今仍是「刪掉再重建」，
+ * 而它沒事**只因為沒有人在監看那個目錄**（它走 `readdirSync` 輪詢）。
+ *
  * ## 輪詢的判定依據：預設與監看目標一致，顯式才分開
  *
  * `shouldUsePolling(p)` 會 `realpath(p)` 再查 `/proc/mounts`，判定的是**那條路徑所在掛載點**的

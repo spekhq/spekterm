@@ -96,6 +96,12 @@ export function prepareEventInjection(sessionId: string, enabled: boolean): Inje
 
   try {
     // 上一輪的殘留會讓等待狀態先呈現一份過期的值。
+    //
+    // **這個「刪掉再重建」在這裡沒事，是因為這個目錄沒有任何人在監看** —— 事件的讀取走
+    // `drainEvents` 的 `readdirSync` 輪詢（見下方），而輪詢認的是路徑。
+    // **若日後改以 watcher 讀取，這個寫法會讓監看靜默失效**：watch 綁的是目錄這個對象，
+    // 刪掉重建之後它留在舊對象上，且那次替換不發出任何目錄事件。
+    // 交接的落點踩過這個坑，處置見 `handoff-outbox.ts` 的 `prepareOutbox`。
     fs.rmSync(dir, { recursive: true, force: true })
     fs.mkdirSync(dir, { recursive: true })
   } catch {
