@@ -201,6 +201,34 @@ delta 動作 SHALL 由 delta spec 的 section 標題推導。delta spec 的內�
 - **WHEN** 一份 delta spec 的內容不符預期格式
 - **THEN** 該份內容以原樣的 markdown 呈現，且視圖的其餘部分仍正常運作
 
+### Requirement: 非 Markdown 的 artifact 以原文呈現
+
+一個 change 的 artifact 不必然是 Markdown —— schema 可以宣告資料檔（change 根目錄下的
+`.yaml` / `.yml` / `.json`）。這類 artifact 的分頁 SHALL 呈現其**原文**，SHALL NOT 交由
+Markdown 渲染。
+
+**一個點得到卻空白的分頁等同於省略了那個 artifact。** 前一條 requirement 的「artifact SHALL
+NOT 被省略」只約束分頁的**存在**；內容的呈現是逐一按 artifact 的種類窮舉的，於是一個新的種類
+落空時分頁仍在、標題仍在，只有內容是空的 —— 它在型別上完全合法，在畫面上看起來像「這個檔案
+是空的」。這條 requirement 約束的是那一面。
+
+交由 Markdown 渲染**不會失敗，它會重新排版**：縮排成為程式碼區塊、`#` 成為標題、開頭的破折號
+成為清單項。資料檔的縮排承載結構，把結構呈現錯比不呈現更糟。
+
+該 artifact 的「在 Files 中開啟」入口 SHALL 指向它**實際的檔案**。artifact 的識別碼是檔名去掉
+副檔名，**SHALL NOT 假設補上 `.md` 就能還原檔名** —— 那對資料檔會指向一個不存在的路徑，而那個
+入口失敗時畫面上只是沒有反應。
+
+#### Scenario: 資料 artifact 的分頁呈現其原文
+
+- **WHEN** 錨定的 change 在其根目錄下有一份資料檔（如 `.yaml`）
+- **THEN** 該 artifact 有一個分頁，且切換到它時呈現該檔案的原文
+
+#### Scenario: 資料 artifact 的檔案入口指向實際的檔案
+
+- **WHEN** 應用程式為一份 `.yaml` 資料 artifact 解析「在 Files 中開啟」的目標
+- **THEN** 目標是該 `.yaml` 檔案本身，而非以識別碼補上 `.md` 組成的路徑
+
 ### Requirement: 瀏覽視圖以兩棵樹呈現 specs 與 changes
 
 **瀏覽** 視圖 SHALL 以上下堆疊的**兩棵樹**呈現**側欄來源** repo 的 OpenSpec 結構，兩棵樹 SHALL

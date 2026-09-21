@@ -160,7 +160,14 @@ export interface DeltaSpecView {
 export interface ChangeArtifactView {
   id: string
   title: string
-  kind: 'markdown' | 'tasks' | 'specs'
+  /**
+   * **這個 union 必須與 core 的 `ArtifactKind` 同步** —— 它是 core 的值原樣轉手，而 core
+   * 1.11.0 加進來的 `'data'`（change 根目錄下的 `.yaml` / `.yml` / `.json`）就是這樣被編譯器
+   * 攔下的。少一個值只會紅在這個檔案，**但消費端漏掉一個分支不會紅**（見 `ChangeView` 的
+   * `ArtifactContent`：kind 是逐一窮舉的，落空就是一個點得到卻空白的分頁）。
+   */
+  kind: 'markdown' | 'tasks' | 'specs' | 'data'
+  /** `kind` 為 `'markdown'` 或 `'data'`：原始檔案內容。`'tasks'` 亦帶原文（core 1.12.0 起）。 */
   content?: string
   tasks?: ParsedTasks
   specs?: DeltaSpecView[]
@@ -604,11 +611,19 @@ export class OpenSpecService {
               })),
             )
           : undefined,
-        // specs 是一整棵子目錄，沒有單一檔案可跳。
+        /*
+          檔名取自 core 的 `file`（1.12.0 起），**不是由 `id` 補上 `.md` 組出來的**。
+
+          `id` 是檔名去副檔名，於是 `asyncapi.yaml` 的 id 是 `asyncapi` —— 拼回 `.md` 會指向一個
+          **不存在的檔案**，而「在 Files 中開啟」失敗時畫面上只是沒有反應。編譯器看不見這件事。
+
+          specs 是一整棵子目錄，沒有單一檔案可跳 —— core 對它不填 `file`，於是這裡**由結構**為
+          null，不必再問一次 kind。
+        */
         relPath:
-          artifact.kind === 'specs' || !changeDir
+          !artifact.file || !changeDir
             ? null
-            : await toFolderRel(root, changeRoot, `${dirIn}/${artifact.id}.md`),
+            : await toFolderRel(root, changeRoot, `${dirIn}/${artifact.file}`),
       })),
     )
 

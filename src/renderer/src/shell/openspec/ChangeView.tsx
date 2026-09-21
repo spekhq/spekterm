@@ -306,7 +306,32 @@ function ArtifactContent({
       )}
 
       {artifact.kind === 'markdown' && artifact.content && <MarkdownView text={artifact.content} />}
+
+      {artifact.kind === 'data' && artifact.content && <DataView text={artifact.content} />}
     </>
+  )
+}
+
+/**
+ * schema 宣告的資料 artifact（change 根目錄下的 `.yaml` / `.yml` / `.json`）。
+ *
+ * **不走 `MarkdownView`** —— YAML 與 JSON 餵給 markdown 渲染器不會失敗，它會安靜地**重新排版**：
+ * 縮排被當成 code block、`#` 註解變成標題、清單的破折號被吃掉。那種失效看起來像「內容怪怪的」，
+ * 不像「渲染錯了」。原文就是這種 artifact 的全部內容，原樣呈現才是忠實的。
+ *
+ * 樣式刻意與 markdown 的 code block 一致（`.markdown pre`）—— 使用者看到的應該是同一個東西。
+ * 長行以水平捲動處理而不折行：資料檔的縮排是有意義的，折行會讓層次看起來是錯的。
+ */
+function DataView({ text }: { text: string }): React.JSX.Element {
+  const { t } = useTranslation()
+
+  return (
+    <pre
+      aria-label={t('openspec.dataArtifact')}
+      className="overflow-x-auto rounded-[5px] border border-hairline bg-shell p-3 font-mono text-sm leading-relaxed text-ink-dim"
+    >
+      {text}
+    </pre>
   )
 }
 

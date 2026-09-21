@@ -172,6 +172,7 @@
     "changeArtifact": "Change artifact",
     "tasks": "Task",
     "specDeltas": "Spec delta",
+    "dataArtifact": "資料 artifact",
     "openInFiles": "在「檔案」中開啟 {{path}}",
     "relatedChanges": "動到這個 spec 的 change：{{changes}}",
     "taskProgress": "Task 進度",

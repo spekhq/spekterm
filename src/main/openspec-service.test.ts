@@ -64,6 +64,16 @@ function makeRepo(): void {
     'openspec/changes/archive/2026-01-01-old-change/proposal.md',
     '# 舊的 change\n\n## Why\n\n歷史。\n',
   )
+  /*
+    **資料 artifact 自成一個 change，不掛在 `add-oauth` 上。**
+
+    共用 fixture 裡沒有空位：`add-oauth` 的 artifact 組成被本檔以外的斷言依賴著，而「多一個
+    artifact」正是那種會讓別人靜默改變的事。副檔名刻意取兩種（`.yaml` 與 `.json`）——
+    `relPath` 若退回「`id` 補 `.md`」的舊寫法，兩條都得紅。
+  */
+  write('openspec/changes/add-webhook/proposal.md', '# 加入 webhook\n\n## Why\n\n因為需要。\n')
+  write('openspec/changes/add-webhook/asyncapi.yaml', 'asyncapi: 3.0.0\ninfo:\n  title: Demo\n')
+  write('openspec/changes/add-webhook/limits.json', '{\n  "maxRetries": 3\n}\n')
 }
 
 beforeEach(() => {
@@ -126,6 +136,43 @@ describe('OpenSpecService 的定址邊界', () => {
     // specs 是一整棵子目錄，沒有單一檔案可跳 —— 但它底下的每個 delta spec 有。
     assert.equal(specs?.relPath, null)
     assert.equal(specs?.specs?.[0].relPath, 'openspec/changes/add-oauth/specs/auth/spec.md')
+  })
+
+  /*
+    資料 artifact（core 1.11.0 起把 change 根目錄的 `.yaml` / `.yml` / `.json` 也當 artifact）。
+
+    **這兩條的鑑別力在副檔名上。** `id` 是檔名去副檔名，於是舊寫法 `${id}.md` 組出來的
+    `asyncapi.md` 是一個不存在的檔案 —— 而「在 Files 中開啟」對一個不存在的路徑只是沒有反應，
+    沒有任何東西會紅。斷言路徑的**全文**（而不是「有值就好」）才擋得住它。
+  */
+  it('資料 artifact 被呈現，且帶著原文', async () => {
+    const detail = await create().getChange('f1', 'add-webhook')
+
+    const yaml = detail.artifacts.find((artifact) => artifact.id === 'asyncapi')
+    assert.equal(yaml?.kind, 'data')
+    assert.equal(yaml?.content, 'asyncapi: 3.0.0\ninfo:\n  title: Demo\n')
+
+    const json = detail.artifacts.find((artifact) => artifact.id === 'limits')
+    assert.equal(json?.kind, 'data')
+    assert.equal(json?.content, '{\n  "maxRetries": 3\n}\n')
+  })
+
+  it('資料 artifact 的路徑帶著它真正的副檔名，不是補上的 .md', async () => {
+    const detail = await create().getChange('f1', 'add-webhook')
+
+    assert.equal(
+      detail.artifacts.find((artifact) => artifact.id === 'asyncapi')?.relPath,
+      'openspec/changes/add-webhook/asyncapi.yaml',
+    )
+    assert.equal(
+      detail.artifacts.find((artifact) => artifact.id === 'limits')?.relPath,
+      'openspec/changes/add-webhook/limits.json',
+    )
+    // 對照：同一個 change 的 markdown artifact 仍然正確 —— 換掉組路徑的來源沒有波及它。
+    assert.equal(
+      detail.artifacts.find((artifact) => artifact.id === 'proposal')?.relPath,
+      'openspec/changes/add-webhook/proposal.md',
+    )
   })
 
   it('archived change 的路徑指向 archive 目錄', async () => {
@@ -261,7 +308,7 @@ describe('OpenSpecService 的快取與失效', () => {
     const svc = create()
 
     const before = await svc.getChanges('f1')
-    assert.equal(before.active.length, 1)
+    assert.ok(before.active.length > 0, '前提：fixture 本來就有 active change')
 
     await delay(READY_MS)
 
@@ -273,8 +320,13 @@ describe('OpenSpecService 的快取與失效', () => {
 
     assert.deepEqual(changed, ['f1'], '應收到一次該 folder 的變更通知')
 
+    /*
+      **比的是差值，不是一個寫死的數字。** 寫死的話，任何往 fixture 加一個 change 的改動都會
+      讓這條紅 —— 而它紅的理由與它要測的事（快取有沒有失效）無關。差值為 1 的鑑別力不變：
+      快取若沒失效，`after` 會等於 `before`。
+    */
     const after = await svc.getChanges('f1')
-    assert.equal(after.active.length, 2, '快取應已失效並重新掃描')
+    assert.equal(after.active.length, before.active.length + 1, '快取應已失效並重新掃描')
   })
 
   it('連續變更合併為單次通知', async () => {

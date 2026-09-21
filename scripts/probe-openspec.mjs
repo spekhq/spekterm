@@ -96,6 +96,22 @@ const DELTA = `## ADDED Requirements
 - **THEN** 新行為發生
 `
 
+/**
+ * 一份資料 artifact 的內容（core 1.11.0 起，change 根目錄的 `.yaml` / `.yml` / `.json` 也是
+ * artifact）。
+ *
+ * **每一行都是刻意的 —— 鑑別力全在「markdown 會把它改成什麼樣子」上。** 若實作把它誤交給
+ * markdown 渲染，`#` 那行會成為標題（textContent 少掉 `#`）、縮排的兩行會成為程式碼區塊、
+ * 空行與換行會被重排。一份「markdown 渲染後恰好長得一樣」的內容（例如單獨一行純文字）
+ * 會讓這條斷言在兩種實作下都通過，那就沒有在測任何東西。
+ */
+const DATA_ARTIFACT = `asyncapi: 3.0.0
+# 這一行若被當成 markdown 會變成標題
+info:
+  title: 範例
+  version: 1.0.0
+`
+
 /** 1/3 完成。探針稍後會把 1.2 勾掉，斷言進度自己變成 2/3。 */
 /**
  * task 的文字是 **markdown，而且可能有多行** —— core 1.4.0 起會把作者寫在項目底下的續行
@@ -147,6 +163,12 @@ function makeFixture() {
   writeFile(join(many, 'openspec/changes/add-oauth/proposal.md'), '# 加入 OAuth\n\n## Why\n\n因為需要。\n')
   writeFile(join(many, 'openspec/changes/add-oauth/tasks.md'), TASKS)
   writeFile(join(many, 'openspec/changes/add-oauth/specs/auth/spec.md'), DELTA)
+  /*
+    **資料 artifact 掛在 `add-oauth` 上，不掛在 `solo-change`。** 後者的分頁組成被
+    `names.join(',') === 'proposal,specs,tasks'` 硬釘著（見該段註解：那份 fixture 沒有空位）。
+    `add-oauth` 沒有任何斷言依賴它的 artifact 組成 —— tasks 進度那條看的是 `1/3`，不受影響。
+  */
+  writeFile(join(many, 'openspec/changes/add-oauth/asyncapi.yaml'), DATA_ARTIFACT)
   changeMeta(join(many, 'openspec/changes/add-invoice'), '2026-06-10')
   writeFile(join(many, 'openspec/changes/add-invoice/proposal.md'), '# 加入發票\n\n## Why\n\n因為需要。\n')
   writeFile(join(many, 'openspec/changes/add-invoice/tasks.md'), '## 1. 後端\n\n- [ ] 1.1 開工\n')
@@ -1025,6 +1047,27 @@ const CLICK_VIZ_CHIP = (label) => `(() => {
 const HAS_OPEN_IN_FILES = `Boolean(
   document.querySelector('button[aria-label$="${suffixOf('openspec.openInFiles')}"]')
 )`
+
+/**
+ * 那個入口**指向哪個檔案** —— 路徑就寫在它的 `aria-label` 裡（`Open {{path}} in Files`）。
+ *
+ * 用它而不是「入口在不在」：`HAS_OPEN_IN_FILES` 對一個指向不存在檔案的入口**照樣為真**
+ * （relPath 只要非 null，按鈕就畫得出來），而那正是「以識別碼補 `.md`」那個錯誤實作的形狀。
+ */
+const OPEN_IN_FILES_TARGET = `(() => {
+  const button = document.querySelector('button[aria-label$="${suffixOf('openspec.openInFiles')}"]')
+  if (!button) return null
+  const label = button.getAttribute('aria-label') ?? ''
+  const prefix = ${JSON.stringify(prefixOf('openspec.openInFiles'))}
+  const suffix = ${JSON.stringify(suffixOf('openspec.openInFiles'))}
+  return label.slice(prefix.length, label.length - suffix.length)
+})()`
+
+/** 資料 artifact 的原文。`textContent` 而非 `innerText` —— 後者會把換行與空白正規化掉。 */
+const DATA_ARTIFACT_TEXT = `(() => {
+  const pre = document.querySelector('pre[aria-label="${copy('openspec.dataArtifact')}"]')
+  return pre ? pre.textContent : null
+})()`
 
 const FOCUS_SESSION_TAB = (index) => `(() => {
   const tabs = [...document.querySelectorAll('[role="tablist"][aria-label="${copy('sessions.tabs')}"] button[role="tab"]')]
@@ -2228,6 +2271,38 @@ async function runAnchoringAndCoordinate(label, config, { app, single }) {
     check(results, '錨定之後本 change 的入口出現（前一段才剛驗過它不在）',
       viewsAfterAnchor.some((tab) => tab.label === copy('openspec.tabChange')),
       viewsAfterAnchor.map((tab) => tab.label).join(', '))
+
+    // ── 資料 artifact（非 Markdown 的 artifact 以原文呈現）─────────────────
+    //
+    // **`add-oauth` 是唯一驗得到這件事的 fixture** —— 它是本檔裡唯一帶資料 artifact 的
+    // change，而 `solo-change` 那份的分頁組成被硬釘著，不能往裡面加。
+    console.log('\n本 change：資料 artifact 以原文呈現')
+    const oauthArtifacts = await pollUntil(app.client, ARTIFACT_TABS, (list) => list.length > 0, 8000)
+    check(
+      results,
+      '資料 artifact 有自己的分頁（標題是完整檔名，不是 humanize 過的）',
+      oauthArtifacts.some((tab) => tab.label === 'asyncapi.yaml'),
+      oauthArtifacts.map((tab) => tab.label).join(', '),
+    )
+    check(
+      results,
+      '切換到資料 artifact 的分頁',
+      (await app.client.evaluate(CLICK_ARTIFACT('asyncapi.yaml'))) === true,
+    )
+    const dataText = await pollUntil(app.client, DATA_ARTIFACT_TEXT, (v) => v !== null, 8000)
+    check(
+      results,
+      '資料 artifact 呈現原文，逐字元相同（未經 markdown 重新排版）',
+      dataText === DATA_ARTIFACT,
+      JSON.stringify(dataText),
+    )
+    const dataTarget = await app.client.evaluate(OPEN_IN_FILES_TARGET)
+    check(
+      results,
+      '資料 artifact 的檔案入口指向 .yaml 本身，不是以識別碼補上的 .md',
+      dataTarget === 'openspec/changes/add-oauth/asyncapi.yaml',
+      String(dataTarget),
+    )
 
     await app.client.evaluate(CLICK_VIEW(copy('openspec.tabBrowse')))
     const marked = await pollUntil(

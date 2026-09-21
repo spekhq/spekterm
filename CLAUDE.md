@@ -258,13 +258,14 @@ port 通不通 —— 任一不成立就**立刻失敗並指出處置**，不進
 
 ### `@spekjs/core` 與 `@spekjs/ui`
 
-core 發佈為 **`@spekjs/core`**（本 repo 宣告 `^1.10.0`），UI 套件為 **`@spekjs/ui`**（`^1.3.1`）。
+core 發佈為 **`@spekjs/core`**（本 repo 宣告 `^1.13.0`），UI 套件為 **`@spekjs/ui`**（`^1.3.1`）。
 改名的原因：`@spek` 這個 npm scope 已被他人註冊，本專案帳號無權發佈。
 
 - **升 core 前先看 ui 的 peer 還滿不滿足** —— **不是「兩者必須同時升」**。`@spekjs/ui` 的 peer
   一路是 `@spekjs/core >=1.3.0`（1.2.0 與 1.3.1 皆然）：core 1.2.0 → 1.3.0 那次分兩步會
   `ERESOLVE`（peer 當時不被滿足），而 core 1.3.0 → **1.6.0** 那次 ui 一個字都不必動
-  （`>=1.3.0` 涵蓋它）；core 1.7.0 → **1.10.0** 與 ui 1.2.0 → **1.3.1** 一起升同樣乾淨。
+  （`>=1.3.0` 涵蓋它）；core 1.7.0 → **1.10.0** 與 ui 1.2.0 → **1.3.1** 一起升同樣乾淨；
+  core 1.10.0 → **1.13.0** 那次 ui 又是一個字都不必動（它本來就已是最新）。
   把它記成「一定要同升」的代價是實際的：要嘛做一次沒有必要的 ui 升級，要嘛以為升不了 core
   而放棄。
 - **`@spekjs/ui` 對 core 是 peer 依賴** —— 升級後確認 npm **dedupe 成同一份** core（`npm ls
@@ -283,6 +284,14 @@ core 發佈為 **`@spekjs/core`**（本 repo 宣告 `^1.10.0`），UI 套件為 
    （本 repo 自 `openspec-worktree-aggregation` 起已改用聚合版。）
 3. **實測 optional 欄位何時被填，不要從語意推論** —— 這個 repo 兩次栽在這裡：假設 `source` 不在
    （結果在，含絕對路徑）、假設 `worktrees` 是空的（結果不是）。
+4. **core 的列舉型別多一個值時，編譯器只攔得到轉手的那一處** —— 1.11.0 對 `ArtifactKind` 加了
+   `'data'`（change 根目錄的 `.yaml` / `.yml` / `.json`）。`ChangeArtifactView.kind` 是窄化的字面
+   union，於是 `openspec-service.ts` 那一行 `TS2322` 紅了 —— **但那是冰山一角**：消費端是逐一
+   窮舉 kind 的（`ChangeView` 的 `ArtifactContent`），漏掉一個分支**不會紅**，畫面上是一個點得到
+   卻空白的分頁。把 union 補上讓紅燈消失，就正好留下那個假綠。
+   **同一次還有一條只有實測看得見的**：新的 kind 讓「`id` 補上 `.md` 就是檔名」這個既有假設失效
+   （`asyncapi` 的檔案是 `asyncapi.yaml`）。1.12.0 新增的 `ChangeArtifact.file` 是正解，而它
+   **每一個非 specs artifact 都被填**（已實測；specs 樹 absent，於是特判可由結構取代）。
 
 **依賴一律宣告 npm 版本，不要把 `file:` / `link:` / `portal:` 寫進版控** —— 那會讓 CI 與
 `electron-builder` 看到與開發者機器不同的依賴。本機要同步改 core 時用 `npm link` 覆寫。
