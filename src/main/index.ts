@@ -514,65 +514,6 @@ void app.whenReady().then(async () => {
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
       createWindow(dirty)
-
-  /**
-   * 檔案落點：**mkdir → 建立監看並等它就緒 → 掃描既有內容**。
-   *
-   * 掃描不是優化 —— `createWatcher` 的 `ignoreInitial: true` 寫死且不可覆寫，於是
-   * 「app 關著的時候投遞」（正是外部 producer 存在的理由）的東西只有掃描看得到。
-   */
-  const intakeSource = new IntakeSource({
-    root: inboxRoot(app.getPath('userData')),
-    adapter: 'file',
-    service: intakeService,
-  })
-  void ensureDeliveryRoot(contextRoot(app.getPath('userData')))
-    .then(() => intakeSource.start())
-    .catch((error) => {
-      console.error(`[intake] failed to start inbox: ${String(error)}`)
-    })
-
-  /**
-   * 交接 —— 收件匣的第二個 producer。
-   *
-   * 它與共用落點**共用同一份落點實作**（`IntakeSource`），差別只在 `depth` 與 `deliver`：
-   * 交接的落點是每個 session 一層，而它的來源與目標是**投遞內容表達不出來**的東西，
-   * 只能經參數供應。
-   */
-  configureHandoff(app.getPath('userData'))
-  const handoffService = new HandoffService({
-    service: intakeService,
-    sourceOf: (sessionId) => {
-      const session = sessionStore.get(sessionId)
-      if (!session) return null
-      const folder = session.folderId === null ? null : store.list().find((f) => f.id === session.folderId)
-      return {
-        folderId: session.folderId,
-        label: session.folderId === null ? 'Global' : (folder?.name ?? session.folderId),
-      }
-    },
-    // **與自我介紹的清單同源** —— 分成兩份的話，agent 手上的選項與接收端認得的選項會分岔。
-    candidates: () => store.list().map((folder) => ({ id: folder.id, name: folder.name, path: folder.path })),
-    agentEventsEnabled: () => preferencesStore.get().agentEvents !== false,
-    // 未設定＝啟用（與另外兩個開關同一條規則）。
-    enabled: () => preferencesStore.get().agentHandoff !== false,
-    requestAutoAccept: (adapter, id, folderId) => requestAutoAccept?.(adapter, id, folderId),
-  })
-  registerHandoffService(handoffService)
-  void handoffService.start().catch((error) => {
-    console.error(`[handoff] failed to start: ${String(error)}`)
-  })
-
-  /**
-   * folder 清單變動時重寫每一個活著的 session 的自我介紹。
-   *
-   * **少了它，「清單取當下的值」只在 spawn 那一刻成立** —— hook 會在續接、壓縮、清除時重跑，
-   * 那些時刻讀到的就是一份過期的清單，而失效是靜默的（agent 交接給一個剛被移除的 repo，
-   * 得到一次它看不到的拒絕）。
-   */
-  store.subscribe(() => {
-    refreshIntros(liveSessions(), store.list())
-  })
     }
   })
 })
