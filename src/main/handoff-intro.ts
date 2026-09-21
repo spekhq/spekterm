@@ -1,6 +1,8 @@
 import fs from 'node:fs'
 import path from 'node:path'
 
+import { MAX_FIELD_LENGTH, MAX_FIRST_PARTY_BODY_LENGTH } from './intake-schema'
+import { MAX_DELIVERY_BYTES } from './intake-source'
 import type { WorkspaceFolder } from './workspace-store'
 
 /**
@@ -52,6 +54,17 @@ export interface IntroInput {
  * 可達的，而歧義對 agent 是一條死路：它收不到任何回饋，不會自己想到換一種寫法。
  */
 export function introText({ folders, outbox }: IntroInput): string {
+  /**
+   * **數字由實際生效的常數推導，不寫死。**
+   *
+   * 一份手寫的、宣稱自己完整的清單會在某一次調整之後與實際判定分岔，**而分岔不會讓任何
+   * 東西變紅** —— 與「把可交接對象的清單做成快照而非取當下值」是同一個失效方式。
+   * 這件事已經以最壞的形式發生過一次：長度上限從未被告知，一則超過它的交接被消費、
+   * 沒有留下痕跡，而來源 agent 回報「已寫出」。
+   *
+   * 守衛見 `scripts/handoff-intro-source.test.mjs`：這三個數字不得以字面值出現在本檔案。
+   */
+  const deliveryKb = Math.floor(MAX_DELIVERY_BYTES / 1024)
   const lines = [
     'You are running inside spekterm, a desktop workspace that hosts this terminal session.',
     '',
@@ -63,6 +76,15 @@ export function introText({ folders, outbox }: IntroInput): string {
     '',
     'Shape:',
     '  {"target": "<repo name or absolute path>", "title": "<one line>", "body": "<the handoff>"}',
+    '',
+    'Limits - a delivery that breaks any of these is rejected:',
+    `  title: at most ${MAX_FIELD_LENGTH} characters.`,
+    `  body:  at most ${MAX_FIRST_PARTY_BODY_LENGTH} characters. This is not a reading budget; it is the`,
+    '         point past which the agent receiving the handoff cannot read the whole thing in one go,',
+    '         so the end of it would silently never reach them.',
+    `  whole file: at most ${deliveryKb} KB.`,
+    '  If the work needs more than that, write the detail to a file in the target repo and point',
+    '  to it from the body.',
     '',
     'The target must match one of the repos below exactly (case-insensitive) by name, or by its',
     'absolute path. Names are not unique; if two repos share a name, use the absolute path.',
@@ -76,8 +98,10 @@ export function introText({ folders, outbox }: IntroInput): string {
     'When a handoff is accepted, spekterm opens a new agent session in the target repo with the',
     'body prepared and the first prompt typed in but NOT submitted. The user sends it.',
     '',
-    'You will NOT be told whether a handoff succeeded. There is no reply channel. Say that you',
-    'wrote the handoff, not that it was delivered.',
+    'A handoff can be rejected: an unknown target, a body over the limit, a file over the limit.',
+    'When that happens the user sees it in their inbox, but YOU are not told - there is no reply channel.',
+    'A rejected handoff looks exactly like a successful one from where you stand.',
+    'Say that you wrote the handoff, not that it was delivered.',
   ]
   return lines.join('\n')
 }

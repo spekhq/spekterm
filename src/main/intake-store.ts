@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 
-import type { Intake, IntakeAuthored, IntakeVerified } from './intake-schema'
+import type { Intake, IntakeAuthored, IntakeRejection, IntakeVerified } from './intake-schema'
 
 /**
  * 收件匣的狀態 index。
@@ -54,11 +54,56 @@ export interface IntakeRecord extends IntakeKey {
   content: IntakeContent | null
 }
 
+/**
+ * 一次拒絕在收件匣中的**痕跡**。
+ *
+ * 它住在資料層而不是 `intake-service`，理由只有一個：**落盤在這裡**，而 service 已經
+ * import store —— 反過來會是循環依賴。
+ */
+export interface IntakeNotice {
+  key: string
+  code: IntakeRejection
+  count: number
+  detail?: string
+  /**
+   * **最近一次**發生的時刻。
+   *
+   * 合併時保留最近而非最早：使用者要知道的是「這件事還在發生嗎」，而一個停在三天前的
+   * 時刻對那個問題完全沉默。
+   */
+  at: number
+  /** 來源座標的標籤。**已正規化。** */
+  origin?: string
+  /** 投遞者寫下的目標原字串。**第三方可控，已正規化。** */
+  target?: string
+  /** 投遞的 adapter —— 上界的額度以它分配。 */
+  adapter?: string
+  /**
+   * 重送會不會有不同結果。**只有永久性的才落盤。**
+   *
+   * 暫時性的每次重試都會再產生一次，落盤只是累積同一件事的副本。
+   */
+  permanent: boolean
+}
+
 interface PersistedIntake {
   version: number
   entries: IntakeRecord[]
+  /**
+   * 永久性拒絕的痕跡。**optional** —— 見 `INTAKE_VERSION` 的註解。
+   */
+  notices?: IntakeNotice[]
 }
 
+/**
+ * 落盤格式的版本。
+ *
+ * **加欄位時 SHALL NOT 遞增它。** loader 是 `version !== INTAKE_VERSION ⇒ return null`，
+ * 於是遞增一次就把使用者收件匣裡的每一則都丟掉。新欄位一律以 optional 加入，缺它時視為空。
+ *
+ * 反向也成立：舊版讀到多一個區段時，逐欄位白名單會原樣丟棄它而 `entries` 一則不少 ——
+ * **回滾不會清空收件匣**。
+ */
 export const INTAKE_VERSION = 1
 
 /** 待處理的則數上限。**保護的是收件匣，不是主行程的工作量。** */
@@ -129,7 +174,31 @@ export function parseIntakeFile(raw: string): PersistedIntake | null {
       content: isContent(content) ? content : null,
     })
   }
-  return { version: INTAKE_VERSION, entries: kept }
+  return { version: INTAKE_VERSION, entries: kept, notices: parseNotices((data as Record<string, unknown>).notices) }
+}
+
+/** 痕跡同樣走**逐欄位白名單**。缺這個區段（舊版寫出來的檔案）時視為空。 */
+function parseNotices(raw: unknown): IntakeNotice[] {
+  if (!Array.isArray(raw)) return []
+  const kept: IntakeNotice[] = []
+  for (const entry of raw) {
+    if (typeof entry !== 'object' || entry === null) continue
+    const n = entry as Record<string, unknown>
+    if (typeof n.key !== 'string' || typeof n.code !== 'string') continue
+    if (typeof n.count !== 'number' || typeof n.at !== 'number') continue
+    kept.push({
+      key: n.key,
+      code: n.code as IntakeRejection,
+      count: n.count,
+      at: n.at,
+      permanent: true,
+      ...(typeof n.detail === 'string' ? { detail: n.detail } : {}),
+      ...(typeof n.origin === 'string' ? { origin: n.origin } : {}),
+      ...(typeof n.target === 'string' ? { target: n.target } : {}),
+      ...(typeof n.adapter === 'string' ? { adapter: n.adapter } : {}),
+    })
+  }
+  return kept
 }
 
 function isContent(value: unknown): value is IntakeContent {
@@ -152,6 +221,8 @@ function isContent(value: unknown): value is IntakeContent {
 
 export class IntakeStore {
   #entries = new Map<string, IntakeRecord>()
+  /** 永久性拒絕的痕跡。**暫時性的不在這裡** —— 它們每次重試都會再產生一次。 */
+  #notices: IntakeNotice[] = []
 
   constructor(private readonly filePath: string) {}
 
@@ -167,10 +238,29 @@ export class IntakeStore {
     for (const entry of parsed.entries) {
       this.#entries.set(intakeKeyOf(entry.adapter, entry.id), entry)
     }
+    this.#notices = parsed.notices ?? []
+  }
+
+  /** 落盤的痕跡（載入時取回）。 */
+  notices(): IntakeNotice[] {
+    return this.#notices.map((n) => ({ ...n }))
+  }
+
+  /**
+   * 取代落盤的痕跡。**只收永久性的** —— 暫時性的每次重試都會再產生一次，
+   * 落盤只是累積同一件事的副本。
+   */
+  setNotices(notices: readonly IntakeNotice[]): void {
+    this.#notices = notices.filter((n) => n.permanent).map((n) => ({ ...n }))
+    this.save()
   }
 
   save(): void {
-    const payload: PersistedIntake = { version: INTAKE_VERSION, entries: [...this.#entries.values()] }
+    const payload: PersistedIntake = {
+      version: INTAKE_VERSION,
+      entries: [...this.#entries.values()],
+      ...(this.#notices.length > 0 ? { notices: this.#notices } : {}),
+    }
     fs.mkdirSync(path.dirname(this.filePath), { recursive: true })
     const tmp = `${this.filePath}.tmp`
     fs.writeFileSync(tmp, JSON.stringify(payload), 'utf8')

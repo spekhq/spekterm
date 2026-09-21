@@ -1,6 +1,7 @@
 import { t } from '@shared/i18n'
 
 import type { IntakeRecord } from './intake-store'
+import type { IntakeFailure } from './intake-service'
 
 /**
  * 通知的**決策層** —— 何時發、發幾則、發什麼。**這一層不碰作業系統。**
@@ -116,7 +117,42 @@ export function reduceForNotification(value: string): string {
   return clipped.trim()
 }
 
-export function buildPayload(batch: readonly IntakeRecord[]): NotifyPayload {
+/**
+ * 窗內累積的一個項目 —— **到達與失敗共用同一個批次、同一個窗、同一組上界**。
+ *
+ * 分成兩條通道的代價是實際的：投遞者控制數量，而「面向使用者的拒絕與警示 SHALL 有界」
+ * 的那份合併與上限只能有一份。兩條通道各自有界 ⇒ 合起來是兩倍。
+ */
+export type NotifyItem =
+  | { kind: 'arrival'; record: IntakeRecord }
+  | { kind: 'failure'; failure: IntakeFailure }
+
+export function buildPayload(items: readonly NotifyItem[]): NotifyPayload {
+  const failures = items.filter((item) => item.kind === 'failure')
+  const batch = items.filter((item) => item.kind === 'arrival').map((item) => item.record)
+
+  /**
+   * **失敗的內文只由系統文案與拒絕的類別構成。**
+   *
+   * 一則失敗**沒有可供取用的已驗證欄位** —— 它正是在攝入失敗的，`title` / `actor` /
+   * `originLabel` 三者要嘛不存在、要嘛從未經過正規化。而既有的「內文 SHALL NOT 含任何路徑、
+   * folder 名稱或識別碼」在此不放寬：投遞者寫下的目標**就是**一個 folder 名稱。
+   *
+   * 使用者要知道是哪一件事，去收件匣看痕跡 —— 而這則通知的效果正是打開收件匣。
+   */
+  if (failures.length === 1 && batch.length === 0) {
+    return {
+      title: t('intake.notify.title'),
+      body: t('intake.notify.failure', { reason: t(`intake.rejectReason.${failures[0].failure.code}`) }),
+    }
+  }
+  if (failures.length > 0) {
+    return {
+      title: t('intake.notify.titleMerged', { total: items.length }),
+      body: t('intake.notify.merged'),
+    }
+  }
+
   if (batch.length > 1) {
     return {
       title: t('intake.notify.titleMerged', { total: batch.length }),
@@ -157,7 +193,7 @@ export class IntakeNotifier {
   readonly #burstWindowMs: number
   readonly #burstMax: number
 
-  #batch: IntakeRecord[] = []
+  #batch: NotifyItem[] = []
   #cancel: (() => void) | null = null
   /** 已呈現的時刻 —— 用來判定窗與窗之間的上界。 */
   #presented: number[] = []
@@ -183,7 +219,21 @@ export class IntakeNotifier {
    * 而它在持續到達時永遠不會到期。
    */
   arrived(record: IntakeRecord): void {
-    this.#batch.push(record)
+    this.#push({ kind: 'arrival', record })
+  }
+
+  /**
+   * 一次**永久性**失敗 —— 「使用者剛剛交辦的一件事確定做不成了」。
+   *
+   * 它與到達共用窗與上界（見 `NotifyItem`）。暫時性的失敗不走這裡：那類項目會在每次補寫或
+   * 重試時再被讀到，逐次通知沒有上界，而合併只防批次、不防節奏。
+   */
+  failed(failure: IntakeFailure): void {
+    this.#push({ kind: 'failure', failure })
+  }
+
+  #push(item: NotifyItem): void {
+    this.#batch.push(item)
     if (this.#cancel !== null) return
     this.#cancel = this.#clock.after(this.#windowMs, () => this.#flush())
   }
@@ -207,10 +257,22 @@ export class IntakeNotifier {
     if (this.#presented.length >= this.#burstMax) return
 
     this.#presented.push(now)
-    this.#backend.present(
-      buildPayload(batch),
-      batch.map((record) => ({ adapter: record.adapter, id: record.id })),
-    )
+    /**
+     * **批次中含任何失敗時不提供主鍵 ⇒ 效果是打開收件匣。**
+     *
+     * 目的地由主鍵決定（`index.ts`：恰一則、已接受、session 還在 ⇒ 聚焦那個 session）。
+     * 一則失敗**沒有**主鍵（它不是一則 record），於是「一則成功交接 ＋ 一則失敗」落在同一個
+     * 窗裡時，主鍵數會恰好是 1 —— 使用者被送去那個 session，而那則失敗**從這條通道上消失**。
+     *
+     * 理由與「批次中含待處理項時打開收件匣」完全相同。
+     */
+    const hasFailure = batch.some((item) => item.kind === 'failure')
+    const keys = hasFailure
+      ? []
+      : batch.flatMap((item) =>
+          item.kind === 'arrival' ? [{ adapter: item.record.adapter, id: item.record.id }] : [],
+        )
+    this.#backend.present(buildPayload(batch), keys)
   }
 
   /** 測試用：目前窗內累積了幾則。 */

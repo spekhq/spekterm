@@ -520,6 +520,8 @@ const workspaceApi = {
     dismiss: (id: string, adapter: string): Promise<{ ok: boolean }> =>
       ipcRenderer.invoke('workspace:intake:dismiss', id, adapter),
     dismissNotices: (): Promise<{ ok: boolean }> => ipcRenderer.invoke('workspace:intake:dismissNotices'),
+    dismissNotice: (key: string, code: string): Promise<{ ok: boolean }> =>
+      ipcRenderer.invoke('workspace:intake:dismissNotice', key, code),
     rules: (): Promise<IntakeRulesSnapshot> => ipcRenderer.invoke('workspace:intake:rules'),
     setRules: (config: IntakeRulesSnapshot): Promise<{ ok: boolean }> =>
       ipcRenderer.invoke('workspace:intake:setRules', config),

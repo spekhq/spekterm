@@ -9,8 +9,11 @@ import {
   type NotifyBackend,
   type NotifyClock,
   type NotifyPayload,
+  type NotifyItem,
+  type IntakeKeyRef,
 } from './intake-notify'
 import { parseIntake } from './intake-schema'
+import type { IntakeFailure } from './intake-service'
 import type { IntakeRecord } from './intake-store'
 
 /** 可控時鐘 —— 驗收不必真的等，而「等一個真實的窗」會讓判準落在兩個都非 0 的數字之間。 */
@@ -40,11 +43,17 @@ function fakeClock(): NotifyClock & { advance: (ms: number) => void } {
   }
 }
 
-function recorder(usable = true): NotifyBackend & { sent: NotifyPayload[] } {
+function recorder(usable = true): NotifyBackend & {
+  sent: NotifyPayload[]
+  keys: (readonly IntakeKeyRef[])[]
+} {
   const sent: NotifyPayload[] = []
+  // **主鍵要記下來** —— 觸發時的目的地由它決定（恰一則、已接受 ⇒ 聚焦那個 session）。
+  const keys: (readonly IntakeKeyRef[])[] = []
   return {
     sent,
-    present: (payload) => { sent.push(payload) },
+    keys,
+    present: (payload, refs) => { sent.push(payload); keys.push(refs) },
     usable: () => usable,
     onActivate: () => {},
   }
@@ -157,10 +166,82 @@ describe('通知不可用時靜默降級', () => {
   })
 })
 
+/** 把一則紀錄包成通知批次的項目 —— 批次現在同時承載到達與失敗（見 `NotifyItem`）。 */
+function arrival(r: IntakeRecord): NotifyItem {
+  return { kind: 'arrival', record: r }
+}
+
+describe('含失敗的批次其效果是打開收件匣', () => {
+  /**
+   * **一則失敗沒有主鍵，而目的地由主鍵決定。**
+   *
+   * `index.ts`：恰一則、已接受、且它建立的 session 還在 ⇒ 聚焦那個 session；其餘打開收件匣。
+   * 於是「一則成功交接 ＋ 一則失敗」落在同一個窗裡時，主鍵數會恰好是 1 —— 使用者被送去那個
+   * session，而**那則失敗從這條通道上消失**。
+   *
+   * 處置是批次含任何失敗時不提供主鍵。主行程那一段（`notifyBackend.onActivate`）
+   * **沒有直接載體** —— 它在 `onActivate` 的回呼裡，而這個 repo 沒有那條路的測試骨架。
+   */
+  it('一則成功 ＋ 一則失敗：不提供主鍵（⇒ 打開收件匣，而非聚焦 session）', () => {
+    const clock = fakeClock()
+    const backend = recorder()
+    const notifier = new IntakeNotifier({ backend, clock, windowMs: 1000 })
+
+    notifier.arrived(record({ id: 'ok-1' }))
+    notifier.failed({ code: 'TARGET_NOT_FOUND', at: 1 })
+    clock.advance(1000)
+
+    assert.equal(backend.sent.length, 1)
+    assert.deepEqual(backend.keys[0], [], '含失敗時不得提供主鍵')
+  })
+
+  it('全部是到達時照常提供主鍵 —— 反向的錨', () => {
+    const clock = fakeClock()
+    const backend = recorder()
+    const notifier = new IntakeNotifier({ backend, clock, windowMs: 1000 })
+
+    notifier.arrived(record({ id: 'ok-1' }))
+    clock.advance(1000)
+
+    assert.equal(backend.keys[0].length, 1, '沒有失敗時主鍵照常帶出去')
+  })
+})
+
+describe('失敗的通知', () => {
+  const failure = (over: Partial<IntakeFailure> = {}): IntakeFailure => ({
+    code: 'TARGET_NOT_FOUND',
+    at: 1,
+    target: 'TARGET-MARKER',
+    origin: 'ORIGIN-MARKER',
+    ...over,
+  })
+
+  it('**內文只由系統文案與拒絕的類別構成**', () => {
+    const payload = buildPayload([{ kind: 'failure', failure: failure() }])
+    const whole = `${payload.title}\n${payload.body}`
+    // 投遞者寫下的目標**是一個 folder 名稱** —— 既有的「不得含路徑、folder 名稱或識別碼」
+    // 在此不放寬。使用者要知道是哪一件事，去收件匣看痕跡。
+    assert.equal(whole.includes('TARGET-MARKER'), false, '投遞者寫下的目標不得進入通知')
+    assert.equal(whole.includes('ORIGIN-MARKER'), false, '來源標籤不得進入通知')
+    // 反向的錨：類別確實說出來了，否則上面兩條對一個空字串照樣成立。
+    assert.ok(payload.body.length > 0, '內文不得為空')
+  })
+
+  it('**失敗與到達共用同一個批次** —— 合併之後不含任何第三方文字', () => {
+    const payload = buildPayload([
+      { kind: 'failure', failure: failure() },
+      arrival(record({ title: 'TITLE-MARKER' })),
+    ])
+    const whole = `${payload.title}\n${payload.body}`
+    assert.equal(whole.includes('TITLE-MARKER'), false)
+    assert.equal(whole.includes('TARGET-MARKER'), false)
+  })
+})
+
 describe('通知的文字', () => {
   it('**標題不含投遞提供的任何值**', () => {
     const payload = buildPayload([
-      record({ title: 'TITLE-MARKER', actor: 'ACTOR-MARKER', origin: { kind: 'slack', id: 'C1', label: 'LABEL-MARKER' } }),
+      arrival(record({ title: 'TITLE-MARKER', actor: 'ACTOR-MARKER', origin: { kind: 'slack', id: 'C1', label: 'LABEL-MARKER' } })),
     ])
     assert.equal(payload.title.includes('TITLE-MARKER'), false)
     assert.equal(payload.title.includes('ACTOR-MARKER'), false)
@@ -173,8 +254,8 @@ describe('通知的文字', () => {
 
   it('**合併的那一則不含任何第三方文字**', () => {
     const payload = buildPayload([
-      record({ id: 'a', title: 'TITLE-MARKER-A', actor: 'ACTOR-A' }),
-      record({ id: 'b', title: 'TITLE-MARKER-B', actor: 'ACTOR-B' }),
+      arrival(record({ id: 'a', title: 'TITLE-MARKER-A', actor: 'ACTOR-A' })),
+      arrival(record({ id: 'b', title: 'TITLE-MARKER-B', actor: 'ACTOR-B' })),
     ])
     const whole = `${payload.title}\n${payload.body}`
     for (const marker of ['TITLE-MARKER-A', 'TITLE-MARKER-B', 'ACTOR-A', 'ACTOR-B']) {
@@ -183,7 +264,7 @@ describe('通知的文字', () => {
   })
 
   it('**通知不含路徑、folder 名稱或識別碼**', () => {
-    const payload = buildPayload([record({ id: 'ID-MARKER' })])
+    const payload = buildPayload([arrival(record({ id: 'ID-MARKER' }))])
     const whole = `${payload.title}\n${payload.body}`
     assert.equal(whole.includes('ID-MARKER'), false, 'intake 的識別碼不得出現')
     assert.equal(/[\\/][A-Za-z0-9._-]+[\\/]/.test(whole), false, '不得含路徑形狀')
@@ -191,14 +272,14 @@ describe('通知的文字', () => {
 
   it('**僅存在於原始投遞的內容不進入通知**', () => {
     // 結構上不可達（紀錄型別不攜帶原始內容），但字元集或型別放寬時它會回來。
-    const payload = buildPayload([record({ raw: { note: 'SOURCE-ONLY-MARKER' } })])
+    const payload = buildPayload([arrival(record({ raw: { note: 'SOURCE-ONLY-MARKER' } }))])
     assert.equal(`${payload.title}${payload.body}`.includes('SOURCE-ONLY-MARKER'), false)
   })
 
   it('系統文案不依 adapter 而異', () => {
-    const fromFile = buildPayload([record()])
+    const fromFile = buildPayload([arrival(record())])
     const slack = { ...record(), adapter: 'slack' }
-    assert.equal(buildPayload([slack]).title, fromFile.title)
+    assert.equal(buildPayload([arrival(slack)]).title, fromFile.title)
   })
 })
 
@@ -235,7 +316,7 @@ describe('第三方欄位進入通知之前的縮減', () => {
     const BIDI = '\u202e'
     const BELL = '\u0007'
     const built = record({ title: `A${ZERO_WIDTH}B${BIDI}C${BELL}D` })
-    const payload = buildPayload([built])
+    const payload = buildPayload([arrival(built)])
     for (const ch of [ZERO_WIDTH, BIDI, BELL]) {
       assert.equal(payload.body.includes(ch), false, JSON.stringify(ch))
     }

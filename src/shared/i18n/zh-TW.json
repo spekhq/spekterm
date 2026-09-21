@@ -627,11 +627,17 @@
       "single": "{{origin}} · {{actor}} —— {{title}}",
       "singleNoActor": "{{origin}} —— {{title}}",
       "merged": "打開收件匣查看它們。",
-      "link": "[連結]"
+      "link": "[連結]",
+      "failure": "一則交接沒有送達：{{reason}}"
     },
     "badge": "{{total}} 則待處理",
     "openedLabel": "已開啟",
-    "fromOrigin": "來自 {{origin}}"
+    "fromOrigin": "來自 {{origin}}",
+    "noticeTarget": "給「{{target}}」",
+    "noticeRepeated": "×{{count}}",
+    "noticeOverflow": "其餘的拒絕",
+    "dismissNotice": "清除這一則",
+    "rejectedHeading_other": "{{count}} 則投遞被拒絕"
   },
   "slack": {
     "label": "Slack",

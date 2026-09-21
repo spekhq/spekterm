@@ -1,6 +1,7 @@
-import { digestOf, IntakeStore, MAX_PENDING, type IntakeRecord } from './intake-store'
+import { digestOf, IntakeStore, MAX_PENDING, type IntakeNotice, type IntakeRecord } from './intake-store'
 import { isValidIntakeId } from './intake-id'
-import { parseIntake, type DeliveryProvenance, type IntakeRejection } from './intake-schema'
+import { isPermanentRejection } from './intake-rejection'
+import { normalizeAuthored, parseIntake, type DeliveryProvenance, type IntakeRejection } from './intake-schema'
 import { saveDelivery } from './intake-archive'
 
 /**
@@ -50,6 +51,30 @@ export interface DeliverOutcome {
   notify: boolean
   detail?: string
   record?: IntakeRecord
+  /**
+   * 這次拒絕的診斷欄位 —— **由 adapter 填入**。
+   *
+   * 共用的攝入路徑算不出它們：`deliver()` 只拿得到 `provenance`（來源座標與**已解析的**
+   * 目標 folder），而「投遞者當初寫的是哪個字串」正是診斷一次「查無」時唯一有用的東西。
+   *
+   * **不讓共用路徑自己去讀 `raw.target`** —— 那會破壞「payload 自稱的一律不採信」的姿態。
+   */
+  failure?: FailureContext
+}
+
+/** 一次失敗的診斷欄位。全部 optional：不是每個 adapter 都算得出它們。 */
+export interface FailureContext {
+  /** 投遞者寫下的目標原字串。**第三方可控，進入痕跡時要正規化。** */
+  target?: string
+  /** 來源座標的標籤（folder 名稱／`Global`／已結束）。 */
+  origin?: string
+}
+
+/** 一次**永久性**失敗 —— 由 adapter 經 `reportFailure()` 送出，供通知與痕跡消費。 */
+export interface IntakeFailure extends FailureContext {
+  code: IntakeRejection
+  detail?: string
+  at: number
 }
 
 /**
@@ -58,14 +83,35 @@ export interface DeliverOutcome {
  * 同一主鍵的重複拒絕合併為一則並累加次數；總則數設上限。投遞者控制投遞的數量，
  * 而使用者的注意力是這條管線僅有的兩道人類防線之一（另一道是讀本文）。
  */
-export interface IntakeNotice {
-  key: string
-  code: IntakeRejection
-  count: number
-  detail?: string
-}
+
+/**
+ * 面向使用者的拒絕呈現，其總則數上界。
+ *
+ * **額度以 adapter 分配**（見 `#notice`）：痕跡由所有 producer 共用，而第三方來源的格式錯誤
+ * 可以是高頻的 —— 交接的失敗被擠進溢位之後，「交接的失敗對使用者可見」在真實使用中就失效了。
+ */
+export type { IntakeNotice } from './intake-store'
 
 const MAX_NOTICES = 20
+
+/** 單一 adapter 至多佔用的則數。留下的空間讓其他來源仍進得來。 */
+const MAX_NOTICES_PER_ADAPTER = 12
+
+/**
+ * 溢位桶的主鍵。
+ *
+ * **它不是一個給人看的字串** —— 呈現層要認得它並換成一句可翻譯的說明。
+ * 此前它是字面的 `'…'` 而且從未被渲染（拒絕只呈現為一個總數），落盤＋逐則呈現之後
+ * 它會直接變成畫面上的一個字。
+ */
+export const OVERFLOW_KEY = '\u0000overflow'
+
+/** 記一次拒絕時，由 adapter 提供的脈絡。 */
+export interface NoticeContext extends FailureContext {
+  adapter?: string
+  /** 見 `DeliverOutcome.notify` —— `DUPLICATE` 的兩種行為靠它分辨。 */
+  notify?: boolean
+}
 
 export interface IntakeServiceOptions {
   store: IntakeStore
@@ -80,6 +126,7 @@ export class IntakeService {
   readonly #archiveRoot: string
   readonly #maxPending: number
   #notices: IntakeNotice[] = []
+  readonly #failures = new Set<(failure: IntakeFailure) => void>()
   #listeners = new Set<() => void>()
   #arrivals = new Set<(record: IntakeRecord) => void>()
 
@@ -87,6 +134,9 @@ export class IntakeService {
     this.#store = store
     this.#archiveRoot = archiveRoot
     this.#maxPending = maxPending
+    // **痕跡跨重啟**。少了這一行，一則失敗的可見性取決於使用者在關掉應用程式之前剛好打開過
+    // 收件匣 —— 而促使他去打開收件匣的那個訊號（通知）正是同一條路徑上的東西。
+    this.#notices = store.notices()
   }
 
   get store(): IntakeStore {
@@ -97,9 +147,27 @@ export class IntakeService {
     return this.#notices.map((n) => ({ ...n }))
   }
 
+  /** 清除全部痕跡。 */
   clearNotices(): void {
     this.#notices = []
+    this.#persistNotices()
     this.#emit()
+  }
+
+  /**
+   * 清除**一則**痕跡。
+   *
+   * 一次清光全部會讓使用者為了清掉一則第三方投遞的格式錯誤，順手清掉一則他還沒處理的
+   * 交接失敗 —— 而後者正是這條通道存在的理由。
+   */
+  dismissNotice(key: string, code: string): void {
+    this.#notices = this.#notices.filter((n) => !(n.key === key && n.code === code))
+    this.#persistNotices()
+    this.#emit()
+  }
+
+  #persistNotices(): void {
+    this.#store.setNotices(this.#notices)
   }
 
   subscribe(listener: () => void): () => void {
@@ -136,20 +204,89 @@ export class IntakeService {
     for (const listener of this.#arrivals) listener(record)
   }
 
-  #notice(code: IntakeRejection, key: string, detail?: string): void {
+  /**
+   * 訂閱**永久性失敗** —— 「一件事確定做不成了，而且重送也不會不同」。
+   *
+   * ## 為什麼不是 `DeliverOutcome.notify`
+   *
+   * 那個旗標的語意是「這則拒絕要不要讓使用者在收件匣裡看到」，它對**暫時性**的拒絕
+   * 同樣為真（寫到一半、收件匣已滿）。接在它上面，一份還沒寫完的投遞會在每次補寫時
+   * 各跳一則桌面通知 —— 逐次通知沒有上界。
+   *
+   * ## 為什麼由 adapter 送出而不是在這裡判
+   *
+   * 「被拒絕的投遞 SHALL NOT 發出作業系統通知」是共用路徑的規則，交接是它**明文的例外**。
+   * 判斷「這個 adapter 適不適用那條例外」的知識在 adapter 那一側 —— 在這裡判就要硬編
+   * adapter 的名字，而那會讓例外變成常規的一部分。
+   */
+  onFailure(listener: (failure: IntakeFailure) => void): () => void {
+    this.#failures.add(listener)
+    return () => this.#failures.delete(listener)
+  }
+
+  /**
+   * 回報一次永久性失敗。**由 adapter 呼叫** —— 它才知道自己適不適用那條例外。
+   *
+   * 呈現（`#notices`）已經在拒絕發生的當下記過一筆；這裡只負責「讓使用者現在就知道」。
+   */
+  reportFailure(failure: IntakeFailure): void {
+    for (const listener of this.#failures) listener(failure)
+  }
+
+  /**
+   * 記下一次拒絕，**供收件匣逐則呈現**。
+   *
+   * ## 合併保留最近一次的時刻
+   *
+   * 使用者要知道的是「這件事還在發生嗎」，而一個停在三天前的時刻對那個問題完全沉默。
+   *
+   * ## 額度以 adapter 分配
+   *
+   * 痕跡由所有 producer 共用。第三方來源的格式錯誤可以是高頻的，而交接的失敗被擠進溢位桶
+   * 之後，「交接的失敗對使用者可見」在真實使用中就失效了 —— 它會是一個沒有任何東西會變紅
+   * 的失效。
+   */
+  #notice(code: IntakeRejection, key: string, detail?: string, context?: NoticeContext): void {
+    const at = Date.now()
     const existing = this.#notices.find((n) => n.key === key && n.code === code)
     if (existing) {
       existing.count += 1
+      existing.at = at
+      this.#persistNotices()
       return
     }
-    if (this.#notices.length >= MAX_NOTICES) {
+
+    const adapter = context?.adapter
+    const sameAdapter = this.#notices.filter((n) => n.adapter === adapter && n.key !== OVERFLOW_KEY)
+    const full = this.#notices.length >= MAX_NOTICES
+    const overQuota = adapter !== undefined && sameAdapter.length >= MAX_NOTICES_PER_ADAPTER
+    if (full || overQuota) {
       // 已達上限：合併成一則「其餘」而非無限累積。
-      const overflow = this.#notices.find((n) => n.key === '…')
-      if (overflow) overflow.count += 1
-      else this.#notices.push({ key: '…', code, count: 1 })
+      const overflow = this.#notices.find((n) => n.key === OVERFLOW_KEY)
+      if (overflow) {
+        overflow.count += 1
+        overflow.at = at
+      } else {
+        this.#notices.push({ key: OVERFLOW_KEY, code, count: 1, at, permanent: false })
+      }
+      this.#persistNotices()
       return
     }
-    this.#notices.push({ key, code, count: 1, ...(detail ? { detail } : {}) })
+
+    this.#notices.push({
+      key,
+      code,
+      count: 1,
+      at,
+      permanent: isPermanentRejection({ code, notify: context?.notify ?? true }),
+      ...(detail ? { detail } : {}),
+      ...(adapter === undefined ? {} : { adapter }),
+      // **第三方可控的兩個欄位在這裡正規化** —— 與 authored 欄位同一套白名單、同一個位置。
+      // 它們從此會被渲染、被落盤，而正規化只在攝入發生一次。
+      ...(context?.origin === undefined ? {} : { origin: normalizeAuthored(context.origin) }),
+      ...(context?.target === undefined ? {} : { target: normalizeAuthored(context.target) }),
+    })
+    this.#persistNotices()
   }
 
   /**
@@ -162,14 +299,14 @@ export class IntakeService {
    * 與 `rejectOversize` 同一個姿態：判定發生在 adapter（只有它算得出「目標查無」），
    * 但**呈現不另開一條路** —— 否則「面向使用者的拒絕與警示 SHALL 有界」會被繞過。
    */
-  reject(code: IntakeRejection, label: string, detail?: string): DeliverOutcome {
-    this.#notice(code, label, detail)
+  reject(code: IntakeRejection, label: string, detail?: string, context?: NoticeContext): DeliverOutcome {
+    this.#notice(code, label, detail, context)
     this.#emit()
     return { ok: false, code, consume: true, notify: true, detail }
   }
 
-  rejectOversize(label: string): DeliverOutcome {
-    this.#notice('TOO_LARGE', label)
+  rejectOversize(label: string, context?: NoticeContext): DeliverOutcome {
+    this.#notice('TOO_LARGE', label, undefined, context)
     this.#emit()
     return { ok: false, code: 'TOO_LARGE', consume: true, notify: true }
   }
@@ -188,6 +325,13 @@ export class IntakeService {
     contents: string,
     adapter: string,
     provenance?: DeliveryProvenance,
+    /**
+     * 這次投遞若失敗，痕跡要記下的診斷欄位 —— **由 adapter 供應**。
+     *
+     * 共用路徑算不出它們（見 `FailureContext`），而本 change 的起因（`TOO_LONG`）正好就
+     * 發生在共用路徑上 —— 少了這個參數，那一則痕跡說不出「是哪一件事」。
+     */
+    failure?: FailureContext,
   ): Promise<DeliverOutcome> {
     let raw: unknown
     try {
@@ -199,14 +343,19 @@ export class IntakeService {
 
     const parsed = parseIntake(raw, adapter, provenance)
     if (!parsed.ok) {
-      this.#notice(parsed.code, typeof (raw as { id?: unknown })?.id === 'string' ? String((raw as { id: string }).id) : '(unknown)', parsed.detail)
+      this.#notice(
+        parsed.code,
+        typeof (raw as { id?: unknown })?.id === 'string' ? String((raw as { id: string }).id) : '(unknown)',
+        parsed.detail,
+        { adapter, ...failure },
+      )
       this.#emit()
       return { ok: false, code: parsed.code, consume: true, notify: true, detail: parsed.detail }
     }
 
     const intake = parsed.value
     if (!isValidIntakeId(intake.id)) {
-      this.#notice('INVALID_ID', '(invalid)')
+      this.#notice('INVALID_ID', '(invalid)', undefined, { adapter, ...failure })
       this.#emit()
       return { ok: false, code: 'INVALID_ID', consume: true, notify: true }
     }
@@ -219,14 +368,14 @@ export class IntakeService {
         return { ok: false, code: 'DUPLICATE', consume: true, notify: false }
       }
       // **內容不同 ⇒ 可見。** 那才是識別碼搶佔，而使用者必須有機會知道有一件事沒進來。
-      this.#notice('DUPLICATE', intake.id)
+      this.#notice('DUPLICATE', intake.id, undefined, { adapter, ...failure, notify: true })
       this.#emit()
       return { ok: false, code: 'DUPLICATE', consume: true, notify: true }
     }
 
     if (this.#store.pendingCount() >= this.#maxPending) {
       // **暫時性拒絕 ⇒ 不消費。** 使用者清一清收件匣，這一則本來就該進來。
-      this.#notice('CAPACITY', intake.id)
+      this.#notice('CAPACITY', intake.id, undefined, { adapter, ...failure })
       this.#emit()
       return { ok: false, code: 'CAPACITY', consume: false, notify: true }
     }
@@ -247,7 +396,7 @@ export class IntakeService {
       if (raced.digest === digestOf(intake.authored, intake.verified)) {
         return { ok: false, code: 'DUPLICATE', consume: true, notify: false }
       }
-      this.#notice('DUPLICATE', intake.id)
+      this.#notice('DUPLICATE', intake.id, undefined, { adapter, ...failure, notify: true })
       this.#emit()
       return { ok: false, code: 'DUPLICATE', consume: true, notify: true }
     }

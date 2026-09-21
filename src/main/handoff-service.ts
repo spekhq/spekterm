@@ -74,6 +74,13 @@ export class HandoffService {
       // 落點是**每個 session 一層**：`<root>/<sessionId>/*.json`。
       depth: 1,
       deliver: (contents, file) => this.deliverFile(contents, file),
+      /**
+       * **這條路徑上的永久性失敗要發通知** —— 「被拒絕的投遞不發通知」那條規則明文的例外。
+       *
+       * 接受那個環節已經沒有人在看，少了它，一次失敗的交接與「什麼都沒發生」在畫面上完全
+       * 相同 —— 而使用者會以為工作已經交出去了。
+       */
+      notifyFailures: true,
     })
     await this.#source.start()
   }
@@ -111,24 +118,48 @@ export class HandoffService {
       // **`MALFORMED` 不消費、也不通知** —— 可能只是寫到一半，而那種項目每次補寫都會再被讀到，
       // 逐次通知沒有上界（`agent-intake` 的例外條款明文排除它）。
       if (payload.reason === 'MALFORMED') return { ok: false, code: 'MALFORMED', consume: false, notify: false }
-      return service.reject('FIELD_TYPE', sessionId, 'target / body')
+      return service.reject('FIELD_TYPE', sessionId, 'target / body', { adapter: HANDOFF_ADAPTER })
     }
 
     const source = this.#deps.sourceOf(sessionId)
     const originId = source ? (source.folderId ?? GLOBAL_SOURCE_ID) : ENDED_SOURCE_ID
     const originLabel = source?.label ?? ENDED_SOURCE_ID
 
+    /**
+     * **診斷欄位由這裡交出去** —— 共用的攝入路徑算不出它們。
+     *
+     * `deliver()` 只拿得到 `provenance`（來源座標與**已解析的**目標 folder），而「投遞者
+     * 當初寫的是哪個字串」正是診斷一次「查無」時唯一有用的東西。讓共用路徑自己去讀
+     * `raw.target` 則會破壞「payload 自稱的一律不採信」的姿態。
+     */
+    const failure = { target: payload.value.target, origin: originLabel }
+
     const target = resolveTarget(payload.value.target, this.#deps.candidates())
     if (!target.ok) {
-      return target.reason === 'AMBIGUOUS'
-        ? service.reject('TARGET_AMBIGUOUS', payload.value.target, target.candidates.join(', '))
-        : service.reject('TARGET_NOT_FOUND', payload.value.target)
+      return {
+        ...(target.reason === 'AMBIGUOUS'
+          ? service.reject('TARGET_AMBIGUOUS', payload.value.target, target.candidates.join(', '), {
+              adapter: HANDOFF_ADAPTER,
+              ...failure,
+            })
+          : service.reject('TARGET_NOT_FOUND', payload.value.target, undefined, {
+              adapter: HANDOFF_ADAPTER,
+              ...failure,
+            })),
+        failure,
+      }
     }
 
     // **預填不可能發生時不建立 session。** 事件回報關閉是一個可事先偵測的**恆定**成因；照樣
     // 建 session 會讓「建了 → 等到逾時 → 退回待處理 → 再處理 → 又建一個」成為主幹。
     if (!this.#deps.agentEventsEnabled()) {
-      return service.reject('PREFILL_UNAVAILABLE', payload.value.target)
+      return {
+        ...service.reject('PREFILL_UNAVAILABLE', payload.value.target, undefined, {
+          adapter: HANDOFF_ADAPTER,
+          ...failure,
+        }),
+        failure,
+      }
     }
 
     const { contents: delivery, provenance } = buildDelivery({
@@ -140,8 +171,10 @@ export class HandoffService {
       targetFolderId: target.folderId,
     })
 
-    const outcome = await service.deliver(delivery, HANDOFF_ADAPTER, provenance)
-    if (!outcome.ok || !outcome.record) return outcome
+    // **失敗的診斷欄位一律帶上** —— 共用路徑的拒絕（本文過長、識別碼不合法…）同樣要說得出
+    // 「是哪一件事」，而它們在那裡算不出目標原字串。
+    const outcome = await service.deliver(delivery, HANDOFF_ADAPTER, provenance, failure)
+    if (!outcome.ok || !outcome.record) return { ...outcome, failure }
 
     // **上限在最後才問** —— 一則會被拒絕的交接不該吃掉一個名額。
     // 超過時**不**自動接受：它留在收件匣成為待處理，使用者接受它即可（降級而非拒絕）。

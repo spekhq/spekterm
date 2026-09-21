@@ -104,8 +104,10 @@ export const MUTATIONS = [
     name: 'title-carries-authored',
     command: 'test',
     file: 'src/main/intake-notify.ts',
-    from: `    title: t('intake.notify.title'),`,
-    to: `    title: \`${'${'}t('intake.notify.title')} — ${'${'}title}\`,`,
+    // **錨點帶下一行** —— `title: t('intake.notify.title')` 自本 change 起在這個檔案裡
+    // 出現兩次（到達的那一則與失敗的那一則），單獨用它會命中兩處而讓對照組失效。
+    from: `    title: t('intake.notify.title'),\n    body: actor`,
+    to: `    title: \`${'${'}t('intake.notify.title')} — ${'${'}title}\`,\n    body: actor`,
     expectRed: '**標題不含投遞提供的任何值**',
     why: '**讓投遞者的標題進到通知的標題。** 桌面上於是出現一則與本應用程式自己發出的別無二致'
       + '的訊息，而使用者沒有任何線索分辨。',
@@ -246,6 +248,50 @@ export const MUTATIONS = [
     why: '**建立之後把焦點切過去。** 這條 requirement **零實作即綠**（不寫任何焦點程式碼，焦點自然\n'
       + '> 不動），它的鑑別力**完全**來自這個對照組。',
   },
+  // ── handoff-body-limit-and-rejection-visibility ─────────────────────────
+  {
+    name: 'handoff-failures-not-notified',
+    file: 'src/main/handoff-service.ts',
+    section: 'runHandoffFailure',
+    from: `      notifyFailures: true,`,
+    to: `      notifyFailures: false,`,
+    expectRed: '目標查無時發出通知（這條路徑上沒有人在等著按接受）',
+    why: '**失敗只寫進收件匣，不發通知。** 接受那個環節已經沒有人在看 —— 使用者不會無緣無故\n'
+      + '> 去打開收件匣，於是一次失敗的交接與「什麼都沒發生」在畫面上完全相同。\n'
+      + '> 這正是本 change 的起點：那條斷言曾經是綠的，而通知從未被發出過。',
+  },
+  {
+    name: 'too-long-treated-as-transient',
+    file: 'src/main/intake-rejection.ts',
+    section: 'runHandoffFailure',
+    from: `export function isPermanentRejection({ code, notify }: RejectionOutcome): boolean {\n  switch (code) {`,
+    to: `export function isPermanentRejection({ code, notify }: RejectionOutcome): boolean {\n  if (code === 'TOO_LONG') return false\n  switch (code) {`,
+    expectRed: 'TOO_LONG：共用攝入路徑上的永久性失敗同樣發出通知',
+    why: '**把「本文過長」判成暫時性。** 它於是不通知、不落盤 —— 而重送同一份投遞必然同樣失敗，\n'
+      + '> 使用者永遠等不到那個「狀態改變之後就會成功」的時刻。',
+  },
+  {
+    name: 'oversize-not-reported',
+    file: 'src/main/intake-source.ts',
+    section: 'runHandoffFailure',
+    from: `        this.#reportIfPermanent(\n          this.#service.rejectOversize(path.basename(file), { adapter: this.#adapter }),\n        )`,
+    to: `        this.#service.rejectOversize(path.basename(file), { adapter: this.#adapter })`,
+    expectRed: 'TOO_LARGE：共用攝入路徑上的永久性失敗同樣發出通知',
+    why: '**把通知接回 adapter 的 `deliver`。** 超過檔案大小上限的投遞在 `readBounded` 就被擋下\n'
+      + '> 並消費掉，它**永遠不會走到** `deliver` —— 於是 `TOO_LARGE` 結構上通知不出來，\n'
+      + '> 而那個缺口不會有任何東西變紅。',
+  },
+  {
+    name: 'notices-not-persisted',
+    file: 'src/main/intake-service.ts',
+    section: 'runHandoffFailure',
+    from: `  #persistNotices(): void {\n    this.#store.setNotices(this.#notices)\n  }`,
+    to: `  #persistNotices(): void {\n    void this.#store\n  }`,
+    expectRed: '失敗的呈現活過重新啟動',
+    why: '**痕跡只活在行程記憶體裡。** 一則失敗的可見性於是取決於使用者在關掉應用程式之前剛好\n'
+      + '> 打開過收件匣 —— 而促使他去打開收件匣的那個訊號（通知）正是同一條路徑上的東西。\n'
+      + '> 兩者同時只在一次執行之內有效時，「可見」在實際使用中等於「不可見」。',
+  },
   {
     name: 'handoff-notify-always-inbox',
     file: 'src/main/index.ts',
@@ -287,11 +333,18 @@ function run(names) {
       // 時候做了什麼」的性質，在 probe 的一次操作裡表達不出來（畫面上看不到那個決策）。
       // 指名錯載體的代價是一個**紅不起來的對照組** —— 那比沒有對照組更糟，因為它看起來有人管。
       const command = mutation.command === 'test' ? ['test'] : ['run', 'probe:intake']
+      /**
+       * **`section` 讓對照組只跑那一段。**
+       *
+       * 跑全套是八倍的時間，而鑑別力一分不差 —— 只要那條 `expectRed` 的斷言確實住在該段。
+       * 指名錯段落的代價與指名錯載體相同：一個紅不起來的對照組。
+       */
       output = execFileSync('npm', command, {
         cwd: repoRoot,
         encoding: 'utf8',
         stdio: ['ignore', 'pipe', 'pipe'],
         timeout: 15 * 60_000,
+        ...(mutation.section ? { env: { ...process.env, PROBE_ONLY: mutation.section } } : {}),
       })
     } catch (error) {
       output = `${error.stdout ?? ''}${error.stderr ?? ''}`

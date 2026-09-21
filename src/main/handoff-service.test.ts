@@ -5,9 +5,10 @@ import path from 'node:path'
 import test from 'node:test'
 
 import { HANDOFF_ADAPTER } from './handoff-delivery'
+import { isPermanentRejection } from './intake-rejection'
 import { configureHandoff, outboxDir, prepareOutbox, resetHandoffState } from './handoff-outbox'
 import { ENDED_SOURCE_ID, GLOBAL_SOURCE_ID, HandoffService } from './handoff-service'
-import { MAX_BODY_LENGTH } from './intake-schema'
+import { MAX_BODY_LENGTH, MAX_FIRST_PARTY_BODY_LENGTH } from './intake-schema'
 import { IntakeService } from './intake-service'
 import { IntakeStore } from './intake-store'
 
@@ -217,6 +218,24 @@ test('不在 <root>/<sessionId>/ 正下方的檔案不是交接', async () => {
   assert.equal(h.autoAccepted.length, 0)
 })
 
+/**
+ * **永久／暫時的分類不決定 `consume`。**
+ *
+ * 這一則的代碼是 `MALFORMED`，而 `MALFORMED` 在 `isPermanentRejection` 裡是**暫時性**的
+ * —— 但它仍然必須被消費掉，否則它每次掃描都再被讀一遍，永遠。
+ *
+ * 兩者綁在一起的實作會把這條路改壞，而症狀是「一個放錯位置的檔案讓每一輪掃描都多走一趟」，
+ * 沒有任何東西會紅。
+ */
+test('放錯位置的投遞雖為暫時性失敗，仍然被消費 —— 分類不決定 consume', async () => {
+  const h = harness({ sources })
+  const outcome = await h.handoff.deliverFile(JSON.stringify(good), '/somewhere/else/a.json')
+
+  assert.equal(outcome.code, 'MALFORMED')
+  assert.equal(isPermanentRejection({ code: 'MALFORMED', notify: outcome.notify }), false)
+  assert.equal(outcome.consume, true, '暫時性失敗，但必須消費')
+})
+
 test('adapter 恆為 handoff —— 去重的主鍵是 (adapter, id)', async () => {
   const h = harness({ sources })
   const file = h.file('s1', 'a.json', good)
@@ -284,9 +303,29 @@ test('偏好關閉時，既有落點中的內容也不被處理', async () => {
   assert.equal(outcome.consume, false)
 })
 
-test('本文超過長度上限的交接被拒絕 —— 不因投遞者是自己的 agent 而放寬', async () => {
+/**
+ * **這一組取代了原本的「不因投遞者是自己的 agent 而放寬」。**
+ *
+ * 那條測試保護的是一道**在這條路徑上不存在**的閘門：`MAX_BODY_LENGTH` 的全部依據是
+ * 「使用者要逐字讀完才能按下接受」，而交接到達即建立 session，不經那道閘。
+ * 依據換成「接手的 agent 要能一次讀完交付的整份內容」之後，上限仍然存在 —— 只是換了一個
+ * 數字與一個相反方向的失效模式（調大不是讓人累，是讓交付靜默地只到一半）。
+ *
+ * **兩條都要有**：只留上面那條，一個把上限整個拿掉的實作照樣全綠。
+ */
+test('交接的本文不受第三方那個上限約束 —— 它保護的閘門在這條路徑上不存在', async () => {
   const h = harness({ sources })
   const file = h.file('s1', 'a.json', { ...good, body: 'x'.repeat(MAX_BODY_LENGTH + 1) })
+  const outcome = await h.handoff.deliverFile(fs.readFileSync(file, 'utf8'), file)
+
+  assert.equal(outcome.ok, true)
+  assert.equal(h.store.list().length, 1)
+  assert.equal(h.autoAccepted.length, 1)
+})
+
+test('交接的本文仍受它自己那個上限約束 —— 依據換了，上限沒有消失', async () => {
+  const h = harness({ sources })
+  const file = h.file('s1', 'a.json', { ...good, body: 'x'.repeat(MAX_FIRST_PARTY_BODY_LENGTH + 1) })
   const outcome = await h.handoff.deliverFile(fs.readFileSync(file, 'utf8'), file)
 
   assert.equal(outcome.code, 'TOO_LONG')

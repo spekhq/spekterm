@@ -3,6 +3,7 @@ import path from 'node:path'
 import type { FSWatcher } from 'chokidar'
 
 import { createWatcher } from './watcher'
+import { isPermanentRejection } from './intake-rejection'
 import type { DeliverOutcome, IntakeService } from './intake-service'
 
 /**
@@ -100,6 +101,20 @@ export interface IntakeSourceOptions {
    * 檔案都能自選 folder）。於是那些值只能經這條路徑以參數供應。
    */
   deliver?: (contents: string, file: string) => Promise<DeliverOutcome>
+  /**
+   * 這個落點的**永久性**失敗要不要讓使用者立刻知道（作業系統通知）。
+   *
+   * **預設為否** —— 「被拒絕的投遞 SHALL NOT 發出作業系統通知」是共用落點的規則：
+   * 投遞者控制數量，而使用者的注意力有限。
+   *
+   * **交接是那條規則明文的例外**，而例外的理由不在這裡：那條路徑上沒有人在等著按接受，
+   * 於是「使用者剛剛交辦、agent 回報已交出、實際上什麼都沒發生」與成功在畫面上完全相同。
+   *
+   * **接線在這裡而不在 `HandoffService`，是因為兩條拒絕路徑只有這裡都經過。**
+   * 超過檔案大小上限的投遞在 `readBounded` 就被擋下並消費掉，它**永遠不會走到** `deliver`
+   * —— 把接線放在 adapter 的 `deliver` 裡，`TOO_LARGE` 就結構上通知不出來。
+   */
+  notifyFailures?: boolean
 }
 
 export class IntakeSource {
@@ -110,15 +125,43 @@ export class IntakeSource {
   readonly #onProcessed?: (file: string, consumed: boolean) => void
   readonly #depth: number
   readonly #deliver: (contents: string, file: string) => Promise<DeliverOutcome>
+  readonly #notifyFailures: boolean
   #inflight = new Set<string>()
 
-  constructor({ root, adapter, service, onProcessed, depth = 0, deliver }: IntakeSourceOptions) {
+  constructor({
+    root,
+    adapter,
+    service,
+    onProcessed,
+    depth = 0,
+    deliver,
+    notifyFailures = false,
+  }: IntakeSourceOptions) {
     this.#root = root
     this.#adapter = adapter
     this.#service = service
     this.#onProcessed = onProcessed
     this.#depth = depth
     this.#deliver = deliver ?? ((contents) => this.#service.deliver(contents, this.#adapter))
+    this.#notifyFailures = notifyFailures
+  }
+
+  /**
+   * 一次拒絕之後：**永久性的**才回報出去。
+   *
+   * 暫時性的（寫到一半、收件匣已滿、某個功能被關閉）不回報 —— 那類項目會在每次補寫或重試
+   * 時再次被讀到，逐次通知沒有上界，而合併只防批次、不防節奏。
+   */
+  #reportIfPermanent(outcome: DeliverOutcome): void {
+    if (!this.#notifyFailures) return
+    if (outcome.ok || !outcome.code) return
+    if (!isPermanentRejection({ code: outcome.code, notify: outcome.notify })) return
+    this.#service.reportFailure({
+      code: outcome.code,
+      ...(outcome.detail === undefined ? {} : { detail: outcome.detail }),
+      ...outcome.failure,
+      at: Date.now(),
+    })
   }
 
   /** mkdir → 建立監看 → 掃描既有內容。**順序是承重的，見檔頭。** */
@@ -207,7 +250,9 @@ export class IntakeSource {
       if ('tooLarge' in read) {
         // 永久性拒絕：大小不會自己變小。拒絕的**呈現**仍經 service，於是它與其餘拒絕
         // 共用同一份合併與上限（「面向使用者的拒絕與警示 SHALL 有界」）。
-        this.#service.rejectOversize(path.basename(file))
+        this.#reportIfPermanent(
+          this.#service.rejectOversize(path.basename(file), { adapter: this.#adapter }),
+        )
         await fs.promises.rm(file, { force: true })
         this.#onProcessed?.(file, true)
         return
@@ -222,6 +267,7 @@ export class IntakeSource {
         console.error(`[intake] delivery failed ${file}: ${String(error)}`)
         return
       }
+      this.#reportIfPermanent(outcome)
       if (outcome.consume) await fs.promises.rm(file, { force: true })
       this.#onProcessed?.(file, outcome.consume)
     } finally {

@@ -281,6 +281,56 @@ function notifications(profile) {
   return readFileSync(file, 'utf8').split('\n').filter(Boolean).map((line) => JSON.parse(line))
 }
 
+/**
+ * 通知的固定合併窗（`src/main/intake-notify.ts` 的 `WINDOW_MS`）**加上餘裕**。
+ *
+ * probe 是 `.mjs`，import 不了 TypeScript 的常數，因此這個值與產品那一份是分開的兩份 ——
+ * 它**只需要大於**產品那個窗，不需要相等，所以分岔不會讓斷言失準（只會讓它多等一會）。
+ */
+const NOTIFY_QUIET_MS = 5_000
+
+/**
+ * 交接的本文 —— **刻意長於第三方本文適用的上限（4,000），遠短於 first-party 的上限（20,000）**。
+ *
+ * 它一次承擔三件事：
+ *
+ * 1. **分流真的生效**。上限若沒有分流，這一則會在投遞階段就被拒 —— 於是 `runHandoff` 的
+ *    每一條斷言全部變紅，而不是只有一條。
+ * 2. **全文不被截斷**。頭尾各一個標記，兩個都必須出現在畫面上。
+ *    只驗頭的話，一個「截斷到前 N 字元」的實作照樣全綠。
+ * 3. **跨行程逐字元**。畫面上那一段的文字必須含磁碟上界線之內的完整內容。
+ */
+const HANDOFF_BODY = `HANDOFF-BODY-HEAD ${'detail line about the work to take over. '.repeat(110)}HANDOFF-BODY-TAIL`
+
+/**
+ * 等到通知**落定**再量測 —— 距離最後一次新增已經過了一個完整的合併窗。
+ *
+ * **「連續兩次讀到相同的數量」是不夠的**：合併窗之內通知根本還沒被發出，數量在那段時間裡
+ * 本來就不變，於是那個判準在窗到期之前就會成立 —— 而窗一到期，一則與待測動作**無關**的通知
+ * 就落在 `before` 之後，成為某條斷言的「證據」。
+ *
+ * 那正是「目標查無時發出通知」這條斷言假綠的成因：它量到 `before=0`，而 9 秒後才看見那則
+ * `"New handoff"`（該段稍早接受的 intake 所觸發），`miss.json` 本身一則通知都沒有發出。
+ */
+async function settledNotifications(profile, label) {
+  let count = -1
+  let changedAt = Date.now()
+  const { list } = await pollFor({
+    read: () => {
+      const current = notifications(profile)
+      if (current.length !== count) {
+        count = current.length
+        changedAt = Date.now()
+      }
+      return { list: current, quietFor: Date.now() - changedAt }
+    },
+    settled: ({ quietFor }) => quietFor >= NOTIFY_QUIET_MS,
+    timeoutMs: 30_000,
+    label,
+  })
+  return list
+}
+
 function receipts(profile) {
   const file = join(notifyRoot(profile), 'receipts.jsonl')
   if (!existsSync(file)) return []
@@ -1344,7 +1394,7 @@ async function runHandoff(_mode, _modeConfig, context) {
   // ── 交接 ──
   writeFileSync(
     join(outbox, 'h1.json'),
-    JSON.stringify({ target: basename(folders[1].path), title: 'HANDOFF-TITLE', body: 'take this over' }),
+    JSON.stringify({ target: basename(folders[1].path), title: 'HANDOFF-TITLE', body: HANDOFF_BODY }),
   )
 
   const sessionsAfter = await pollFor({
@@ -1405,6 +1455,54 @@ async function runHandoff(_mode, _modeConfig, context) {
     label: '已開好的那一則呈現於收件匣',
   }).catch(() => '')
   check(results, '已建立 session 的交接在收件匣中看得見（含它開在哪裡）', openedText.includes('HANDOFF-TITLE'), openedText.slice(0, 120))
+
+  /**
+   * **本文的全文不被截斷。**
+   *
+   * 這裡是 first-party 本文**唯一**的呈現位置（交接從不停留於待處理，`IntakeCard` 那一段
+   * 永遠不會顯示它）。頭尾兩個標記都要在 —— 只驗頭的話，一個「截斷到前 N 字元」的實作
+   * 照樣全綠。
+   */
+  check(
+    results,
+    '已建立 session 的交接其本文全文呈現且未被截斷',
+    openedText.includes('HANDOFF-BODY-HEAD') && openedText.includes('HANDOFF-BODY-TAIL'),
+    `頭=${openedText.includes('HANDOFF-BODY-HEAD')} 尾=${openedText.includes('HANDOFF-BODY-TAIL')} 長度=${openedText.length}`,
+  )
+
+  // 長度是「這則很長」唯一看得見的訊號，而這一段此前沒有它。
+  check(
+    results,
+    '已建立 session 的交接其呈現附上本文的長度',
+    openedText.includes(copy('intake.bodyLength', { count: HANDOFF_BODY.length })),
+    `找的是「${copy('intake.bodyLength', { count: HANDOFF_BODY.length })}」`,
+  )
+
+  /**
+   * **跨行程的那一條 —— 交接這條路徑此前沒有它。**
+   *
+   * 既有的同形斷言（`runAcceptPrefill`）比對的是 `IntakeCard` 那一列，而 first-party 的本文
+   * 根本不在那裡呈現。於是「交付的內容逐字元等於呈現的內容」在**交接**上從未被驗過。
+   *
+   * 對照組：把截斷加進這一段的渲染，這條必須變紅。
+   */
+  const handoffContextDir = join(profile, 'intake')
+  const handoffContextFile = existsSync(handoffContextDir)
+    ? readdirSync(handoffContextDir).find((name) => name.endsWith('.md'))
+    : undefined
+  const handoffContents = handoffContextFile
+    ? readFileSync(join(handoffContextDir, handoffContextFile), 'utf8')
+    : ''
+  const handoffFenced =
+    handoffContents.match(/<<<untrusted-[0-9a-f]+>>>\n([\s\S]*)\n<<<\/untrusted-[0-9a-f]+>>>/)?.[1] ?? null
+  check(
+    results,
+    '交接：交給 agent 的內容逐字元等於呈現給使用者的本文',
+    handoffFenced !== null && openedText.includes(handoffFenced),
+    handoffFenced === null
+      ? `(無界線) 檔案=${handoffContextFile ?? '無'}`
+      : `檔案內 ${handoffFenced.length} 字元，畫面 ${openedText.length} 字元`,
+  )
 
   /**
    * **通知的效果分流。**
@@ -1516,7 +1614,9 @@ async function runHandoffFailure(_mode, _modeConfig, context) {
   })
   const outbox = await awaitOutbox(profile, '投遞落點出現')
 
-  const before = notifications(profile).length
+  // **量在靜止點** —— 見 `settledNotifications` 的註解（這一行是本 change 的起點）。
+  const settledBefore = await settledNotifications(profile, '通知落定（量測 before 之前）')
+  const before = settledBefore.length
   const sessionsBefore = ptySessionPids(marker).length
 
   /**
@@ -1536,7 +1636,23 @@ async function runHandoffFailure(_mode, _modeConfig, context) {
     timeoutMs: 25_000,
     label: '查無目標發出通知',
   }).catch(() => notifications(profile))
-  check(results, '目標查無時發出通知（這條路徑上沒有人在等著按接受）', after.length > before, `前=${before} 後=${after.length}`)
+
+  /**
+   * **比對內容，不只比對數量。**
+   *
+   * 「多了一則通知」是一個方便取得的量，它對「**哪一則**」完全沉默 —— 而這條斷言在乎的正是
+   * 那件事。比對的是拒絕的**類別說明**（`intake.rejectReason.TARGET_NOT_FOUND`）：
+   * **不比對目標原字串** —— 既有 requirement 明文禁止通知內文含 folder 名稱。
+   */
+  const reason = copy('intake.rejectReason.TARGET_NOT_FOUND')
+  const arrived = after.slice(before)
+  const named = arrived.filter((n) => `${n.title ?? ''} ${n.body ?? ''}`.includes(reason))
+  check(
+    results,
+    '目標查無時發出通知（這條路徑上沒有人在等著按接受）',
+    named.length > 0,
+    `前=${before} 後=${after.length} 新增=${JSON.stringify(arrived.map((n) => n.body ?? n.title))} 找的是「${reason}」`,
+  )
   check(
     results,
     '目標查無時不建立任何 session',
@@ -1558,6 +1674,51 @@ async function runHandoffFailure(_mode, _modeConfig, context) {
   }).catch(() => '')
   check(results, '該失敗同時呈現於收件匣之內', /rejected|Rejected/.test(rejected))
 
+  /**
+   * **共用攝入路徑上的永久性失敗同樣可見。**
+   *
+   * 本文過長（`TOO_LONG`）與投遞過大（`TOO_LARGE`）都**不是** adapter 自己算出來的 ——
+   * 前者在 `parseIntake`、後者在 `readBounded`，而 `readBounded` 在 `deliver` **之前**就
+   * 消費掉檔案並 return。把通知接在 adapter 的 `deliver` 裡，這兩條結構上都通知不出來，
+   * 而那正是這個 change 的起點（一則本文過長的交接被消費、無通知、無痕跡）。
+   */
+  for (const [name, payload, code] of [
+    [
+      'over-long.json',
+      JSON.stringify({ target: basename(folders[1].path), title: 'TOO-LONG', body: 'x'.repeat(21_000) }),
+      'TOO_LONG',
+    ],
+    [
+      'over-big.json',
+      JSON.stringify({ target: basename(folders[1].path), title: 'TOO-BIG', body: 'x'.repeat(600_000) }),
+      'TOO_LARGE',
+    ],
+  ]) {
+    const quiet = await settledNotifications(profile, `通知落定（${code} 之前）`)
+    const sessionsHere = ptySessionPids(marker).length
+    writeFileSync(join(outbox, name), payload)
+    const reason = copy(`intake.rejectReason.${code}`)
+    const arrivedNow = await pollFor({
+      read: () => notifications(profile),
+      settled: (list) => list.slice(quiet.length).some((n) => `${n.title ?? ''} ${n.body ?? ''}`.includes(reason)),
+      timeoutMs: 25_000,
+      label: `${code} 發出通知`,
+    }).catch(() => notifications(profile))
+    const newOnes = arrivedNow.slice(quiet.length)
+    check(
+      results,
+      `${code}：共用攝入路徑上的永久性失敗同樣發出通知`,
+      newOnes.some((n) => `${n.title ?? ''} ${n.body ?? ''}`.includes(reason)),
+      `新增=${JSON.stringify(newOnes.map((n) => n.body ?? n.title))} 找的是「${reason}」`,
+    )
+    check(
+      results,
+      `${code}：不建立任何 session`,
+      ptySessionPids(marker).length === sessionsHere,
+      `前=${sessionsHere} 後=${ptySessionPids(marker).length}`,
+    )
+  }
+
   // 寫到一半的投遞：**不消費、不通知**（每次補寫都會再被讀到，逐次通知沒有上界）。
   const notifiedBefore = notifications(profile).length
   writeFileSync(join(outbox, 'partial.json'), '{"target":"beta","bo')
@@ -1567,6 +1728,80 @@ async function runHandoffFailure(_mode, _modeConfig, context) {
     '寫到一半的投遞不發通知，且不被消費',
     notifications(profile).length === notifiedBefore && existsSync(join(outbox, 'partial.json')),
     `通知 ${notifiedBefore}→${notifications(profile).length}`,
+  )
+
+  /**
+   * **呈現要能認得出是哪一件事失敗。**
+   *
+   * 此前這裡只有一個總數（「N 則投遞被拒絕」）—— 它回答不了「哪一則」「為什麼」
+   * 「我要怎麼辦」中的任何一個。而說明原因的文案（`intake.rejectReason`）早就寫好了，
+   * 只是**沒有任何消費者**。
+   */
+  await openInbox(app)
+  const missTarget = basename(folders[1].path).slice(0, -3)
+  const detailed = await pollFor({
+    read: () => app.client.evaluate('document.body.textContent ?? \'\''),
+    settled: (text) => text.includes(copy('intake.rejectReason.TARGET_NOT_FOUND')),
+    timeoutMs: 15_000,
+    label: '拒絕的類別呈現於收件匣',
+  }).catch(() => '')
+  check(
+    results,
+    '拒絕的呈現說得出類別與投遞者寫下的目標',
+    detailed.includes(copy('intake.rejectReason.TARGET_NOT_FOUND')) && detailed.includes(missTarget),
+    `類別=${detailed.includes(copy('intake.rejectReason.TARGET_NOT_FOUND'))} 目標=${detailed.includes(missTarget)}`,
+  )
+
+  /**
+   * **逐則清除。**
+   *
+   * 一次清光全部會讓使用者為了清掉一則第三方投遞的格式錯誤，順手清掉一則他還沒處理的
+   * 交接失敗 —— 而後者正是這條通道存在的理由。
+   */
+  const noticeCount = `document.querySelectorAll('${label('intake.dismissNotice')}').length`
+  const beforeDismiss = await app.client.evaluate(noticeCount)
+  const dismissed = await app.client.evaluate(`(() => {
+    const button = document.querySelector('${label('intake.dismissNotice')}')
+    if (!button) return false
+    button.click()
+    return true
+  })()`)
+  const afterDismiss = await pollFor({
+    read: () => app.client.evaluate(noticeCount),
+    settled: (n) => n < beforeDismiss,
+    timeoutMs: 15_000,
+    label: '逐則清除之後少一則',
+  }).catch(() => beforeDismiss)
+  check(
+    results,
+    '痕跡可被逐則清除，其餘的仍在',
+    dismissed === true && afterDismiss === beforeDismiss - 1 && afterDismiss > 0,
+    `前=${beforeDismiss} 後=${afterDismiss}`,
+  )
+
+  /**
+   * **失敗的呈現活過重新啟動。**
+   *
+   * 這是「拒絕必須可見」能否成立的最後一段：一則只活在行程記憶體中的警示，其可見性取決於
+   * 使用者在關掉應用程式之前剛好打開過收件匣 —— 而促使他去打開收件匣的那個訊號（通知）
+   * 正是同一條路徑上的東西。兩者同時只在一次執行之內有效時，「可見」在實際使用中等於
+   * 「不可見」。
+   *
+   * **port 借用 `RESTART_PORT`** —— 段落是依序跑的，前一個重啟段落此刻已經結束。
+   */
+  const restarted = await freshApp(context, { profile, configDir, stub, marker, port: RESTART_PORT })
+  await openInbox(restarted)
+  const survived = await pollFor({
+    read: () => restarted.client.evaluate(noticeCount),
+    settled: (n) => n > 0,
+    timeoutMs: 20_000,
+    label: '重啟之後痕跡仍在',
+  }).catch(() => 0)
+  check(
+    results,
+    '失敗的呈現活過重新啟動',
+    survived === afterDismiss,
+    `重啟前=${afterDismiss} 重啟後=${survived}`,
   )
 }
 

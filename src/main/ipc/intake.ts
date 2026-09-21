@@ -11,6 +11,7 @@ import {
   type RoutingRule,
   type RoutingStore,
 } from '../intake-routing'
+import { OVERFLOW_KEY } from '../intake-service'
 import type { IntakeService } from '../intake-service'
 import type { IntakeRecord } from '../intake-store'
 import type { FolderLookup } from '../workspace-store'
@@ -42,6 +43,7 @@ export const INTAKE_CHANNELS = {
   attach: 'workspace:intake:attach',
   dismiss: 'workspace:intake:dismiss',
   dismissNotices: 'workspace:intake:dismissNotices',
+  dismissNotice: 'workspace:intake:dismissNotice',
   rules: 'workspace:intake:rules',
   setRules: 'workspace:intake:setRules',
   /** 主行程 → renderer：收件匣有變動。 */
@@ -160,7 +162,29 @@ function sanitizeRules(input: unknown): RoutingConfig {
 /** `list` 的回傳形狀。 */
 export interface IntakeSnapshot {
   items: IntakeView[]
-  notices: { key: string; code: string; count: number; detail?: string }[]
+  /**
+   * 拒絕的痕跡 —— **逐則**，不是一個總數。
+   *
+   * 一個計數器回答不了「哪一則」「為什麼」「我要怎麼辦」中的任何一個，
+   * 而使用者對一則他自己交辦的工作正是要問這三件事。
+   */
+  notices: {
+    key: string
+    code: string
+    count: number
+    detail?: string
+    at: number
+    origin?: string
+    target?: string
+    permanent: boolean
+    /**
+     * 這是不是「其餘」那一桶。
+     *
+     * **由主行程標示，renderer 不認得那個主鍵** —— 讓 renderer 去比對一個主行程的內部常數
+     * 會把 `intake-service`（連同它的 `node:fs`）整個拉進 renderer 的 bundle。
+     */
+    overflow?: boolean
+  }[]
 }
 
 /**
@@ -222,7 +246,10 @@ export function registerIntakeHandlers(deps: IntakeHandlerDeps): void {
         .list()
         .filter((record) => record.state !== 'dismissed')
         .map((record) => project(record, config, ids)),
-      notices: service.notices(),
+      notices: service.notices().map((notice) => ({
+        ...notice,
+        ...(notice.key === OVERFLOW_KEY ? { overflow: true } : {}),
+      })),
     }
   })
 
@@ -258,6 +285,18 @@ export function registerIntakeHandlers(deps: IntakeHandlerDeps): void {
   })
   deps.registerFocusSession?.((sessionId) => {
     send(INTAKE_CHANNELS.focusSession, sessionId)
+  })
+
+  /**
+   * 清除**一則**痕跡。
+   *
+   * 一次清光全部會讓使用者為了清掉一則第三方投遞的格式錯誤，順手清掉一則他還沒處理的
+   * 交接失敗 —— 而後者正是這條通道存在的理由。
+   */
+  ipcMain.handle(INTAKE_CHANNELS.dismissNotice, (_event, key: unknown, code: unknown) => {
+    if (typeof key !== 'string' || typeof code !== 'string') return { ok: false }
+    service.dismissNotice(key, code)
+    return { ok: true }
   })
 
   ipcMain.handle(INTAKE_CHANNELS.dismissNotices, () => {

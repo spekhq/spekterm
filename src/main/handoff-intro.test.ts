@@ -5,6 +5,8 @@ import path from 'node:path'
 import test from 'node:test'
 
 import { introText, writeIntroFile } from './handoff-intro'
+import { MAX_FIELD_LENGTH, MAX_FIRST_PARTY_BODY_LENGTH } from './intake-schema'
+import { MAX_DELIVERY_BYTES } from './intake-source'
 
 const folders = [
   { name: 'spekterm', path: '/home/u/git/spekterm' },
@@ -35,7 +37,11 @@ test('告訴 agent 目標可以用絕對路徑 —— 那是同名歧義唯一�
 })
 
 test('告訴 agent 它收不到投遞的結果 —— 否則它會回報一件沒有發生的事', () => {
-  assert.match(introText({ folders, outbox: '/x' }), /NOT be told whether a handoff succeeded/)
+  // 比對的是**那件事**而不是某一句的措辭：這段文字自本 change 起還要說明失敗長什麼樣子，
+  // 而把斷言釘在一整句上會讓每一次補充都變成一次假性的紅燈。
+  const text = introText({ folders, outbox: '/x' })
+  assert.match(text, /YOU are not told|NOT be told/)
+  assert.match(text, /no reply channel/i)
 })
 
 test('零 folder 的 workspace 不產生一份謊稱有對象的清單', () => {
@@ -75,4 +81,32 @@ test('寫不出來時回 null，呼叫端據此降級為沒有自我介紹', () 
   const blocker = path.join(base, 'blocker')
   fs.writeFileSync(blocker, 'not a directory')
   assert.equal(writeIntroFile(path.join(blocker, 'intro.json'), { folders, outbox: '/x' }), null)
+})
+
+/**
+ * **告知的內容必須涵蓋所有會導致拒絕的約束。**
+ *
+ * 投遞者沒有回饋管道 —— 一個未被告知的約束就是一條死路：它照著手上那份說明去寫、
+ * 被拒絕、然後回報自己已經交出去了。這正是本 change 要修的那個 bug。
+ */
+test('告知的內容涵蓋三個上限，且數字由常數推導', () => {
+  const text = introText({ folders: [{ name: 'alpha', path: '/a' }], outbox: '/out' })
+
+  assert.ok(text.includes(String(MAX_FIRST_PARTY_BODY_LENGTH)), '本文的長度上限要講')
+  assert.ok(text.includes(String(MAX_FIELD_LENGTH)), '標題的長度上限要講（它同樣產生 TOO_LONG）')
+  assert.ok(text.includes(String(Math.floor(MAX_DELIVERY_BYTES / 1024))), '整份投遞的大小上限要講')
+})
+
+test('告知的內容說明失敗是可達的結果，且投遞者不會被告知', () => {
+  const text = introText({ folders: [], outbox: '/out' }).toLowerCase()
+
+  assert.ok(text.includes('rejected'), '要明說一則交接可能被拒絕')
+  assert.ok(text.includes('inbox'), '要說明使用者會在何處看到那次失敗')
+  assert.ok(text.includes('not told') || text.includes('no reply channel'), '要說明投遞者不會被告知')
+})
+
+test('告知的內容給出「內容太長時怎麼辦」的做法', () => {
+  // 少了這一句，agent 面對一份長交接只能自己截斷 —— 而截掉的正是它要交代的事。
+  const text = introText({ folders: [], outbox: '/out' })
+  assert.ok(/write the detail to a file/i.test(text))
 })

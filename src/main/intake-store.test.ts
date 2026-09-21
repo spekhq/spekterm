@@ -4,7 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { after, describe, it } from 'node:test'
 
-import { IntakeStore, INTAKE_VERSION, digestOf, parseIntakeFile } from './intake-store'
+import { IntakeStore, INTAKE_VERSION, digestOf, parseIntakeFile, type IntakeNotice } from './intake-store'
 import { parseIntake } from './intake-schema'
 
 const bases: string[] = []
@@ -162,5 +162,88 @@ describe('落盤的解析是逐欄位白名單', () => {
 
   it('損毀的 JSON 回 null 而非拋出', () => {
     assert.equal(parseIntakeFile('{not json'), null)
+  })
+})
+
+/**
+ * 痕跡的落盤 —— **三件事：跨重啟、不 bump 版本、兩個方向都不掉資料。**
+ */
+describe('永久性拒絕的痕跡', () => {
+  const notice = (over: Partial<IntakeNotice> = {}): IntakeNotice => ({
+    key: 'k1',
+    code: 'TARGET_NOT_FOUND',
+    count: 1,
+    at: 1_700_000_000_000,
+    permanent: true,
+    target: 'nowhere',
+    origin: 'alpha',
+    adapter: 'handoff',
+    ...over,
+  })
+
+  it('痕跡跨重啟保留', () => {
+    const file = tempFile()
+    const a = new IntakeStore(file)
+    a.setNotices([notice()])
+
+    const b = new IntakeStore(file)
+    b.load()
+    assert.equal(b.notices().length, 1)
+    assert.equal(b.notices()[0].target, 'nowhere')
+    assert.equal(b.notices()[0].at, 1_700_000_000_000)
+  })
+
+  it('暫時性的不落盤 —— 它們每次重試都會再產生一次', () => {
+    const file = tempFile()
+    const a = new IntakeStore(file)
+    a.setNotices([notice(), notice({ key: 'k2', code: 'MALFORMED', permanent: false })])
+
+    const b = new IntakeStore(file)
+    b.load()
+    assert.deepEqual(
+      b.notices().map((n) => n.key),
+      ['k1'],
+    )
+  })
+
+  it('**升級**：不含痕跡區段的既有檔案載入後，entries 一則不少', () => {
+    // 這是那條「加欄位不得 bump 版本」的載體。
+    // **對照組：把 INTAKE_VERSION 加一，這條必須變紅。**
+    const file = tempFile()
+    fs.writeFileSync(
+      file,
+      JSON.stringify({
+        version: 1,
+        entries: [{ adapter: 'file', id: 'a1', state: 'pending', digest: 'd', content: null }],
+      }),
+    )
+    const store = new IntakeStore(file)
+    store.load()
+    assert.equal(store.list().length, 1, '舊檔案裡的 intake 一則都不能掉')
+    assert.deepEqual(store.notices(), [], '沒有那個區段時視為空，不是載入失敗')
+  })
+
+  it('**降級**：含痕跡區段的檔案被不認得它的版本載入時，entries 一則不少', () => {
+    // 舊版的 parseIntakeFile 只讀 version 與 entries，逐欄位白名單會原樣丟棄 notices。
+    const parsed = parseIntakeFile(
+      JSON.stringify({
+        version: INTAKE_VERSION,
+        entries: [{ adapter: 'file', id: 'a1', state: 'pending', digest: 'd', content: null }],
+        notices: [notice()],
+      }),
+    )
+    assert.ok(parsed)
+    assert.equal(parsed.entries.length, 1, '回滾不得清空收件匣')
+  })
+
+  it('痕跡同樣走逐欄位白名單 —— 缺必要欄位者被丟棄', () => {
+    const parsed = parseIntakeFile(
+      JSON.stringify({
+        version: INTAKE_VERSION,
+        entries: [],
+        notices: [notice(), { key: 'bad' }, null, 'nope'],
+      }),
+    )
+    assert.equal(parsed?.notices?.length, 1)
   })
 })

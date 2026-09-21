@@ -4,7 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { after, describe, it } from 'node:test'
 
-import { IntakeService } from './intake-service'
+import { IntakeService, type DeliverOutcome, type IntakeFailure } from './intake-service'
 import { IntakeSource, MAX_DELIVERY_BYTES } from './intake-source'
 import { IntakeStore } from './intake-store'
 
@@ -139,6 +139,16 @@ describe('副檔名、大小、與解析失敗的處置', () => {
     assert.equal(fs.readdirSync(h.inbox).length, 2, '未採納的項目仍原封留著')
   })
 
+  /**
+   * **這道上限作用在檔案上，而且它判得比 provenance 早。**
+   *
+   * `readBounded` 在 `#handle` 的最前面，先 `stat` 再讀 —— 那時候還沒有人解析過內容，
+   * 更沒有 `firstPartyBody` 可言。於是「本文長度上限依 `firstPartyBody` 分流」**不及於它**：
+   * 無論交接或第三方投遞，超過這個大小就是不被解析。
+   *
+   * **也因此這條測試對分流沒有鑑別力** —— 它對「兩條路徑共用同一個檔案大小上限」與
+   * 「兩條路徑各有一個」同樣為綠。分流的載體在 `intake-schema.test.ts`。
+   */
   it('超出大小上限的投遞不被解析，且被消費掉', async () => {
     const h = harness()
     drop(h.inbox, 'big.json', 'x'.repeat(MAX_DELIVERY_BYTES + 10))
@@ -456,5 +466,87 @@ describe('寫到一半的暫存檔', () => {
     await waitFor('改名之後被處理', () => processed.length > 0)
 
     assert.equal(h.store.pendingCount(), 1)
+  })
+})
+
+/**
+ * **失敗的回報：永久的出去，暫時的不出去。**
+ *
+ * 這一組釘住的是 `notifyFailures` 那條接線的兩半。少了反向那一半，一個「任何拒絕都回報」
+ * 的實作照樣全綠 —— 而它的後果是一份還沒寫完的投遞在每次補寫時各跳一則桌面通知，
+ * 逐次通知沒有上界。
+ */
+describe('永久性失敗的回報', () => {
+  function withDeliver(h: Harness, outcome: DeliverOutcome): { source: IntakeSource; seen: IntakeFailure[] } {
+    const seen: IntakeFailure[] = []
+    h.service.onFailure((failure) => seen.push(failure))
+    const source = new IntakeSource({
+      root: h.inbox,
+      adapter: 'handoff',
+      service: h.service,
+      notifyFailures: true,
+      deliver: () => Promise.resolve(outcome),
+    })
+    sources.push(source)
+    return { source, seen }
+  }
+
+  it('永久性拒絕被回報，且帶著 adapter 交進來的診斷欄位', async () => {
+    const h = harness()
+    const { source, seen } = withDeliver(h, {
+      ok: false,
+      code: 'TARGET_NOT_FOUND',
+      consume: true,
+      notify: true,
+      failure: { target: 'nowhere', origin: 'alpha' },
+    })
+    drop(h.inbox, 'a.json', payload())
+    await source.start()
+
+    assert.equal(seen.length, 1)
+    assert.equal(seen[0].code, 'TARGET_NOT_FOUND')
+    assert.equal(seen[0].target, 'nowhere')
+    assert.equal(seen[0].origin, 'alpha')
+  })
+
+  it('暫時性拒絕不被回報 —— 每次補寫都會再被讀到，逐次通知沒有上界', async () => {
+    const h = harness()
+    const { source, seen } = withDeliver(h, { ok: false, code: 'MALFORMED', consume: false, notify: false })
+    drop(h.inbox, 'a.json', payload())
+    await source.start()
+
+    assert.deepEqual(seen, [])
+  })
+
+  it('事件回報被關閉所致的失敗不被回報 —— 使用者打開那個開關就會成功', async () => {
+    const h = harness()
+    const { source, seen } = withDeliver(h, {
+      ok: false,
+      code: 'PREFILL_UNAVAILABLE',
+      consume: true,
+      notify: true,
+      failure: { target: 'beta' },
+    })
+    drop(h.inbox, 'a.json', payload())
+    await source.start()
+
+    assert.deepEqual(seen, [], '它取決於一個使用者可以打開的偏好 —— 與「收件匣已滿」同類')
+  })
+
+  it('未開啟回報的落點一則都不回報 —— 共用落點的拒絕不跳通知', async () => {
+    const h = harness()
+    const seen: IntakeFailure[] = []
+    h.service.onFailure((failure) => seen.push(failure))
+    const source = new IntakeSource({
+      root: h.inbox,
+      adapter: 'file',
+      service: h.service,
+      deliver: () => Promise.resolve({ ok: false, code: 'TOO_LONG', consume: true, notify: true }),
+    })
+    sources.push(source)
+    drop(h.inbox, 'a.json', payload())
+    await source.start()
+
+    assert.deepEqual(seen, [], '「被拒絕的投遞不發通知」對共用落點仍然成立')
   })
 })

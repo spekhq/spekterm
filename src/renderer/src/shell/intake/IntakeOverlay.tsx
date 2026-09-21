@@ -4,6 +4,7 @@ import { createPortal } from 'react-dom'
 import { sessionToReuse } from './reuse-session'
 import { useTranslation } from 'react-i18next'
 
+import { relativeTime } from '@shared/i18n/locale'
 import type { IntakeView } from '../../../../main/ipc/intake'
 import { useSessions } from '../terminal/sessions'
 import { useWorkspaceFolders } from '../useWorkspaceFolders'
@@ -218,21 +219,70 @@ export function IntakeOverlay({ onClose, opener }: IntakeOverlayProps): React.JS
           這條管線僅有的兩道人類防線之一（另一道是讀本文）。
         */}
         {notices.length > 0 ? (
-          <div className="mb-3 flex items-center gap-2 rounded border border-hairline bg-shell px-3 py-2">
-            <span className="text-2xs text-ink">
-              {t('intake.rejected', {
-                count: notices.reduce((total, notice) => total + notice.count, 0),
-              })}
-            </span>
-            <span className="flex-1" />
-            <button
-              type="button"
-              aria-label={t('intake.dismissNotices')}
-              onClick={() => void window.workspace.intake.dismissNotices().then(reload)}
-              className="rounded px-2 py-0.5 text-2xs text-ink-muted hover:bg-hairline/40"
-            >
-              {t('intake.dismissNotices')}
-            </button>
+          <div className="mb-3 flex flex-col gap-1 rounded border border-hairline bg-shell px-3 py-2">
+            <div className="flex items-center gap-2">
+              <span className="text-2xs text-ink">
+                {t('intake.rejectedHeading', {
+                  count: notices.reduce((total, notice) => total + notice.count, 0),
+                })}
+              </span>
+              <span className="flex-1" />
+              <button
+                type="button"
+                aria-label={t('intake.dismissNotices')}
+                onClick={() => void window.workspace.intake.dismissNotices().then(reload)}
+                className="rounded px-2 py-0.5 text-2xs text-ink-muted hover:bg-hairline/40"
+              >
+                {t('intake.dismissNotices')}
+              </button>
+            </div>
+            {/*
+              **逐則，不是一個總數。**
+
+              一個計數器回答不了「哪一則」「為什麼」「我要怎麼辦」中的任何一個 —— 而使用者
+              對一則他自己交辦的工作正是要問這三件事。此前這裡只有那個總數，於是一則交接
+              失敗與從未發生過的交接，在畫面上完全相同。
+
+              **類別的說明文案（`intake.rejectReason`）本來就寫好了，只是沒有任何消費者。**
+            */}
+            <ul className="flex flex-col gap-0.5">
+              {notices.map((notice) => (
+                <li key={`${notice.key} ${notice.code}`} className="flex items-baseline gap-2">
+                  <span className="text-2xs text-ink-muted">
+                    {notice.overflow
+                      ? t('intake.noticeOverflow')
+                      : t(`intake.rejectReason.${notice.code}` as 'intake.rejectReason.MALFORMED')}
+                  </span>
+                  {notice.origin ? (
+                    <span className="text-2xs text-ink-faint">
+                      {t('intake.fromOrigin', { origin: notice.origin })}
+                    </span>
+                  ) : null}
+                  {notice.target ? (
+                    <span className="text-2xs text-ink-faint">
+                      {t('intake.noticeTarget', { target: notice.target })}
+                    </span>
+                  ) : null}
+                  {notice.count > 1 ? (
+                    <span className="text-2xs text-ink-faint">
+                      {t('intake.noticeRepeated', { count: notice.count })}
+                    </span>
+                  ) : null}
+                  <span className="text-2xs text-ink-faint">{relativeTime(notice.at)}</span>
+                  <span className="flex-1" />
+                  <button
+                    type="button"
+                    aria-label={t('intake.dismissNotice')}
+                    onClick={() =>
+                      void window.workspace.intake.dismissNotice(notice.key, notice.code).then(reload)
+                    }
+                    className="rounded px-1 text-2xs text-ink-faint hover:bg-hairline/40"
+                  >
+                    ×
+                  </button>
+                </li>
+              ))}
+            </ul>
           </div>
         ) : null}
 
@@ -278,14 +328,28 @@ export function IntakeOverlay({ onClose, opener }: IntakeOverlayProps): React.JS
                     </span>
                     </div>
                     {/*
-                      **本文要看得見。**
+                      **本文要看得見，而且要看得到全部。**
 
                       到達即接受的交接沒有經過接受閘 —— 於是「按下送出」是唯一的閘，而使用者
                       要能讀到他正要送出的是什麼。呈現方式與待處理項完全相同（純文字、不渲染
                       任何標記、不產生連結）：那條約束的作用域是**本文**，不是**狀態**。
+
+                      **這裡是 first-party 本文唯一的呈現位置** —— 交接從不停留於待處理，
+                      所以 `IntakeCard` 那一段永遠不會顯示它。**因此這裡 SHALL NOT 截斷**：
+                      截掉它等同讓使用者在看不到全文的情況下按下送出。長本文以**捲動**處理，
+                      `max-h-*` 給它一個不把整個收件匣撐開的高度。
                     */}
-                    <p className="whitespace-pre-wrap break-words text-2xs text-ink-faint">
+                    <p className="max-h-64 overflow-y-auto whitespace-pre-wrap break-words text-2xs text-ink-faint">
                       {item.body}
+                    </p>
+                    {/*
+                      **長度是一個看得見的訊號**（`agent-intake` 的「呈現 SHALL 附上本文的長度」）。
+                      `IntakeCard` 一直都有它，而這一段沒有 —— 於是那條要求在 first-party 這條
+                      路徑上**從來沒有載體**。本文的上限放寬之後它更重要：使用者一眼看得出
+                      「這則很長」。
+                    */}
+                    <p className="text-2xs text-ink-faint">
+                      {t('intake.bodyLength', { count: item.bodyLength })}
                     </p>
                   </li>
                 ))}

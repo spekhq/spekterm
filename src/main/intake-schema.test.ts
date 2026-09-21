@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
-import { MAX_BODY_LENGTH, normalizeAuthored, parseIntake } from './intake-schema'
+import { MAX_BODY_LENGTH, MAX_FIRST_PARTY_BODY_LENGTH, MAX_FIELD_LENGTH, normalizeAuthored, parseIntake } from './intake-schema'
 
 const ADAPTER = 'file'
 
@@ -114,5 +114,64 @@ describe('本文是否為第三方撰寫', () => {
     assert.equal(result.ok, true)
     if (!result.ok) return
     assert.equal(result.value.verified.firstPartyBody, undefined)
+  })
+})
+
+/**
+ * 本文長度上限的分流 —— **六格都要驗**。
+ *
+ * 只驗「first-party 的長本文會過」是不夠的：那一格對一個**把上限整個拿掉**的實作同樣為綠。
+ * 要有鑑別力，得同時釘住「第三方那兩格一個字都沒變」與「first-party 仍然有它自己的上限」。
+ */
+describe('本文長度上限依 firstPartyBody 分流', () => {
+  const firstParty = { origin: { kind: 'session', id: 'f1', label: 'repo' }, targetFolderId: 'f1', firstPartyBody: true }
+  const thirdParty = { origin: { kind: 'session', id: 'f1', label: 'repo' }, targetFolderId: 'f1' }
+
+  it('第三方：未超過其上限時通過', () => {
+    const r = parseIntake(payload({ body: 'x'.repeat(MAX_BODY_LENGTH) }), ADAPTER, thirdParty)
+    assert.equal(r.ok, true)
+  })
+
+  it('第三方：超過其上限時被拒 —— 與本 change 之前逐字相同', () => {
+    const r = parseIntake(payload({ body: 'x'.repeat(MAX_BODY_LENGTH + 1) }), ADAPTER, thirdParty)
+    assert.equal(r.ok, false)
+    if (r.ok) return
+    assert.equal(r.code, 'TOO_LONG')
+    assert.equal(r.detail, 'body')
+  })
+
+  it('first-party：超過第三方的上限但未超過自己的，通過', () => {
+    const r = parseIntake(payload({ body: 'x'.repeat(MAX_BODY_LENGTH + 1) }), ADAPTER, firstParty)
+    assert.equal(r.ok, true)
+    if (!r.ok) return
+    assert.equal(r.value.authored.body.length, MAX_BODY_LENGTH + 1)
+  })
+
+  it('first-party：恰在自己的上限上，通過', () => {
+    const r = parseIntake(payload({ body: 'x'.repeat(MAX_FIRST_PARTY_BODY_LENGTH) }), ADAPTER, firstParty)
+    assert.equal(r.ok, true)
+  })
+
+  it('first-party：超過自己的上限時仍然被拒 —— 依據換了，上限沒有消失', () => {
+    const r = parseIntake(payload({ body: 'x'.repeat(MAX_FIRST_PARTY_BODY_LENGTH + 1) }), ADAPTER, firstParty)
+    assert.equal(r.ok, false)
+    if (r.ok) return
+    assert.equal(r.code, 'TOO_LONG')
+    assert.equal(r.detail, 'body')
+  })
+
+  it('title 的上限不分流 —— 它是清單裡的一行，那是呈現預算', () => {
+    const r = parseIntake(payload({ title: 't'.repeat(MAX_FIELD_LENGTH + 1) }), ADAPTER, firstParty)
+    assert.equal(r.ok, false)
+    if (r.ok) return
+    assert.equal(r.code, 'TOO_LONG')
+    assert.equal(r.detail, 'title')
+  })
+
+  it('兩個上限的尺度相同 —— 都以正規化之後的長度判定', () => {
+    // 零寬字元被正規化剝掉之後就在上限之內。
+    const body = 'x'.repeat(MAX_FIRST_PARTY_BODY_LENGTH) + '\u200b'.repeat(50)
+    const r = parseIntake(payload({ body }), ADAPTER, firstParty)
+    assert.equal(r.ok, true)
   })
 })

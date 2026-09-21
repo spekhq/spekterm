@@ -33,8 +33,32 @@
  * 漏掉任何一段都不會有東西變紅。既有的正確形式見 `preferences-store` 的 `sanitizeFamily`。
  */
 
-/** 呈現與交付共用的長度上限。**訂在「一個人會實際讀完」的量級，不是技術極限。** */
+/**
+ * **第三方逐字撰寫**的本文其長度上限。**訂在「一個人會實際讀完」的量級，不是技術極限。**
+ *
+ * 它是收件匣人類閘門有效性的唯一旋鈕：使用者要讀完本文才能按下接受，而把它調大只是讓他
+ * 比較累 —— 不會有任何東西變紅。
+ *
+ * **它不適用於 `firstPartyBody` 的投遞**（見 `MAX_FIRST_PARTY_BODY_LENGTH`）。
+ */
 export const MAX_BODY_LENGTH = 4000
+
+/**
+ * **非第三方撰寫**（`firstPartyBody`）的本文其長度上限。
+ *
+ * 那條路徑不經接受閘，於是上面那個上限的**全部依據**在此不存在。換上的依據是
+ * **接手的 agent 必須能一次讀完交付給它的整份內容** —— 讀不完時收尾界線不進脈絡，
+ * 「界線之外的不算數」靜默失效，而它拿到的是半份工作。
+ *
+ * **這個依據的方向與上面那個相反**：調大不是讓人比較累，是讓交付靜默地只到一半。
+ *
+ * 值由實測得出（Claude Code 2.1.278，見 `docs/lessons/handoff.md` 第八節）：它是實測中
+ * **完整讀取成功**的那一格，不是任何門檻的換算 —— 三道門檻裡有兩道（256 KB 的檔案大小、
+ * 25,000 的單次讀取 token 上限）都不以字元計。**CLI 換版之後要重測。**
+ *
+ * 對照：一份真實的工作交接包約 5,700 字元。
+ */
+export const MAX_FIRST_PARTY_BODY_LENGTH = 20_000
 
 /** 其餘 authored 欄位的長度上限。 */
 export const MAX_FIELD_LENGTH = 200
@@ -235,7 +259,14 @@ export function parseIntake(
 
   // **長度以正規化之後判定。** 以原文判定的話，一串被剝掉的不可見字元可以把一則合法的投遞
   // 推過上限，而使用者看到的內容其實很短。
-  if (authored.body.length > MAX_BODY_LENGTH) {
+  //
+  // **本文的上限依「是否為第三方逐字撰寫」分流，其餘欄位不分流。** `title` 是清單裡的一行，
+  // 那**是**一個呈現預算，對兩條路徑同樣成立；而本文的那個上限保護的是接受閘，
+  // 非第三方的投遞不經那道閘（見兩個常數各自的註解）。
+  //
+  // **分流的是「套哪一個」，不是「怎麼量」** —— 尺度仍是正規化之後的 UTF-16 code unit。
+  const bodyLimit = provenance?.firstPartyBody ? MAX_FIRST_PARTY_BODY_LENGTH : MAX_BODY_LENGTH
+  if (authored.body.length > bodyLimit) {
     return { ok: false, code: 'TOO_LONG', detail: 'body' }
   }
   for (const [key, value] of Object.entries(authored)) {

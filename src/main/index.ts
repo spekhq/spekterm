@@ -353,6 +353,14 @@ void app.whenReady().then(async () => {
   // **接在到達上，不是接在「有東西變了」或 `DeliverOutcome.notify` 上** —— 後兩者會讓
   // 每一次拒絕跳一則桌面通知、每一則真正進來的都不跳（見 `intake-service.ts` 的 `onArrival`）。
   intakeService.onArrival((record) => notifier.arrived(record))
+  /**
+   * **永久性失敗也要讓使用者知道** —— 「被拒絕的投遞不發通知」那條規則明文的例外，
+   * 其適用範圍由 adapter 自己決定（`IntakeSource` 的 `notifyFailures`）。
+   *
+   * 接在這裡而不是 `DeliverOutcome.notify` 上：那個旗標對**暫時性**的拒絕同樣為真，
+   * 而一份還沒寫完的投遞會在每次補寫時再被讀到 —— 逐次通知沒有上界。
+   */
+  intakeService.onFailure((failure) => notifier.failed(failure))
 
   let openInbox: (() => void) | null = null
   let requestAutoAccept: ((adapter: string, id: string, folderId: string) => void) | null = null
@@ -379,8 +387,13 @@ void app.whenReady().then(async () => {
    * - **恰一則、已接受、且它建立的 session 還在** ⇒ 聚焦那個 session。它在收件匣裡沒有任何
    *   待辦動作；送使用者去收件匣等於要他再點一次。
    * - **其餘一律打開收件匣** —— 包含合併的那一則（它只陳述數量，使用者無從得知涵蓋了什麼；
-   *   若其中有待處理項，把他送去一個 session 會讓那些項目從這條通道上消失）、失敗的項目
-   *   （那些仍是待處理），以及**該 session 已被關閉**的情形（SHALL NOT 重建它）。
+   *   若其中有待處理項，把他送去一個 session 會讓那些項目從這條通道上消失），以及
+   *   **該 session 已被關閉**的情形（SHALL NOT 重建它）。
+   *
+   * **永久性失敗不是待處理項，它根本沒有主鍵** —— 批次裡有任何一則時，`IntakeNotifier`
+   * 就不提供主鍵（見它的 `#flush`），於是這裡一律落在「打開收件匣」那一側。少了那一步，
+   * 「一則成功交接 ＋ 一則失敗」落在同一個窗裡會讓主鍵數恰好是 1，使用者被送去那個
+   * session，而**那則失敗從這條通道上消失**。
    */
   notifyBackend.onActivate((keys) => {
     bringToFront()

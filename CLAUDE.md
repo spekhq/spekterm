@@ -177,8 +177,10 @@ npm run probe:intake    # agent-intake / intake-routing（收件匣的兩條入�
                         #   **交接的三段也在這裡**（`runHandoff` / `runHandoffFailure` /
                         #   `runHandoffDisabled`）—— 它是收件匣的第二個 producer，共用同一套
                         #   替身與落點佈置。
-                        #   對照組見 `scripts/intake-control-groups.mjs`（十個 mutation，
-                        #   每一個都指名哪一條斷言必須變紅）
+                        #   對照組見 `scripts/intake-control-groups.mjs`（**23** 個 mutation，
+                        #   每一個都指名哪一條斷言必須變紅；`section` 欄位讓它只跑需要的那一段）
+                        #   **失敗的可見性也在這一支**：`TOO_LONG` / `TOO_LARGE` 的通知、
+                        #   痕跡逐則呈現與逐則清除、痕跡活過重啟
 npm run probe:slack     # slack-intake-source / secret-scope（替身是**真的 HTTPS 伺服器** ——
                         #   產品的端點白名單只認 https，而那條不為驗收放寬。信任錨走
                         #   `NODE_EXTRA_CA_CERTS`：實測 `--ignore-certificate-errors` 無效，

@@ -635,11 +635,18 @@
       "single": "{{origin}} · {{actor}} — {{title}}",
       "singleNoActor": "{{origin}} — {{title}}",
       "merged": "Open the inbox to review them.",
-      "link": "[link]"
+      "link": "[link]",
+      "failure": "A handoff could not be delivered: {{reason}}"
     },
     "badge": "{{total}} waiting",
     "openedLabel": "Already opened",
-    "fromOrigin": "from {{origin}}"
+    "fromOrigin": "from {{origin}}",
+    "noticeTarget": "to “{{target}}”",
+    "noticeRepeated": "×{{count}}",
+    "noticeOverflow": "Other rejections",
+    "dismissNotice": "Clear this rejection",
+    "rejectedHeading_one": "{{count}} delivery was rejected",
+    "rejectedHeading_other": "{{count}} deliveries were rejected"
   },
   "slack": {
     "label": "Slack",
