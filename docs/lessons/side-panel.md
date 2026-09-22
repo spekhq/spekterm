@@ -85,6 +85,39 @@
     子項渲染出來也是 `<li>`，後代選擇器會把它們一起選中 —— 失效的樣子是「有幾條 task」對不上，
     看起來像 flaky，不像選錯層。
 
+### 已完成 task 的淡化：**繼承會被子元素自己的顏色打敗**
+
+淡化（`text-ink-faint line-through`）掛在 `<li>` 上，靠**繼承**傳給內文。刪除線沒事 ——
+`text-decoration` 是**傳播**給後代的；但顏色是**繼承**的，而一個自己宣告了顏色的元素會贏過繼承。
+於是一條已被劃掉的 task 仍夾著數段最亮的前景色，而「已完成的東西比還沒做的更醒目」正好偽裝成
+使用者在掃視的那個訊號。
+
+- **那條既有的 scenario（「多行項目仍可區分完成狀態…涵蓋該項目的整段文字」）措辭是對的，
+  載體卻只驗到一半** —— 它讀 `<li>` 自己的 `textDecorationLine`，而刪除線本來就涵蓋整段。
+  **顏色沒有涵蓋，而沒有任何東西會紅。**
+- **修正要下在呼叫端，不是 `MarkdownView`。** 拿掉 `strong` 的 `text-ink` 會改到**散文**
+  （非 `dense` 的容器是 `text-ink-dim`，那裡的層級差是承重的），**而散文的一般 `strong`
+  沒有任何載體**（`probe-openspec.mjs` 只驗 BDD 關鍵字與內文不同色）。
+  順帶更正一個直覺：它**不會**改到 `ConversationView` —— 那條祖先鏈一層都沒設顏色，
+  繼承到的就是 `body` 的 `--color-ink`，`strong` 的 `text-ink` 在那裡與繼承值同值。
+- **涵蓋範圍要用通用選擇器，不要列舉。** `.task-done .markdown * { color: inherit }`。
+  列舉 `strong, a` 是白名單 —— `index.css` 裡自帶顏色的還有 `.markdown h1..h4`、
+  `.markdown blockquote`、`.markdown th`，**而那個 change 的 design 第一版列舉時就漏了這三條**。
+- **勝負來自 cascade layer，不是 specificity（實測）。** `.text-ink` 產在 `@layer utilities`
+  之內，`index.css` 的自訂規則在任何 layer 之外 —— **unlayered 無條件贏過 layer 內的宣告**。
+  把同一條規則包進 `@layer components`，實測全部復原。**因此：把 `index.css` 收進 `@layer`、
+  或把這條改寫成 Tailwind v4 的 `@utility`，它會靜默失效。**
+- **作用域是文字，不含完成標記。** `TaskMark` 是 `<li>` 的直接子節點、不在 `.markdown` 之內，
+  它承載的是狀態本身 —— 雛型明文豁免它（`workspace-mockup.html:374`）。
+  把規則寫成 `.task-done *` 會把綠勾勾也弄暗。
+- **對比度是一個知情的缺口。** 已完成 task 的文字落在 **3.06:1**（`--color-ink-faint` #5b6675
+  對 `--color-panel` #14181d），低於 WCAG 2 AA 的 4.5:1，也低於上游 spek 判定不可接受而 revert
+  的 3.24:1 —— 上游另有明文下限（`theme-toggle/spec.md:58`）與一條要求已完成 task 的連結／
+  行內 code 仍須過那個下限的 scenario，**本 repo 的方向與它相反**。
+  提高到 `--color-ink-dim`（6.95:1、過 AA、接近 spek 實際的 6.08–6.41:1）的方案經渲染比對後
+  被否決：淡化不夠。**spekterm 目前沒有任何對比度守衛**，這是裁決不是疏漏；
+  完整論證見 `task-completion-dimming` 的 design D4。
+
 ## worktree 聚合
 
 **涵蓋範圍、去重、graph 節點命名全部委由 core**（upstream #17／#23）。宿主端只做四件事：來源 DTO

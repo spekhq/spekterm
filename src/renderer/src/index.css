@@ -196,6 +196,32 @@ body[data-dragging='true'] * {
   margin: 0.25em 0;
 }
 
+/*
+ * 已完成的 task：文字通篇只有一種前景色。
+ *
+ * 淡化掛在 `<li>` 上（`ChangeView.tsx` 的 `TaskList`），靠**繼承**傳給內文 —— 而一個自己
+ * 宣告了顏色的元素會贏過繼承。症狀是一條已被劃掉的 task 仍夾著數段最亮的前景色，讀起來
+ * 像還有東西要做，而 tasks 清單正是使用者掃視「哪些還沒做」的地方。
+ *
+ * **為什麼是 `*` 而不是列舉 `strong, a`** —— 列舉是白名單，需要有人記得更新。自帶顏色的
+ * 不只那兩個：底下的 `.markdown h1..h4`、`.markdown blockquote`、`.markdown th` 都是，
+ * 而本 change 的 design 第一版列舉時就漏了這三條。通用選擇器讓「在已完成的 task 裡保留
+ * 自己的顏色」這件事**表達不出來**，日後新增的行內元件也逃不掉。
+ *
+ * **為什麼不寫成 Tailwind 的 `[&_*]:text-inherit`** —— 它產出的選擇器 specificity 是
+ * (0,1,0)，與 `.text-ink` 相同，勝負由產出順序決定（一個沒有被寫下來的前提）。
+ *
+ * **這條規則不得被收進 `@layer`。** 實測：`.text-ink` 產在 `@layer utilities` 之內，而
+ * 本檔的自訂規則在任何 layer 之外 —— unlayered 無條件贏過 layer 內的宣告，與 specificity
+ * 無關。把本檔收進 `@layer`、或把這條改寫成 `@utility`，它會**靜默失效**。
+ *
+ * 作用域是**文字**：完成標記是 `<li>` 的直接子節點、不在 `.markdown` 之內，因此不受影響
+ * —— 它承載的是狀態本身，雛型亦明文讓它保留 `--green`（workspace-mockup.html:374）。
+ */
+.task-done .markdown * {
+  color: inherit;
+}
+
 .markdown h1,
 .markdown h2,
 .markdown h3,

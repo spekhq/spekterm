@@ -400,8 +400,13 @@ function TaskList({ tasks }: { tasks: ParsedTasks }): React.JSX.Element {
                   穩定的：清單來自單一檔案的一次解析，不會就地重排。
                 */
                 key={`${section.title}:${index}`}
+                /*
+                  `task-done` 不是樣式，是 `index.css` 那條 `.task-done .markdown *` 的掛載點：
+                  淡化靠繼承傳給內文，而 `MarkdownView` 渲染出來的 `strong`／連結自帶顏色，
+                  會贏過繼承。**改動這個 class 名要連 `index.css` 一起改。**
+                */
                 className={`flex gap-2 text-base ${
-                  task.completed ? 'text-ink-faint line-through' : 'text-ink'
+                  task.completed ? 'task-done text-ink-faint line-through' : 'text-ink'
                 }`}
               >
                 <TaskMark completed={task.completed} />

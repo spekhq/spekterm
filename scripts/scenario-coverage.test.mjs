@@ -43,6 +43,7 @@ const COVERED_CHANGES = [
   'ui-language-switch',
   'handoff-body-limit-and-rejection-visibility',
   'handoff-outbox-watch-survives-restore',
+  'task-completion-dimming',
 ]
 
 /** change 的所在 —— 封存後它會搬到 `archive/` 之下，兩處都找。 */
@@ -902,6 +903,41 @@ export const TABLE = [
     + '> 中途方案 —— 後者修得好偵測，卻仍會銷毀一則尚未被消費的待處理交接。\n'
     + '> 既有的 `上一輪未被消費的投遞不會在重建時被清掉` 是同一條性質在 injection 那一側的版本，\n'
     + '> 它原本是**反過來**寫的（釘住一個不成立的理由），本 change 一併改正'],
+  // ══════════════════════════════════════════════════════════════════════════
+  // task-completion-dimming
+  //
+  // MODIFIED 把整條 requirement 搬進 delta，於是五條**既有** scenario 也會被掃到。
+  // 那五條的載體是逐條到 `probe-openspec.mjs` 找出來的，不是憑印象填「既有」——
+  // 上一次 82 列的表裡，憑印象填的 39 條中有 4 條是假的。
+  // ══════════════════════════════════════════════════════════════════════════
+
+  ['依 section 分組', 'tasks 依 section 分組', false,
+    '把 section 攤平成單一清單', '既有載體，本 change 未動'],
+  ['區分已完成與未完成的 task', '已完成與未完成的 task 可區分', false,
+    '已完成的列不加 line-through', '既有載體，本 change 未動'],
+  ['項目的續行不被摺成單一行', 'task 的子項渲染為清單項目，不與第一行黏成一段', false,
+    '把 task 文字退回 `<span>{task.text}</span>`', '既有載體，本 change 未動'],
+  ['項目文字中的行內標記被渲染', 'task 文字中的行內標記被渲染（而非顯示原始字元）', false,
+    '把 task 文字退回 `<span>{task.text}</span>`', '既有載體，本 change 未動'],
+  ['多行項目仍可區分完成狀態', '多行且已完成的 task，刪除線涵蓋整段', false,
+    '已完成的列不加 line-through',
+    '既有載體。**它只驗 `<li>` 自己的 text-decoration-line** —— 刪除線會傳播給後代，'
+    + '所以這條對「顏色沒有涵蓋整段」是透明的，而那正是本 change 要修的缺陷'],
+
+  ['已完成項目中的行內標記不保留自己的顏色', '已完成 task 的行內標記與內文同色', false,
+    '刪掉 `.task-done .markdown *` 那條規則',
+    'fixture 的 1.1 帶著四種行內標記：粗體（text-ink）、連結（text-accent）、'
+    + '`**SHALL**`（bddTone ⇒ text-danger）、行內 code。**code 那一項恆綠**'
+    + '（`.markdown code` 只設背景、顏色本來就繼承），留著是為了證明「有 code」不等於「驗到了 code」。'
+    + '已實跑該 mutation：strong/link/bdd 分別退回 ink/accent/danger，斷言變紅'],
+  ['已完成與未完成項目的內文顏色不同', '已完成與未完成的 task 內文顏色不同', false,
+    '把未完成的 `<li>` 也改成 text-ink-faint',
+    '**上一條的對照組。** 少了它，一個把整份清單都畫成 ink-faint 的實作會讓上一條全綠。已實跑'],
+  ['完成狀態標記不隨文字淡化', '完成標記不隨文字淡化', false,
+    '把規則的作用域由 `.task-done .markdown *` 放寬成 `.task-done *`',
+    '標記是 `<li>` 的直接子節點、不在 `.markdown` 之內，承載的是狀態本身；'
+    + '雛型明文豁免它（workspace-mockup.html:374）。已實跑該 mutation：標記跟著退成 ink-faint'],
+
 ]
 
 /**

@@ -119,12 +119,24 @@ info:
  * 那三條呈現條款；其餘維持單行，讓「多行」與「單行」在同一份 fixture 裡都被走到。
  *
  * **1.1 同時是已完成的那一條** —— 刪除線要涵蓋渲染出來的子元素，而那只有在多行項目上才驗得到。
+ *
+ * **1.1 的續行同時帶著四種行內標記，各有各的理由**（`task-completion-dimming`）：
+ * 淡化必須涵蓋整段文字，而在收斂之前，`MarkdownView` 是**逐元件**指定顏色的 ——
+ * 於是每一種自帶顏色的標記都是一個獨立的逃脫點。
+ *
+ * - `**務必**` 是 `text-ink`（與內文差 14.46:1 → 3.06:1）
+ * - 外部連結是 `text-accent`
+ * - `**SHALL**` 整個 strong 恰為 BDD 關鍵字 ⇒ `text-danger`（`MarkdownView` 的 `bddTone`）
+ * - `` `docs/api.md` `` 是行內 code —— **它恆綠**（`.markdown code` 只設背景、顏色本來就繼承），
+ *   留著是為了證明「有 code」不等於「驗到了 code」，不是為了鑑別力。
+ *
+ * **連結用 `https:`** —— `MarkdownView` 只把 http(s) 渲染成 `<a>`，相對路徑會變成 `<span>`。
  */
 const TASKS = `## 1. 後端
 
 - [x] 1.1 建立 endpoint
   - 子項：先確認 schema
-  回傳格式見 \`docs/api.md\`，**務必**保持相容
+  回傳格式見 \`docs/api.md\`，**務必**保持相容，細節見 [RFC](https://example.com/rfc)，該條 **SHALL** 維持
 - [ ] 1.2 接上 provider
 
 ## 2. 前端
@@ -544,12 +556,31 @@ const TASK_SECTIONS = `[...document.querySelectorAll('section[aria-label="${copy
  * 於是「有幾條 task」這種斷言會多算。失效的樣子是一個數字對不上，看起來像 flaky，而不像
  * 選擇器選錯了層。
  */
+/*
+ * 顏色欄位讀的是 **computed color**，不是 class —— 與上面那條「看 computed style，不看 class」
+ * 同一條紀律。淡化掛在 `<li>` 上靠繼承傳下去，而自帶顏色的子元素會贏過繼承，
+ * 所以「涵蓋整段文字」這件事只有逐個元素比對顏色才驗得出來。
+ *
+ * **每個 `querySelector` 都要 guard `null`** —— fixture 的 1.2 與 2.1 沒有 `strong`／連結，
+ * 少了 `?.` 這裡會 throw，而症狀是整個 evaluate 掛掉（一個 Uncaught error，不是一條紅斷言）。
+ *
+ * `markColor` 讀的是完成標記那個 `<svg>`（`<li>` 的直接子節點，**不在 `.markdown` 之內**）——
+ * 它承載的是狀態本身，不該隨文字淡化。
+ */
 const TASK_ITEMS = `[...document.querySelectorAll('section[aria-label="${copy('openspec.tasks')}"] > div > ul > li')].map((li) => ({
   text: li.innerText.replace(/\\s+/g, ' ').trim(),
   struck: getComputedStyle(li).textDecorationLine.includes('line-through'),
   nestedItems: li.querySelectorAll('li').length,
   codeMarks: [...li.querySelectorAll('code')].map((c) => c.innerText),
   strongMarks: [...li.querySelectorAll('strong')].map((s) => s.innerText),
+  bodyColor: getComputedStyle(li).color,
+  strongColor: li.querySelector('strong') ? getComputedStyle(li.querySelector('strong')).color : null,
+  linkColor: li.querySelector('a') ? getComputedStyle(li.querySelector('a')).color : null,
+  bddColor: (() => {
+    const el = [...li.querySelectorAll('strong')].find((s) => s.innerText.trim() === 'SHALL')
+    return el ? getComputedStyle(el).color : null
+  })(),
+  markColor: li.querySelector('svg') ? getComputedStyle(li.querySelector('svg')).color : null,
 }))`
 
 const DELTA_BADGES = `[...document.querySelectorAll('section[aria-label="${copy('openspec.specDeltas')}"] span')]
@@ -1960,6 +1991,39 @@ async function runPanelBasics(label, { port, rendererUrl }) {
       '多行且已完成的 task，刪除線涵蓋整段',
       multiline?.struck === true && (multiline?.nestedItems ?? 0) >= 1,
       `struck=${multiline?.struck} 巢狀=${multiline?.nestedItems}`,
+    )
+
+    // ── 淡化涵蓋整段文字（`task-completion-dimming`）────────────────────────
+    //
+    // 刪除線是**傳播**給後代的（`text-decoration` 的性質），顏色不是 —— 顏色是**繼承**的，
+    // 而一個自帶顏色的子元素會贏過繼承。於是上面那條「刪除線涵蓋整段」曾經是綠的，
+    // 而同一條 task 裡的粗體仍是最亮的前景色。三條斷言各防一件事，見 design D5。
+    //
+    // **這三條必須留在寫入 `TASKS_DONE` 之前** —— 那一步會把 1.2 也勾掉，
+    // 於是第二條沒有未完成的列可以當參照物了。
+    const openItem = items.find((i) => !i.struck)
+    check(
+      results,
+      '已完成 task 的行內標記與內文同色',
+      multiline?.strongColor === multiline?.bodyColor &&
+        multiline?.linkColor === multiline?.bodyColor &&
+        multiline?.bddColor === multiline?.bodyColor,
+      `body=${multiline?.bodyColor} strong=${multiline?.strongColor} link=${multiline?.linkColor} bdd=${multiline?.bddColor}`,
+    )
+    check(
+      results,
+      '已完成與未完成的 task 內文顏色不同',
+      // 少了這條，一個把整份清單都畫成 ink-faint 的實作會讓上一條全綠。
+      Boolean(openItem) && multiline?.bodyColor !== openItem?.bodyColor,
+      `done=${multiline?.bodyColor} open=${openItem?.bodyColor}`,
+    )
+    check(
+      results,
+      '完成標記不隨文字淡化',
+      // `--color-green` #34d399。標記承載的是「這一項完成了」這個狀態，不是被淡化的內容；
+      // 雛型亦明文豁免它（workspace-mockup.html:374）。
+      multiline?.markColor === 'rgb(52, 211, 153)',
+      `mark=${multiline?.markColor} body=${multiline?.bodyColor}`,
     )
 
     // proposal 一度整個被漏掉（雛型的「本 change」只畫了 tasks 與 spec deltas）。

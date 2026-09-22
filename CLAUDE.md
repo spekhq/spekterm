@@ -88,7 +88,7 @@ tmux 與自寫 daemon 取捨。**不要把「重建」誤當成「常駐」**：
 |---|---|
 | 任何一支 `scripts/probe-*.mjs`、`scripts/lib/` 的儀器（`instrument` / `cdp` / `mounted`）、加一條驗收斷言或一種等待、追一個 flaky | **`docs/lessons/probes.md`** |
 | pty、`src/renderer/src/shell/terminal/`、session 持久化與重建 | **`docs/lessons/terminal.md`** |
-| `src/renderer/src/side-panel/`、`@spekjs/core` 或 `@spekjs/ui` 升級 | **`docs/lessons/side-panel.md`** |
+| `src/renderer/src/shell/side-panel/`、`src/renderer/src/shell/openspec/`、`@spekjs/core` 或 `@spekjs/ui` 升級 | **`docs/lessons/side-panel.md`** |
 | `src/main/intake-*`（**含 `intake-notify*`**）、`src/main/ipc/intake.ts`、`scripts/probe-intake.mjs`、`scripts/lib/stub-agent.mjs`、或任何會動到「呈現給人看的文字」與「交給 agent 的文字」其中一端的東西、**或任何會把文字送到作業系統通知的東西** | **`docs/lessons/intake.md`** |
 | `src/main/slack-*`、`src/main/secret-store.ts`、`scripts/probe-slack.mjs`、`scripts/lib/stub-slack.mjs`、或任何會把憑證交給第三方的東西 | **`docs/lessons/slack.md`** |
 | `src/main/handoff-*`、`src/main/handoff-service.ts` 的落點與上限、`scripts/probe-intake.mjs` 的 `runHandoff*` 段落、或任何**倚賴「注入的內容真的進入 agent 脈絡」**的東西 | **`docs/lessons/handoff.md`** |
