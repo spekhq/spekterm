@@ -1,7 +1,7 @@
 {
   "name": "spekterm",
   "productName": "Spekterm",
-  "version": "0.1.13",
+  "version": "0.1.14",
   "private": true,
   "license": "UNLICENSED",
   "description": "Spec-driven multi-agent development workbench (Electron desktop app)",
