@@ -6,7 +6,7 @@ import { after, describe, it } from 'node:test'
 
 import { configureAgentEvents, prepareEventInjection } from './agent-events'
 import { clearWait } from './agent-wait'
-import { cancelPrefill, pendingPrefillCount, schedulePrefill } from './intake-prefill'
+import { cancelPrefill, isSubmitted, pendingPrefillCount, schedulePrefill } from './intake-prefill'
 
 const bases: string[] = []
 after(() => {
@@ -157,5 +157,16 @@ describe('等不到就緒', () => {
     assert.deepEqual(writes, [])
     cancelPrefill(sessionId)
     clearWait(sessionId)
+  })
+})
+
+describe('已送出的判定（intake-inbox-usability）', () => {
+  it('等待狀態落回未知不視為已送出', () => {
+    // 判定的後果會落盤（已了結 ⇒ 從收件匣移除本文）—— 無法分辨的狀態不得推定為送出。
+    assert.equal(isSubmitted('unknown'), false)
+    assert.equal(isSubmitted('ready'), false)
+    // 對照：真正開始工作的兩種狀態為真，否則上面兩條對「永遠回 false」也成立。
+    assert.equal(isSubmitted('busy'), true)
+    assert.equal(isSubmitted('awaiting-choice'), true)
   })
 })

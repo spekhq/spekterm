@@ -268,6 +268,20 @@ describe('去重', () => {
     assert.equal(again.ok, false)
     assert.equal(again.code, 'DUPLICATE')
   })
+
+  it('清除之後去重仍然有效', async () => {
+    // 「從收件匣清除」只是不再呈現（intake-inbox-usability）—— 它不得被實作成刪掉那筆紀錄。
+    const h = harness()
+    await h.service.deliver(payload(), 'file')
+    h.store.setState('file', 'a1', 'accepted', 's1')
+    h.store.settle('file', 'a1')
+    assert.ok(h.store.get('file', 'a1')?.settledAt, '前置：確實已了結')
+
+    const again = await h.service.deliver(payload(), 'file')
+    assert.equal(again.ok, false)
+    assert.equal(again.code, 'DUPLICATE')
+    assert.equal(h.store.get('file', 'a1')?.state, 'accepted')
+  })
 })
 
 describe('拒絕與警示有界', () => {

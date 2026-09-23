@@ -114,6 +114,17 @@ export interface IntakeAuthored {
   actor: string
   /** 來源座標的**標籤**（channel 名稱之類）—— 與 `originId` 不同，這是可變的字串。 */
   originLabel: string
+  /**
+   * 這件事**於來源發生**的時刻（毫秒）。選填 —— 沒有時收件匣以到達的時間代之。
+   *
+   * **它在第三方撰寫的這一組**：Slack adapter 也是經共用落點投遞的 producer，它寫的東西與外部
+   * producer 同樣不受信任。因此它只用於呈現與排序，**不作任何判斷依據**（routing 不比對它、
+   * 去重的摘要不納入它），而它的效力有上限 —— 不得晚於到達時間（見 `intake-projection.ts`）。
+   *
+   * 存在的理由是回補（intake-inbox-usability）：應用程式關閉期間發生的事於啟動時一次進來，
+   * 只看到達時間的話，昨天的事會顯示成「剛剛」。
+   */
+  occurredAt?: number
 }
 
 export interface Intake {
@@ -194,6 +205,23 @@ export function bodyOf(intake: Intake): string {
   return intake.authored.body
 }
 
+/**
+ * ISO 8601 的日期時刻，**必須帶時區**（`Z` 或 `±hh:mm`）。
+ *
+ * 不交給 `Date.parse` 自由發揮：它接受的格式由實作定義（`'Sep 22 2026'` 也吃），而不帶時區的
+ * 時刻會被當成**本機時間** —— 同一份投遞在不同時區的機器上呈現成不同的時刻，卻不會有任何錯誤。
+ */
+const ISO_INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2})$/
+
+/** `undefined` ＝ 沒有宣告；`null` ＝ 宣告了但不是可解析的時刻。 */
+function readInstant(source: Record<string, unknown>, key: string): number | null | undefined {
+  const value = source[key]
+  if (value === undefined) return undefined
+  if (typeof value !== 'string' || !ISO_INSTANT.test(value)) return null
+  const ms = Date.parse(value)
+  return Number.isFinite(ms) ? ms : null
+}
+
 function readString(source: Record<string, unknown>, key: string): string | null {
   const value = source[key]
   return typeof value === 'string' ? value : null
@@ -250,11 +278,17 @@ export function parseIntake(
   const actor = readString(source, 'actor') ?? ''
   const originLabel = provenance ? provenance.origin.label : (readString(originFields, 'label') ?? '')
 
+  // **宣告了卻不可解析 ⇒ 整則拒絕**，與其他欄位型別不符同一個處置（永久性）。靜默丟掉它的話，
+  // producer 的格式錯誤永遠不會被看見 —— 它的每一則都會以到達時間呈現，而沒有人知道為什麼。
+  const occurredAt = readInstant(source, 'occurredAt')
+  if (occurredAt === null) return { ok: false, code: 'FIELD_TYPE', detail: 'occurredAt' }
+
   const authored: IntakeAuthored = {
     title: normalizeAuthored(title),
     body: normalizeAuthored(body),
     actor: normalizeAuthored(actor),
     originLabel: normalizeAuthored(originLabel),
+    ...(occurredAt !== undefined ? { occurredAt } : {}),
   }
 
   // **長度以正規化之後判定。** 以原文判定的話，一串被剝掉的不可見字元可以把一則合法的投遞
@@ -270,7 +304,8 @@ export function parseIntake(
     return { ok: false, code: 'TOO_LONG', detail: 'body' }
   }
   for (const [key, value] of Object.entries(authored)) {
-    if (key !== 'body' && value.length > MAX_FIELD_LENGTH) {
+    // 只有字串欄位有長度（發生時間是一個數字）。
+    if (typeof value === 'string' && key !== 'body' && value.length > MAX_FIELD_LENGTH) {
       return { ok: false, code: 'TOO_LONG', detail: key }
     }
   }

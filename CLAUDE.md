@@ -36,8 +36,9 @@ OpenSpec 結構的側欄，讓使用者不必另外開 IDE 就能一邊駕駛 ag
   「現在能不能送輸入」來自注入的 hooks。**SHALL NOT 解析終端畫面** —— 生態系有三個專案走過
   那條路，一個要在自己的 app 裡再養一個 VT100 模擬器，一個已失效，一個公開宣告不可維護後刪光。
 - **收件匣** —— 活動列的 `Handoffs` 入口已接上（PRD §11 Phase 7 的本機 inbox）。外部 producer
-  往 `<userData>/intake-inbox/` 投遞一份 JSON，使用者**看過本文之後**接受它，就在 routing 解析出
-  的 folder 得到一個開好、context 備妥、第一則 prompt 已填但**尚未送出**的 agent session。
+  往 `<userData>/intake-inbox/` 投遞一份 JSON，使用者**看過本文之後**接受它，就在**他確認的**
+  folder（routing 只決定預選哪一個，`intake-inbox-usability`）得到一個開好、context 備妥、
+  第一則 prompt 已填但**尚未送出**的 agent session。
   **Slack 已是第一個 producer**（`slack-mention-intake`）：有人在 Slack 提及使用者本人時，
   那件事成為一則待處理項目。**回補是主幹、即時是加速器** —— 桌面 app 大多數時間是關著的，
   而 Socket Mode 沒有重送佇列。**回補有三個觸發點**（啟動時、每五分鐘、存下憑證的那一刻）——
@@ -132,6 +133,10 @@ SPEKTERM_SCAN_PATH=../spek npm run dev
 | `npm run test:e2e` | 全部 13 支探針，走 CDP 或真 Electron 主行程，驗**被出貨的那份程式碼** | **驗收時**。約二十分鐘 |
 | `npm run test:all` | 兩層都跑 | 封存前 |
 
+**`test:unit` 是一串寫死層數的 glob，而一支不在 glob 裡的測試從來不會被執行** —— 沒有錯誤、
+`npm test` 照樣全綠。`src/main/ipc/` 的測試曾經從寫下那天起就沒跑過，其中一條紅了而沒有人看到。
+`scripts/test-glob.test.mjs` 擋著：repo 內每一支 `*.test.*` 都必須被某個 glob 涵蓋。
+
 **探針不併進 `npm test` 是刻意的**：它們不可平行（各自佔 debugging port、各自起 Electron 還要收屍）。
 併進去的代價是「從此沒有人敢隨手打 `npm test`」。迭代時用單支 `probe:*` 入口，不要為了改一行跑
 `test:e2e`。
@@ -179,10 +184,14 @@ npm run probe:intake    # agent-intake / intake-routing（收件匣的兩條入�
                         #   producer，共用同一套替身與落點佈置。**`runHandoffRestored` 種
                         #   `sessions.json` ＋ 既有的落點目錄**：落點被重新準備之後還收不收得到，
                         #   只有「session 被還原」這個形狀驗得出來（新建落點是唯一沒壞的那一種）。
-                        #   對照組見 `scripts/intake-control-groups.mjs`（**25** 個 mutation，
+                        #   對照組見 `scripts/intake-control-groups.mjs`（**40** 個 mutation，
                         #   每一個都指名哪一條斷言必須變紅；`section` 欄位讓它只跑需要的那一段）
                         #   **失敗的可見性也在這一支**：`TOO_LONG` / `TOO_LARGE` 的通知、
                         #   痕跡逐則呈現與逐則清除、痕跡活過重啟
+                        #   **接受之前改選 folder 與已開好那一段的去留**（`runChooseFolder` /
+                        #   `runOpenedLifecycle`）：session 開在哪裡一律讀 pty 行程的
+                        #   `/proc/<pid>/cwd`；「缺了確認的 folder 就拒絕」直接呼叫 IPC ——
+                        #   經畫面的斷言對主行程恆綠（停用的按鈕點不到它）
 npm run probe:slack     # slack-intake-source / secret-scope（替身是**真的 HTTPS 伺服器** ——
                         #   產品的端點白名單只認 https，而那條不為驗收放寬。信任錨走
                         #   `NODE_EXTRA_CA_CERTS`：實測 `--ignore-certificate-errors` 無效，

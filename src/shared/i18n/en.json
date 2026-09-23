@@ -592,7 +592,11 @@
     "pendingCount_other": "{{count}} items waiting",
     "accept": "Accept",
     "dismiss": "Dismiss",
-    "opensIn": "Opens in {{folder}}",
+    "opensInLabel": "Opens in",
+    "chooseFolder": "Folder to open this in",
+    "choosePlaceholder": "Choose a folder…",
+    "chosenFolderGone": "The folder you chose is no longer in the workspace",
+    "clearOpened": "Clear from inbox",
     "unresolved": "Cannot work out which folder this belongs to",
     "unresolvedFolderGone": "The folder this rule points to is no longer in the workspace",
     "bodyLength": "{{count}} characters",
@@ -628,6 +632,7 @@
       "spoofable": "This field is written by whoever sent the item and can be chosen to steer where it opens"
     },
     "itemLabel": "Inbox item: {{title}}",
+    "openedItemLabel": "Opened item: {{title}}",
     "dismissNotices": "Clear",
     "close": "Close inbox",
     "notify": {

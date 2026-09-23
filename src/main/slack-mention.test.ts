@@ -99,6 +99,22 @@ describe('識別碼', () => {
 })
 
 describe('buildDelivery：投遞內容', () => {
+  it('回補取回的提及宣告訊息本身的時間', () => {
+    // ts 1699999999.000100 ＝ 2023-11-14T22:13:19.000Z（秒後的小數是 Slack 的序號，不是毫秒）。
+    // 與「何時被取回」無關 —— buildDelivery 根本拿不到取回的時刻，於是這一條同時涵蓋回補與即時。
+    const delivery = buildDelivery(input())
+    assert.equal(delivery.occurredAt, '2023-11-14T22:13:19.000Z')
+    const parsed = parseIntake(delivery, 'file')
+    assert.ok(parsed.ok, '收件匣的解析器接受這個格式')
+    if (!parsed.ok) return
+    assert.equal(parsed.value.authored.occurredAt, Date.UTC(2023, 10, 14, 22, 13, 19))
+  })
+
+  it('ts 不是數字時不宣告發生時間（收件匣以到達時間代之），而不是宣告一個錯的', () => {
+    const delivery = buildDelivery(input({ message: message({ ts: 'not-a-ts' }) }))
+    assert.equal('occurredAt' in delivery, false)
+  })
+
   it('產出的投遞被收件匣接受', () => {
     // **端到端的形狀檢查**：不是「我覺得欄位齊了」，而是收件匣自己的解析器說它合法。
     const parsed = parseIntake(buildDelivery(input()), 'file')

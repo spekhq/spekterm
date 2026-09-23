@@ -273,6 +273,11 @@ void app.whenReady().then(async () => {
   // 收件匣：狀態 index、原始投遞的保存處、routing 規則（**本能力自己的檔案，不進 preferences**）。
   const intakeStore = new IntakeStore(join(app.getPath('userData'), 'intake.json'))
   intakeStore.load()
+  // **上一次執行接受、而 prompt 尚未送出的，在這裡一次了結**（intake-inbox-usability）。
+  // 預填的 prompt 住在 pty 的輸入處，pty 活不過應用程式 —— 被還原的 session 裡已經沒有那一則
+  // prompt 可以送出，它們留在收件匣裡只會累積。**必須在任何來源開始投遞之前**：晚了的話，
+  // 一則在啟動瞬間到達即接受的交接會被一起了結，本文在使用者看到之前就消失了。
+  intakeStore.settleOpened()
   const routingStore = new RoutingStore(routingFile(app.getPath('userData')))
   routingStore.load()
   const intakeService = new IntakeService({

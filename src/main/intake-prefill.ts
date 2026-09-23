@@ -1,4 +1,4 @@
-import { encodePrefill } from './agent-events'
+import { encodePrefill, type WaitState } from './agent-events'
 import { subscribeWait, waitStateOf } from './agent-wait'
 
 /**
@@ -36,6 +36,28 @@ import { subscribeWait, waitStateOf } from './agent-wait'
  */
 
 /** 等不到就緒的上限。**必須大於 drain 的 tick（400ms）數個數量級**，否則正常啟動會被判成逾時。 */
+/**
+ * 預填之後，**使用者送出了嗎**。
+ *
+ * 「使用者按下 Enter」發生在 pty 之內，renderer 與主行程都收不到自己發出的訊號；而注入的 hooks
+ * **不含 `UserPromptSubmit`**（`agent-events.ts` 的 `HOOKED_EVENTS`），所以送出本身沒有事件。
+ * 唯一的線索是 agent **開始工作了** —— 等待狀態成為忙碌或等待選擇。
+ *
+ * ## `unknown` 不算
+ *
+ * 此前的判定是「不再是 ready」，那把落回未知的事件（不認得種類的 `Notification`、
+ * `SessionEnd`、不認得的事件）一併當成送出。那在過去只撤掉一個暫時的標示；自
+ * `intake-inbox-usability` 起它會**落盤**「已了結」—— 一次誤判就把交接的本文從它唯一的呈現位置
+ * 永久移除，而且沒有復原的入口。**一個無法分辨的狀態不能推定為送出。**
+ *
+ * 收件匣的 prompt 必然要求 agent 先讀 context 檔，所以真正的送出一定會經過一次工具呼叫（⇒ 忙碌）。
+ *
+ * **「待送出」標示與「已了結」共用這一個判定** —— 兩處各自判斷的話，標示消失而項目還在（或反之）。
+ */
+export function isSubmitted(state: WaitState): boolean {
+  return state === 'busy' || state === 'awaiting-choice'
+}
+
 export const PREFILL_TIMEOUT_MS = 30_000
 
 export interface PrefillDeps {

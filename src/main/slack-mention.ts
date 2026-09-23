@@ -57,6 +57,8 @@ export interface IntakeDelivery {
   body: string
   actor: string
   origin: { kind: 'slack'; id: string; label: string }
+  /** 被提及那一則訊息的時間（ISO 8601）。`ts` 不是數字時不宣告 —— 收件匣以到達時間代之。 */
+  occurredAt?: string
 }
 
 /**
@@ -195,7 +197,20 @@ function buildTitle(input: MentionInput): string {
  * 那是**投遞者自稱的來源**，收件匣不採信它（`adapter` 由接收端決定），寫在這裡只為了讓
  * routing 有一個可比對的欄位。
  */
+/**
+ * Slack 的 `ts`（epoch 秒，帶六位小數，同時也是訊息的識別碼）換算成 ISO 8601。
+ *
+ * **宣告訊息本身的時間，不是取回的時刻**（`slack-intake-source`）：回補是本能力的主幹，
+ * 關閉期間的提及於啟動時一次取回 —— 不宣告的話，昨天的提及會以「剛剛」呈現。
+ */
+export function occurredAtOf(ts: string): string | undefined {
+  const seconds = Number(ts)
+  if (!Number.isFinite(seconds) || seconds <= 0) return undefined
+  return new Date(Math.floor(seconds * 1000)).toISOString()
+}
+
 export function buildDelivery(input: MentionInput): IntakeDelivery {
+  const occurredAt = occurredAtOf(input.message.ts)
   return {
     id: intakeIdOf({ teamId: input.teamId, channelId: input.channelId, ts: input.message.ts }),
     title: buildTitle(input),
@@ -206,5 +221,6 @@ export function buildDelivery(input: MentionInput): IntakeDelivery {
       id: input.channelId,
       label: truncateField(input.channelName),
     },
+    ...(occurredAt ? { occurredAt } : {}),
   }
 }

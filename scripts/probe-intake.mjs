@@ -26,6 +26,7 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
+  readlinkSync,
   realpathSync,
   renameSync,
   rmSync,
@@ -33,8 +34,8 @@ import {
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
-import { check, connectToApp, pollFor } from './lib/cdp.mjs'
-import { copy, copyIn, label, labelIn } from './lib/copy.mjs'
+import { check, connectToApp, pollFor, pressKey } from './lib/cdp.mjs'
+import { copy, copyIn, label, labelIn, prefixOf } from './lib/copy.mjs'
 import { retryAction } from './lib/instrument.mjs'
 import { awaitMounted } from './lib/mounted.mjs'
 import { electronExtraArgs } from './lib/display.mjs'
@@ -566,20 +567,42 @@ async function runRouting(_mode, _modeConfig, context) {
   //
   // **釘名字而不是識別碼**：識別碼對使用者不構成資訊，而「顯示識別碼」這個缺陷正是
   // 以釘識別碼的斷言放過去的 —— 改成顯示名字之後，原本那條否定斷言會變成恆真。
+  //
+  // **釘被選中的那一項，不是整列的文字**（intake-inbox-usability）：folder 改為選單之後，
+  // 整列的文字含**每一個**選項的名字，於是「含第二個的名字」「不含第一個的名字」的真假
+  // 只取決於選項的排列順序。使用者讀到的是被選中的那一項。
+  const selected = await app.client.evaluate(selectedFolderExpression('ROUTED-TITLE'))
   check(
     results,
     '接受之前看得到將開在哪個 folder（第二個，不是選中的或第一個）',
-    text.includes(`Opens in ${folders[1].name}`),
-    text.slice(0, 120),
+    selected?.text === folders[1].name,
+    `${JSON.stringify(selected)} | ${text.slice(0, 80)}`,
   )
+  check(results, '不是 fallback 指向的那一個', selected?.text !== folders[0].name, JSON.stringify(selected))
+  // 識別碼不得外洩到那一列上 —— 它既不是資訊，也是路徑以外的第二種位置指認。
+  check(results, '呈現的不是 folder 識別碼', !!selected && selected.text !== folders[1].id, JSON.stringify(selected))
+
+  /**
+   * **session 真的開在那裡** —— 讀 pty 行程的 cwd（intake-inbox-usability）。
+   *
+   * 此前這一段只驗畫面上寫著將開在哪裡，從來沒有驗到接受之後 session 開在哪。
+   * 未改選即接受：送出的是預選值（解析結果），而第一個 folder 是 fallback —— 規則不生效的
+   * 錯誤實作會開在那裡。
+   */
+  const before = ptySessionPids(marker)
+  await pollFor({
+    read: () => app.client.evaluate(acceptExpression('ROUTED-TITLE')),
+    settled: Boolean,
+    timeoutMs: 15_000,
+    label: '未改選即接受',
+  })
+  const opened = await newSessionCwd(marker, before, '接受建立了 session')
   check(
     results,
-    '不是 fallback 指向的那一個',
-    !text.includes(`Opens in ${folders[0].name}`),
-    text.slice(0, 120),
+    '未改選即接受時 session 開在解析出的 folder（第二個，不是 fallback 的第一個）',
+    opened.cwd === folders[1].path && opened.count === 1,
+    `cwd=${opened.cwd} 新增=${opened.count} 期望=${folders[1].path}`,
   )
-  // 識別碼不得外洩到那一列上 —— 它既不是資訊，也是路徑以外的第二種位置指認。
-  check(results, '呈現的不是 folder 識別碼', !text.includes(`Opens in ${folders[1].id}`), text.slice(0, 120))
 }
 
 /**
@@ -1311,7 +1334,10 @@ async function runHandoff(_mode, _modeConfig, context) {
    * IPC 往返 —— 實測約一半的機率連**來源** session 的 prompt 都收不到（收據為空，
    * 而 context 檔與 pty 都在）。那是替身太快，不是產品沒寫。
    */
-  const stub = makeStubAgent(mkTemp, configDir, { readyDelaySeconds: 2 })
+  //
+  // **`busySeconds`**：收到一行時先宣告忙碌 —— 「使用者送出」唯一的線索是 agent 開始工作
+  // （intake-inbox-usability）。它只在收到一行時作用，在此之前的斷言不受影響。
+  const stub = makeStubAgent(mkTemp, configDir, { readyDelaySeconds: 2, busySeconds: 1 })
 
   drop(profile, 'source', intake({ id: 'src-1', title: 'SOURCE-TITLE' }))
 
@@ -1588,6 +1614,54 @@ async function runHandoff(_mode, _modeConfig, context) {
     `rail=${afterActivate.rail}`,
   )
   check(results, '觸發交接的通知不打開收件匣', afterActivate.inbox === false, `inbox=${afterActivate.inbox}`)
+
+  /**
+   * **送出之後，它離開已開好那一段**（intake-inbox-usability）。
+   *
+   * 焦點此刻在交接建立的那個 session（上一條剛驗過）。Enter 必須是**真的**按鍵事件 ——
+   * 併進文字送出的換行不會被 xterm 當成 Enter。收據是替身讀到的那一行。
+   *
+   * 反向對照：**由接受路徑建立、而 prompt 沒有送出的那一則（SOURCE-TITLE）必須還在** ——
+   * 否則「已開好那一段整個被清空」也會讓這條通過。
+   */
+  const focusTerminal = `(() => {
+    const visible = [...document.querySelectorAll('.xterm-helper-textarea')].find((area) => {
+      const rect = area.closest('.xterm')?.getBoundingClientRect()
+      return rect && rect.width > 0 && rect.height > 0
+    })
+    if (!visible) return false
+    visible.focus()
+    return document.activeElement === visible
+  })()`
+  const submitted = await retryAction({
+    act: async () => {
+      if (await app.client.evaluate(focusTerminal)) await pressKey(app.client, 'Enter')
+    },
+    read: () => stub.input(),
+    settled: (input) => input !== '',
+    attemptWindowMs: 4000,
+    timeoutMs: 20_000,
+    label: '於交接建立的 session 送出',
+  })
+  await openInbox(app)
+  const afterSubmit = await pollFor({
+    read: () => app.client.evaluate(`document.querySelector('${label('intake.openedLabel')}')?.textContent ?? ''`),
+    settled: (text) => !text.includes('HANDOFF-TITLE'),
+    timeoutMs: 20_000,
+    label: '送出之後交接離開已開好那一段',
+  })
+  const handoffEntry = JSON.parse(readFileSync(join(profile, 'intake.json'), 'utf8')).entries.find(
+    (entry) => entry.content?.authored?.title === 'HANDOFF-TITLE',
+  )
+  check(
+    results,
+    '送出之後不再呈現，且了結落盤',
+    submitted !== '' &&
+      !afterSubmit.includes('HANDOFF-TITLE') &&
+      afterSubmit.includes('SOURCE-TITLE') &&
+      typeof handoffEntry?.settledAt === 'number',
+    `送出=${JSON.stringify(submitted.slice(0, 40))} 仍在=${afterSubmit.includes('HANDOFF-TITLE')} 來源仍在=${afterSubmit.includes('SOURCE-TITLE')} settledAt=${handoffEntry?.settledAt}`,
+  )
 }
 
 /**
@@ -2066,6 +2140,756 @@ async function runHandoffRestored(_mode, _modeConfig, context) {
   )
 }
 
+// ── intake-inbox-usability ─────────────────────────────────────────────────────
+
+/** 卡片上的 folder 選單。**以字典取標籤**（它同時是選擇器）。 */
+function selectedFolderExpression(title) {
+  return `(() => {
+    const row = document.querySelector(${JSON.stringify(itemSelector(title))})
+    const select = row?.querySelector(${JSON.stringify(label('intake.chooseFolder'))})
+    if (!select) return null
+    return { value: select.value, text: select.selectedOptions[0]?.textContent ?? null }
+  })()`
+}
+
+/**
+ * 在卡片上改選 folder。
+ *
+ * 原生 select 的下拉清單是作業系統畫的，CDP 驅動不到 —— 與 probe-workspace／probe-files
+ * 同一個做法：以原生 setter 設值再發 change（React 對 select 聽的就是 change）。
+ * 回傳的是**畫面上最終被選定的值**，由呼叫端輪詢確認它留住了（受控元件會把沒被接住的值改回去）。
+ */
+function chooseFolderExpression(title, folderId) {
+  return `(() => {
+    const row = document.querySelector(${JSON.stringify(itemSelector(title))})
+    const select = row?.querySelector(${JSON.stringify(label('intake.chooseFolder'))})
+    if (!select) return null
+    if (select.value !== ${JSON.stringify(folderId)}) {
+      const setter = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set
+      setter.call(select, ${JSON.stringify(folderId)})
+      select.dispatchEvent(new Event('change', { bubbles: true }))
+    }
+    return select.value
+  })()`
+}
+
+async function chooseFolder(app, title, folderId) {
+  return pollFor({
+    read: () => app.client.evaluate(chooseFolderExpression(title, folderId)),
+    settled: (value) => value === folderId,
+    timeoutMs: 15_000,
+    label: `改選 ${title}`,
+  })
+}
+
+/** 收件匣 overlay 裡的分頁 —— tablist 以字典標籤指名（role="tab" 在這個 app 會撞）。 */
+function switchTabExpression(tabCopyKey) {
+  return `(() => {
+    const list = document.querySelector('[role="tablist"]${label('intake.label')}')
+    const tab = [...(list?.querySelectorAll('[role="tab"]') ?? [])].find(
+      (candidate) => candidate.textContent === ${JSON.stringify(copy(tabCopyKey))},
+    )
+    if (!tab) return false
+    if (tab.getAttribute('aria-selected') !== 'true') tab.click()
+    return tab.getAttribute('aria-selected') === 'true'
+  })()`
+}
+
+/** 那一列的接受鈕是不是停用的。選不到那一列時回 null（不要讓「選不到」看起來像「停用」）。 */
+function acceptDisabledExpression(title) {
+  return `(() => {
+    const row = document.querySelector(${JSON.stringify(itemSelector(title))})
+    const button = row?.querySelector('${label('intake.accept')}')
+    return button ? button.disabled : null
+  })()`
+}
+
+/** 每一個 agent session 的 pty 開在哪裡 —— **讀行程的 cwd，不讀 renderer 的狀態**。 */
+function sessionCwds(marker) {
+  return ptySessionPids(marker).map((pid) => {
+    try {
+      return readlinkSync(`/proc/${pid}/cwd`)
+    } catch {
+      return null
+    }
+  })
+}
+
+/** 等 session 多一個，回傳**新的那一個**的 cwd。 */
+async function newSessionCwd(marker, beforePids, label_) {
+  const pids = await pollFor({
+    read: () => ptySessionPids(marker),
+    settled: (now) => now.length > beforePids.length,
+    timeoutMs: 20_000,
+    label: label_,
+  })
+  const fresh = pids.filter((pid) => !beforePids.includes(pid))
+  if (fresh.length !== 1) return { cwd: null, count: fresh.length }
+  try {
+    return { cwd: readlinkSync(`/proc/${fresh[0]}/cwd`), count: 1 }
+  } catch {
+    return { cwd: null, count: 1 }
+  }
+}
+
+/**
+ * 接受之前由使用者確認 folder（intake-routing「接受時由使用者確認目標 folder…」）。
+ *
+ * fixture：**無 fallback**；一條以來源識別碼命中、指向 f2（甲）的規則；另一條命中後指向一個
+ * 不存在的 folder。三則可解析（R1–R3，三則才分得出「不延續到其他 intake」與「沒改選的跟著規則走」）、
+ * 一則 NO_MATCH、一則 FOLDER_GONE，外加一則以種入 intake.json 造出的「目標已不存在的待處理交接」
+ * —— 那個目標無法由投遞內容表達，只能這樣造。
+ *
+ * 甲＝f2（規則原本指的）、乙＝f1、丙＝f3。
+ */
+async function runChooseFolder(_mode, _modeConfig, context) {
+  const { profile, folders } = seedProfile()
+  seedRouting(profile, {
+    rules: [
+      { id: 'r1', criterion: 'originId', contains: 'CROUTE', folderId: folders[1].id },
+      { id: 'r2', criterion: 'originId', contains: 'CGONE', folderId: 'f9' },
+    ],
+    fallbackFolderId: null,
+  })
+  writeFileSync(
+    join(profile, 'intake.json'),
+    JSON.stringify({
+      version: 1,
+      entries: [
+        {
+          adapter: 'handoff',
+          id: 'choose-handoff-gone',
+          state: 'pending',
+          digest: 'seeded',
+          content: {
+            verified: { adapter: 'handoff', originKind: 'handoff', originId: 'seeded', targetFolderId: 'f9', firstPartyBody: true },
+            authored: { title: 'CHOOSE-HANDOFF-GONE', body: 'b', actor: 'agent', originLabel: 'seeded' },
+            receivedAt: Date.now() - 60_000,
+          },
+        },
+      ],
+    }),
+  )
+  const configDir = mkTemp('spekterm-intake-config-')
+  const marker = `spek-intake-${process.pid}-${Date.now()}`
+  const stub = makeStubAgent(mkTemp, configDir)
+
+  drop(profile, 'r1', intake({ id: 'choose-r1', title: 'CHOOSE-R1', originId: 'CROUTE' }))
+  drop(profile, 'r2', intake({ id: 'choose-r2', title: 'CHOOSE-R2', originId: 'CROUTE' }))
+  drop(profile, 'r3', intake({ id: 'choose-r3', title: 'CHOOSE-R3', originId: 'CROUTE' }))
+  drop(profile, 'nm', intake({ id: 'choose-nomatch', title: 'CHOOSE-NOMATCH', originId: 'CNONE' }))
+  drop(profile, 'fg', intake({ id: 'choose-gone', title: 'CHOOSE-GONE', originId: 'CGONE' }))
+
+  const app = await freshApp(context, { profile, configDir, stub, marker })
+  await openInbox(app)
+  const r1 = await pollFor({
+    read: () => app.client.evaluate(selectedFolderExpression('CHOOSE-R1')),
+    settled: (value) => value?.value === folders[1].id,
+    timeoutMs: 15_000,
+    label: 'R1 已呈現且預選甲',
+  })
+
+  // ── 預選：釘**被選中的那一項**，不是整列的文字（選單的每一個選項都在整列的文字裡）──
+  check(
+    results,
+    '可解析者被選定的 folder 為其解析結果，並以名稱呈現',
+    r1?.text === folders[1].name,
+    JSON.stringify(r1),
+  )
+  for (const [title, reasonKey] of [
+    ['CHOOSE-NOMATCH', 'intake.unresolved'],
+    ['CHOOSE-GONE', 'intake.unresolvedFolderGone'],
+    ['CHOOSE-HANDOFF-GONE', 'intake.unresolvedFolderGone'],
+  ]) {
+    const selected = await app.client.evaluate(selectedFolderExpression(title))
+    const text = await app.client.evaluate(itemTextExpression(title))
+    check(
+      results,
+      `解析不出者沒有被選定的 folder，且呈現原因（${title}）`,
+      selected?.value === '' && text.includes(copy(reasonKey)),
+      `selected=${JSON.stringify(selected)} 原因=${text.includes(copy(reasonKey))}`,
+    )
+  }
+
+  // ── 主行程不替使用者補預設值：直接呼叫 IPC，繞過畫面 ──
+  // 停用的按鈕點不到主行程、畫面永遠送出呈現值 —— 經畫面的斷言對主行程的實作一律是綠的。
+  const direct = await app.client.evaluate(`(async () => {
+    const accept = window.workspace.intake.accept
+    return {
+      missing: await accept('choose-r1', 'file'),
+      empty: await accept('choose-r1', 'file', ''),
+      unknown: await accept('choose-r1', 'file', 'f9'),
+      state: (await window.workspace.intake.list()).items.find((item) => item.id === 'choose-r1')?.state ?? null,
+    }
+  })()`)
+  check(
+    results,
+    '未指明確認的 folder 的接受被拒絕，即使解析得出',
+    direct?.missing?.ok === false &&
+      direct?.missing?.reason === 'unknown' &&
+      direct?.empty?.ok === false &&
+      direct?.empty?.reason === 'unknown' &&
+      direct?.state === 'pending',
+    JSON.stringify(direct),
+  )
+  check(
+    results,
+    '確認的 folder 不在 workspace 時被拒絕（FOLDER_GONE）',
+    direct?.unknown?.ok === false && direct?.unknown?.reason === 'FOLDER_GONE',
+    JSON.stringify(direct?.unknown),
+  )
+
+  // ── 改選不延續到其他 intake：**在接受之前**看 R2 ──
+  await chooseFolder(app, 'CHOOSE-R1', folders[0].id)
+  const r2BeforeAccept = await app.client.evaluate(selectedFolderExpression('CHOOSE-R2'))
+  check(
+    results,
+    '改選一則之後，另一則同樣命中規則的仍預選解析結果',
+    r2BeforeAccept?.value === folders[1].id,
+    JSON.stringify(r2BeforeAccept),
+  )
+
+  // ── 改選活過分頁切換；沒改選的跟著規則走（正反兩向）──
+  await chooseFolder(app, 'CHOOSE-R3', folders[2].id)
+  await pollFor({
+    read: () => app.client.evaluate(switchTabExpression('intake.rules.label')),
+    settled: Boolean,
+    timeoutMs: 15_000,
+    label: '切到 Rules 分頁',
+  })
+  // 經規則編輯入口把 r1 改指乙 —— 那是使用者唯一能改規則的地方，而它會讓卡片全部卸載。
+  const ruleChanged = await pollFor({
+    read: () =>
+      app.client.evaluate(`(() => {
+        const list = document.querySelector('ul${label('intake.rules.label')}')
+        const select = list?.querySelector('li')?.querySelector(${JSON.stringify(label('intake.rules.folder'))})
+        if (!select) return null
+        if (select.value !== ${JSON.stringify(folders[0].id)}) {
+          const setter = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set
+          setter.call(select, ${JSON.stringify(folders[0].id)})
+          select.dispatchEvent(new Event('change', { bubbles: true }))
+        }
+        return select.value
+      })()`),
+    settled: (value) => value === folders[0].id,
+    timeoutMs: 15_000,
+    label: '經規則編輯入口把規則改指乙',
+  })
+  const routingFile = join(profile, 'intake-routing.json')
+  const routingAfterEdit = await pollFor({
+    read: () => readFileSync(routingFile, 'utf8'),
+    settled: (text) => JSON.parse(text).rules?.[0]?.folderId === folders[0].id,
+    timeoutMs: 15_000,
+    label: '規則的變更已落盤',
+  })
+  const cardsUnmounted = await app.client.evaluate(`!document.querySelector(${JSON.stringify(itemSelector('CHOOSE-R3'))})`)
+  check(
+    results,
+    '前置：在規則分頁時卡片確實已卸載（否則「改選活過分頁切換」沒有被驗到）',
+    ruleChanged === folders[0].id && cardsUnmounted === true,
+    `rule=${ruleChanged} unmounted=${cardsUnmounted}`,
+  )
+  await pollFor({
+    read: () => app.client.evaluate(switchTabExpression('intake.title')),
+    settled: Boolean,
+    timeoutMs: 15_000,
+    label: '切回收件匣分頁',
+  })
+  const afterRules = await pollFor({
+    read: () =>
+      app.client.evaluate(`({
+        r2: ${selectedFolderExpression('CHOOSE-R2')},
+        r3: ${selectedFolderExpression('CHOOSE-R3')},
+      })`),
+    settled: (value) => value?.r2?.value === folders[0].id,
+    timeoutMs: 15_000,
+    label: '沒改選的 R2 跟著規則變成乙',
+  })
+  check(
+    results,
+    '改選之後規則的變動不覆蓋使用者的選擇',
+    afterRules?.r3?.value === folders[2].id,
+    JSON.stringify(afterRules?.r3),
+  )
+  check(results, '尚未改選者的預選隨規則變動', afterRules?.r2?.value === folders[0].id, JSON.stringify(afterRules?.r2))
+
+  // ── 接受 R3（改選為丙，而規則此刻指乙）⇒ pty 開在丙；改選沒有寫回規則 ──
+  // **挑 R3 而不是 R1**：R1 改選的乙恰好也是規則現在指的地方，「開在乙」分不出改選與規則。
+  // R3 的改選（丙）與解析結果（乙）不同 —— 新 session 只有一個且開在丙，就表示乙沒有新增。
+  const beforeR3 = ptySessionPids(marker)
+  await pollFor({
+    read: () => app.client.evaluate(acceptExpression('CHOOSE-R3')),
+    settled: Boolean,
+    timeoutMs: 15_000,
+    label: '接受 R3',
+  })
+  const r3Opened = await newSessionCwd(marker, beforeR3, 'R3 的 session 已建立')
+  check(
+    results,
+    '改選之後 session 建立於改選的 folder',
+    r3Opened.cwd === folders[2].path && r3Opened.count === 1,
+    `cwd=${r3Opened.cwd} 新增=${r3Opened.count} 期望=${folders[2].path}（解析結果是 ${folders[0].path}）`,
+  )
+  check(
+    results,
+    '改選不改變規則（規則檔與改選之前逐位元組相同）',
+    readFileSync(routingFile, 'utf8') === routingAfterEdit,
+    readFileSync(routingFile, 'utf8').slice(0, 160),
+  )
+
+  // ── 解析不出者：選定之前不能接受；明確選定之後開在選定的那裡 ──
+  await openInbox(app)
+  const disabled = await pollFor({
+    read: () => app.client.evaluate(acceptDisabledExpression('CHOOSE-NOMATCH')),
+    settled: (value) => value !== null,
+    timeoutMs: 15_000,
+    label: 'NO_MATCH 那一列已呈現',
+  })
+  const beforeTry = ptySessionPids(marker).length
+  const tried = await app.client.evaluate(acceptExpression('CHOOSE-NOMATCH'))
+  await new Promise((resolve) => setTimeout(resolve, 1500))
+  const stateAfterTry = await app.client.evaluate(
+    `window.workspace.intake.list().then((snapshot) => snapshot.items.find((item) => item.id === 'choose-nomatch')?.state ?? null)`,
+  )
+  check(
+    results,
+    '解析不出者在選定之前無法接受',
+    disabled === true && tried === false && ptySessionPids(marker).length === beforeTry && stateAfterTry === 'pending',
+    `disabled=${disabled} 點得到=${tried} session ${beforeTry}→${ptySessionPids(marker).length} state=${stateAfterTry}`,
+  )
+
+  await chooseFolder(app, 'CHOOSE-NOMATCH', folders[1].id)
+  const beforeNm = ptySessionPids(marker)
+  await pollFor({
+    read: () => app.client.evaluate(acceptExpression('CHOOSE-NOMATCH')),
+    settled: Boolean,
+    timeoutMs: 15_000,
+    label: '接受 NO_MATCH',
+  })
+  const nmOpened = await newSessionCwd(marker, beforeNm, 'NO_MATCH 的 session 已建立')
+  check(
+    results,
+    '解析不出者在明確選定之後可接受，session 開在選定的 folder',
+    nmOpened.cwd === folders[1].path,
+    `cwd=${nmOpened.cwd} 新增=${nmOpened.count} 期望=${folders[1].path}`,
+  )
+}
+
+/**
+ * 標題**從每一列的無障礙標籤取**，不從畫面上的文字取 —— 標題與本文重複時不另外呈現
+ * （Slack 的標題就是本文裡那一則的第一行），於是「第一個 span 是標題」不成立。
+ */
+const OPENED_PREFIX = prefixOf('intake.openedItemLabel')
+const PENDING_PREFIX = prefixOf('intake.itemLabel')
+
+/** 已開好那一段裡的標題，依畫面順序。 */
+const OPENED_TITLES = `[...document.querySelectorAll(${JSON.stringify(`li[aria-label^="${OPENED_PREFIX}"]`)})].map(
+  (li) => li.getAttribute('aria-label').slice(${OPENED_PREFIX.length}),
+)`
+
+/** 待處理那一段的標題，依畫面順序。 */
+const PENDING_TITLES = `[...document.querySelectorAll(${JSON.stringify(`[role="dialog"]${label('intake.label')} li[aria-label^="${PENDING_PREFIX}"]`)})].map(
+  (li) => li.getAttribute('aria-label').slice(${PENDING_PREFIX.length}),
+)`
+
+/** 某一列（待處理或已開好）的元素，以無障礙標籤指名。 */
+function rowExpression(title) {
+  return `(document.querySelector(${JSON.stringify(label('intake.itemLabel', { title }))}) ?? document.querySelector(${JSON.stringify(label('intake.openedItemLabel', { title }))}))`
+}
+
+/** 某一列的 time 元素文字。 */
+function arrivedTextExpression(title) {
+  return `(${rowExpression(title)}?.querySelector('time')?.textContent ?? null)`
+}
+
+/** 頁面內以與收件匣相同的格式設定算出期望字串 —— 語言跟著頁面走。 */
+function fullTimeExpression(ms) {
+  return `new Intl.DateTimeFormat(document.documentElement.lang || 'en', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(${ms}))`
+}
+
+function clearOpenedExpression(title) {
+  return `(() => {
+    const row = document.querySelector(${JSON.stringify(label('intake.openedItemLabel', { title }))})
+    const button = row?.querySelector('${label('intake.clearOpened')}')
+    if (!button) return false
+    button.click()
+    return true
+  })()`
+}
+
+function intakeEntry(profile, id) {
+  const data = JSON.parse(readFileSync(join(profile, 'intake.json'), 'utf8'))
+  return data.entries.find((entry) => entry.id === id) ?? null
+}
+
+/** 對目前的焦點送 Ctrl+Shift+W（關閉選中項目裡聚焦的 session）。帶修飾鍵的按鍵走 rawKeyDown。 */
+async function pressCloseSession(client) {
+  const base = { key: 'w', code: 'KeyW', windowsVirtualKeyCode: 87, nativeVirtualKeyCode: 87, modifiers: 2 | 8 }
+  await client.send('Input.dispatchKeyEvent', { type: 'rawKeyDown', ...base })
+  await client.send('Input.dispatchKeyEvent', { type: 'keyUp', ...base })
+}
+
+/**
+ * 已開好那一段的去留、它呈現的 folder、兩段的順序與發生時間（agent-intake）。
+ *
+ * **已開好的項目在這一次執行中以接受產生** —— 啟動之前就已接受的，照規格會在啟動時被了結
+ * （預填的 prompt 活不過 pty）。唯一種入的已接受項目就是用來驗那件事的。
+ * 段落最後以同一個 profile 重新啟動一次，驗「本次接受而未送出的，重開之後不再呈現」。
+ */
+async function runOpenedLifecycle(_mode, _modeConfig, context) {
+  const { profile, folders } = seedProfile()
+  // 規則把 CRA 指向甲（f1）—— 「routing 會解到甲、而 session 在乙」要的就是它。
+  seedRouting(profile, { rules: [{ id: 'r', criterion: 'originId', contains: 'CRA', folderId: folders[0].id }] })
+  const configDir = mkTemp('spekterm-intake-config-')
+  const marker = `spek-intake-${process.pid}-${Date.now()}`
+  const stub = makeStubAgent(mkTemp, configDir)
+
+  const S = {
+    legacy: '0a1b2c3d-0000-4000-8000-000000000001',
+    pending: '0a1b2c3d-0000-4000-8000-000000000006',
+  }
+  writeFileSync(
+    join(profile, 'sessions.json'),
+    JSON.stringify({
+      version: 1,
+      sessions: [
+        { id: S.legacy, folderId: folders[0].id, spawnTarget: 'claude', ordinal: 1, customTitle: 'SESSION-LEGACY' },
+        { id: S.pending, folderId: folders[1].id, spawnTarget: 'claude', ordinal: 1, customTitle: 'SESSION-PENDING' },
+      ],
+    }),
+  )
+
+  const now = Date.now()
+  const HOUR = 3_600_000
+  /**
+   * **回補的形狀**：`ago` 是宣告的**發生**時間，`receivedAgo` 是到達時間 —— 到達時間都擠在
+   * 最近一兩分鐘內，而且**與發生時間的順序相反**（越早發生的越晚收到）。於是「依到達時間排」
+   * 與「顯示到達時間」兩個錯誤實作都會紅。`declared: false` 的不宣告發生時間（以到達時間代之）。
+   */
+  const entry = (id, title, { state = 'pending', sessionId, originId = 'C1', ago, receivedAgo, declared = true }) => ({
+    adapter: 'file',
+    id,
+    state,
+    digest: `seeded-${id}`,
+    ...(sessionId ? { sessionId } : {}),
+    content: {
+      verified: { adapter: 'file', originKind: 'slack', originId },
+      authored: {
+        title,
+        body: `${title} body`,
+        actor: 'someone',
+        originLabel: '#dev',
+        ...(declared ? { occurredAt: now - ago } : {}),
+      },
+      receivedAt: now - (declared ? receivedAgo : ago),
+    },
+  })
+  // **落盤順序刻意打亂**：既不是由舊到新、也不是由新到舊 —— 否則反轉插入順序也會綠。
+  writeFileSync(
+    join(profile, 'intake.json'),
+    JSON.stringify({
+      version: 1,
+      entries: [
+        entry('p-b', 'ACCEPT-B', { ago: 2 * HOUR, receivedAgo: 59_000 }),
+        entry('p-mid', 'PENDING-MID', { ago: 24 * HOUR + 60_000, receivedAgo: 58_500 }),
+        entry('p-elsewhere', 'ACCEPT-ELSEWHERE', { originId: 'CRA', ago: 5 * HOUR, receivedAgo: 56_000 }),
+        entry('p-new', 'PENDING-NEW', { ago: 3 * HOUR, receivedAgo: 59_500 }),
+        // **上一次執行接受、session 仍在、prompt 沒送出** —— 啟動時必須被了結。
+        entry('o-legacy', 'OPENED-LEGACY', { state: 'accepted', sessionId: S.legacy, ago: 30 * 60_000, receivedAgo: 61_000 }),
+        entry('p-a', 'ACCEPT-A', { ago: HOUR, receivedAgo: 60_000 }),
+        entry('p-removed', 'ACCEPT-REMOVED', { ago: 4 * HOUR, receivedAgo: 57_000 }),
+        entry('p-old', 'PENDING-OLD', { ago: 2 * 24 * HOUR, receivedAgo: 57_500 }),
+        entry('p-close', 'ACCEPT-CLOSE', { ago: 3 * HOUR + 60_000, receivedAgo: 58_000 }),
+        // 宣告一個**未來**的時刻，而它是最早到達的 —— 有效時間必須是到達時間（排最後）。
+        entry('p-future', 'PENDING-FUTURE', { ago: -10 * 24 * HOUR, receivedAgo: 10 * 24 * HOUR }),
+        // 待處理、帶著仍存在於乙的 session、routing 解到甲 —— 預填逾時退回待處理的形狀。
+        entry('p-session', 'PENDING-SESSION', { sessionId: S.pending, originId: 'CRA', ago: 20 * 60_000, declared: false }),
+      ],
+    }),
+  )
+  // **走真的解析路徑**：一份投遞檔宣告 ISO 8601 的發生時間（上面那些是直接種進落盤檔的）。
+  const droppedAt = new Date(now - 26 * HOUR).toISOString()
+  drop(profile, 'dropped', { ...intake({ id: 'p-dropped', title: 'PENDING-DROPPED' }), occurredAt: droppedAt })
+
+  let app = await freshApp(context, { profile, configDir, stub, marker })
+  await openInbox(app)
+  const expectedPending = [
+    'PENDING-SESSION',
+    'ACCEPT-A',
+    'ACCEPT-B',
+    'PENDING-NEW',
+    'ACCEPT-CLOSE',
+    'ACCEPT-REMOVED',
+    'ACCEPT-ELSEWHERE',
+    'PENDING-MID',
+    'PENDING-DROPPED',
+    'PENDING-OLD',
+    'PENDING-FUTURE',
+  ]
+  const pendingTitles = await pollFor({
+    read: () => app.client.evaluate(PENDING_TITLES),
+    settled: (titles) => titles.includes('PENDING-DROPPED') && titles.includes('PENDING-SESSION'),
+    timeoutMs: 20_000,
+    label: '待處理項目已呈現（含投遞檔那一則）',
+  })
+
+  // ── 上一次執行接受的：啟動時了結 ──
+  // **等過 session 清單落盤的去抖動再讀** —— 還原若丟掉了那個 session，立刻讀到的仍是種入的那一份。
+  await new Promise((resolve) => setTimeout(resolve, 1500))
+  const openedAtStart = await app.client.evaluate(OPENED_TITLES)
+  const legacySessionKept = JSON.parse(readFileSync(join(profile, 'sessions.json'), 'utf8')).sessions.some(
+    (session) => session.id === S.legacy,
+  )
+  check(
+    results,
+    '上一次執行接受而未送出的項目，啟動後不再呈現（session 仍被還原、狀態仍為已接受、了結落盤）',
+    !openedAtStart.includes('OPENED-LEGACY') &&
+      legacySessionKept &&
+      intakeEntry(profile, 'o-legacy')?.state === 'accepted' &&
+      typeof intakeEntry(profile, 'o-legacy')?.settledAt === 'number',
+    `已開好=${JSON.stringify(openedAtStart)} session在=${legacySessionKept} 紀錄=${JSON.stringify({ state: intakeEntry(profile, 'o-legacy')?.state, settledAt: intakeEntry(profile, 'o-legacy')?.settledAt })}`,
+  )
+
+  // ── 待處理：順序、預選、發生時間 ──
+  check(
+    results,
+    '待處理項目依發生時間新的在上',
+    JSON.stringify(pendingTitles) === JSON.stringify(expectedPending),
+    `${JSON.stringify(pendingTitles)} 期望 ${JSON.stringify(expectedPending)}`,
+  )
+  const pendingSession = await app.client.evaluate(selectedFolderExpression('PENDING-SESSION'))
+  check(
+    results,
+    '預填逾時退回者預選既有 session 所在的 folder',
+    pendingSession?.value === folders[1].id && pendingSession?.text === folders[1].name,
+    JSON.stringify(pendingSession),
+  )
+  // 期望值在頁面內以同一組格式設定算出（語言跟著頁面走）。宣告的發生時間與到達時間相差數小時，
+  // 於是「顯示到達時間」的錯誤實作在這裡一定對不上。
+  const shown = (title) => arrivedTextExpression(title)
+  const times = await app.client.evaluate(`({
+    pendingNew: ${shown('PENDING-NEW')},
+    dropped: ${shown('PENDING-DROPPED')},
+    session: ${shown('PENDING-SESSION')},
+    future: ${shown('PENDING-FUTURE')},
+    expectNew: ${fullTimeExpression(now - 3 * HOUR)},
+    expectDropped: ${fullTimeExpression(Date.parse(droppedAt))},
+    expectSession: ${fullTimeExpression(now - 20 * 60_000)},
+    expectFuture: ${fullTimeExpression(now - 10 * 24 * HOUR)},
+    receivedNew: ${fullTimeExpression(now - 59_500)},
+  })`)
+  check(
+    results,
+    '宣告的發生時間晚於到達時間時以到達時間為準（呈現與排序）',
+    times.future === times.expectFuture && pendingTitles.at(-1) === 'PENDING-FUTURE',
+    `呈現=${times.future} 期望=${times.expectFuture} 排序末位=${pendingTitles.at(-1)}`,
+  )
+
+  // ── 標題與本文重複時只出現一次 ──
+  // PENDING-NEW 的本文以標題開頭（Slack 的形狀）；PENDING-DROPPED 的本文不含標題（交接的形狀）。
+  // 兩個方向各一：前者若照樣另列標題會出現兩次，後者若被誤判為重複會一次都不出現。
+  const occurrences = await app.client.evaluate(`({
+    redundant: (${rowExpression('PENDING-NEW')}?.textContent ?? '').split('PENDING-NEW').length - 1,
+    distinct: (${rowExpression('PENDING-DROPPED')}?.textContent ?? '').split('PENDING-DROPPED').length - 1,
+  })`)
+  check(
+    results,
+    '標題已在本文中時不另外呈現，不在本文中時照常呈現',
+    occurrences.redundant === 1 && occurrences.distinct === 1,
+    JSON.stringify(occurrences),
+  )
+
+  // ── 在這一次執行中接受五則 ──
+  // 順序是承重的：CLOSE 最後、且開在乙 —— create() 把新建的 session 設為該 folder 的焦點，
+  // 於是之後在乙按 Ctrl+Shift+W 關掉的就是它。
+  const acceptOne = async (title, folderId) => {
+    await openInbox(app)
+    if (folderId) await chooseFolder(app, title, folderId)
+    const before = ptySessionPids(marker)
+    await pollFor({
+      read: () => app.client.evaluate(acceptExpression(title)),
+      settled: Boolean,
+      timeoutMs: 15_000,
+      label: `接受 ${title}`,
+    })
+    return newSessionCwd(marker, before, `${title} 的 session 已建立`)
+  }
+  const opened = {
+    // A、B 解析不出（規則只認 CRA、沒有 fallback）—— 明確選定甲。
+    a: await acceptOne('ACCEPT-A', folders[0].id),
+    b: await acceptOne('ACCEPT-B', folders[0].id),
+    removed: await acceptOne('ACCEPT-REMOVED', folders[2].id),
+    elsewhere: await acceptOne('ACCEPT-ELSEWHERE', folders[1].id),
+    close: await acceptOne('ACCEPT-CLOSE', folders[1].id),
+  }
+  check(
+    results,
+    '前置：五則都在這一次執行中接受並建立了 session',
+    Object.values(opened).every((result) => result.count === 1),
+    JSON.stringify(opened),
+  )
+
+  await openInbox(app)
+  const openedTitles = await pollFor({
+    read: () => app.client.evaluate(OPENED_TITLES),
+    settled: (titles) => titles.length >= 5,
+    timeoutMs: 20_000,
+    label: '五則都出現在已開好那一段',
+  })
+  check(
+    results,
+    '已開好的項目新的在上',
+    JSON.stringify(openedTitles) ===
+      JSON.stringify(['ACCEPT-A', 'ACCEPT-B', 'ACCEPT-CLOSE', 'ACCEPT-REMOVED', 'ACCEPT-ELSEWHERE']),
+    JSON.stringify(openedTitles),
+  )
+
+  const elsewhere = await app.client.evaluate(`${rowExpression('ACCEPT-ELSEWHERE')}?.textContent ?? ''`)
+  check(
+    results,
+    '已開好的項目呈現的是 session 所在的 folder，不是解析結果',
+    elsewhere.includes(copy('intake.fromSession', { name: folders[1].name })) &&
+      !elsewhere.includes(copy('intake.fromSession', { name: folders[0].name })),
+    elsewhere.slice(0, 160),
+  )
+
+  const openedTimes = await app.client.evaluate(`({
+    openedA: ${shown('ACCEPT-A')},
+    expectA: ${fullTimeExpression(now - HOUR)},
+  })`)
+  check(
+    results,
+    '每一則呈現發生時間的完整日期與時刻（宣告者為發生時間、未宣告者為到達時間）',
+    times.pendingNew === times.expectNew &&
+      times.pendingNew !== times.receivedNew &&
+      times.dropped === times.expectDropped &&
+      times.session === times.expectSession &&
+      openedTimes.openedA === openedTimes.expectA,
+    JSON.stringify({ ...times, ...openedTimes }),
+  )
+
+  // ── 逐則清除 ──
+  const ptysBeforeClear = ptySessionPids(marker).length
+  await pollFor({
+    read: () => app.client.evaluate(clearOpenedExpression('ACCEPT-A')),
+    settled: Boolean,
+    timeoutMs: 15_000,
+    label: '清除 ACCEPT-A',
+  })
+  const afterClear = await pollFor({
+    read: () => app.client.evaluate(OPENED_TITLES),
+    settled: (titles) => !titles.includes('ACCEPT-A'),
+    timeoutMs: 15_000,
+    label: 'ACCEPT-A 離開已開好那一段',
+  })
+  await new Promise((resolve) => setTimeout(resolve, 1500))
+  check(
+    results,
+    '逐則清除只清掉那一則，其 session 仍在，且了結落盤',
+    !afterClear.includes('ACCEPT-A') &&
+      afterClear.includes('ACCEPT-B') &&
+      ptySessionPids(marker).length === ptysBeforeClear &&
+      typeof intakeEntry(profile, 'p-a')?.settledAt === 'number',
+    `清單=${JSON.stringify(afterClear)} pty ${ptysBeforeClear}→${ptySessionPids(marker).length} settledAt=${intakeEntry(profile, 'p-a')?.settledAt}`,
+  )
+
+  // ── 關閉 session ⇒ 不再呈現 ──
+  const inboxDialog = `[role="dialog"]${label('intake.label')}`
+  const closeInbox = `(() => {
+    const dialog = document.querySelector(${JSON.stringify(inboxDialog)})
+    if (dialog) dialog.querySelector(${JSON.stringify(label('intake.close'))})?.click()
+    return !document.querySelector(${JSON.stringify(inboxDialog)})
+  })()`
+  await pollFor({ read: () => app.client.evaluate(closeInbox), settled: Boolean, timeoutMs: 15_000, label: '關閉收件匣' })
+  await pollFor({
+    read: () =>
+      app.client.evaluate(`(() => {
+        ${railRowClick(folders[1].name)}
+        return ${RAIL_SELECTION} === ${JSON.stringify(folders[1].name)}
+      })()`),
+    settled: Boolean,
+    timeoutMs: 15_000,
+    label: '選中乙',
+  })
+  const ptysBeforeClose = ptySessionPids(marker).length
+  await retryAction({
+    act: () => pressCloseSession(app.client),
+    read: () => ptySessionPids(marker).length,
+    settled: (count) => count < ptysBeforeClose,
+    attemptWindowMs: 3000,
+    timeoutMs: 15_000,
+    label: '以 Ctrl+Shift+W 關閉乙聚焦的 session',
+  })
+  await openInbox(app)
+  const afterClose = await pollFor({
+    read: () => app.client.evaluate(OPENED_TITLES),
+    settled: (titles) => !titles.includes('ACCEPT-CLOSE'),
+    timeoutMs: 15_000,
+    label: 'ACCEPT-CLOSE 離開已開好那一段',
+  })
+  check(
+    results,
+    'session 已不存在時不再呈現',
+    !afterClose.includes('ACCEPT-CLOSE') && afterClose.includes('ACCEPT-ELSEWHERE') && afterClose.includes('ACCEPT-B'),
+    JSON.stringify(afterClose),
+  )
+
+  // ── 移除 folder ⇒ 不再呈現 ──
+  await pollFor({ read: () => app.client.evaluate(closeInbox), settled: Boolean, timeoutMs: 15_000, label: '關閉收件匣' })
+  const removeLabel = label('rail.removeFolder', { name: folders[2].name })
+  await pollFor({
+    read: () =>
+      app.client.evaluate(`(() => {
+        document.querySelector(${JSON.stringify(removeLabel)})?.click()
+        return !document.querySelector(${JSON.stringify(removeLabel)})
+      })()`),
+    settled: Boolean,
+    timeoutMs: 15_000,
+    label: '把第三個 folder 移出 workspace',
+  })
+  await openInbox(app)
+  const afterRemove = await pollFor({
+    read: () => app.client.evaluate(OPENED_TITLES),
+    settled: (titles) => !titles.includes('ACCEPT-REMOVED'),
+    timeoutMs: 15_000,
+    label: 'ACCEPT-REMOVED 離開已開好那一段',
+  })
+  check(
+    results,
+    'session 所在的 folder 已被移出 workspace 時不再呈現',
+    !afterRemove.includes('ACCEPT-REMOVED') && afterRemove.includes('ACCEPT-B'),
+    JSON.stringify(afterRemove),
+  )
+
+  // ── 以同一個 profile 重新啟動：本次接受而未送出的不再呈現 ──
+  // 前置：重開之前它們確實還在（否則「重開之後不在」恆真）。等過 session 清單落盤的去抖動。
+  const beforeRestart = await app.client.evaluate(OPENED_TITLES)
+  await new Promise((resolve) => setTimeout(resolve, 1500))
+  const sessionOf = (id) => intakeEntry(profile, id)?.sessionId
+  app = await freshApp(context, { profile, configDir, stub, marker })
+  await openInbox(app)
+  await pollFor({
+    read: () => app.client.evaluate(PENDING_TITLES),
+    settled: (titles) => titles.includes('PENDING-NEW'),
+    timeoutMs: 20_000,
+    label: '重開之後收件匣已呈現',
+  })
+  await new Promise((resolve) => setTimeout(resolve, 1500))
+  const afterRestart = await app.client.evaluate(OPENED_TITLES)
+  const restoredIds = JSON.parse(readFileSync(join(profile, 'sessions.json'), 'utf8')).sessions.map((session) => session.id)
+  check(
+    results,
+    '應用程式重新啟動後，本次接受而未送出的項目不再呈現（session 仍被還原）',
+    beforeRestart.includes('ACCEPT-B') &&
+      beforeRestart.includes('ACCEPT-ELSEWHERE') &&
+      afterRestart.length === 0 &&
+      restoredIds.includes(sessionOf('p-b')) &&
+      restoredIds.includes(sessionOf('p-elsewhere')) &&
+      typeof intakeEntry(profile, 'p-b')?.settledAt === 'number',
+    `重開前=${JSON.stringify(beforeRestart)} 重開後=${JSON.stringify(afterRestart)} 還原=${restoredIds.includes(sessionOf('p-b'))}/${restoredIds.includes(sessionOf('p-elsewhere'))}`,
+  )
+}
+
 const SECTIONS = [
   { name: 'runIngest', run: runIngest },
   { name: 'runPlainText', run: runPlainText },
@@ -2084,6 +2908,8 @@ const SECTIONS = [
   { name: 'runHandoffRestored', run: runHandoffRestored },
   { name: 'runHandoffFailure', run: runHandoffFailure },
   { name: 'runHandoffDisabled', run: runHandoffDisabled },
+  { name: 'runChooseFolder', run: runChooseFolder },
+  { name: 'runOpenedLifecycle', run: runOpenedLifecycle },
 ]
 
 const outcome = await runSections({

@@ -2,18 +2,18 @@ import { type WebContents, ipcMain } from 'electron'
 
 import { bodyOf } from '../intake-schema'
 import { buildContext, buildPrompt, createNonce, writeContext } from '../intake-context'
-import { cancelPrefill, schedulePrefill } from '../intake-prefill'
+import { decideAccept, type IntakeAcceptResult } from '../intake-accept'
+import { cancelPrefill, isSubmitted, schedulePrefill } from '../intake-prefill'
 import { subscribeWait } from '../agent-wait'
 import {
   isAuthoredCriterion,
-  resolveRouting,
   type RoutingConfig,
   type RoutingRule,
   type RoutingStore,
 } from '../intake-routing'
+import { listView, type IntakeView } from '../intake-projection'
 import { OVERFLOW_KEY } from '../intake-service'
 import type { IntakeService } from '../intake-service'
-import type { IntakeRecord } from '../intake-store'
 import type { FolderLookup } from '../workspace-store'
 import { existingTerminalService } from './terminal'
 
@@ -36,6 +36,9 @@ import { existingTerminalService } from './terminal'
  * 建好之後再回報 sessionId —— 主行程據此寫 context 檔並排定預填。
  */
 
+export type { IntakeView } from '../intake-projection'
+export type { IntakeAcceptResult } from '../intake-accept'
+
 export const INTAKE_CHANNELS = {
   list: 'workspace:intake:list',
   accept: 'workspace:intake:accept',
@@ -44,6 +47,10 @@ export const INTAKE_CHANNELS = {
   dismiss: 'workspace:intake:dismiss',
   dismissNotices: 'workspace:intake:dismissNotices',
   dismissNotice: 'workspace:intake:dismissNotice',
+  /**
+   * 把一則**已接受**的從收件匣清除（了結）。它不刪紀錄 —— 去重鍵照常保留 —— 也不碰它的 session。
+   */
+  settle: 'workspace:intake:settle',
   rules: 'workspace:intake:rules',
   setRules: 'workspace:intake:setRules',
   /** 主行程 → renderer：收件匣有變動。 */
@@ -72,61 +79,9 @@ export const INTAKE_CHANNELS = {
   focusSession: 'workspace:intake:focusSession',
 } as const
 
-/** 送往 renderer 的投影 —— **逐欄位建構，不原樣轉手**。 */
-export interface IntakeView {
-  id: string
-  adapter: string
-  state: IntakeRecord['state']
-  originKind: string
-  originId: string
-  originLabel: string
-  title: string
-  actor: string
-  body: string
-  bodyLength: number
-  receivedAt: number
-  sessionId?: string
-  /** 解析結果 —— 已經是 renderer 的合法詞彙。 */
-  folderId?: string
-  unresolved?: 'NO_MATCH' | 'FOLDER_GONE'
-}
-
 export interface RuleView extends RoutingRule {
   /** 以第三方撰寫的欄位為判準時為真 —— 編輯介面據此標示它可被投遞者操縱。 */
   spoofable: boolean
-}
-
-function project(
-  record: IntakeRecord,
-  routing: RoutingConfig,
-  knownFolderIds: ReadonlySet<string>,
-): IntakeView {
-  const content = record.content
-  const base: IntakeView = {
-    id: record.id,
-    adapter: record.adapter,
-    state: record.state,
-    originKind: content?.verified.originKind ?? '',
-    originId: content?.verified.originId ?? '',
-    originLabel: content?.authored.originLabel ?? '',
-    title: content?.authored.title ?? '',
-    actor: content?.authored.actor ?? '',
-    body: '',
-    bodyLength: 0,
-    receivedAt: content?.receivedAt ?? 0,
-    ...(record.sessionId ? { sessionId: record.sessionId } : {}),
-  }
-  if (!content) return base
-
-  const intake = { id: record.id, verified: content.verified, authored: content.authored, receivedAt: content.receivedAt }
-  const body = bodyOf(intake)
-  const resolved = resolveRouting(routing, intake, knownFolderIds)
-  return {
-    ...base,
-    body,
-    bodyLength: body.length,
-    ...(resolved.ok ? { folderId: resolved.folderId } : { unresolved: resolved.reason }),
-  }
 }
 
 function sanitizeRules(input: unknown): RoutingConfig {
@@ -187,14 +142,6 @@ export interface IntakeSnapshot {
   }[]
 }
 
-/**
- * `accept` 的回傳形狀 —— 成功時帶一個**指示**（在哪個 folder 建立），外加「它是不是已經
- * 建過一個」（預填逾時退回待處理時，那個 session 仍然存在）。
- */
-export type IntakeAcceptResult =
-  | { ok: true; folderId: string; existingSessionId?: string }
-  | { ok: false; reason: 'unknown' | 'prefillUnavailable' | 'NO_MATCH' | 'FOLDER_GONE' }
-
 /** routing 規則的回傳形狀。 */
 export interface IntakeRulesSnapshot {
   rules: RuleView[]
@@ -242,10 +189,7 @@ export function registerIntakeHandlers(deps: IntakeHandlerDeps): void {
     const config = routing.get()
     const ids = knownIds()
     return {
-      items: service.store
-        .list()
-        .filter((record) => record.state !== 'dismissed')
-        .map((record) => project(record, config, ids)),
+      items: listView(service.store.list(), config, ids),
       notices: service.notices().map((notice) => ({
         ...notice,
         ...(notice.key === OVERFLOW_KEY ? { overflow: true } : {}),
@@ -326,40 +270,39 @@ export function registerIntakeHandlers(deps: IntakeHandlerDeps): void {
   })
 
   /**
+   * 使用者把一則已開好的項目從收件匣清除。
+   *
+   * **不是 `dismiss`**：忽略的語意是「沒有建立 session」，而這一則確實建了一個。
+   * **只對已接受者生效**（由 store 判定）—— 待處理的清除走忽略。
+   */
+  ipcMain.handle(INTAKE_CHANNELS.settle, (_event, id: unknown, adapter: unknown) => {
+    if (typeof id !== 'string' || typeof adapter !== 'string') return { ok: false }
+    service.store.settle(adapter, id)
+    broadcast()
+    return { ok: true }
+  })
+
+  /**
    * 接受一則 intake。
    *
    * **只回傳一個指示**（要在哪個 folder 建立 agent session）—— 建立本身由 renderer 走它既有的
    * 路徑完成，理由見檔頭。狀態要等 `attach` 回報之後才轉為已接受。
+   *
+   * **folder 是使用者在卡片上確認的那一個**（第三個參數），判定見 `decideAccept`。
+   * 這裡**不求 routing** —— 缺了那個參數就拒絕，不退回解析結果。
    */
-  ipcMain.handle(INTAKE_CHANNELS.accept, (_event, id: unknown, adapter: unknown) => {
-    if (typeof id !== 'string' || typeof adapter !== 'string') return { ok: false, reason: 'unknown' }
-    const record = service.store.get(adapter, id)
-    if (!record?.content) return { ok: false, reason: 'unknown' }
-
-    // **事件回報關閉時，預填永遠不會發生 —— 於是在建立 session 之前就告知。**
-    // 少了這條，使用者得到一個空的 session、一則已離開待處理清單的工作項目，以及零錯誤訊息。
-    if (!agentEventsEnabled()) return { ok: false, reason: 'prefillUnavailable' }
-
-    const intake = {
-      id: record.id,
-      verified: record.content.verified,
-      authored: record.content.authored,
-      receivedAt: record.content.receivedAt,
-    }
-    const resolved = resolveRouting(routing.get(), intake, knownIds())
-    if (!resolved.ok) return { ok: false, reason: resolved.reason }
-
-    /**
-     * **這一則已經建過 session 了嗎。**
-     *
-     * 預填逾時會把它退回待處理（見 `onTimeout`），而**那個 session 仍然存在** —— 再次接受
-     * 時若又建一個，每處理一次就多一個空的 session，**沒有上界**，而每一個看起來都正常。
-     *
-     * 回傳既有的識別碼，由 renderer 判斷它還在不在：還在就直接 attach（重新排一次預填），
-     * 不在才建新的。判斷放在 renderer 是因為 session 清單的權威在它那裡。
-     */
-    return { ok: true, folderId: resolved.folderId, existingSessionId: record.sessionId }
-  })
+  ipcMain.handle(
+    INTAKE_CHANNELS.accept,
+    (_event, id: unknown, adapter: unknown, folderId: unknown): IntakeAcceptResult => {
+      if (typeof id !== 'string' || typeof adapter !== 'string') return { ok: false, reason: 'unknown' }
+      return decideAccept({
+        record: service.store.get(adapter, id),
+        chosenFolderId: folderId,
+        knownFolderIds: knownIds(),
+        eventsEnabled: agentEventsEnabled(),
+      })
+    },
+  )
 
   /**
    * renderer 建好 session 之後回報 —— 主行程據此寫 context 檔並排定預填。
@@ -396,19 +339,20 @@ export function registerIntakeHandlers(deps: IntakeHandlerDeps): void {
           if (!sender.isDestroyed()) sender.send(INTAKE_CHANNELS.prefill, sessionId, 'pending')
           /**
            * 「使用者送出了」**發生在 pty 之內** —— renderer 與主行程都收不到自己發出的訊號。
-           * 唯一的線索是 agent 回報的等待狀態**離開就緒**（它開始工作了）。
-           * 訂閱一次，見到就撤掉標示並退訂。
+           * 唯一的線索是 agent **開始工作了**（判定見 `isSubmitted`：落回未知的不算）。
+           * 訂閱一次，見到就撤掉標示、把這一則標為了結（它不必再留在收件匣裡等人讀），並退訂。
            */
           const stop = subscribeWait(sessionId, (snapshot) => {
-            if (snapshot.state === 'ready') return
+            if (!isSubmitted(snapshot.state)) return
             stop()
             if (!sender.isDestroyed()) sender.send(INTAKE_CHANNELS.prefill, sessionId, 'sent')
+            // **只了結這個 session 所屬的那一則**：再次接受時 record 上的關聯會被換成新的
+            // session，舊訂閱若晚到，不能把新的那一次一併了結。
+            if (service.store.get(adapter, id)?.sessionId === sessionId) {
+              service.store.settle(adapter, id)
+              broadcast()
+            }
           })
-          /**
-           * 「使用者送出了」**發生在 pty 之內** —— renderer 與主行程都收不到自己發出的訊號。
-           * 唯一的線索是 agent 回報的等待狀態**離開就緒**（它開始工作了）。
-           * 訂閱一次，見到就撤掉標示並退訂。
-           */
         },
         onTimeout: () => {
           // **以狀態為準，不以成因為準。** 回到可重新處理的狀態，並說話。

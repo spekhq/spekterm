@@ -175,3 +175,33 @@ describe('本文長度上限依 firstPartyBody 分流', () => {
     assert.equal(r.ok, true)
   })
 })
+
+describe('發生時間（intake-inbox-usability）', () => {
+  it('宣告了不可解析的發生時間的投遞被拒絕', () => {
+    // 非字串、亂字串、不帶時區（會被當成本機時間 —— 同一份投遞在不同時區呈現成不同時刻）、
+    // 以及 Date.parse 自己會吃的非 ISO 格式。
+    for (const occurredAt of [1726912345, 'yesterday', '2026-09-22T07:41:00', 'Sep 22 2026 07:41', '2026-13-45T99:99:00Z']) {
+      const result = parseIntake(payload({ occurredAt }), ADAPTER)
+      assert.equal(result.ok, false, `occurredAt=${String(occurredAt)} 應被拒絕`)
+      if (result.ok) continue
+      assert.equal(result.code, 'FIELD_TYPE')
+      assert.equal(result.detail, 'occurredAt')
+    }
+  })
+
+  it('未宣告發生時間的投遞照常進入收件匣', () => {
+    const result = parseIntake(payload(), ADAPTER)
+    assert.equal(result.ok, true)
+    if (!result.ok) return
+    assert.equal('occurredAt' in result.value.authored, false)
+  })
+
+  it('可解析者存成對應的毫秒值，時區被正確套用', () => {
+    const utc = parseIntake(payload({ occurredAt: '2026-09-22T07:41:00Z' }), ADAPTER)
+    const taipei = parseIntake(payload({ occurredAt: '2026-09-22T15:41:00.500+08:00' }), ADAPTER)
+    assert.ok(utc.ok && taipei.ok)
+    if (!utc.ok || !taipei.ok) return
+    assert.equal(utc.value.authored.occurredAt, Date.UTC(2026, 8, 22, 7, 41))
+    assert.equal(taipei.value.authored.occurredAt, Date.UTC(2026, 8, 22, 7, 41, 0, 500))
+  })
+})

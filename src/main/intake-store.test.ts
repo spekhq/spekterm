@@ -74,6 +74,103 @@ describe('狀態與關聯跨重啟保留', () => {
   })
 })
 
+describe('了結的標記（intake-inbox-usability）', () => {
+  it('已了結的項目狀態仍為已接受', () => {
+    const file = tempFile()
+    const store = new IntakeStore(file)
+    store.add(intakeOf())
+    store.setState('file', 'a1', 'accepted', 'session-7')
+    store.settle('file', 'a1', 1234)
+
+    const reloaded = new IntakeStore(file)
+    reloaded.load()
+    const record = reloaded.get('file', 'a1')
+    // **狀態不變是這一條的重點** —— 了結若被做成第四種狀態，舊版會整筆丟棄它（連同去重鍵）。
+    assert.equal(record?.state, 'accepted')
+    assert.equal(record?.settledAt, 1234)
+    assert.equal(record?.sessionId, 'session-7')
+  })
+
+  it('只對已接受者生效 —— 待處理與已忽略呼叫它無作用', () => {
+    const file = tempFile()
+    const store = new IntakeStore(file)
+    store.add(intakeOf({ id: 'p1' }))
+    store.add(intakeOf({ id: 'd1' }))
+    store.setState('file', 'd1', 'dismissed')
+    store.settle('file', 'p1', 1)
+    store.settle('file', 'd1', 1)
+    assert.equal(store.get('file', 'p1')?.settledAt, undefined)
+    assert.equal(store.get('file', 'd1')?.settledAt, undefined)
+  })
+
+  it('已設過就不覆寫 —— 第一次了結的時刻才是事實', () => {
+    const store = new IntakeStore(tempFile())
+    store.add(intakeOf())
+    store.setState('file', 'a1', 'accepted', 's')
+    store.settle('file', 'a1', 10)
+    store.settle('file', 'a1', 20)
+    assert.equal(store.get('file', 'a1')?.settledAt, 10)
+  })
+
+  it('再次被接受時了結的標記被清除', () => {
+    // 路徑：預填還沒發生時清除 → 逾時退回待處理 → 再次接受。少了清除，它一建立 session
+    // 就從收件匣消失。
+    const store = new IntakeStore(tempFile())
+    store.add(intakeOf())
+    store.setState('file', 'a1', 'accepted', 's1')
+    store.settle('file', 'a1', 10)
+    store.setState('file', 'a1', 'pending')
+    assert.equal(store.get('file', 'a1')?.settledAt, 10, '前置：退回待處理不動它（那不是這一條要驗的）')
+    store.setState('file', 'a1', 'accepted', 's2')
+    assert.equal(store.get('file', 'a1')?.settledAt, undefined)
+  })
+
+  it('非數字的 settledAt 被丟棄，而該筆照常載入', () => {
+    const parsed = parseIntakeFile(
+      JSON.stringify({
+        version: INTAKE_VERSION,
+        entries: [{ adapter: 'file', id: 'a1', state: 'accepted', digest: 'd', settledAt: 'yesterday', content: null }],
+      }),
+    )
+    assert.equal(parsed?.entries.length, 1)
+    assert.equal(parsed?.entries[0].state, 'accepted')
+    assert.equal('settledAt' in (parsed?.entries[0] ?? {}), false)
+  })
+})
+
+describe('啟動時了結尚未送出的已開好項目（intake-inbox-usability）', () => {
+  it('已接受未了結者被了結並落盤；已了結者保留原本的時刻；待處理與已忽略不動', () => {
+    const file = tempFile()
+    const store = new IntakeStore(file)
+    for (const id of ['open', 'done', 'pend', 'gone']) store.add(intakeOf({ id }))
+    store.setState('file', 'open', 'accepted', 's1')
+    store.setState('file', 'done', 'accepted', 's2')
+    store.settle('file', 'done', 10)
+    store.setState('file', 'gone', 'dismissed')
+
+    assert.equal(store.settleOpened(500), 1)
+
+    const reloaded = new IntakeStore(file)
+    reloaded.load()
+    assert.equal(reloaded.get('file', 'open')?.settledAt, 500, '了結必須落盤')
+    assert.equal(reloaded.get('file', 'open')?.state, 'accepted')
+    assert.equal(reloaded.get('file', 'done')?.settledAt, 10, '第一次了結的時刻才是事實')
+    assert.equal(reloaded.get('file', 'pend')?.settledAt, undefined)
+    assert.equal(reloaded.get('file', 'gone')?.settledAt, undefined)
+  })
+
+  it('沒有東西可了結時不寫檔', () => {
+    const file = tempFile()
+    const store = new IntakeStore(file)
+    store.add(intakeOf())
+    const before = fs.statSync(file).mtimeMs
+    const contents = fs.readFileSync(file, 'utf8')
+    assert.equal(store.settleOpened(), 0)
+    assert.equal(fs.readFileSync(file, 'utf8'), contents)
+    assert.equal(fs.statSync(file).mtimeMs, before)
+  })
+})
+
 describe('去重鍵與內容的保留期限分開', () => {
   it('內容清除之後，去重鍵仍在', () => {
     const file = tempFile()

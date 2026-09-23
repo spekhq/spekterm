@@ -4,11 +4,15 @@ import { createPortal } from 'react-dom'
 import { sessionToReuse } from './reuse-session'
 import { useTranslation } from 'react-i18next'
 
-import { relativeTime } from '@shared/i18n/locale'
+import { formatDateTime, relativeTime } from '@shared/i18n/locale'
 import type { IntakeView } from '../../../../main/ipc/intake'
 import { useSessions } from '../terminal/sessions'
+import type { WorkspaceFolder } from '../types'
+import { useNow } from '../useNow'
 import { useWorkspaceFolders } from '../useWorkspaceFolders'
 import { useIntake } from './intake-state'
+import { preselectFolder, type Preselection } from './preselect-folder'
+import { showTitleSeparately } from './title-redundancy'
 import { RulesEditor } from './RulesEditor'
 import { SlackSettings } from './SlackSettings'
 
@@ -40,7 +44,15 @@ import { SlackSettings } from './SlackSettings'
  * 主行程的 `accept` 只回一個**指示**（在哪個 folder 建立），建立本身走 renderer 既有的
  * `create` 路徑 —— session 清單的權威在 renderer，主行程自行建立的 session 會在 500ms 後被
  * 抹掉，**而 pty 還活著**。建好之後以 `attach` 回報，主行程才寫 context 檔並排定預填。
+ *
+ * **folder 由使用者在卡片上確認**（intake-inbox-usability）：routing 只決定預先選定哪一個，
+ * 按下接受時送出去的是卡片上被選定的那一個，主行程查表驗證、缺了就拒絕。
  */
+
+/** 改選的鍵。**不用 NUL 當分隔符** —— 見 CLAUDE.md「原始碼裡一個字面的 NUL」。 */
+function itemKey(item: IntakeView): string {
+  return `${item.adapter} ${item.id}`
+}
 
 type Tab = 'inbox' | 'rules' | 'slack'
 
@@ -56,6 +68,19 @@ export function IntakeOverlay({ onClose, opener }: IntakeOverlayProps): React.JS
   // **folder 的名字住在 renderer。** 主行程的投影刻意只給識別碼（送路徑會破壞邊界語彙），
   // 而「Opens in <uuid>」對使用者不構成資訊 —— 那個字串要回答的是「它會開在我的哪個 repo」。
   const { folders } = useWorkspaceFolders()
+  // 拒絕痕跡仍以相對時間呈現（「這件事還在發生嗎」），它會過期 —— 每分鐘重算一次。
+  const now = useNow()
+  /**
+   * 使用者在這次打開收件匣之後的改選 —— **住在 overlay，不在卡片**。
+   *
+   * 卡片在切到 Rules 分頁時會卸載，而規則只能在那個分頁改：放在卡片裡的話，使用者先改選、
+   * 再去改規則、切回來，他的改選就不見了 —— 「規則的變動不覆蓋使用者的選擇」在真實操作中
+   * 必然不成立。overlay 關閉時它隨之消失；那是「選擇不落盤」的直接後果。
+   */
+  const [overrides, setOverrides] = useState<ReadonlyMap<string, string>>(() => new Map())
+  const choose = useCallback((key: string, folderId: string) => {
+    setOverrides((current) => new Map(current).set(key, folderId))
+  }, [])
   // **快照來自常駐的 provider，不是這裡自己拉的。** 兩份的話，計數與內容可以無聲分岔
   // （見 `intake-state.tsx` 的檔頭）。`reload` 仍然保留 —— 主行程那幾條路徑都有推送，
   // 但顯式的重新拉取是第二條防線。
@@ -95,15 +120,17 @@ export function IntakeOverlay({ onClose, opener }: IntakeOverlayProps): React.JS
   }, [])
 
   const accept = useCallback(
-    async (item: IntakeView) => {
+    async (item: IntakeView, folderId: string) => {
       setFailure(null)
-      const decision = await window.workspace.intake.accept(item.id, item.adapter)
+      const decision = await window.workspace.intake.accept(item.id, item.adapter, folderId)
       if (!decision.ok) {
         setFailure(
           decision.reason === 'prefillUnavailable'
             ? t('intake.prefillUnavailable')
-            : decision.reason === 'FOLDER_GONE'
-              ? t('intake.unresolvedFolderGone')
+            : // 主行程回 FOLDER_GONE 只剩一個成因：使用者確認的 folder 在按下接受之前被移除了。
+              // 「這條規則指向的…」那句講的是規則，對這裡是錯的。
+              decision.reason === 'FOLDER_GONE'
+              ? t('intake.chosenFolderGone')
               : t('intake.unresolved'),
         )
         return
@@ -113,12 +140,10 @@ export function IntakeOverlay({ onClose, opener }: IntakeOverlayProps): React.JS
        *
        * 預填逾時會把它退回待處理，而**那個 session 仍然存在** —— 再次接受時若又建一個，
        * 每處理一次就多一個空的 session，沒有上界，而每一個看起來都正常。
-       * 還在就沿用它（`attach` 會重新排一次預填），不在才建新的。
+       * 還在、**而且在使用者這次確認的 folder** 就沿用它（`attach` 會重新排一次預填），
+       * 否則建新的 —— 改選之後沿用舊的，等於把本文送進他剛改掉的 repo。
        */
-      const reusable = sessionToReuse(
-        decision.existingSessionId,
-        sessions.all().map((session) => session.id),
-      )
+      const reusable = sessionToReuse(decision.existingSessionId, sessions.all(), decision.folderId)
       const sessionId = reusable
         ? reusable
         : await (async () => {
@@ -137,6 +162,8 @@ export function IntakeOverlay({ onClose, opener }: IntakeOverlayProps): React.JS
   )
 
   const items = snapshot.items.filter((item) => item.state === 'pending')
+  const liveSessions = sessions.all()
+  const knownFolderIds = new Set(folders.map((folder) => folder.id))
   /**
    * 已經開好 session 的那些。
    *
@@ -144,8 +171,22 @@ export function IntakeOverlay({ onClose, opener }: IntakeOverlayProps): React.JS
    * （`agent-handoff-source`）從不經過待處理：少了這一段，使用者看到一則通知、打開收件匣、
    * 什麼都沒有。既有的 requirement 早就要求「這個 session 從哪來」在收件匣中看得見，
    * 而那條此前沒有任何載體（`intake.fromSession` 這個字串在字典裡躺著沒人用）。
+   *
+   * **但它有離開的條件**（intake-inbox-usability）：這一段存在的理由是「按下送出之前看得到
+   * 本文全文」。送出之後與使用者清除之後的，主行程已經不列（`settledAt`）；這裡再篩掉
+   * **session 已不存在**、以及 **session 所在的 folder 已不在 workspace** 的 ——
+   * 移除一個 folder 不會關閉它的 session（`folders:remove` 與 renderer 都不修剪），那樣的
+   * session 沒有 rail 入口，呈現它只會讓這一則永遠留著。
+   *
+   * **folder 名取自它的 session，不取自主行程的解析結果**：接受時使用者可以改選 folder，
+   * 規則也可能事後改變 —— 重算 routing 會把「Opened in」標錯。
    */
-  const opened = snapshot.items.filter((item) => item.state === 'accepted' && item.sessionId)
+  const opened = snapshot.items.flatMap((item) => {
+    if (item.state !== 'accepted' || !item.sessionId) return []
+    const session = liveSessions.find((candidate) => candidate.id === item.sessionId)
+    const folder = session ? folders.find((candidate) => candidate.id === session.folderId) : undefined
+    return folder ? [{ item, folderName: folder.name }] : []
+  })
   const notices = snapshot.notices
 
   return createPortal(
@@ -268,7 +309,7 @@ export function IntakeOverlay({ onClose, opener }: IntakeOverlayProps): React.JS
                       {t('intake.noticeRepeated', { count: notice.count })}
                     </span>
                   ) : null}
-                  <span className="text-2xs text-ink-faint">{relativeTime(notice.at)}</span>
+                  <span className="text-2xs text-ink-faint">{relativeTime(notice.at, now)}</span>
                   <span className="flex-1" />
                   <button
                     type="button"
@@ -297,9 +338,18 @@ export function IntakeOverlay({ onClose, opener }: IntakeOverlayProps): React.JS
             <ul className="flex flex-col gap-3">
               {items.map((item) => (
                 <IntakeCard
-                  key={`${item.adapter} ${item.id}`}
+                  key={itemKey(item)}
                   item={item}
-                  folderName={folders.find((folder) => folder.id === item.folderId)?.name ?? null}
+                  folders={folders}
+                  selection={preselectFolder({
+                    override: overrides.get(itemKey(item)),
+                    existingSessionFolderId: item.sessionId
+                      ? liveSessions.find((session) => session.id === item.sessionId)?.folderId
+                      : undefined,
+                    resolvedFolderId: item.folderId,
+                    knownFolderIds,
+                  })}
+                  onChoose={(folderId) => choose(itemKey(item), folderId)}
                   onAccept={accept}
                   onChanged={reload}
                 />
@@ -307,26 +357,36 @@ export function IntakeOverlay({ onClose, opener }: IntakeOverlayProps): React.JS
             </ul>
             {opened.length > 0 ? (
               <ul aria-label={t('intake.openedLabel')} className="mt-4 flex flex-col gap-1">
-                {opened.map((item) => (
+                {opened.map(({ item, folderName }) => (
                   <li
-                    key={`${item.adapter} ${item.id}`}
+                    key={itemKey(item)}
+                    aria-label={t('intake.openedItemLabel', { title: item.title })}
                     className="flex flex-col gap-1 rounded border border-hairline px-3 py-1.5"
                   >
-                    <div className="flex items-baseline gap-2">
-                    <span className="text-2xs text-ink">{item.title}</span>
-                    <span className="text-2xs text-ink-faint">
-                      {t('intake.fromOrigin', { origin: item.originLabel })}
-                    </span>
-                    <span className="flex-1" />
-                    <span className="text-2xs text-ink-muted">
-                      {t('intake.fromSession', {
-                        name:
-                          folders.find((folder) => folder.id === item.folderId)?.name ??
-                          item.folderId ??
-                          '',
-                      })}
-                    </span>
+                    {/* 第一列是從哪來、何時、開在哪；標題（若不與本文重複）在其下 —— 理由同待處理的卡片。 */}
+                    <div className="flex items-baseline gap-2 whitespace-nowrap">
+                      <span className="text-2xs text-ink-faint">
+                        {t('intake.fromOrigin', { origin: item.originLabel })}
+                      </span>
+                      <OccurredAt at={item.occurredAt} />
+                      <span className="flex-1" />
+                      <span className="text-2xs text-ink-muted">{t('intake.fromSession', { name: folderName })}</span>
+                      {/*
+                        **逐則清除**：送出之後它會自己離開；這顆鈕給的是其餘的情形 —— 應用程式
+                        重啟之後預填已經不在、或使用者決定不送了。它不刪紀錄也不碰 session。
+                      */}
+                      <button
+                        type="button"
+                        aria-label={t('intake.clearOpened')}
+                        onClick={() => void window.workspace.intake.settle(item.id, item.adapter).then(reload)}
+                        className="cursor-pointer rounded px-2 py-0.5 text-2xs text-ink-faint hover:bg-hairline/40 focus:outline-none focus-visible:ring-1 focus-visible:ring-accent"
+                      >
+                        {t('intake.clearOpened')}
+                      </button>
                     </div>
+                    {showTitleSeparately(item.title, item.body) ? (
+                      <span className="break-words text-2xs text-ink">{item.title}</span>
+                    ) : null}
                     {/*
                       **本文要看得見，而且要看得到全部。**
 
@@ -370,37 +430,69 @@ function tabClass(active: boolean): string {
   )
 }
 
+/**
+ * 這件事**發生**的時間，**完整的日期與時刻**（intake-inbox-usability）。
+ *
+ * 第一版呈現相對的**到達**時間，dogfood 當場踩到：昨天的 Slack 提及寫著「剛剛」—— 它們是啟動時
+ * 一次回補進來的。`at` 是主行程算好的有效時間（宣告的發生時間，不晚於到達時間）。
+ * 內容已過期（沒有時間）的不呈現。
+ */
+function OccurredAt({ at }: { at: number }): React.JSX.Element | null {
+  if (!at) return null
+  const date = new Date(at)
+  return (
+    <time dateTime={date.toISOString()} className="text-2xs text-ink-faint">
+      {formatDateTime(date, OCCURRED_FORMAT)}
+    </time>
+  )
+}
+
+/** 完整的日期與時刻 —— 格式隨使用者選擇的語言（`formatDateTime` 經 `@shared/i18n/locale`）。 */
+const OCCURRED_FORMAT: Intl.DateTimeFormatOptions = { dateStyle: 'medium', timeStyle: 'short' }
+
 function IntakeCard({
   item,
-  folderName,
+  folders,
+  selection,
+  onChoose,
   onAccept,
   onChanged,
 }: {
   item: IntakeView
-  /** 解析到的 folder 在 rail 上的名字。清單尚未抵達時為 `null` —— 那時退回識別碼。 */
-  folderName: string | null
-  onAccept: (item: IntakeView) => Promise<void>
+  folders: readonly WorkspaceFolder[]
+  /** 被選定的 folder（`preselectFolder` 的結果）。`''` ＝ 沒有選定。 */
+  selection: Preselection
+  onChoose: (folderId: string) => void
+  onAccept: (item: IntakeView, folderId: string) => Promise<void>
   onChanged: () => void
 }): React.JSX.Element {
   const { t } = useTranslation()
+  const chosen = selection.folderId
 
   return (
     <li
       aria-label={t('intake.itemLabel', { title: item.title })}
       className="rounded border border-hairline bg-shell px-3 py-2"
     >
-      <div className="flex items-baseline gap-2">
-        {/* 標題也是第三方撰寫的 —— 與本文同樣只當文字呈現。 */}
-        <span className="text-sm text-ink">{item.title}</span>
-        <span className="text-2xs text-ink-faint">{item.actor}</span>
+      {/*
+        **第一列是誰、在哪、何時，不折行；標題（若不與本文重複）在其下。** 同一列放長標題會把
+        其餘資訊擠成好幾行；而 Slack 的標題就是本文裡那一則的第一行（dogfood 回報兩件事）。
+      */}
+      <div className="flex items-baseline gap-2 whitespace-nowrap">
+        <span className="text-2xs text-ink-muted">{item.actor}</span>
         <span className="text-2xs text-ink-faint">{item.originLabel}</span>
+        <OccurredAt at={item.occurredAt} />
         <span className="flex-1" />
         {/*
           識別碼是投遞者挑的，字元集白名單只保證它路徑安全、不保證它不是一句話 ——
           因此以等寬、截短、可辨識為機器識別碼的方式呈現。
         */}
-        <code className="max-w-[14rem] truncate font-mono text-2xs text-ink-faint">{item.id}</code>
+        <code className="min-w-0 max-w-[14rem] truncate font-mono text-2xs text-ink-faint">{item.id}</code>
       </div>
+      {/* 標題也是第三方撰寫的 —— 與本文同樣只當文字呈現。 */}
+      {showTitleSeparately(item.title, item.body) ? (
+        <p className="mt-1 break-words text-sm text-ink">{item.title}</p>
+      ) : null}
 
       {/*
         **本文全文，純文字。** `whitespace-pre-wrap` 保留換行；沒有任何 markdown 渲染，
@@ -410,15 +502,41 @@ function IntakeCard({
       <p className="mt-1 text-2xs text-ink-faint">{t('intake.bodyLength', { count: item.bodyLength })}</p>
 
       <div className="mt-2 flex items-center gap-2">
-        {item.folderId ? (
-          <span className="text-2xs text-ink-muted">
-            {t('intake.opensIn', { folder: folderName ?? item.folderId })}
-          </span>
-        ) : (
+        {/*
+          **將開在哪個 folder —— 使用者在這裡確認或改選。** 原生 select：全鍵盤操作是瀏覽器給的。
+
+          值為空（沒有被選定）時**一律**渲染佔位項：一個不在選項中的值會讓 select 顯示第一個
+          選項、送出的卻是那個不存在的值。
+        */}
+        <span className="text-2xs text-ink-muted">{t('intake.opensInLabel')}</span>
+        <select
+          aria-label={t('intake.chooseFolder')}
+          value={chosen}
+          onChange={(event) => onChoose(event.target.value)}
+          className="cursor-pointer rounded border border-hairline bg-shell px-2 py-1 text-2xs text-ink focus:outline-none focus-visible:ring-1 focus-visible:ring-accent"
+        >
+          {chosen === '' ? (
+            <option value="" disabled>
+              {t('intake.choosePlaceholder')}
+            </option>
+          ) : null}
+          {folders.map((folder) => (
+            <option key={folder.id} value={folder.id}>
+              {folder.name}
+            </option>
+          ))}
+        </select>
+        {/*
+          **沒有被選定時說明為什麼。** 使用者的改選被移除 ⇒ 說那件事；解析不出 ⇒ 說原因。
+          選定之後不再呈現原因 —— 那時要說的是「將開在哪」，而選單已經在說了。
+        */}
+        {selection.overrideGone ? (
+          <span className="text-2xs text-ink-faint">{t('intake.chosenFolderGone')}</span>
+        ) : chosen === '' ? (
           <span className="text-2xs text-ink-faint">
             {item.unresolved === 'FOLDER_GONE' ? t('intake.unresolvedFolderGone') : t('intake.unresolved')}
           </span>
-        )}
+        ) : null}
         <span className="flex-1" />
         <button
           type="button"
@@ -431,8 +549,8 @@ function IntakeCard({
         <button
           type="button"
           aria-label={t('intake.accept')}
-          disabled={!item.folderId}
-          onClick={() => void onAccept(item)}
+          disabled={chosen === ''}
+          onClick={() => void onAccept(item, chosen)}
           className="cursor-pointer rounded bg-accent/10 px-2 py-1 text-2xs text-accent disabled:cursor-default disabled:opacity-40 focus:outline-none focus-visible:ring-1 focus-visible:ring-accent"
         >
           {t('intake.accept')}

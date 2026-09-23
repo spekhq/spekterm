@@ -238,6 +238,12 @@ const PROBE_EXPRESSION = `(async () => {
     // 前者帶 adapter／intake 識別碼／**已解析好的 folderId**（renderer 既有的合法詞彙），
     // 因為建立 session 仍由 renderer 走它既有的 create 路徑（session 清單的權威在它那裡）；
     // 後者只帶一個 session 識別碼。**兩者都不含任何檔案系統路徑，也不給 renderer 新的詞彙。**
+    // dismissNotice 於 handoff-body-limit-and-rejection-visibility 引入：逐則清除一則拒絕痕跡，
+    // 只收痕跡自己的 key 與代碼（主行程給的值）。**當時漏登在這裡，這條因此紅了兩天而沒有人跑它**
+    // —— intake-inbox-usability 補上。
+    // settle 於 intake-inbox-usability 引入：把一則已開好的項目從收件匣清除（了結）。只收 intake
+    // 識別碼與 adapter，不刪紀錄、不碰 session —— 它比既有的 dismiss 還弱，不給 renderer 新的詞彙。
+    // 同一個 change 讓 accept 多收一個 folderId，那是 renderer 既有的合法詞彙，由主行程查表驗證。
     // （這一段在 template literal 之內 —— 不能寫反引號，會把它提前關閉。）
     surplusIntakeKeys: Object.keys(api?.intake ?? {}).filter(
       (key) =>
@@ -246,7 +252,9 @@ const PROBE_EXPRESSION = `(async () => {
           'accept',
           'attach',
           'dismiss',
+          'settle',
           'dismissNotices',
+          'dismissNotice',
           'rules',
           'setRules',
           'onChanged',

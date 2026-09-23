@@ -44,6 +44,7 @@ const COVERED_CHANGES = [
   'handoff-body-limit-and-rejection-visibility',
   'handoff-outbox-watch-survives-restore',
   'task-completion-dimming',
+  'intake-inbox-usability',
 ]
 
 /** change 的所在 —— 封存後它會搬到 `archive/` 之下，兩處都找。 */
@@ -222,8 +223,10 @@ export const TABLE = [
   ['本文過長的投遞在投遞階段被拒絕', '本文超過長度上限被拒絕', false, '移除長度上限', ''],
 
   // ── session 的建立 ────────────────────────────────────────────────────────
-  ['於解析出的 folder 建立，而不是於選中的或第一個 folder', '接受之前看得到將開在哪個 folder（第二個，不是選中的或第一個）', false,
-    '讓規則不生效而落到 fallback', 'probe；鑑別力全部來自三 folder 的 fixture 形狀'],
+  ['於解析出的 folder 建立，而不是於選中的或第一個 folder', '未改選即接受時 session 開在解析出的 folder（第二個，不是 fallback 的第一個）', false,
+    '讓規則不生效而落到 fallback',
+    '**讀 pty 行程的 cwd**（intake-inbox-usability）。此前的載體是畫面上「Opens in」那一行 —— '
+    + '它驗的是呈現，從來沒有驗到 session 真的開在哪裡'],
   ['由 intake 建立的 session 與手動建立者一同被重建', null, true, null, '**無載體** —— 需要跨重啟的 probe 段落，本輪未做'],
   ['session 的名稱未被系統指定', 'session 的名稱未被系統指定（agent 宣告的標題呈現得出來）', false, '接受後呼叫 rename', 'probe；正面形式'],
   ['啟動參數與手動建立者等價', '去除對話識別碼之後逐項相同，且參數個數相同', false, '在 intake 路徑多加一個旗標', '等價而非黑名單'],
@@ -275,12 +278,17 @@ export const TABLE = [
   ['兩種判準的標示不同', '第三方撰寫的欄位被標示為可操縱', false, '一律標示或一律不標示', '含反面（可驗證的欄位不被標示）'],
   ['規則存在但都不命中時採用 fallback', '有一條存在但不命中的規則時採用 fallback', false, '規則非空時直接拋錯', 'fixture 必須有一條不命中的規則'],
   ['一條規則都沒有時採用 fallback', '一條規則都沒有時採用 fallback', false, '空清單時回拒絕', ''],
-  ['無規則亦無 fallback 時拒絕', '無規則亦無 fallback 時拒絕', false, '退回第一個 folder', ''],
+  ['無規則亦無 fallback 時拒絕', '解析不出者沒有被選定的 folder，且呈現原因（', false, '解析不出者預選第一個 folder',
+    'probe（`runChooseFolder`，無 fallback 的 profile）；解析本身另由「無規則亦無 fallback 時拒絕」單元測試承擔'],
   ['指向的 folder 已被移出 workspace 時拒絕，即使 fallback 可用', '命中的 folder 已移出 workspace 時拒絕 —— **即使 fallback 可用**',
-    false, '視為未命中往下走', 'fixture 必須同時設有可用的 fallback'],
-  ['解析失敗時嘗試接受不建立任何 session', null, true, null,
-    '**無載體** —— 需要一個「解析不出」的 probe fixture（三 folder 之外再加一個無 fallback 的 profile），本輪未做'],
-  ['可解析與不可解析的兩則同時呈現', '不是 fallback 指向的那一個', true, null, '**半覆蓋** —— probe 驗了可解析那一則，不可解析那一則的呈現未驗'],
+    false, '視為未命中往下走',
+    'fixture 必須同時設有可用的 fallback（單元測試）。「沒有被預先選定」那一半：投影不轉交失敗分支的 folder'
+    + '（「解析不出時不帶 folderId（NO_MATCH 與 FOLDER_GONE）」），畫面由 `runChooseFolder` 的 CHOOSE-GONE 驗'],
+  ['解析失敗時嘗試接受不建立任何 session', '解析不出者在選定之前無法接受', false, '接受鈕不停用、主行程退回 routing',
+    'probe（intake-inbox-usability 補上）：停用、強行觸發無效、session 數不變、仍為待處理'],
+  ['可解析與不可解析的兩則同時呈現', '可解析者被選定的 folder 為其解析結果，並以名稱呈現', false, '預選第一個 folder',
+    '釘**被選中的那一項**（整列的文字含每一個選項）。不可解析那一半由「解析不出者沒有被選定的 folder，且呈現原因」'
+    + '承擔（NO_MATCH、FOLDER_GONE、目標已不存在的交接三種）'],
   ['經編輯介面建立的規則跨重啟保留', null, true, null, '**無載體** —— store 層的跨重啟驗得到，但「經編輯介面」那條路徑未驗'],
   ['變更終端偏好不影響規則', '不與使用者偏好共用檔案', true, '把規則放進 preferences.json', '兩個檔案 ⇒ 恆真；價值全在 mutation'],
   ['形狀不合的規則被忽略而非使其餘失效', '形狀不合的單條被忽略，其餘照常生效', false, '整份視為未設定', '斷言用行為而非長度'],
@@ -516,8 +524,9 @@ export const TABLE = [
     '退回待處理時清掉 sessionId',
     '**「回到待處理」本身由既有的 `agent-intake` 載體承擔**；這一列釘的是本 change 補上的那一半，'
     + '而那一半的載體是一個純函式（`sessionToReuse`）—— '
-    + '**主行程回傳 `existingSessionId` 那一段沒有直接載體**：那條路在 `ipcMain.handle` 之內，'
-    + '而這個 repo 沒有 IPC handler 的測試骨架'],
+    + '主行程回傳 `existingSessionId` 那一段自 intake-inbox-usability 起抽成 `decideAccept`'
+    + '（「已建過 session 者帶回它的識別碼，由 renderer 判斷沿不沿用」）。'
+    + '**「未改選 folder」這個前提**由沿用判定的單元測試承擔（同 folder 沿用、不同 folder 不沿用）'],
 
   // ── agent-initiated-handoff：全域上限 ────────────────────────────────────
   ['超過上限者成為待處理', '超過上限者仍進收件匣，但不自動接受（降級為待處理，非拒絕）', false,
@@ -569,7 +578,8 @@ export const TABLE = [
     '照樣建立 session，等預填逾時', ''],
   ['逾時之後再次處理不建立第二個 session', '逾時之後再次處理不建立第二個 session', false,
     '退回待處理時清掉 sessionId',
-    '**這個缺口在手動 intake 上本來就在** —— 自動化把它搬到了主幹上（事件回報關掉時每一則都會走）'],
+    '**這個缺口在手動 intake 上本來就在** —— 自動化把它搬到了主幹上（事件回報關掉時每一則都會走）。'
+    + '自 intake-inbox-usability 起前提是「未改選 folder」：單元測試以同一個 folder 呼叫沿用判定'],
   ['來源為自身 agent session 的拒絕發出通知', '目標查無時發出通知（這條路徑上沒有人在等著按接受）', false,
     '交接的拒絕也走「不發通知」', ''],
   ['尚未被消費的解析失敗不發出通知', '寫到一半的投遞不發通知，且不被消費', false,
@@ -937,6 +947,92 @@ export const TABLE = [
     '把規則的作用域由 `.task-done .markdown *` 放寬成 `.task-done *`',
     '標記是 `<li>` 的直接子節點、不在 `.markdown` 之內，承載的是狀態本身；'
     + '雛型明文豁免它（workspace-mockup.html:374）。已實跑該 mutation：標記跟著退成 ink-faint'],
+
+  // ══ intake-inbox-usability ══════════════════════════════════════════════
+  // ── intake-routing：接受時由使用者確認目標 folder ────────────────────────
+  ['改選之後 session 建立於改選的 folder', '改選之後 session 建立於改選的 folder', false,
+    '接受時送出解析結果而非被選定的值',
+    '讀 pty 的 cwd。**挑改選與解析結果不同的那一則（R3）** —— R1 改選的恰好也是規則當時指的地方'],
+  ['解析不出者在選定之前無法接受', '解析不出者在選定之前無法接受', false, '解析不出者預選第一個 folder',
+    '停用 ＋ 強行觸發無效 ＋ session 數不變 ＋ 仍為待處理'],
+  ['解析不出者在明確選定之後可接受', '解析不出者在明確選定之後可接受，session 開在選定的 folder', false,
+    '選定之後接受鈕仍停用', '沒有任何規則可循 —— 開在哪裡只可能來自使用者的選定'],
+  ['未指明確認的 folder 的接受被拒絕，即使解析得出', '未指明確認的 folder 的接受被拒絕，即使解析得出', false,
+    'accept-falls-back-to-routing',
+    '**探針直接呼叫 IPC**（不帶、帶空字串）。經畫面的斷言對主行程恆綠：停用的按鈕點不到它、畫面永遠送出呈現值。'
+    + '判定函式的輸入不含解析結果，「退回」只寫得在 handler —— 那正是對照組改的地方。已實跑'],
+  ['確認的 folder 於接受時已不在 workspace 時拒絕', '確認的 folder 不在 workspace 時被拒絕（FOLDER_GONE）', false,
+    '不查表就回 ok',
+    '探針以一個不存在的識別碼呼叫 IPC —— 對主行程而言與「選定之後被移除」同一條路。'
+    + '畫面那一半（改選指向的 folder 不在了 ⇒ 回到佔位項並說明）由「改選指向已移除的 folder ⇒ 空並說明」單元測試承擔'],
+  ['改選不改變規則，也不延續到其他 intake', '改選一則之後，另一則同樣命中規則的仍預選解析結果', false,
+    '改選存成 overlay 層的單一值（所有卡片共用）',
+    '**在接受之前驗**（接受會關閉收件匣，關閉之後任何實作都回到解析結果）。'
+    + '「不改變規則」由同段的「改選不改變規則（規則檔與改選之前逐位元組相同）」承擔 —— 那一半對不寫規則的實作恆綠'],
+  ['改選之後規則的變動不覆蓋使用者的選擇', '改選之後規則的變動不覆蓋使用者的選擇', false, 'override-in-card',
+    '**經規則分頁的 UI 改規則**，前置斷言確認卡片在那一刻已卸載 —— 直接呼叫 setRules 的版本對「改選放在卡片裡」是綠的。已實跑'],
+  ['尚未改選者的預選隨規則變動', '尚未改選者的預選隨規則變動', false, '預選凍結在打開收件匣那一刻的解析結果',
+    '上一列的反方向。缺一則「永遠不跟」與「永遠跟」分不出來'],
+  ['預填逾時退回者預選既有 session 所在的 folder', '預填逾時退回者預選既有 session 所在的 folder', false,
+    'preselect-ignores-session',
+    '探針以種入的待處理紀錄（帶著仍存在於乙的 sessionId、routing 解到甲）驗；單元測試同名。已實跑'],
+  ['帶著已解析目標者同樣可改選', '帶著已解析目標者以使用者確認的 folder 為準', false, '判定改回優先採用 targetFolderId',
+    '單元測試。探針的 CHOOSE-HANDOFF-GONE 只驗到「目標不在時沒有預選」'],
+
+  // ── agent-intake：已開好那一段的去留 ─────────────────────────────────────
+  ['送出之後不再呈現，且跨重啟保持', '送出之後不再呈現，且了結落盤', false, 'settle-not-on-submit',
+    '真的按 Enter、替身帶 `busySeconds`（否則等待狀態不離開就緒）；反向對照是同段未送出的那一則仍在。'
+    + '跨重啟的那一半：重開之後它本來就會被啟動時的了結帶走（見「應用程式重新啟動後…」），'
+    + '而 `settledAt` 的落盤與載入由單元測試「已了結的項目狀態仍為已接受」承擔。已實跑'],
+  ['尚未送出且 session 仍存在時持續呈現', '已建立 session 的交接在收件匣中看得見（含它開在哪裡）', true,
+    '把 session 條件寫反',
+    '**這一列防的是篩得太兇**：舊實作（只進不出）照樣綠。鑑別力在其餘各列'],
+  ['逐則清除只清掉那一則，且跨重啟保持', '逐則清除只清掉那一則，其 session 仍在，且了結落盤', false,
+    '清除改成關閉 session 或刪紀錄',
+    '清除前後 pty 數不變（session 不被關閉）。跨重啟的那一半同上一列'],
+  ['應用程式重新啟動後，尚未送出的項目不再呈現', '上一次執行接受而未送出的項目，啟動後不再呈現（session 仍被還原、狀態仍為已接受、了結落盤）', false,
+    'no-startup-settle',
+    '種入「上一次執行接受、session 仍在、未送出」的一則；段落最後另以同一個 profile 重開，'
+    + '驗本次接受而未送出的也不再呈現（「應用程式重新啟動後，本次接受而未送出的項目不再呈現（session 仍被還原）」）。'
+    + '**已開好的項目因此改為在這一次執行中接受產生** —— 種進落盤檔的已接受項目一啟動就會被了結'],
+  ['session 已不存在時不再呈現', 'session 已不存在時不再呈現', false, '篩選不看 session 是否存在',
+    '以 Ctrl+Shift+W 關掉該 folder 聚焦的那一個（最後接受的那一則）；同 folder 的另一則仍在，證明沒有多關'],
+  ['session 所在的 folder 已被移出 workspace 時不再呈現', 'session 所在的 folder 已被移出 workspace 時不再呈現', false,
+    '篩選只看 session 不看 folder',
+    '**移除 folder 不會關閉它的 session**（已查證）—— 只看 session 的話那一則永遠留著，而它沒有 rail 入口'],
+  ['呈現的 folder 為 session 所在的 folder', '已開好的項目呈現的是 session 所在的 folder，不是解析結果', false,
+    'opened-folder-from-routing', '種入的紀錄 routing 解到甲、session 在乙。已實跑（投影那一側）'],
+  ['等待狀態落回未知不視為已送出', '等待狀態落回未知不視為已送出', false, 'unknown-counts-as-sent',
+    '單元測試，四種狀態逐一（含真正送出的兩種當對照）。已實跑'],
+  ['清除過而退回待處理的項目再次接受後重新呈現', '再次被接受時了結的標記被清除', false, 'accept-keeps-settled',
+    '探針造不出預填逾時（30 秒）—— 由 store 層的單元測試承擔。已實跑'],
+  ['清除之後去重仍然有效', '清除之後去重仍然有效', false, '清除改成刪除紀錄', ''],
+  ['待處理項目依發生時間新的在上', '待處理項目依發生時間新的在上', false, 'sort-by-received',
+    '**回補的形狀**：到達時間擠在一兩分鐘內且與發生時間的順序相反，落盤順序打亂；含一則經投遞檔'
+    + '（真的解析路徑）進來的。`sort-by-insertion` 由單元測試承擔'],
+  ['每一則呈現發生時間的完整日期與時刻', '每一則呈現發生時間的完整日期與時刻（宣告者為發生時間、未宣告者為到達時間）', false,
+    'time-shows-received',
+    '**釘 `<time>` 的文字，不是 dateTime 屬性**；期望值在頁面內以同一組 `Intl.DateTimeFormat` 設定算出，'
+    + '並另外斷言它**不等於**到達時間的格式化結果（兩者相差數小時）'],
+  ['已建立 session 的項目同樣新的在上', '已開好的項目新的在上', false, 'sort-by-received',
+    '到達時間與發生時間的順序相反 —— 依到達時間排會整串倒過來'],
+  ['宣告的發生時間晚於到達時間時以到達時間為準', '宣告的發生時間晚於到達時間時以到達時間為準（呈現與排序）', false,
+    'future-not-clamped',
+    '種入的那一則宣告十天後、十天前到達：呈現到達時間且排在最後。單元測試「宣告未來時刻者的有效時間為到達時間」同一件事'],
+  ['宣告了不可解析的發生時間的投遞被拒絕', '宣告了不可解析的發生時間的投遞被拒絕', false,
+    '把不可解析的發生時間靜默丟掉',
+    '五種形狀：非字串、亂字串、**不帶時區**（會被當成本機時間）、`Date.parse` 自己吃得下的非 ISO 格式、越界的日期'],
+  ['未宣告發生時間的投遞照常進入收件匣', '未宣告發生時間的投遞照常進入收件匣', true, '把發生時間改成必填',
+    '**零實作即綠**（沒有這個欄位時一切照舊）。鑑別力在那個 mutation；既有的每一支投遞測試都不帶它，同樣會紅'],
+  ['回補取回的提及宣告訊息本身的時間', '回補取回的提及宣告訊息本身的時間', false, '以取回的時刻（Date.now()）填入',
+    '單元測試：ts 換算成 ISO，且經收件匣的解析器得到同一個毫秒值'],
+  ['即時收到的提及同樣宣告訊息的時間', '回補取回的提及宣告訊息本身的時間', false, '即時路徑另寫一份不帶時間的投遞',
+    '**兩條路徑都經 `deliverCandidate` → `buildDelivery`**（已查證：即時路徑以回補的依賴建構），而 `buildDelivery` '
+    + '拿不到取回的時刻。真實的即時連線沒有載體（見 `probe:slack` 的既有缺口）'],
+  ['已了結的項目狀態仍為已接受', '已了結的項目狀態仍為已接受', false, '以新的 state 值表達了結',
+    '新的 state 值會讓舊版整筆丟棄紀錄（連同去重鍵）。`settled-dropped-on-load` 讓同一條變紅。已實跑'],
+  ['逾時之後改選別的 folder 再次處理', '逾時之後改選別的 folder 再次處理 ⇒ 不沿用原 folder 的那一個', false,
+    'reuse-ignores-folder', '探針造不出預填逾時；由沿用判定的單元測試承擔。已實跑'],
 
 ]
 

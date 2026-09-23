@@ -6,9 +6,12 @@ import { after, describe, it } from 'node:test'
 
 import { buildContext, buildPrompt, createNonce, writeContext } from '../intake-context'
 import { parseIntake } from '../intake-schema'
+import { listView, project } from '../intake-projection'
+import type { RoutingConfig } from '../intake-routing'
 import { IntakeService } from '../intake-service'
-import { IntakeStore } from '../intake-store'
+import { IntakeStore, type IntakeRecord } from '../intake-store'
 import { configureAgentEvents, prepareEventInjection } from '../agent-events'
+import { composeInjection } from '../agent-injection'
 
 /**
  * 送往 renderer 的投影，與「交給 agent 的檔案不在 workspace 之內」。
@@ -63,21 +66,11 @@ describe('送往 renderer 的東西不含任何路徑', () => {
       body: 'body text',
     }), 'file')
 
-    // 投影所依據的欄位集合 —— 與 `ipc/intake.ts` 的 `project()` 同源。
-    const record = store.get('file', 'a1')
-    assert.ok(record?.content)
-    const projected = {
-      id: record.id,
-      adapter: record.adapter,
-      state: record.state,
-      originKind: record.content.verified.originKind,
-      originId: record.content.verified.originId,
-      originLabel: record.content.authored.originLabel,
-      title: record.content.authored.title,
-      actor: record.content.authored.actor,
-      body: record.content.authored.body,
-      receivedAt: record.content.receivedAt,
-    }
+    // **量的是被出貨的那一份投影**（`intake-projection.ts`）。此前這裡是一份手抄的複本，
+    // 註解寫著「與 project() 同源」—— 而它從未被 `npm test` 執行過。
+    const projected = listView(store.list(), { rules: [], fallbackFolderId: 'f1' }, new Set(['f1']))
+    assert.equal(projected.length, 1, '前置：確實投影出那一則')
+    assert.ok(projected[0].body.includes('body text'), '前置：本文確實在投影裡（否則「不含路徑」恆真）')
 
     const serialized = JSON.stringify(projected)
     assert.equal(serialized.includes(base), false, '不得含 userData 之下的任何路徑')
@@ -146,9 +139,132 @@ describe('注入設定的頂層欄位', () => {
     // 而且今日恆真。這一條的價值在回歸線：往注入設定加任何頂層欄位都會紅。
     // 注入需要一個落點 —— 沒有它 `prepareEventInjection` 一律回 null（那是「不參與」，
     // 不是「沒有欄位」）。
+    //
+    // **量的是合成之後寫給 agent 的那一份設定，不是單一貢獻的片段。** hooks 自
+    // `agent-initiated-handoff` 起改由貢獻的獨立欄位交給合成器、再由合成器組回
+    // `settings.hooks` —— 此前這裡量的是貢獻的 `settings`，於是那次搬家之後它恆為空，
+    // 而這個檔案當時不在 `npm test` 的 glob 裡，沒有人看到它紅。
     configureAgentEvents(temp())
     const contribution = prepareEventInjection('S-keys', true)
     assert.ok(contribution)
-    assert.deepEqual(Object.keys(contribution.settings), ['hooks'])
+    const settingsFile = path.join(temp(), 'settings.json')
+    assert.ok(composeInjection(settingsFile, [contribution]))
+    const written = JSON.parse(fs.readFileSync(settingsFile, 'utf8')) as Record<string, unknown>
+    assert.deepEqual(Object.keys(written), ['hooks'])
+  })
+})
+
+/** 以指定欄位造一筆落盤紀錄 —— 投影只讀紀錄，不經 store。 */
+function record(
+  overrides: Partial<IntakeRecord> & { receivedAt?: number; originId?: string; occurredAt?: number } = {},
+): IntakeRecord {
+  const { receivedAt = 1000, originId = 'C1', occurredAt, ...rest } = overrides
+  const intake = ingested({ id: rest.id ?? 'a1', origin: { kind: 'slack', id: originId, label: '#dev' } })
+  return {
+    adapter: 'file',
+    id: intake.id,
+    state: 'pending',
+    digest: 'd',
+    content: {
+      verified: intake.verified,
+      authored: { ...intake.authored, ...(occurredAt !== undefined ? { occurredAt } : {}) },
+      receivedAt,
+    },
+    ...rest,
+  }
+}
+
+const ROUTE_TO_A: RoutingConfig = {
+  rules: [{ id: 'r', criterion: 'originId', contains: 'C1', folderId: 'A' }],
+  fallbackFolderId: null,
+}
+
+describe('投影：已接受者開在哪裡由 session 說了算（intake-inbox-usability）', () => {
+  it('已接受者沒有 folderId —— 規則改指別處也一樣', () => {
+    const accepted = record({ state: 'accepted', sessionId: 's1' })
+    const known = new Set(['A', 'B'])
+    assert.equal(project(accepted, ROUTE_TO_A, known).folderId, undefined)
+    const rerouted: RoutingConfig = { ...ROUTE_TO_A, rules: [{ ...ROUTE_TO_A.rules[0], folderId: 'B' }] }
+    assert.equal(project(accepted, rerouted, known).folderId, undefined)
+    // 對照：同一筆紀錄在待處理時確實會求出 folder —— 否則上面兩條恆真。
+    assert.equal(project({ ...accepted, state: 'pending' }, ROUTE_TO_A, known).folderId, 'A')
+  })
+
+  it('解析不出時不帶 folderId（NO_MATCH 與 FOLDER_GONE）', () => {
+    const noMatch = project(record({ originId: 'OTHER' }), ROUTE_TO_A, new Set(['A']))
+    assert.equal(noMatch.unresolved, 'NO_MATCH')
+    assert.equal('folderId' in noMatch, false)
+    // FOLDER_GONE 的解析結果本身帶著那個不可用的 folder —— 它不得被轉交成預選值。
+    const gone = project(record(), ROUTE_TO_A, new Set(['B']))
+    assert.equal(gone.unresolved, 'FOLDER_GONE')
+    assert.equal('folderId' in gone, false)
+  })
+})
+
+describe('清單：篩選與順序（intake-inbox-usability）', () => {
+  it('已了結者不在清單中，未了結的已接受者仍在', () => {
+    const list = listView(
+      [
+        record({ id: 'open', state: 'accepted', sessionId: 's1' }),
+        record({ id: 'done', state: 'accepted', sessionId: 's2', settledAt: 5 }),
+        record({ id: 'gone', state: 'dismissed' }),
+      ],
+      ROUTE_TO_A,
+      new Set(['A']),
+    )
+    assert.deepEqual(list.map((item) => item.id), ['open'])
+  })
+
+  it('以打亂的落盤順序種入，輸出為到達時間由新到舊', () => {
+    // 落盤順序既不是由舊到新、也不是由新到舊 —— 否則「反轉插入順序」這個錯誤實作照樣綠。
+    const list = listView(
+      [
+        record({ id: 'middle', receivedAt: 2000 }),
+        record({ id: 'oldest', receivedAt: 1000 }),
+        record({ id: 'newest', receivedAt: 3000 }),
+      ],
+      ROUTE_TO_A,
+      new Set(['A']),
+    )
+    assert.deepEqual(list.map((item) => item.id), ['newest', 'middle', 'oldest'])
+  })
+
+  it('回補的形狀：到達時間相同、發生時間各異 ⇒ 依發生時間由新到舊', () => {
+    // 同一次回補進來的，到達時間幾乎相同 —— 依它排序等於沒有排序。落盤順序也打亂。
+    const list = listView(
+      [
+        record({ id: 'monday', receivedAt: 9000, occurredAt: 1000 }),
+        record({ id: 'wednesday', receivedAt: 9000, occurredAt: 3000 }),
+        record({ id: 'tuesday', receivedAt: 9000, occurredAt: 2000 }),
+      ],
+      ROUTE_TO_A,
+      new Set(['A']),
+    )
+    assert.deepEqual(list.map((item) => item.id), ['wednesday', 'tuesday', 'monday'])
+    assert.deepEqual(list.map((item) => item.occurredAt), [3000, 2000, 1000])
+  })
+
+  it('宣告未來時刻者的有效時間為到達時間 —— 釘不上最上面', () => {
+    const list = listView(
+      [record({ id: 'honest', receivedAt: 5000, occurredAt: 4000 }), record({ id: 'future', receivedAt: 1000, occurredAt: 99_999 })],
+      ROUTE_TO_A,
+      new Set(['A']),
+    )
+    assert.deepEqual(list.map((item) => item.id), ['honest', 'future'])
+    assert.equal(list[1].occurredAt, 1000)
+  })
+
+  it('沒有宣告發生時間者以到達時間代之', () => {
+    const [item] = listView([record({ id: 'plain', receivedAt: 4242 })], ROUTE_TO_A, new Set(['A']))
+    assert.equal(item.occurredAt, 4242)
+  })
+
+  it('內容已過期者排在最後', () => {
+    const list = listView(
+      [record({ id: 'expired', state: 'accepted', sessionId: 's', content: null }), record({ id: 'fresh', receivedAt: 10 })],
+      ROUTE_TO_A,
+      new Set(['A']),
+    )
+    assert.deepEqual(list.map((item) => item.id), ['fresh', 'expired'])
   })
 })

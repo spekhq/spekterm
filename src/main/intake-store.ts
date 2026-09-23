@@ -41,6 +41,17 @@ interface IntakeKey {
   digest: string
   /** 已接受者建立了哪個 session。**關聯只存在 intake 這一側。** */
   sessionId?: string
+  /**
+   * 已接受者**了結**的時刻 —— prompt 已送出，或使用者已從收件匣清除它。了結者不再呈現。
+   *
+   * **它不是第四種狀態，而且必須不是。** `parseIntakeFile` 對 `state` 做白名單，不認得的
+   * **整筆丟棄** —— 以新的狀態值表達它，回滾一次就連同去重鍵一起消失，Slack 的回補會把那些
+   * 提及當成新的再送進來。以 optional 欄位表達時，舊版只是丟掉這個欄位（那些項目重新出現在
+   * 收件匣裡），`entries` 一則不少。
+   *
+   * 放在去重鍵這一半，因為它是狀態不是內容 —— 內容可以過期，這個不行。
+   */
+  settledAt?: number
 }
 
 /** 可過期的那一半。 */
@@ -171,6 +182,7 @@ export function parseIntakeFile(raw: string): PersistedIntake | null {
       state: e.state,
       digest: e.digest,
       ...(typeof e.sessionId === 'string' ? { sessionId: e.sessionId } : {}),
+      ...(typeof e.settledAt === 'number' ? { settledAt: e.settledAt } : {}),
       content: isContent(content) ? content : null,
     })
   }
@@ -304,7 +316,47 @@ export class IntakeStore {
     if (!record) return
     record.state = state
     if (sessionId !== undefined) record.sessionId = sessionId
+    // **再次被接受 ⇒ 了結的標記作廢。** 路徑：預填還沒發生時使用者清除它 → 逾時退回待處理
+    // （標記仍在）→ 再次接受 —— 少了這一行，它一建立 session 就從收件匣消失，使用者看不到
+    // 他正要送出的本文。
+    if (state === 'accepted') delete record.settledAt
     this.save()
+  }
+
+  /**
+   * 標記一則已接受的 intake 為**了結**（prompt 已送出，或使用者清除了它）。
+   *
+   * **只對 `accepted` 生效**：待處理的清除是「忽略」，那是另一個有自己語意的狀態；
+   * 已忽略的本來就不呈現。**已設過就不覆寫** —— 第一次了結的時刻才是事實。
+   */
+  settle(adapter: string, id: string, at: number = Date.now()): void {
+    const record = this.#entries.get(intakeKeyOf(adapter, id))
+    if (!record || record.state !== 'accepted' || record.settledAt !== undefined) return
+    record.settledAt = at
+    this.save()
+  }
+
+  /**
+   * **啟動時**把所有已接受而未了結的一次了結（intake-inbox-usability）。
+   *
+   * 預先填入而尚未送出的 prompt 住在 pty 的輸入處，而 pty 不會活過應用程式 —— 啟動之前接受的
+   * 每一則，其「送出之前看得到本文」的理由都已不成立。少了這一步，它們只剩手動清除一條出口，
+   * 而且一次次累積（dogfood 回報的正是這件事）。
+   *
+   * **呼叫端必須在任何來源開始投遞之前呼叫** —— 晚了的話，一則在啟動瞬間到達即接受的交接會被
+   * 一起了結，它的本文在使用者看到之前就消失了。
+   *
+   * 已了結者保留原本的時刻；沒有東西可了結時不寫檔。回傳了結的則數（診斷用）。
+   */
+  settleOpened(at: number = Date.now()): number {
+    let settled = 0
+    for (const record of this.#entries.values()) {
+      if (record.state !== 'accepted' || record.settledAt !== undefined) continue
+      record.settledAt = at
+      settled += 1
+    }
+    if (settled > 0) this.save()
+    return settled
   }
 
   /**

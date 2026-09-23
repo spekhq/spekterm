@@ -344,6 +344,157 @@ export const MUTATIONS = [
     why: '**通知的效果不再分流。** 一則已接受的交接在收件匣裡沒有任何待辦動作 —— 把使用者送去那裡，\n'
       + '> 等於要他再點一次才到得了他真正要去的地方。',
   },
+  // ── intake-inbox-usability ────────────────────────────────────────────────
+  {
+    name: 'accept-falls-back-to-routing',
+    file: 'src/main/ipc/intake.ts',
+    section: 'runChooseFolder',
+    from: `        chosenFolderId: folderId,`,
+    to: `        chosenFolderId: folderId ?? routing.get().fallbackFolderId ?? routing.get().rules[0]?.folderId,`,
+    expectRed: '未指明確認的 folder 的接受被拒絕，即使解析得出',
+    why: '**缺了使用者確認的 folder 時，handler 退回 routing。** 判定函式的輸入不含解析結果，\n'
+      + '> 退回只可能寫在 handler 這一層 —— 而經畫面的斷言對它一律是綠的（畫面永遠送出呈現值、\n'
+      + '> 停用的按鈕點不到主行程）。唯一的載體是探針直接呼叫 IPC 的那一條。',
+  },
+  {
+    name: 'override-in-card',
+    file: 'src/renderer/src/shell/intake/IntakeOverlay.tsx',
+    section: 'runChooseFolder',
+    from: `            onClick={() => setTab('rules')}`,
+    to: `            onClick={() => { setTab('rules'); setOverrides(new Map()) }}`,
+    expectRed: '改選之後規則的變動不覆蓋使用者的選擇',
+    why: '**改選在切到 Rules 分頁時消失** —— 那正是把它放在卡片裡的後果（卡片在那一刻卸載）。\n'
+      + '> 把狀態搬回卡片是跨好幾處的改動，單點替換表達不出來；這是它**等價而單點**的形狀。\n'
+      + '> 直接呼叫 setRules 的斷言對它是綠的 —— 使用者改規則一定要先切到那個分頁。',
+  },
+  {
+    name: 'preselect-ignores-session',
+    command: 'test',
+    file: 'src/renderer/src/shell/intake/preselect-folder.ts',
+    from: `  if (known(existingSessionFolderId)) return { folderId: existingSessionFolderId, overrideGone: false }\n`,
+    to: ``,
+    expectRed: '預填逾時退回者預選既有 session 所在的 folder',
+    why: '**預選不看既有 session。** 第一次接受時改選過 folder、預填逾時退回待處理之後，\n'
+      + '> 重新打開收件匣預選回解析結果 —— 使用者沒注意就按下接受，本文送進他先前改掉的 repo。',
+  },
+  {
+    name: 'reuse-ignores-folder',
+    command: 'test',
+    file: 'src/renderer/src/shell/intake/reuse-session.ts',
+    from: `  return session && session.folderId === chosenFolderId ? existingSessionId : null`,
+    to: `  return session ? existingSessionId : null`,
+    expectRed: '逾時之後改選別的 folder 再次處理 ⇒ 不沿用原 folder 的那一個',
+    why: '**沿用舊 session 時不問它在哪個 folder。** 使用者改選之後，prompt 被填進原 folder 的那一個。',
+  },
+  {
+    name: 'unknown-counts-as-sent',
+    command: 'test',
+    file: 'src/main/intake-prefill.ts',
+    from: `  return state === 'busy' || state === 'awaiting-choice'`,
+    to: `  return state !== 'ready'`,
+    expectRed: '等待狀態落回未知不視為已送出',
+    why: '**退回舊判定：「不再是 ready」就算送出。** 落回未知的事件會被當成送出 ——\n'
+      + '> 而判定的後果會落盤，把交接的本文從它唯一的呈現位置永久移除。',
+  },
+  {
+    name: 'accept-keeps-settled',
+    command: 'test',
+    file: 'src/main/intake-store.ts',
+    from: `    if (state === 'accepted') delete record.settledAt\n`,
+    to: ``,
+    expectRed: '再次被接受時了結的標記被清除',
+    why: '**再次接受時不清除了結的標記。** 預填前清除 → 逾時退回 → 再次接受，它一建立 session\n'
+      + '> 就從收件匣消失，使用者看不到他正要送出的本文。',
+  },
+  {
+    name: 'settled-dropped-on-load',
+    command: 'test',
+    file: 'src/main/intake-store.ts',
+    from: `      ...(typeof e.settledAt === 'number' ? { settledAt: e.settledAt } : {}),\n`,
+    to: ``,
+    expectRed: '已了結的項目狀態仍為已接受',
+    why: '**逐欄位白名單漏掉 settledAt。** 了結的標記活不過重啟 —— 使用者清掉的東西每次開機都回來。',
+  },
+  {
+    name: 'settled-still-listed',
+    command: 'test',
+    file: 'src/main/intake-projection.ts',
+    from: `    .filter((record) => !(record.state === 'accepted' && record.settledAt !== undefined))\n`,
+    to: ``,
+    expectRed: '已了結者不在清單中，未了結的已接受者仍在',
+    why: '**清單不看了結。** 已開好那一段回到「只進不出」—— 本 change 的起點。',
+  },
+  {
+    name: 'opened-folder-from-routing',
+    command: 'test',
+    file: 'src/main/intake-projection.ts',
+    from: `  if (record.state !== 'pending') return withBody\n`,
+    to: ``,
+    expectRed: '已接受者沒有 folderId —— 規則改指別處也一樣',
+    why: '**已接受者也在列出時重算 routing。** 那報的是「現在的規則會解到哪」，不是它開在哪 ——\n'
+      + '> 接受時使用者改選過、或規則事後改變，「Opened in」就標錯。',
+  },
+  {
+    name: 'sort-by-insertion',
+    command: 'test',
+    file: 'src/main/intake-projection.ts',
+    from: `    .sort(byNewestOccurrence)`,
+    to: `    .reverse()`,
+    expectRed: '以打亂的落盤順序種入，輸出為到達時間由新到舊',
+    why: '**以反轉插入順序代替排序。** 種入順序若恰好是由舊到新，這個錯誤實作會通過 ——\n'
+      + '> 那正是 fixture 刻意打亂的理由。',
+  },
+  {
+    name: 'no-startup-settle',
+    file: 'src/main/index.ts',
+    section: 'runOpenedLifecycle',
+    from: `  intakeStore.settleOpened()\n`,
+    to: ``,
+    expectRed: '上一次執行接受而未送出的項目，啟動後不再呈現（session 仍被還原、狀態仍為已接受、了結落盤）',
+    why: '**啟動時不了結。** 上一次執行接受而沒送出的項目（session 被還原、預填的 prompt 已隨 pty\n'
+      + '> 消失）只剩手動清除一條出口，一次次累積 —— dogfood 回報的「Opened in 還是沒消失」。',
+  },
+  {
+    name: 'time-shows-received',
+    file: 'src/renderer/src/shell/intake/IntakeOverlay.tsx',
+    section: 'runOpenedLifecycle',
+    from: `        <span className="text-2xs text-ink-faint">{item.originLabel}</span>
+        <OccurredAt at={item.occurredAt} />`,
+    to: `        <span className="text-2xs text-ink-faint">{item.originLabel}</span>
+        <OccurredAt at={item.receivedAt} />`,
+    expectRed: '每一則呈現發生時間的完整日期與時刻（宣告者為發生時間、未宣告者為到達時間）',
+    why: '**呈現到達時間而非發生時間** —— dogfood 踩到的那個形狀：回補進來的昨天的提及顯示成今天。\n'
+      + '> 種入的項目發生時間與到達時間相差數小時；只驗「有一個時間」的斷言對它是綠的。',
+  },
+  {
+    name: 'sort-by-received',
+    command: 'test',
+    file: 'src/main/intake-projection.ts',
+    from: `  return b.occurredAt - a.occurredAt`,
+    to: `  return b.receivedAt - a.receivedAt`,
+    expectRed: '回補的形狀：到達時間相同、發生時間各異 ⇒ 依發生時間由新到舊',
+    why: '**依到達時間排序。** 回補一次進來的項目到達時間幾乎相同，依它排序等於沒有排序。',
+  },
+  {
+    name: 'future-not-clamped',
+    command: 'test',
+    file: 'src/main/intake-projection.ts',
+    from: `Math.min(declared, receivedAt)`,
+    to: `declared`,
+    expectRed: '宣告未來時刻者的有效時間為到達時間 —— 釘不上最上面',
+    why: '**不夾住宣告的發生時間。** 那個欄位是投遞者撰寫的 —— 宣告一個未來的時刻就能把自己釘在\n'
+      + '> 收件匣的最上面。',
+  },
+  {
+    name: 'settle-not-on-submit',
+    file: 'src/main/ipc/intake.ts',
+    section: 'runHandoff',
+    from: `              service.store.settle(adapter, id)`,
+    to: ``,
+    expectRed: '送出之後不再呈現，且了結落盤',
+    why: '**送出之後只撤標示、不落盤了結。** 畫面上它照樣離開不了已開好那一段 ——\n'
+      + '> 而只看「載入時帶 settledAt 就不呈現」的斷言對它是綠的。',
+  },
 ]
 
 function run(names) {

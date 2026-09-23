@@ -645,8 +645,9 @@ session 脈絡裡送出的，彙整成一份跨數十天、跨數十個專案的
 
 > **本機 inbox 與 spawner + context 注入器已由 `agent-intake-inbox` 落地**（活動列的 Handoffs
 > 入口已接上）。外部 producer 往 `<userData>/intake-inbox/` 投遞一份 JSON，使用者看過本文之後
-> 接受它，就在 routing 解析出的 folder 得到一個開好、context 備妥、第一則 prompt 已填但
-> **尚未送出**的 agent session。
+> 接受它，就在他確認的 folder 得到一個開好、context 備妥、第一則 prompt 已填但
+> **尚未送出**的 agent session。routing 只決定預先選定哪一個 —— 接受之前可以改選
+> （`intake-inbox-usability`）。
 >
 > **agent 自己是第二個 producer**（`agent-initiated-handoff`）—— 而那正是「handoff」這個字
 > 原本的意思：a repo 的 session 把工作交接給 b repo。spekterm 經 `SessionStart` hook 的

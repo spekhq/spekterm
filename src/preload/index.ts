@@ -513,12 +513,16 @@ const workspaceApi = {
   },
   intake: {
     list: (): Promise<IntakeSnapshot> => ipcRenderer.invoke('workspace:intake:list'),
-    accept: (id: string, adapter: string): Promise<IntakeAcceptResult> =>
-      ipcRenderer.invoke('workspace:intake:accept', id, adapter),
+    /** `folderId` ＝ 使用者在卡片上確認的 folder。**缺了它主行程就拒絕** —— 不退回 routing 的結果。 */
+    accept: (id: string, adapter: string, folderId: string): Promise<IntakeAcceptResult> =>
+      ipcRenderer.invoke('workspace:intake:accept', id, adapter, folderId),
     attach: (id: string, adapter: string, sessionId: string): Promise<{ ok: boolean }> =>
       ipcRenderer.invoke('workspace:intake:attach', id, adapter, sessionId),
     dismiss: (id: string, adapter: string): Promise<{ ok: boolean }> =>
       ipcRenderer.invoke('workspace:intake:dismiss', id, adapter),
+    /** 把一則已開好的項目從收件匣清除。不刪紀錄、不碰它的 session。 */
+    settle: (id: string, adapter: string): Promise<{ ok: boolean }> =>
+      ipcRenderer.invoke('workspace:intake:settle', id, adapter),
     dismissNotices: (): Promise<{ ok: boolean }> => ipcRenderer.invoke('workspace:intake:dismissNotices'),
     dismissNotice: (key: string, code: string): Promise<{ ok: boolean }> =>
       ipcRenderer.invoke('workspace:intake:dismissNotice', key, code),

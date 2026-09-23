@@ -585,7 +585,11 @@
     "pendingCount_other": "{{count}} 個待處理",
     "accept": "接受",
     "dismiss": "忽略",
-    "opensIn": "將開在 {{folder}}",
+    "opensInLabel": "開在",
+    "chooseFolder": "要開在哪個資料夾",
+    "choosePlaceholder": "選擇資料夾…",
+    "chosenFolderGone": "你選的資料夾已經不在工作區裡",
+    "clearOpened": "從收件匣清除",
     "unresolved": "判斷不出這一則屬於哪個資料夾",
     "unresolvedFolderGone": "這條規則指向的資料夾已經不在工作區裡",
     "bodyLength": "{{count}} 個字元",
@@ -620,6 +624,7 @@
       "spoofable": "這個欄位由投遞者自己撰寫，他可以挑選它的內容來左右這一則開在哪裡"
     },
     "itemLabel": "收件匣項目：{{title}}",
+    "openedItemLabel": "已開好的項目：{{title}}",
     "dismissNotices": "清除",
     "close": "關閉收件匣",
     "notify": {

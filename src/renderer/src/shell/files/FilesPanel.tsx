@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { t } from '@shared/i18n'
 import { useWorktreeRoots } from '../openspec/data'
@@ -9,21 +9,10 @@ import { ConfirmDelete, ContextMenu, type MenuItem, NameDialog } from './dialogs
 import { FileTree } from './FileTree'
 import { FileViewer } from './FileViewer'
 import { WorktreePicker } from './WorktreePicker'
+import { useNow } from '../useNow'
 import { useDirtyBuffers } from './dirty-buffers'
 import { ROOT_PATH, baseNameOf, joinRelPath, parentOf, stripRoot } from './paths'
 import { type TreeRow, useFileTree, describeFailure } from './useFileTree'
-
-/** 相對時間會過期。面板開著的時候，每分鐘讓它重算一次。 */
-function useNow(intervalMs = 60_000): number {
-  const [now, setNow] = useState(() => Date.now())
-
-  useEffect(() => {
-    const timer = setInterval(() => setNow(Date.now()), intervalMs)
-    return () => clearInterval(timer)
-  }, [intervalMs])
-
-  return now
-}
 
 /** 檔案操作的失敗要說得出原因。UI 讀 `code`，不解析錯誤訊息。 */
 function describeOperationFailure(failure: FsFailure): string {
