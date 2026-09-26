@@ -1,5 +1,6 @@
-import { INTRO_COMMAND, INTRO_ENV, OUTBOX_ENV, writeIntroFile } from './handoff-intro'
-import { introFile, outboxDir, prepareOutbox } from './handoff-outbox'
+import { INTRO_COMMAND, INTRO_ENV, OUTBOX_ENV, RELATIONS_ENV, writeIntroFile } from './handoff-intro'
+import { introFile, outboxDir, prepareOutbox, relationsFile } from './handoff-outbox'
+import { writeRelationsFor, type RelationsWorld } from './handoff-relations'
 import type { InjectionContribution } from './agent-injection'
 import type { WorkspaceFolder } from './workspace-store'
 
@@ -21,17 +22,25 @@ export function prepareHandoffInjection(
   sessionId: string,
   enabled: boolean,
   folders: FolderList,
+  peer: {
+    /** 它的固定名字（`agent-peer-name`）。 */
+    name?: string
+    /** 算關係用的當下狀態。關係檔在這裡先寫一次 —— 那時這個 session 的 pty 還不在執行中集合裡。 */
+    world?: RelationsWorld
+  } = {},
 ): InjectionContribution | null {
   if (!enabled) return null
   const outbox = prepareOutbox(sessionId)
   if (!outbox) return null
 
-  writeIntroFile(introFile(sessionId), { folders, outbox })
+  const relations = relationsFile(sessionId)
+  if (peer.world) writeRelationsFor(sessionId, peer.world)
+  writeIntroFile(introFile(sessionId), { folders, outbox, name: peer.name, relations })
 
   return {
     settings: {},
     hooks: { SessionStart: [INTRO_COMMAND] },
-    env: { [INTRO_ENV]: introFile(sessionId), [OUTBOX_ENV]: outbox },
+    env: { [INTRO_ENV]: introFile(sessionId), [OUTBOX_ENV]: outbox, [RELATIONS_ENV]: relations },
   }
 }
 
@@ -42,10 +51,18 @@ export function prepareHandoffInjection(
  * 重跑，那些時刻讀到的就是一份過期的清單。失效方式是靜默的：agent 交接給一個剛被移除的 repo，
  * 得到一次它看不到的拒絕。
  */
-export function refreshIntros(sessionIds: readonly string[], folders: FolderList): void {
+export function refreshIntros(
+  sessionIds: readonly string[],
+  folders: FolderList,
+  /**
+   * 每個 session 的固定名字。**重寫時一定要帶上** —— 否則 folder 清單一變動，自我介紹就被重寫成
+   * 不含名字的版本，下一次續接、壓縮、清除時 agent 就不知道自己叫什麼。
+   */
+  nameOf: (sessionId: string) => string | undefined,
+): void {
   for (const sessionId of sessionIds) {
     const outbox = outboxDir(sessionId)
     if (!outbox) continue
-    writeIntroFile(introFile(sessionId), { folders, outbox })
+    writeIntroFile(introFile(sessionId), { folders, outbox, name: nameOf(sessionId), relations: relationsFile(sessionId) })
   }
 }

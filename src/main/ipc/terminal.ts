@@ -1,7 +1,9 @@
 import { type WebContents, ipcMain } from 'electron'
+import { createSession } from '../session-create'
+import type { RelationsWorld } from '../handoff-relations'
 import type { PreferencesStore } from '../preferences-store'
 import { SessionStatusService } from '../session-status'
-import type { RendererSession, SessionStore } from '../session-store'
+import type { RendererSession, SessionLineage, SessionStore } from '../session-store'
 import { type SpawnTarget, TerminalError, TerminalService } from '../terminal'
 import { agentSettingsFile } from '../agent-injection'
 import { prepareHandoffInjection } from '../handoff-injection'
@@ -37,6 +39,8 @@ export const TERMINAL_CHANNELS = {
 /** 重建一個 session 所需的一切。`scrollback` 只有 shell 目標會有（design D3）。 */
 export interface RestoredSession extends RendererSession {
   scrollback?: string
+  /** 主行程寫下的交接來源（唯讀）。renderer 靠它畫樹與標示；它不含路徑。 */
+  lineage?: SessionLineage
 }
 
 /**
@@ -62,6 +66,36 @@ async function toResult<T>(run: () => T | Promise<T>): Promise<FsResult<T>> {
 
 /** 每個 renderer 一份 pty 集合。key 是 `webContents.id`（與 watcher 的擁有者記帳同構）。 */
 const services = new Map<number, TerminalService>()
+
+/** 所有服務中目前持有 pty 的 claude session —— 關係檔的「是否在執行」。 */
+export function runningAgents(): string[] {
+  return [...services.values()].flatMap((service) => service.runningAgents())
+}
+
+/** 計算關係所需的當下狀態（`handoff-relations.ts`）。 */
+export function currentRelationsWorld(store: FolderLookup, sessions: SessionStore): RelationsWorld {
+  return { view: sessions.view(), folders: store.list(), running: new Set(runningAgents()) }
+}
+
+/**
+ * pty 誕生或結束 —— 關係檔的觸發點之一（`handoff-lineage` design D6 的單一觸發點由呼叫端接上）。
+ */
+const ptyListeners = new Set<() => void>()
+
+export function onPtyChange(listener: () => void): () => void {
+  ptyListeners.add(listener)
+  return () => ptyListeners.delete(listener)
+}
+
+function ptyChanged(): void {
+  for (const listener of ptyListeners) {
+    try {
+      listener()
+    } catch (error) {
+      console.error(`[terminal] pty listener failed: ${String(error)}`)
+    }
+  }
+}
 
 /**
  * 取得**已存在**的 service，不建立新的。
@@ -89,6 +123,12 @@ function statusServiceFor(service: TerminalService, contents: WebContents): Sess
   return status
 }
 
+/** rail 項目的名稱（名字的前綴）。`null` ＝ 全域；查無時回空字串（`peer-name` 會用代替字）。 */
+function railLabelOf(store: FolderLookup, folderId: string | null): string | null {
+  if (folderId === null) return null
+  return store.list().find((folder) => folder.id === folderId)?.name ?? ''
+}
+
 function serviceFor(
   store: FolderLookup,
   sessions: SessionStore,
@@ -104,6 +144,9 @@ function serviceFor(
       contents.send(TERMINAL_CHANNELS.data, sessionId, chunk)
     },
     exit: (sessionId, exitCode, reason) => {
+      // **在 `disposed` 提早 return 之前** —— renderer 重新載入時所有 pty 都以 `disposed` 結束，
+      // 掛在那之後的話，關係檔裡的「是否在執行」永遠不會被刷新。
+      ptyChanged()
       // **`disposed` 是關視窗／reload 時我們自己殺的 —— 那不是 session 結束。**
       //
       // 少了這道分支，關一次視窗就會把整份持久化清空（每個 pty 都會 exit，每個 exit 都被當成
@@ -133,13 +176,17 @@ function serviceFor(
   // 交接的注入貢獻。**排在事件橋接之後**（見 `terminal.ts` 的註冊順序註解）。
   // 未設定＝啟用，與另外兩個同一條規則，且三者的啟用狀態彼此獨立。
   (sessionId) =>
-    prepareHandoffInjection(sessionId, preferences.get().agentHandoff !== false, store.list()),
+    prepareHandoffInjection(sessionId, preferences.get().agentHandoff !== false, store.list(), {
+      name: sessions.view().find((entry) => entry.session.id === sessionId)?.session.peerName,
+      world: currentRelationsWorld(store, sessions),
+    }),
   // 交接的落點於 session 結束時收掉 —— **先處理完裡面既有的項目，再清除**（順序住在服務裡）。
   endHandoffSession,
   )
   services.set(contents.id, service)
 
   contents.once('destroyed', () => {
+    sessions.dropProvisional()
     services.delete(contents.id)
     statusServices.get(contents.id)?.dispose()
     statusServices.delete(contents.id)
@@ -152,6 +199,8 @@ function serviceFor(
   // 'did-navigate' 殺光（design D2）。沿用 watcher 的教訓：用 'did-navigate'（已 commit），
   // 不是 'did-start-navigation'（那對被擋下的導航也會觸發）。
   contents.on('did-navigate', () => {
+    // 尚未被 renderer 送來持久化的 session 永遠不會被送來了（新頁面不知道它們）。
+    sessions.dropProvisional()
     disposeConversationFor(contents.id)
     // reload 之後 renderer 會重新告訴我們要盯誰；先停掉，否則它會繼續對一個已消失的頁面推送。
     statusServices.get(contents.id)?.dispose()
@@ -221,7 +270,7 @@ export function registerTerminalHandlers(
 
   ipcMain.handle(
     TERMINAL_CHANNELS.create,
-    (event, folderId: string | null, target: SpawnTarget, worktreeKey?: string) =>
+    (event, folderId: string | null, target: SpawnTarget, worktreeKey?: string, ticket?: unknown) =>
     toResult(async () => {
       // **識別碼 → 路徑的解析在這裡完成，不在 `TerminalService` 裡**：列舉住在 OpenSpec 資料層，
       // 而 terminal 服務不該認識它。`worktreesFor` 走的是**與側欄同一個實例與同一組參數** ——
@@ -235,20 +284,27 @@ export function registerTerminalHandlers(
         folderId,
         worktreeKey,
       )
-      const result = await serviceFor(store, sessions, preferences, event.sender).create(folderId, target, {
-        cwd,
-        worktreeRoots,
+      // 識別碼、來源與名字在 spawn 之前就落在暫定紀錄裡 —— 順序的理由見 `session-create.ts`。
+      const result = await createSession({
+        sessions,
+        folderId,
+        target,
+        railLabel: railLabelOf(store, folderId),
+        ticket,
+        spawn: (sessionId, peerName) =>
+          serviceFor(store, sessions, preferences, event.sender).create(folderId, target, {
+            sessionId,
+            cwd,
+            worktreeRoots,
+            peerName,
+          }),
       })
 
-      // **對話識別碼必須在這裡就落下去。** 它是主行程在 `create` 回傳當下就知道的東西，而 renderer
-      // 永遠不會看到它 —— 漏掉這一行，claude session 的對話 id 就從來沒有被持久化過，於是每次
-      // 重建都以「沒有東西可以續接」開一個全新的對話。**症狀是靜默的**：分頁、名字、順序全都好好地
-      // 回來了，只有對話內容永遠是空的（探針抓到：重建時的 argv 是 `--session-id <新 id>`，
-      // 而不是 `--resume <原 id>`）。
       if (result.conversationId) {
         sessions.update(result.sessionId, { claudeSessionId: result.conversationId })
       }
-      return { sessionId: result.sessionId }
+      ptyChanged()
+      return { sessionId: result.sessionId, ...(result.lineage ? { lineage: result.lineage } : {}) }
     }),
   )
 
@@ -277,10 +333,12 @@ export function registerTerminalHandlers(
         resumeConversationId: persisted.claudeSessionId,
         cwd,
         worktreeRoots,
+        peerName: persisted.peerName,
       })
       if (result.conversationId) {
         sessions.update(sessionId, { claudeSessionId: result.conversationId })
       }
+      ptyChanged()
       return { sessionId: result.sessionId }
     }),
   )
@@ -300,7 +358,8 @@ export function registerTerminalHandlers(
     // 建立 service（若尚未存在）—— 於是 did-navigate／destroyed 的清理鉤子在第一次重建時就掛上。
     serviceFor(store, sessions, preferences, event.sender)
 
-    return sessions.list().map(({ claudeSessionId: _c, cwd: _w, ...rest }) => ({
+    // `lineage` **要**送（renderer 靠它畫樹與標示，它不含路徑）；`peerName` 不送（renderer 用不到）。
+    return sessions.list().map(({ claudeSessionId: _c, cwd: _w, peerName: _n, ...rest }) => ({
       ...rest,
       // claude 續接時會自行重現先前的對話 —— 再重播一次快照，使用者會看到兩份歷史（design D3）。
       scrollback:

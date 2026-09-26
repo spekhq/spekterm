@@ -621,23 +621,24 @@ describe('由 intake 建立的 session 其啟動參數與手動建立者等價',
    * 等價形式涵蓋所有未來新增的旗標，並順帶驗證了「走相同路徑」：`agent-intake` 不擴充
    * `terminal.create` 的介面，於是「由 intake 建立」與「手動建立」在這一層根本沒有分岔。
    *
-   * **允許相異的只有兩樣**：對話識別碼（每次都是新的 UUID），以及注入設定的位置
-   * （未注入時兩者皆無）。其餘逐項相同，**且參數個數相同** —— 一個多出來的旗標必然破壞後者，
+   * **允許相異的只有三樣**：對話識別碼（每次都是新的 UUID）、注入設定的位置（未注入時兩者皆無），
+   * 以及固定名字的**值**（`agent-peer-name`：每個 claude session 都有、各自不同）。其餘逐項相同，**且參數個數相同** —— 一個多出來的旗標必然破壞後者，
    * 不論正規化怎麼寫。
    */
   const UUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g
 
   function normalize(argv: string): string[] {
-    return argv.replace(UUID, '<conversation>').split(' ')
+    // 名字只換掉**值** —— 旗標本身仍逐項比對，於是「多一個旗標」照樣破壞等價。
+    return argv.replace(UUID, '<conversation>').replace(/--name=\S+/g, '--name=<name>').split(' ')
   }
 
-  it('去除對話識別碼之後逐項相同，且參數個數相同', async () => {
+  it('去除對話識別碼與名字的值之後逐項相同，且參數個數相同', async () => {
     const stub = installStubClaude()
     service = new TerminalService(lookup([{ id: 'f1', path: repo, status: 'ok' }]), sink())
 
-    await service.create('f1', 'claude')
+    await service.create('f1', 'claude', { peerName: 'alpha-1111' })
     await waitFor(() => stub.calls().length === 1, { label: '第一個 session' })
-    await service.create('f1', 'claude')
+    await service.create('f1', 'claude', { peerName: 'alpha-2222' })
     await waitFor(() => stub.calls().length === 2, { label: '第二個 session' })
 
     const [first, second] = stub.calls().map(normalize)
@@ -681,5 +682,75 @@ describe('交接的落點', () => {
     assert.deepEqual(ended, [id])
     service.dispose()
     fs.rmSync(repo, { recursive: true, force: true })
+  })
+})
+
+describe('固定名字的交付（agent-peer-name）', () => {
+  it('名字經環境變數交給 claude，不拼進命令字串', async () => {
+    const stub = installStubClaude()
+    // **這個值刻意不合法**（`decidePeerName` 不會產生它）—— 它是用來證明交付路徑本身不經 shell
+    // 再解析一次：若名字被拼進命令字串，`$(...)` 會被執行。
+    const marker = path.join(repo, 'pwned')
+    service = new TerminalService(lookup([{ id: 'f1', path: repo, status: 'ok' }]), sink())
+    await service.create('f1', 'claude', { peerName: `x$(touch ${marker})` })
+    await waitFor(() => stub.calls().length === 1, { label: 'claude 被呼叫' })
+    assert.ok(stub.calls()[0].endsWith(`--name=x$(touch ${marker})`), stub.calls()[0])
+    assert.equal(fs.existsSync(marker), false, '名字中的命令不得被執行')
+  })
+
+  it('注入功能全部關閉時仍帶名字', async () => {
+    const stub = installStubClaude()
+    // 建構子預設三個注入功能皆關、設定檔為空 ⇒ `composeInjection` 回 null。
+    service = new TerminalService(lookup([{ id: 'f1', path: repo, status: 'ok' }]), sink())
+    await service.create('f1', 'claude', { peerName: 'alpha-1111' })
+    await waitFor(() => stub.calls().length === 1, { label: 'claude 被呼叫' })
+    assert.ok(stub.calls()[0].includes('--name=alpha-1111'), stub.calls()[0])
+  })
+
+  it('自癒出來的 agent 沿用相同的名字', async () => {
+    const stub = installStubClaude({ resumeFails: true })
+    service = new TerminalService(lookup([{ id: 'f1', path: repo, status: 'ok' }]), sink())
+    await service.create('f1', 'claude', {
+      resumeConversationId: '55555555-5555-4555-8555-555555555555',
+      peerName: 'alpha-1111',
+    })
+    await waitFor(() => stub.calls().length === 2, { label: '自癒的那次呼叫' })
+    for (const call of stub.calls()) assert.ok(call.includes('--name=alpha-1111'), call)
+  })
+
+  it('shell 目標不帶名字', async () => {
+    service = new TerminalService(lookup([{ id: 'f1', path: repo, status: 'ok' }]), sink())
+    const { sessionId } = await service.create('f1', 'shell', { peerName: 'alpha-1111' })
+    service.write(sessionId, 'echo "NAME=[$SPEKTERM_PEER_NAME]"\n')
+    await waitFor(() => output().includes('NAME=['), { label: 'shell 回應' })
+    assert.ok(output().includes('NAME=[]'), output())
+  })
+
+  it('外層的 SPEKTERM_* 不進入 pty 的環境', () => {
+    const env = ptyEnv(
+      { PATH: '/usr/bin', SPEKTERM_PEER_NAME: 'outer-1111', SPEKTERM_HANDOFF_DIR: '/outer', SPEKTERM_EVENT_DIR: '/e' },
+      {},
+    )
+    assert.equal(env.SPEKTERM_PEER_NAME, undefined)
+    assert.equal(env.SPEKTERM_HANDOFF_DIR, undefined)
+    assert.equal(env.SPEKTERM_EVENT_DIR, undefined)
+    assert.equal(env.PATH, '/usr/bin')
+  })
+
+  it('同一個 session 的前一顆 pty 結束之前，不啟動新的', async () => {
+    installStubClaude()
+    const first = new TerminalService(lookup([{ id: 'f1', path: repo, status: 'ok' }]), sink())
+    const sessionId = '66666666-6666-4666-8666-666666666666'
+    await first.create('f1', 'claude', { sessionId, peerName: 'alpha-6666' })
+    await waitFor(() => output().includes('STUB_READY'), { label: '第一個 claude 起來了' })
+
+    // renderer 重新載入：舊服務非同步地殺掉 pty，新服務立刻以同一個識別碼喚醒。
+    first.dispose()
+    service = new TerminalService(lookup([{ id: 'f1', path: repo, status: 'ok' }]), sink())
+    await service.create('f1', 'claude', { sessionId, peerName: 'alpha-6666' })
+    assert.ok(
+      exits.some((entry) => entry.sessionId === sessionId && entry.reason === 'disposed'),
+      '新的 pty 誕生時，舊的那一顆已經結束',
+    )
   })
 })

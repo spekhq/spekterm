@@ -13,12 +13,15 @@
 「session 常駐」）。**不要把兩者混為一談。**
 
 重建**不使 `terminal-sessions` 的「三路徑皆不留孤兒行程」鬆動**：舊 pty 照樣被殺，重建開的是新的。
+
 ## Requirements
+
 ### Requirement: session 跨應用程式重啟與 renderer 重新載入存活
 
 重建一個 session 所需的**事實** SHALL 被持久化，並於下次開啟應用程式時重建：**它的歸屬**
 （某個 folder，或**全域** —— 見 `global-session`）、spawn 目標、使用者取的名字、分頁順序、
-**它開在哪個工作目錄**，以及 **pty 最近一次宣告的終端標題**。renderer 重新載入時 SHALL 同樣重建。
+**它開在哪個工作目錄**、**pty 最近一次宣告的終端標題**，以及由主行程寫入的**交接來源**（見
+`session-lineage`）與 claude 目標的**固定名字**（見 `agent-peer-name`）。renderer 重新載入時 SHALL 同樣重建。
 
 **歸屬為全域** SHALL 以一個明確的狀態表示，SHALL NOT 以一個保留的 folder 識別碼字串表示 ——
 後者會使每一處「以識別碼查找 folder」的讀取靜默地查無此 folder。
@@ -72,6 +75,11 @@ pty 宣告的標題屬於「必需」而非「衍生」：**休眠的 session �
 
 - **WHEN** 一個 session 所開的 worktree 於應用程式未開啟期間被移除，其後該 session 被喚醒
 - **THEN** 該 session 於其 folder 的根目錄重建，且不呈現為失敗
+
+#### Scenario: 來源與固定名字隨 session 重建
+
+- **WHEN** 一個由交接建立的 claude session 存在，關閉並重新開啟應用程式
+- **THEN** 它的來源與固定名字與關閉之前相同
 
 ### Requirement: 重建的 session 為休眠態，於首次被顯示時才啟動 pty
 
@@ -383,3 +391,45 @@ renderer **完全不可見** —— 使用者拿到的是一個能用的 agent�
 - **WHEN** 一個全域 claude session 被重建並喚醒
 - **THEN** 新的 pty 的工作目錄為家目錄，且不因沒有工作目錄識別碼可查而退回任何 folder
 
+### Requirement: session 的來源與固定名字由主行程持久化，renderer 不能寫入
+
+session 的來源（見 `session-lineage`）與 claude 目標的固定名字（見 `agent-peer-name`）SHALL 由
+**主行程**寫入並持久化。renderer 送往持久化的 session 資料中即使含有它們，亦 SHALL 不被採信 ——
+落盤時 SHALL 保留主行程已知的值，SHALL NOT 以 renderer 送來的值覆寫，亦 SHALL NOT 因 renderer
+沒有送來而清除。
+
+**理由**：來源決定了 agent 被告知「誰是你的母 session」，名字是 agent 被聯絡的地址 —— 兩者都是
+關於身分的事實，不是呈現偏好。renderer 若能寫入它們，一個被入侵或有 bug 的 renderer 就能讓 agent
+把訊息送給錯的對象，而使用者在畫面上看到的關係也不再可信。
+
+**兩者都會在下次啟動時被使用，因此都適用「持久化的識別碼在被用於命令或檔案路徑之前必須驗證」**：
+
+- 來源中的 session 識別碼會被**解析**（用以查找母 session）。不合法時 SHALL 丟棄該筆來源（該 session
+  成為沒有來源的 session），SHALL NOT 丟棄該 session。
+- 固定名字會成為 agent CLI 的**參數**。它 SHALL 以與產生時相同的字元集與長度規則驗證；不合法時
+  SHALL 丟棄，並依 `agent-peer-name` 重新決定一個，SHALL NOT 以原值啟動 agent。
+
+來源的快照（folder 名稱、session 標籤）是給人看的文字，SHALL NOT 被用於組成任何命令或檔案路徑；
+系統 SHALL NOT 在其中放入任何路徑欄位。
+
+session 被關閉時，它作為**母 session** 的關係 SHALL 保留在其子 session 上（見 `session-lineage`）。
+
+#### Scenario: renderer 送來的來源與名字不被採信
+
+- **WHEN** renderer 送往持久化的資料中，替一個 session 附上另一個 session 為其來源、並附上另一個名字
+- **THEN** 重新啟動之後，該 session 的來源與名字與主行程原本記下的相同
+
+#### Scenario: renderer 沒有送來源不會清掉來源
+
+- **WHEN** session C 有來源，renderer 送往持久化的 C 資料中不含來源
+- **THEN** 重新啟動之後，C 的來源仍在
+
+#### Scenario: 不合法的來源識別碼只丟棄來源
+
+- **WHEN** 持久化檔案中某個 session 的來源識別碼不是合法格式
+- **THEN** 該 session 被重建且沒有來源，該值不被用於任何查找、命令或路徑
+
+#### Scenario: 不合法的固定名字不進入 agent 的參數
+
+- **WHEN** 持久化檔案中某個 claude session 的固定名字含有字元集之外的字元
+- **THEN** 該 session 被喚醒時，agent 以一個合法的、重新決定的名字啟動，原值不出現在任何參數中

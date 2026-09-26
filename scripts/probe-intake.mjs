@@ -34,7 +34,7 @@ import {
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
-import { check, connectToApp, pollFor, pressKey } from './lib/cdp.mjs'
+import { check, connectToApp, dragMouse, pollFor, pressKey } from './lib/cdp.mjs'
 import { copy, copyIn, label, labelIn, prefixOf } from './lib/copy.mjs'
 import { retryAction } from './lib/instrument.mjs'
 import { awaitMounted } from './lib/mounted.mjs'
@@ -2890,6 +2890,477 @@ async function runOpenedLifecycle(_mode, _modeConfig, context) {
   )
 }
 
+// ── handoff-lineage ────────────────────────────────────────────────────────────
+
+/** 落盤的 session 清單（主行程寫的那一份 —— 關係與名字只存在這裡）。 */
+function persistedSessions(profile) {
+  try {
+    return JSON.parse(readFileSync(join(profile, 'sessions.json'), 'utf8')).sessions ?? []
+  } catch {
+    return []
+  }
+}
+
+/** 某個 session 的關係檔（主行程為 agent 寫的那一份）。讀不到回 `null`。 */
+function relationsOf(profile, sessionId) {
+  try {
+    return JSON.parse(readFileSync(join(profile, 'handoff', 'relations', `${sessionId}.json`), 'utf8'))
+  } catch {
+    return null
+  }
+}
+
+/**
+ * 某個 folder 在 rail 上的 session 子列清單（`<ul>`），以及它之內的標示。
+ *
+ * **以字典組選擇器** —— 標示的可見文字只有箭頭與數字，完整文字在它的標籤上。
+ */
+function lineageUiExpression(folderName) {
+  const list = label('rail.folderSessions', { name: folderName })
+  const fromPrefix = prefixOf('lineage.fromParent')
+  const childrenPrefix = prefixOf('lineage.children_other')
+  return `(() => {
+    const ul = document.querySelector(${JSON.stringify(`ul${list}`)})
+    if (!ul) return null
+    const sources = [...ul.querySelectorAll('button')].filter((b) => (b.getAttribute('aria-label') ?? '').startsWith(${JSON.stringify(fromPrefix)}))
+    const parents = [...ul.querySelectorAll('button')].filter((b) => (b.getAttribute('aria-label') ?? '').startsWith(${JSON.stringify(childrenPrefix)}))
+    const liOf = (b) => b.closest('li')
+    return {
+      sources: sources.map((b) => ({
+        label: b.getAttribute('aria-label'),
+        disabled: b.getAttribute('aria-disabled') === 'true',
+        topLevel: liOf(b)?.parentElement === ul,
+        nestedUnderParent: parents.some((p) => liOf(p) !== liOf(b) && liOf(p)?.contains(liOf(b))),
+      })),
+      parents: parents.map((b) => ({ label: b.getAttribute('aria-label') })),
+    }
+  })()`
+}
+
+/** 點 rail 上某個 folder 清單裡的某一種標示（第一個）。 */
+function clickMarkerExpression(folderName, prefixKey) {
+  const list = label('rail.folderSessions', { name: folderName })
+  const prefix = prefixOf(prefixKey)
+  return `(() => {
+    const ul = document.querySelector(${JSON.stringify(`ul${list}`)})
+    const b = ul && [...ul.querySelectorAll('button')].find((x) => (x.getAttribute('aria-label') ?? '').startsWith(${JSON.stringify(prefix)}))
+    if (!b) return false
+    b.click()
+    return true
+  })()`
+}
+
+/**
+ * 母子關係的端到端路徑（`session-lineage`、`agent-peer-name`）。
+ *
+ * 一個母 session（由接受路徑建立 —— 落點在 spawn 時才存在）先後交接出兩個子 session：一個在
+ * **同一個 folder**（rail 上縮排於其下），一個在**另一個 folder**（頂層，靠標示往返）。
+ */
+async function runLineage(_mode, _modeConfig, context) {
+  const { profile, folders } = seedProfile()
+  seedRouting(profile, { fallbackFolderId: folders[0].id })
+  const configDir = mkTemp('spekterm-intake-config-')
+  const marker = `spek-intake-${process.pid}-${Date.now()}`
+  const stub = makeStubAgent(mkTemp, configDir, { readyDelaySeconds: 2 })
+  const [nameA, nameB] = [basename(folders[0].path), basename(folders[1].path)]
+
+  drop(profile, 'source', intake({ id: 'lineage-src', title: 'LINEAGE-SOURCE' }))
+  let app = await freshApp(context, { profile, configDir, stub, marker })
+  await openInbox(app)
+  await pollFor({
+    read: () => app.client.evaluate(acceptExpression('LINEAGE-SOURCE')),
+    settled: Boolean,
+    timeoutMs: 20_000,
+    label: '母 session 已由接受路徑建立',
+  })
+  const outbox = await awaitOutbox(profile, '母 session 的投遞落點出現')
+  const P = basename(outbox)
+
+  // ── 交接兩次：同一個 folder、另一個 folder ──
+  writeFileSync(join(outbox, 'same.json'), JSON.stringify({ target: nameA, title: 'LINEAGE-SAME', body: 'same folder' }))
+  const childA = await pollFor({
+    read: () => persistedSessions(profile).find((s) => s.lineage?.parentId === P && s.folderId === folders[0].id) ?? null,
+    settled: Boolean,
+    timeoutMs: 30_000,
+    label: '同 folder 的子 session 落盤且帶來源',
+  }).catch(() => null)
+  writeFileSync(join(outbox, 'cross.json'), JSON.stringify({ target: nameB, title: 'LINEAGE-CROSS', body: 'other folder' }))
+  const childB = await pollFor({
+    read: () => persistedSessions(profile).find((s) => s.lineage?.parentId === P && s.folderId === folders[1].id) ?? null,
+    settled: Boolean,
+    timeoutMs: 30_000,
+    label: '跨 folder 的子 session 落盤且帶來源',
+  }).catch(() => null)
+
+  check(results, '由交接建立的 session 帶著來源（同 folder）', childA !== null, JSON.stringify(persistedSessions(profile).map((s) => s.lineage ?? null)))
+  check(results, '由交接建立的 session 帶著來源（跨 folder）', childB !== null, JSON.stringify(persistedSessions(profile).map((s) => s.lineage ?? null)))
+  check(
+    results,
+    '來源的快照是攝入當下的 folder 名稱',
+    childB?.lineage?.origin?.kind === 'folder' && childB?.lineage?.origin?.folderName === nameA,
+    JSON.stringify(childB?.lineage ?? null),
+  )
+  /**
+   * **同 folder 的那一個也要驗** —— 它是在母 session 建好之後最快被投遞的那一則，落在母 session
+   * 尚未被 renderer 持久化的窗口裡。第一版只驗了跨 folder 的，而同 folder 的來源被記成「已結束」
+   * （查來源時看不到暫定紀錄），整段照樣是綠的，直到「母 session 關閉後的快照」才露出來。
+   */
+  check(
+    results,
+    '母 session 尚未被持久化時投遞的交接，其來源仍是那個 folder（不是已結束）',
+    childA?.lineage?.origin?.kind === 'folder' && childA?.lineage?.origin?.folderName === nameA,
+    JSON.stringify(childA?.lineage ?? null),
+  )
+  if (!childA || !childB) return
+
+  // ── 名字：落盤的、argv 上的、環境變數裡的，三者相同；而且每個 claude session 都有 ──
+  const named = await pollFor({
+    read: () => persistedSessions(profile).filter((s) => s.spawnTarget === 'claude'),
+    settled: (list) => list.length >= 3 && list.every((s) => typeof s.peerName === 'string' && s.claudeSessionId),
+    timeoutMs: 15_000,
+    label: '三個 claude session 都有名字與對話識別碼',
+  }).catch(() => persistedSessions(profile))
+  const launches = stub.peerNames()
+  const nameCheck = named.map((s) => {
+    const seen = launches.filter((entry) => entry.conversation === s.claudeSessionId)
+    return { name: s.peerName, ok: seen.length > 0 && seen.every((entry) => entry.argv === s.peerName && entry.env === s.peerName) }
+  })
+  check(results, '每個 claude session 以它落盤的固定名字啟動（argv 與環境變數一致）', nameCheck.length >= 3 && nameCheck.every((c) => c.ok), JSON.stringify({ nameCheck, launches }))
+  check(results, '名字的前綴取自 rail 項目的名稱', childA.peerName?.startsWith(`${nameA}-`) && childB.peerName?.startsWith(`${nameB}-`), `${childA.peerName} / ${childB.peerName}`)
+
+  const parentName = named.find((s) => s.id === P)?.peerName
+
+  // ── 關係檔：母 session 啟動之後才長出的子 session，母 session 查得到 ──
+  const relP = await pollFor({
+    read: () => relationsOf(profile, P),
+    settled: (r) => (r?.children?.length ?? 0) === 2,
+    timeoutMs: 15_000,
+    label: '母 session 的關係檔含兩個子 session',
+  }).catch(() => relationsOf(profile, P))
+  check(
+    results,
+    '母 session 於啟動之後查得到新長出的子 session（含名字）',
+    new Set((relP?.children ?? []).map((c) => c.name)).size === 2 &&
+      (relP?.children ?? []).every((c) => [childA.peerName, childB.peerName].includes(c.name)),
+    JSON.stringify(relP),
+  )
+  const relA = relationsOf(profile, childA.id)
+  check(results, '子 session 查得到母 session 的名字', relA?.parent?.name === parentName && relA?.parent?.running === true, JSON.stringify(relA?.parent))
+  check(
+    results,
+    '兄弟查得到彼此且不含自己',
+    (relA?.siblings ?? []).map((s) => s.name).join() === childB.peerName,
+    JSON.stringify(relA?.siblings),
+  )
+  check(
+    results,
+    '關係檔中沒有 spekterm 的識別碼',
+    !JSON.stringify(relP ?? {}).includes(P) && !JSON.stringify(relA ?? {}).includes(childA.id),
+    `母=${JSON.stringify(relP)} 子=${JSON.stringify(relA)}`,
+  )
+
+  // ── rail：同 folder 縮排於母 session 之下；跨 folder 於頂層 ──
+  const uiA = await pollFor({
+    read: () => app.client.evaluate(lineageUiExpression(nameA)),
+    settled: (ui) => (ui?.sources?.length ?? 0) >= 1 && (ui?.parents?.length ?? 0) >= 1,
+    timeoutMs: 15_000,
+    label: 'folder A 的子列出現兩端的標示',
+  }).catch(() => null)
+  check(results, '同一個 folder 中的子 session 縮排於母 session 之下', uiA?.sources?.[0]?.nestedUnderParent === true, JSON.stringify(uiA))
+  check(results, '母 session 的標示只計存在的子 session（兩個）', uiA?.parents?.[0]?.label === copy('lineage.children_other', { count: 2 }), JSON.stringify(uiA?.parents))
+  const uiB = await app.client.evaluate(lineageUiExpression(nameB))
+  check(results, '母 session 屬於另一個 folder 時子 session 以頂層呈現並帶來源標示', uiB?.sources?.[0]?.topLevel === true && uiB?.sources?.[0]?.disabled === false, JSON.stringify(uiB))
+
+  // ── 跳轉：子 → 母（跨 folder），母 → 子（選單）──
+  await pollFor({
+    read: () => app.client.evaluate(`(() => { ${railRowClick(nameB)} return ${RAIL_SELECTION} === ${JSON.stringify(nameB)} })()`),
+    settled: Boolean,
+    timeoutMs: 15_000,
+    label: '前置：rail 選中 folder B',
+  })
+  await app.client.evaluate(clickMarkerExpression(nameB, 'lineage.fromParent'))
+  const afterJump = await pollFor({
+    read: () => app.client.evaluate(RAIL_SELECTION),
+    settled: (name) => name === nameA,
+    timeoutMs: 10_000,
+    label: '觸發來源標示後選中母 session 的 folder',
+  }).catch(() => app.client.evaluate(RAIL_SELECTION))
+  check(results, '自子 session 跳回母 session（選中項為母 session 的 folder）', afterJump === nameA, afterJump)
+
+  await app.client.evaluate(clickMarkerExpression(nameA, 'lineage.children_other'))
+  const menuItems = await pollFor({
+    read: () => app.client.evaluate(`[...document.querySelectorAll('[role="menu"] [role="menuitem"], [role="menu"] button')].map((b) => b.textContent)`),
+    settled: (items) => items.length === 2,
+    timeoutMs: 10_000,
+    label: '子 session 標示列出兩個子 session',
+  }).catch(() => [])
+  check(results, '觸發子 session 標示列出存在的子 session', menuItems.length === 2 && menuItems.some((t) => t.includes(nameB)), JSON.stringify(menuItems))
+  await app.client.evaluate(`[...document.querySelectorAll('[role="menu"] [role="menuitem"], [role="menu"] button')].find((b) => b.textContent.includes(${JSON.stringify(nameB)}))?.click()`)
+  const afterMenu = await pollFor({
+    read: () => app.client.evaluate(RAIL_SELECTION),
+    settled: (name) => name === nameB,
+    timeoutMs: 10_000,
+    label: '自母 session 跳到跨 folder 的子 session',
+  }).catch(() => app.client.evaluate(RAIL_SELECTION))
+  check(results, '自母 session 跳到子 session（選中項為子 session 的 folder）', afterMenu === nameB, afterMenu)
+
+  // ── 關閉母 session ──
+  const closeLabel = prefixOf('sessions.closeSession')
+  const closed = await app.client.evaluate(`(() => {
+    const ul = document.querySelector(${JSON.stringify(`ul${label('rail.folderSessions', { name: nameA })}`)})
+    const marker = ul && [...ul.querySelectorAll('button')].find((b) => (b.getAttribute('aria-label') ?? '').startsWith(${JSON.stringify(prefixOf('lineage.children_other'))}))
+    const row = marker?.closest('[role="button"]')
+    const close = row && [...row.querySelectorAll('button')].find((b) => (b.getAttribute('aria-label') ?? '').startsWith(${JSON.stringify(closeLabel)}))
+    if (!close) return false
+    close.click()
+    return true
+  })()`)
+  check(results, '前置：關掉了母 session', closed === true, `找到關閉鈕=${closed}`)
+  await pollFor({
+    read: () => persistedSessions(profile).some((s) => s.id === P),
+    settled: (present) => !present,
+    timeoutMs: 15_000,
+    label: '母 session 自落盤中消失',
+  })
+
+  const uiClosed = await pollFor({
+    read: () => app.client.evaluate(lineageUiExpression(nameA)),
+    settled: (ui) => ui?.sources?.[0]?.disabled === true,
+    timeoutMs: 10_000,
+    label: '子 session 的來源標示轉為已關閉',
+  }).catch(() => null)
+  check(results, '母 session 關閉後子 session 回到頂層並標明已關閉', uiClosed?.sources?.[0]?.topLevel === true && uiClosed?.sources?.[0]?.disabled === true, JSON.stringify(uiClosed))
+  check(
+    results,
+    '母 session 關閉後子 session 呈現攝入當下的快照',
+    (uiClosed?.sources?.[0]?.label ?? '').includes(nameA) && uiClosed?.sources?.[0]?.label !== uiA?.sources?.[0]?.label,
+    `${uiA?.sources?.[0]?.label} → ${uiClosed?.sources?.[0]?.label}`,
+  )
+
+  const ptyBefore = ptySessionPids(marker).length
+  const selectionBefore = await app.client.evaluate(RAIL_SELECTION)
+  await app.client.evaluate(clickMarkerExpression(nameA, 'lineage.fromParent'))
+  await new Promise((resolve) => setTimeout(resolve, 1500))
+  check(
+    results,
+    '觸發已關閉來源的標示不建立 session、不改變選中項',
+    ptySessionPids(marker).length === ptyBefore && (await app.client.evaluate(RAIL_SELECTION)) === selectionBefore,
+    `pty ${ptyBefore}→${ptySessionPids(marker).length}`,
+  )
+
+  const relAClosed = await pollFor({
+    read: () => relationsOf(profile, childA.id),
+    settled: (r) => r?.parent?.closed === true,
+    timeoutMs: 10_000,
+    label: '子 session 的關係檔標明母 session 已關閉',
+  }).catch(() => relationsOf(profile, childA.id))
+  check(results, '母 session 關閉之後子 session 查得到它已不存在，且兄弟仍互列', relAClosed?.parent?.closed === true && relAClosed?.parent?.repo === nameA && (relAClosed?.siblings ?? []).some((s) => s.name === childB.peerName), JSON.stringify(relAClosed))
+
+  // ── 重新啟動：關係與名字都還在 ──
+  const before = Object.fromEntries(persistedSessions(profile).map((s) => [s.id, { lineage: s.lineage, peerName: s.peerName }]))
+  app = await freshApp(context, { profile, configDir, stub, marker })
+  const after = Object.fromEntries(persistedSessions(profile).map((s) => [s.id, { lineage: s.lineage, peerName: s.peerName }]))
+  check(results, '重新啟動之後關係與名字與關閉之前相同', JSON.stringify(after) === JSON.stringify(before), JSON.stringify({ before, after }))
+
+  const uiRestarted = await pollFor({
+    read: () => app.client.evaluate(lineageUiExpression(nameA)),
+    settled: (ui) => (ui?.sources?.length ?? 0) >= 1,
+    timeoutMs: 15_000,
+    label: '重新啟動之後標示仍在',
+  }).catch(() => null)
+  check(results, '母 session 關閉後重新啟動，快照仍在', uiRestarted?.sources?.[0]?.disabled === true && uiRestarted?.sources?.[0]?.label === uiClosed?.sources?.[0]?.label, JSON.stringify(uiRestarted))
+
+  // 喚醒跨 folder 的子 session：它以相同的名字啟動；休眠的兄弟在它的關係檔裡不在執行中。
+  const launchesBefore = stub.peerNames().length
+  await pollFor({
+    read: () => app.client.evaluate(`(() => { ${railRowClick(nameB)} return ${RAIL_SELECTION} === ${JSON.stringify(nameB)} })()`),
+    settled: Boolean,
+    timeoutMs: 15_000,
+    label: '選中 folder B（喚醒它的 session）',
+  })
+  const relaunch = await pollFor({
+    read: () => stub.peerNames().slice(launchesBefore),
+    settled: (list) => list.length >= 1,
+    timeoutMs: 30_000,
+    label: '子 session 被喚醒',
+  }).catch(() => [])
+  check(results, '重新啟動之後名字不變（喚醒時帶著同一個名字）', relaunch.length >= 1 && relaunch.every((entry) => entry.argv === childB.peerName && entry.env === childB.peerName), JSON.stringify(relaunch))
+  const relB = await pollFor({
+    read: () => relationsOf(profile, childB.id),
+    settled: (r) => r !== null,
+    timeoutMs: 10_000,
+    label: '被喚醒的子 session 有關係檔',
+  }).catch(() => null)
+  check(
+    results,
+    '休眠的兄弟存在但不在執行中',
+    (relB?.siblings ?? []).some((s) => s.name === childA.peerName && s.running === false),
+    JSON.stringify(relB),
+  )
+}
+
+
+/** 某個 folder 在 rail 上的子列：依畫面順序，每一列的標籤、深度（縮排）與中心座標。 */
+function railRowsExpression(folderName) {
+  const list = label('rail.folderSessions', { name: folderName })
+  return `(() => {
+    const ul = document.querySelector(${JSON.stringify(`ul${list}`)})
+    if (!ul) return null
+    return [...ul.querySelectorAll('li > div[role="button"]')].map((row) => {
+      const r = row.getBoundingClientRect()
+      return {
+        label: row.querySelector('span.truncate')?.textContent ?? '',
+        indent: parseFloat(row.style.paddingLeft) || 0,
+        parentLabel: row.parentElement?.parentElement?.closest('li')?.querySelector(':scope > div[role="button"] span.truncate')?.textContent ?? null,
+        x: Math.round(r.x + r.width / 2),
+        y: Math.round(r.y + r.height / 2),
+        top: r.top,
+        bottom: r.bottom,
+      }
+    })
+  })()`
+}
+
+/** 分頁列的分頁標籤，依畫面順序。 */
+const TAB_ORDER = `[...document.querySelectorAll(${JSON.stringify(`[role="tablist"]${label('sessions.tabs')} [role="tab"]`)})].map((tab) => tab.querySelector('span.font-mono')?.textContent ?? '')`
+
+/**
+ * rail 上帶子孫的整塊拖曳，以及分頁列的拖曳不改變母子關係（`workspace-layout`）。
+ *
+ * **session 以種入的 `sessions.json` 佈置** —— 這一段驗的是版面與順序，不是交接本身（那在
+ * `runLineage`）。它們以休眠態重建，沒有 pty；每一個都帶使用者取的名字，於是列與分頁認得出來。
+ *
+ * 拖曳一律**往下、且至少三個兄弟**（`CLAUDE.md`「插入點與提交序位差一格，兩個項目時看不出來」）
+ * —— 整塊移動會把那一格的偏移放大成整塊的長度。
+ */
+async function runLineageDrag(_mode, _modeConfig, context) {
+  const { profile, folders } = seedProfile()
+  const configDir = mkTemp('spekterm-intake-config-')
+  const marker = `spek-intake-${process.pid}-${Date.now()}`
+  const stub = makeStubAgent(mkTemp, configDir)
+  const [nameA, nameB, nameC] = folders.map((folder) => folder.name)
+
+  const ids = {}
+  let seq = 0
+  const make = (folderId, title, parent) => {
+    seq += 1
+    const id = `${String(seq).padStart(8, '0')}-0000-4000-8000-000000000000`
+    ids[title] = id
+    return {
+      id,
+      folderId,
+      spawnTarget: 'shell',
+      ordinal: seq,
+      customTitle: title,
+      ...(parent ? { lineage: { parentId: ids[parent], origin: { kind: 'folder', folderId, folderName: 'x' } } } : {}),
+    }
+  }
+  const sessions = [
+    // A：頂層 P（帶子 C）、X、Y
+    make(folders[0].id, 'P', null), make(folders[0].id, 'C', 'P'), make(folders[0].id, 'X', null), make(folders[0].id, 'Y', null),
+    // B：Q 之下三個子 C1、C2、C3
+    make(folders[1].id, 'Q', null), make(folders[1].id, 'C1', 'Q'), make(folders[1].id, 'C2', 'Q'), make(folders[1].id, 'C3', 'Q'),
+    // C：互為來源（損毀的關係）
+    make(folders[2].id, 'LOOP-A', null), make(folders[2].id, 'LOOP-B', 'LOOP-A'),
+  ]
+  const loopA = sessions.find((s) => s.customTitle === 'LOOP-A')
+  loopA.lineage = { parentId: ids['LOOP-B'], origin: { kind: 'unknown' } }
+  writeFileSync(join(profile, 'sessions.json'), JSON.stringify({ version: 1, sessions }))
+
+  const app = await freshApp(context, { profile, configDir, stub, marker })
+
+  const selectFolder = async (name) =>
+    pollFor({
+      read: () => app.client.evaluate(`(() => { ${railRowClick(name)} return ${RAIL_SELECTION} === ${JSON.stringify(name)} })()`),
+      settled: Boolean,
+      timeoutMs: 15_000,
+      label: `選中 ${name}`,
+    })
+
+  // ── 損毀的關係：環上的兩個都呈現 ──
+  const loopRows = await pollFor({
+    read: () => app.client.evaluate(railRowsExpression(nameC)),
+    settled: (rows) => (rows?.length ?? 0) >= 2,
+    timeoutMs: 15_000,
+    label: '互為來源的兩個 session 呈現於 rail',
+  }).catch(() => null)
+  check(results, '互為來源的兩個 session 皆呈現於 rail', (loopRows ?? []).map((r) => r.label).sort().join() === 'LOOP-A,LOOP-B', JSON.stringify(loopRows))
+
+  // ── A：P（帶子 C）拖到 Y 之後 ──
+  await selectFolder(nameA)
+  const rowsA = await pollFor({
+    read: () => app.client.evaluate(railRowsExpression(nameA)),
+    settled: (rows) => (rows?.length ?? 0) === 4,
+    timeoutMs: 15_000,
+    label: 'A 的四列',
+  }).catch(() => null)
+  const rowOf = (rows, name) => rows?.find((r) => r.label === name)
+  check(
+    results,
+    '前置：C 縮排於 P 之下',
+    rowOf(rowsA, 'C')?.parentLabel === 'P' && rowOf(rowsA, 'C')?.indent > rowOf(rowsA, 'P')?.indent,
+    JSON.stringify(rowsA),
+  )
+  if (rowsA) {
+    const from = rowOf(rowsA, 'P')
+    const y = rowOf(rowsA, 'Y')
+    await dragMouse(app.client, { x: from.x, y: from.y }, { x: y.x, y: Math.round(y.bottom - 2) }, 10)
+  }
+  const tabsA = await pollFor({
+    read: () => app.client.evaluate(TAB_ORDER),
+    settled: (tabs) => tabs.join() === 'X,Y,P,C',
+    timeoutMs: 10_000,
+    label: 'P 連同 C 移到 Y 之後',
+  }).catch(() => app.client.evaluate(TAB_ORDER))
+  check(results, '於 rail 往下拖曳帶有子孫的 session：子孫一起移動', tabsA.join() === 'X,Y,P,C', tabsA.join())
+
+  // ── A：分頁列把 C 移到 P 之前（Shift+←），rail 上 C 仍在 P 之下 ──
+  await app.client.evaluate(`[...document.querySelectorAll(${JSON.stringify(`[role="tablist"]${label('sessions.tabs')} [role="tab"]`)})].find((tab) => tab.textContent.includes('C'))?.click()`)
+  const shiftLeft = { key: 'ArrowLeft', code: 'ArrowLeft', windowsVirtualKeyCode: 37, nativeVirtualKeyCode: 37, modifiers: 8 }
+  await app.client.send('Input.dispatchKeyEvent', { type: 'rawKeyDown', ...shiftLeft })
+  await app.client.send('Input.dispatchKeyEvent', { type: 'keyUp', ...shiftLeft })
+  const tabsMoved = await pollFor({
+    read: () => app.client.evaluate(TAB_ORDER),
+    settled: (tabs) => tabs.join() === 'X,Y,C,P',
+    timeoutMs: 10_000,
+    label: '分頁列中 C 移到 P 之前',
+  }).catch(() => app.client.evaluate(TAB_ORDER))
+  const rowsMoved = await app.client.evaluate(railRowsExpression(nameA))
+  check(
+    results,
+    '於分頁列拖曳不改變母子關係（C 在分頁列排到 P 之前，rail 上仍縮排於 P 之下）',
+    tabsMoved.join() === 'X,Y,C,P' && rowOf(rowsMoved, 'C')?.parentLabel === 'P',
+    `分頁=${tabsMoved.join()} rail=${JSON.stringify(rowsMoved?.map((r) => [r.label, r.parentLabel]))}`,
+  )
+
+  // ── B：三個兄弟往下拖第一個 ──
+  await selectFolder(nameB)
+  const rowsB = await pollFor({
+    read: () => app.client.evaluate(railRowsExpression(nameB)),
+    settled: (rows) => (rows?.length ?? 0) === 4,
+    timeoutMs: 15_000,
+    label: 'B 的四列',
+  }).catch(() => null)
+  if (rowsB) {
+    const from = rowOf(rowsB, 'C1')
+    const to = rowOf(rowsB, 'C3')
+    await dragMouse(app.client, { x: from.x, y: from.y }, { x: to.x, y: Math.round(to.bottom - 2) }, 10)
+  }
+  const tabsB = await pollFor({
+    read: () => app.client.evaluate(TAB_ORDER),
+    settled: (tabs) => tabs.join() === 'Q,C2,C3,C1',
+    timeoutMs: 10_000,
+    label: 'C1 移到 C3 之後',
+  }).catch(() => app.client.evaluate(TAB_ORDER))
+  const rowsB2 = await app.client.evaluate(railRowsExpression(nameB))
+  check(
+    results,
+    'rail 上的兄弟次序與分頁列一致（三個兄弟，往下拖第一個）',
+    tabsB.join() === 'Q,C2,C3,C1' && (rowsB2 ?? []).map((r) => r.label).join() === 'Q,C2,C3,C1',
+    `分頁=${tabsB.join()} rail=${(rowsB2 ?? []).map((r) => r.label).join()}`,
+  )
+}
+
 const SECTIONS = [
   { name: 'runIngest', run: runIngest },
   { name: 'runPlainText', run: runPlainText },
@@ -2910,6 +3381,8 @@ const SECTIONS = [
   { name: 'runHandoffDisabled', run: runHandoffDisabled },
   { name: 'runChooseFolder', run: runChooseFolder },
   { name: 'runOpenedLifecycle', run: runOpenedLifecycle },
+  { name: 'runLineage', run: runLineage },
+  { name: 'runLineageDrag', run: runLineageDrag },
 ]
 
 const outcome = await runSections({

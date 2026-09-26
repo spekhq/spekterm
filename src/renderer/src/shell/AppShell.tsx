@@ -9,6 +9,7 @@ import { DirtyBuffersProvider } from './files/dirty-buffers'
 import { OpenSpecProvider } from './openspec/data'
 import { PanelCoordinateProvider } from './panel-coordinate'
 import { SessionsProvider } from './terminal/sessions'
+import { LineageProvider } from './terminal/lineage'
 import { IntakeProvider } from './intake/intake-state'
 import { IntakeAutoAccept } from './intake/IntakeAutoAccept'
 import { PrefillProvider } from './intake/prefill-state'
@@ -42,6 +43,16 @@ export function AppShell(): React.JSX.Element {
             StatusBar），兩者都在這一層之下。座標隸屬於 rail 的項目而非 session，但它與 session
             一樣必須活過「切換 folder」，因此掛在同一個高度。
           */}
+          {/*
+            交接關係的呈現（跳轉、「存在」的判定）—— rail 與分頁列都用它，而跳到另一個 rail 項目
+            的 session 需要改變選中的項目，那是這一層才有的能力。必須在 `SessionsProvider` 之內。
+          */}
+          <LineageProvider
+            folders={folders}
+            onSelectItem={(folderId) =>
+              folderId === null ? select({ kind: 'global' }) : select(folderSelection(folderId))
+            }
+          >
           <PanelCoordinateProvider>
           <OpenSpecProvider>
             {/*
@@ -118,6 +129,7 @@ export function AppShell(): React.JSX.Element {
             </div>
           </OpenSpecProvider>
           </PanelCoordinateProvider>
+          </LineageProvider>
           </IntakeProvider>
           </PrefillProvider>
         </SessionsProvider>

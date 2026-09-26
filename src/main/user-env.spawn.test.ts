@@ -17,7 +17,9 @@ import type { FolderLookup, WorkspaceFolder } from './workspace-store'
  * 最後才驗 pty —— `ptyEnv()` 讀的是套用之後的 `getUserEnv()`。
  */
 
-const RC_SENTINEL = 'SPEKTERM_RC_SENTINEL'
+// **不可用 `SPEKTERM_` 前綴** —— 那個前綴保留給 spekterm 替 session 設定的專屬變數，`ptyEnv()` 會把
+// 從外層繼承來的一律剝掉（`agent-peer-name`）。以它命名的哨兵會被當成外層的殘留而消失。
+const RC_SENTINEL = 'SPEK_TEST_RC_SENTINEL'
 const PROFILE_SENTINEL = 'SPEKTERM_PROFILE_SENTINEL'
 const TRICKY = 'SPEKTERM_TRICKY'
 const TRICKY_VALUE = 'line1\nline2 with \'quote\' and "dquote" and @@ mark'

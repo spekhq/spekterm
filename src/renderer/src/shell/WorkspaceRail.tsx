@@ -4,6 +4,8 @@ import { ContextMenu, type MenuItem } from './files/dialogs'
 import { SessionNameDialog } from './terminal/SessionNameDialog'
 import { StatusDot, sessionLabel, sessionTitle, statusTitle } from './terminal/session-badge'
 import { type SessionState, useSessions } from './terminal/sessions'
+import { LineageMarkers, useLineage } from './terminal/lineage'
+import { type Forest, ROOT, blockOf, buildForest, moveBlock } from './session-forest'
 import { dividerRowOf, folderIndexToRow, placeFromRow, rowToFolderIndex } from './rail-rows'
 import { useDragReorder } from './useDragReorder'
 import { useScrollIntoView } from './useScrollIntoView'
@@ -115,6 +117,158 @@ interface RailItemView {
   pinLocked?: boolean
 }
 
+/** 每一層縮排的寬度（rem）。與基準的 `pl-9`（2.25rem）同一個單位。 */
+const INDENT_STEP_REM = 0.875
+
+/**
+ * rail 上的一組兄弟 session（同一個母節點之下，或頂層），**各自持有一份拖曳**（`handoff-lineage`
+ * design D4）。
+ *
+ * `useDragReorder` 的 `count`／`rectOf` 在按下之前就固定了，而「要在哪一組兄弟之間移動」只有按下
+ * 哪一列才知道 —— 每組一個實例，那兩個值在按下之前就已確定。子節點的那一組渲染在母節點的
+ * `<li>` 之內、列的 `<div>` 之外，於是在子列按下不會同時啟動母節點那一組的拖曳。
+ *
+ * **命中判定量的是「節點連同子孫」整塊**（比照 folder 列量整個區塊）—— 那是使用者眼中它佔的
+ * 地盤；而整塊移動會把插入點差一格的偏移放大成整塊的長度（見 `session-forest.ts`）。
+ */
+function SessionGroup({
+  ids,
+  depth,
+  forest,
+  byId,
+  focusedSessionId,
+  rowRefs,
+  onSelectSession,
+  onCloseSession,
+  onContextMenu,
+  onMove,
+}: {
+  ids: readonly string[]
+  depth: number
+  forest: Forest
+  byId: ReadonlyMap<string, SessionState>
+  focusedSessionId: string | null
+  /** 以 ref 物件傳入 —— 渲染期間不讀它，只在 ref callback 與命中判定裡讀。 */
+  rowRefs: React.RefObject<Map<string, HTMLDivElement>>
+  onSelectSession: (sessionId: string) => void
+  onCloseSession: (sessionId: string) => void
+  onContextMenu: (session: SessionState, x: number, y: number) => void
+  onMove: (siblings: readonly string[], from: number, to: number) => void
+}): React.JSX.Element {
+  const { t } = useTranslation()
+
+  const rectOf = useCallback(
+    (index: number): DOMRect | null => {
+      const rects = blockOf(forest, ids[index])
+        .map((id) => rowRefs.current.get(id)?.getBoundingClientRect())
+        .filter((rect): rect is DOMRect => rect !== undefined)
+      if (rects.length === 0) return null
+      const top = Math.min(...rects.map((rect) => rect.top))
+      const bottom = Math.max(...rects.map((rect) => rect.bottom))
+      const left = Math.min(...rects.map((rect) => rect.left))
+      const right = Math.max(...rects.map((rect) => rect.right))
+      return new DOMRect(left, top, right - left, bottom - top)
+    },
+    [forest, ids, rowRefs],
+  )
+
+  const reorder = useDragReorder(ids.length, 'vertical', rectOf, (from, to) => onMove(ids, from, to))
+
+  return (
+    <>
+      {ids.map((id, index) => {
+        const session = byId.get(id)
+        if (!session) return null
+        const isFocused = session.id === focusedSessionId
+        const label = sessionLabel(session)
+        const full = sessionTitle(session)
+        const dragging = reorder.drag?.fromIndex === index
+        const children = forest.childrenOf.get(id) ?? []
+        const displayDepth = Math.min(depth, 3)
+
+        return (
+          <li
+            key={session.id}
+            className={
+              // 插入指示畫在**整塊**上（它的 `<li>` 含子孫），因為命中判定也是整塊。
+              (reorder.isDropTarget(index) ? 'border-t-2 border-t-accent ' : '') +
+              (reorder.dropAtEnd && index === ids.length - 1 ? 'border-b-2 border-b-accent ' : '') +
+              (dragging ? 'opacity-40 ' : '')
+            }
+          >
+            <div
+              ref={(el) => {
+                if (el) rowRefs.current.set(session.id, el)
+                else rowRefs.current.delete(session.id)
+              }}
+              role="button"
+              tabIndex={0}
+              onMouseDown={(event) => reorder.onMouseDown(index, event)}
+              onClick={() => onSelectSession(session.id)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' || event.key === ' ') onSelectSession(session.id)
+              }}
+              onContextMenu={(event) => {
+                event.preventDefault()
+                event.stopPropagation()
+                onContextMenu(session, event.clientX, event.clientY)
+              }}
+              title={`${full} — ${statusTitle(session)}`}
+              style={{ paddingLeft: `${2.25 + displayDepth * INDENT_STEP_REM}rem` }}
+              className={
+                // 縮排造出樹狀層次（mockup 的 .ws-session-row）；交接的子 session 再往內縮一層。
+                // select-none：拖曳時不該把標籤的文字反白選起來（實測體感很差）。
+                // `group/session` 掛在**列**上而不是 `<li>`：`<li>` 含子孫的列，掛在那裡的話
+                // 滑過子列時母節點的 ✕ 也會一起浮現。
+                'group/session flex items-center gap-2 py-1.5 pr-1 text-xs select-none ' +
+                // 靜止時 pointer：點一下會切換 focused session —— 那才是主要的可供性
+                // （design D8）。拖曳中的 grabbing 由 `body[data-dragging]` 全域覆蓋。
+                'cursor-pointer ' +
+                (isFocused ? 'bg-stage text-ink' : 'text-ink-dim hover:bg-hover/60')
+              }
+            >
+              <StatusDot session={session} />
+              <span className="min-w-0 flex-1 truncate font-mono">{label}</span>
+
+              <LineageMarkers session={session} />
+
+              <button
+                type="button"
+                aria-label={t('sessions.closeSession', { label })}
+                title={t('sessions.closeSession', { label: full })}
+                onClick={(event) => {
+                  event.stopPropagation()
+                  onCloseSession(session.id)
+                }}
+                className="shrink-0 cursor-pointer rounded px-1 text-ink-faint opacity-0 group-hover/session:opacity-100 hover:text-danger"
+              >
+                ✕
+              </button>
+            </div>
+
+            {children.length > 0 && (
+              <ul>
+                <SessionGroup
+                  ids={children}
+                  depth={depth + 1}
+                  forest={forest}
+                  byId={byId}
+                  focusedSessionId={focusedSessionId}
+                  rowRefs={rowRefs}
+                  onSelectSession={onSelectSession}
+                  onCloseSession={onCloseSession}
+                  onContextMenu={onContextMenu}
+                  onMove={onMove}
+                />
+              </ul>
+            )}
+          </li>
+        )
+      })}
+    </>
+  )
+}
+
 function RailRow({
   item,
   selected,
@@ -127,7 +281,7 @@ function RailRow({
   onCloseSession,
   onCreateSession,
   onRenameSession,
-  onReorderSessions,
+  onSetSessionOrder,
   onRemove,
   onTogglePin,
   blockRef,
@@ -148,7 +302,11 @@ function RailRow({
   onCloseSession: (sessionId: string) => void
   onCreateSession: (spawnTarget: SpawnTarget) => void
   onRenameSession: (sessionId: string, name: string) => void
-  onReorderSessions: (fromIndex: number, toIndex: number) => void
+  /**
+   * 以新的次序取代這個項目的 session 順序。rail 上的拖曳是**兄弟之間、帶子孫的整塊移動**
+   * （`session-forest`），一次只能移一個項目的 `reorder` 表達不出來。
+   */
+  onSetSessionOrder: (ids: string[]) => void
   /** 全域項目不可移除 —— 它不是 workspace 的成員（`global-session`）。 */
   onRemove?: () => void
   /** 切換置頂。全域項目不傳（它的置頂狀態不可取消）。 */
@@ -181,13 +339,27 @@ function RailRow({
   // 讓「在標題列按右鍵」跳出 session 的選單。
   const [folderMenu, setFolderMenu] = useState<{ x: number; y: number } | null>(null)
   const [renaming, setRenaming] = useState<SessionState | null>(null)
-  const rowRefs = useRef(new Map<number, HTMLDivElement>())
+  /**
+   * 子列的元素，**鍵為 session 識別碼**，不是序位 —— 樹狀呈現之後，畫面上的列序與單一順序中的
+   * 序位不同，以序位為鍵的話捲動與命中判定會指向別的列。
+   */
+  const rowRefs = useRef(new Map<string, HTMLDivElement>())
+  const lineage = useLineage()
 
-  const rectOf = useCallback((index: number) => {
-    return rowRefs.current.get(index)?.getBoundingClientRect() ?? null
-  }, [])
-
-  const reorder = useDragReorder(sessions.length, 'vertical', rectOf, onReorderSessions)
+  /**
+   * 這個項目的樹（`session-forest`）。母節點必須**存在且屬於這個項目** —— 不存在的來源、別的
+   * 項目的來源，子 session 一律以頂層呈現，它的來源由標示表達。
+   */
+  const forest = buildForest(
+    sessions.map((session) => ({ id: session.id, parentId: session.lineage?.parentId })),
+    new Set(sessions.filter((session) => lineage.exists(session)).map((session) => session.id)),
+  )
+  const byId = new Map(sessions.map((session) => [session.id, session]))
+  const order = sessions.map((session) => session.id)
+  const moveSiblings = (siblings: readonly string[], from: number, to: number): void => {
+    const next = moveBlock(order, forest, siblings, from, to)
+    if (next.some((id, index) => id !== order[index])) onSetSessionOrder(next)
+  }
 
   /**
    * 這一列被選中時，把它的 focused session 子列捲進可視範圍。
@@ -206,12 +378,12 @@ function RailRow({
    * 身分，於是觸發條件實際上是「這個元件重繪了」：背景中運作的 agent 每改一次終端標題就把
    * 使用者手動捲到的位置搶回來一次。
    */
-  const focusedIndex = sessions.findIndex((session) => session.id === focusedSessionId)
+  const focusedIndex = forest.rows.findIndex((row) => row.id === focusedSessionId)
   const rowGuard = useScrollIntoView(
     selected && focusedSessionId !== null && focusedIndex !== -1
       ? `${focusedSessionId}:${focusedIndex}`
       : null,
-    () => rowRefs.current.get(focusedIndex),
+    () => (focusedSessionId === null ? undefined : rowRefs.current.get(focusedSessionId)),
     'block',
   )
 
@@ -464,67 +636,18 @@ function RailRow({
 
       {expanded && sessions.length > 0 && (
         <ul aria-label={t('rail.folderSessions', { name: item.name })} className="pb-1">
-          {sessions.map((session, index) => {
-            const isFocused = session.id === focusedSessionId
-            const label = sessionLabel(session)
-            const full = sessionTitle(session)
-            const dragging = reorder.drag?.fromIndex === index
-
-            return (
-              <li key={session.id} className="group/session">
-                <div
-                  ref={(el) => {
-                    if (el) rowRefs.current.set(index, el)
-                    else rowRefs.current.delete(index)
-                  }}
-                  role="button"
-                  tabIndex={0}
-                  onMouseDown={(event) => reorder.onMouseDown(index, event)}
-                  onClick={() => onSelectSession(session.id)}
-                  onKeyDown={(event) => {
-                    if (event.key === 'Enter' || event.key === ' ') onSelectSession(session.id)
-                  }}
-                  onContextMenu={(event) => {
-                    event.preventDefault()
-                    event.stopPropagation()
-                    setMenu({ x: event.clientX, y: event.clientY, session })
-                  }}
-                  title={`${full} — ${statusTitle(session)}`}
-                  className={
-                    // 縮排造出樹狀層次（mockup 的 .ws-session-row）
-                    // select-none：拖曳時不該把標籤的文字反白選起來（實測體感很差）。
-                    'flex items-center gap-2 py-1.5 pr-1 pl-9 text-xs select-none ' +
-                    // 靜止時 pointer：點一下會切換 focused session —— 那才是主要的可供性
-                    // （design D8）。拖曳中的 grabbing 由 `body[data-dragging]` 全域覆蓋。
-                    'cursor-pointer ' +
-                    // 插入指示：拖到這裡放開，就會插在它前面
-                    (reorder.isDropTarget(index) ? 'border-t-2 border-t-accent ' : '') +
-                    (reorder.dropAtEnd && index === sessions.length - 1
-                      ? 'border-b-2 border-b-accent '
-                      : '') +
-                    (dragging ? 'opacity-40 ' : '') +
-                    (isFocused ? 'bg-stage text-ink' : 'text-ink-dim hover:bg-hover/60')
-                  }
-                >
-                  <StatusDot session={session} />
-                  <span className="min-w-0 flex-1 truncate font-mono">{label}</span>
-
-                  <button
-                    type="button"
-                    aria-label={t('sessions.closeSession', { label })}
-                    title={t('sessions.closeSession', { label: full })}
-                    onClick={(event) => {
-                      event.stopPropagation()
-                      onCloseSession(session.id)
-                    }}
-                    className="shrink-0 cursor-pointer rounded px-1 text-ink-faint opacity-0 group-hover/session:opacity-100 hover:text-danger"
-                  >
-                    ✕
-                  </button>
-                </div>
-              </li>
-            )
-          })}
+          <SessionGroup
+            ids={forest.childrenOf.get(ROOT) ?? []}
+            depth={0}
+            forest={forest}
+            byId={byId}
+            focusedSessionId={focusedSessionId}
+            rowRefs={rowRefs}
+            onSelectSession={onSelectSession}
+            onCloseSession={onCloseSession}
+            onContextMenu={(session, x, y) => setMenu({ x, y, session })}
+            onMove={moveSiblings}
+          />
         </ul>
       )}
 
@@ -758,9 +881,7 @@ export function WorkspaceRail({
         onCloseSession={sessions.close}
         onCreateSession={(spawnTarget) => createSession(folder.id, spawnTarget)}
         onRenameSession={sessions.rename}
-        onReorderSessions={(fromIndex, toIndex) =>
-          sessions.reorder(folder.id, fromIndex, toIndex)
-        }
+        onSetSessionOrder={(ids) => sessions.setOrder(folder.id, ids)}
         onRemove={() => onRemove(folder.id)}
         onTogglePin={() => onSetPinned(folder.id, !folder.pinned)}
       />
@@ -826,7 +947,7 @@ export function WorkspaceRail({
           onCloseSession={sessions.close}
           onCreateSession={(spawnTarget) => createSession(null, spawnTarget)}
           onRenameSession={sessions.rename}
-          onReorderSessions={(fromIndex, toIndex) => sessions.reorder(null, fromIndex, toIndex)}
+          onSetSessionOrder={(ids) => sessions.setOrder(null, ids)}
           dropTarget={false}
           dropAtEnd={false}
           dragged={false}

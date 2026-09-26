@@ -703,5 +703,13 @@
     "statusRateLimitedSoon": "Slack asked us to slow down. Nothing is wrong with your setup — trying again shortly.",
     "statusFailureScopeUnknown": "Your Slack token is valid but is missing permissions ({{error}}). Add the missing User Token Scopes and reinstall the app."
   },
-  "languageName": "English"
+  "languageName": "English",
+  "lineage": {
+    "item": "{{repo}} › {{title}}",
+    "fromParent": "From {{item}}",
+    "fromClosed": "From {{item}} (closed)",
+    "fromUnknown": "From a session that has closed",
+    "children_one": "Handed off {{count}} session",
+    "children_other": "Handed off {{count}} sessions"
+  }
 }

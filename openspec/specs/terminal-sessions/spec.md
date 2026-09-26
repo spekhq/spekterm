@@ -40,6 +40,10 @@ renderer SHALL 僅以 `folderId` 與一個**工作目錄識別碼**指定 sessio
 
 **重建的工作目錄仍不經 renderer 之手**：renderer 至多供應一個不可逆識別碼，路徑的解析、驗證與夾制一律由主行程完成（見 `session-persistence`）。主行程自行取得的工作目錄（例如 shell 的最後位置）SHALL NOT 送往 renderer。**此禁令的作用域為持久化** —— 狀態列為呈現而取得的當下工作目錄不在其內（見 `status-bar`）。
 
+建立時可附帶一張由主行程簽發的**交接單次憑證**（見 `session-lineage`）。它 SHALL NOT 影響工作目錄、
+spawn 目標或啟動參數；主行程 SHALL 只在建立一個**新**識別碼的 session 時讀取它，重建既有 session 時
+SHALL 忽略它。
+
 此邊界只約束**初始**工作目錄。session 一旦啟動即為真實 shell，pty 內執行的命令 SHALL NOT 被此邊界限制 —— 這與 `filesystem-access` 那種「renderer 只能觸及 workspace」的沙箱語意不同。
 
 #### Scenario: 於可用 folder 建立成功
@@ -81,7 +85,7 @@ renderer SHALL 僅以 `folderId` 與一個**工作目錄識別碼**指定 sessio
 #### Scenario: 建立介面不接受任何路徑參數
 
 - **WHEN** 檢視建立 session 的能力介面
-- **THEN** 它僅接受歸屬（`folderId`，或全域）、spawn 目標與工作目錄識別碼，不存在讓 renderer 指定工作目錄路徑的參數
+- **THEN** 它僅接受歸屬（`folderId`，或全域）、spawn 目標、工作目錄識別碼，以及一張選填的交接單次憑證（見 `session-lineage`；不含路徑），不存在讓 renderer 指定工作目錄路徑的參數
 
 #### Scenario: 工作目錄識別碼不含路徑資訊
 

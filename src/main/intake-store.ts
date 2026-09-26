@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 
-import type { Intake, IntakeAuthored, IntakeRejection, IntakeVerified } from './intake-schema'
+import { parseHandoffSource, type Intake, type IntakeAuthored, type IntakeRejection, type IntakeVerified } from './intake-schema'
 
 /**
  * 收件匣的狀態 index。
@@ -183,7 +183,7 @@ export function parseIntakeFile(raw: string): PersistedIntake | null {
       digest: e.digest,
       ...(typeof e.sessionId === 'string' ? { sessionId: e.sessionId } : {}),
       ...(typeof e.settledAt === 'number' ? { settledAt: e.settledAt } : {}),
-      content: isContent(content) ? content : null,
+      content: isContent(content) ? withSafeSource(content) : null,
     })
   }
   return { version: INTAKE_VERSION, entries: kept, notices: parseNotices((data as Record<string, unknown>).notices) }
@@ -211,6 +211,21 @@ function parseNotices(raw: unknown): IntakeNotice[] {
     })
   }
   return kept
+}
+
+/**
+ * `isContent` 只驗必要欄位、其餘原樣保留 —— 對**會被拿去用**的選填欄位那不夠。
+ *
+ * 交接的來源會在建立子 session 時被寫進 session，而它的識別碼於下次啟動時被**解析**。一個形狀
+ * 不對的值若在這裡被放行，它會在記憶體裡活到重啟，然後被 `parseSessionEntry` 丟掉 —— 關係
+ * 靜默消失。在讀入的這一刻就丟掉它（只丟這一組，record 保留）。
+ */
+function withSafeSource(content: IntakeContent): IntakeContent {
+  const raw = (content.verified as unknown as Record<string, unknown>).source
+  if (raw === undefined) return content
+  const { source: _drop, ...rest } = content.verified
+  const source = parseHandoffSource(raw)
+  return { ...content, verified: source ? { ...rest, source } : rest }
 }
 
 function isContent(value: unknown): value is IntakeContent {

@@ -3,6 +3,7 @@ import { type WebContents, ipcMain } from 'electron'
 import { bodyOf } from '../intake-schema'
 import { buildContext, buildPrompt, createNonce, writeContext } from '../intake-context'
 import { decideAccept, type IntakeAcceptResult } from '../intake-accept'
+import { ticketFor } from '../handoff-ticket'
 import { cancelPrefill, isSubmitted, schedulePrefill } from '../intake-prefill'
 import { subscribeWait } from '../agent-wait'
 import {
@@ -225,7 +226,7 @@ export function registerIntakeHandlers(deps: IntakeHandlerDeps): void {
   }
 
   deps.registerAutoAccept?.((adapter, id, folderId) => {
-    send(INTAKE_CHANNELS.autoAccept, adapter, id, folderId)
+    send(INTAKE_CHANNELS.autoAccept, adapter, id, folderId, ticketFor(service.store.get(adapter, id), folderId))
   })
   deps.registerFocusSession?.((sessionId) => {
     send(INTAKE_CHANNELS.focusSession, sessionId)
@@ -295,12 +296,16 @@ export function registerIntakeHandlers(deps: IntakeHandlerDeps): void {
     INTAKE_CHANNELS.accept,
     (_event, id: unknown, adapter: unknown, folderId: unknown): IntakeAcceptResult => {
       if (typeof id !== 'string' || typeof adapter !== 'string') return { ok: false, reason: 'unknown' }
-      return decideAccept({
-        record: service.store.get(adapter, id),
+      const record = service.store.get(adapter, id)
+      const decision = decideAccept({
+        record,
         chosenFolderId: folderId,
         knownFolderIds: knownIds(),
         eventsEnabled: agentEventsEnabled(),
       })
+      if (!decision.ok) return decision
+      const ticket = ticketFor(record, decision.folderId)
+      return ticket ? { ...decision, ticket } : decision
     },
   )
 

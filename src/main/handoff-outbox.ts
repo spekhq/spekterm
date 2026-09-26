@@ -43,6 +43,18 @@ export function outboxDir(sessionId: string): string {
   return root ? path.join(root, sessionId) : ''
 }
 
+/**
+ * 某個 session 的關係檔（`session-lineage`）。**在 outbox 之外**，理由與自我介紹檔相同。
+ */
+export function relationsDir(): string {
+  return handoffRootPath ? path.join(handoffRootPath, 'relations') : ''
+}
+
+export function relationsFile(sessionId: string): string {
+  const dir = relationsDir()
+  return dir ? path.join(dir, `${sessionId}.json`) : ''
+}
+
 /** 某個 session 的自我介紹檔。**在 outbox 之外** —— 放進去會被當成一份投遞。 */
 export function introFile(sessionId: string): string {
   return handoffRootPath ? path.join(handoffRootPath, 'intro', `${sessionId}.json`) : ''

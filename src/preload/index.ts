@@ -8,6 +8,7 @@ import type { FsResult, WriteResponse } from '../main/ipc/fs'
 import type { PanelSnapshot } from '../main/panel-store'
 import type { FollowUpdate as ConversationUpdate } from '../main/transcript-follow-service'
 import type { DrainResult, WaitState } from '../main/agent-events'
+import type { SessionLineage } from '../shared/lineage/types'
 import type {
   IntakeAcceptResult,
   IntakeRulesSnapshot,
@@ -341,8 +342,13 @@ const workspaceApi = {
       folderId: string | null,
       spawnTarget: SpawnTarget,
       worktreeKey?: string,
-    ): Promise<FsResult<{ sessionId: string }>> =>
-      ipcRenderer.invoke('workspace:terminal:create', folderId, spawnTarget, worktreeKey),
+      /**
+       * 交接的單次憑證（由主行程於自動接受或接受時簽發）。**renderer 只能原樣轉交** —— 它不是
+       * 「宣告這個 session 的來源」，主行程查它綁定的那一則交接自己記下的來源。
+       */
+      ticket?: string,
+    ): Promise<FsResult<{ sessionId: string; lineage?: SessionLineage }>> =>
+      ipcRenderer.invoke('workspace:terminal:create', folderId, spawnTarget, worktreeKey, ticket),
     /**
      * 喚醒一個休眠的 session（重建後尚無 pty）。
      *
@@ -543,14 +549,15 @@ const workspaceApi = {
     },
     /** 主行程：這一則到達時即被接受，請在該 folder 建立 session 並回報 sessionId。 */
     onAutoAccept: (
-      listener: (adapter: string, id: string, folderId: string) => void,
+      listener: (adapter: string, id: string, folderId: string, ticket?: string) => void,
     ): (() => void) => {
       const handler = (
         _event: IpcRendererEvent,
         adapter: string,
         id: string,
         folderId: string,
-      ): void => listener(adapter, id, folderId)
+        ticket?: string,
+      ): void => listener(adapter, id, folderId, typeof ticket === 'string' ? ticket : undefined)
       ipcRenderer.on('workspace:intake:autoAccept', handler)
       return () => ipcRenderer.removeListener('workspace:intake:autoAccept', handler)
     },

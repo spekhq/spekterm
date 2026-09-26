@@ -147,7 +147,7 @@ export function IntakeOverlay({ onClose, opener }: IntakeOverlayProps): React.JS
       const sessionId = reusable
         ? reusable
         : await (async () => {
-            const outcome = await sessions.create(decision.folderId, 'claude')
+            const outcome = await sessions.create(decision.folderId, 'claude', { ticket: decision.ticket })
             if (outcome.status !== 'created') {
               setFailure(outcome.failure.message)
               return null

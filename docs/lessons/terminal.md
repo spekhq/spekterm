@@ -187,8 +187,15 @@ HOME     存在      NODE_OPTIONS     **不存在**      ELECTRON_RUN_AS_NODE   
   （至多一次）。**判準只看「時間 + 結束碼」，不解析 claude 的輸出** —— 這條路徑零 layout 依賴。
 - **`#heal()` 是主線情境，而它對 renderer 完全不可見**（`status` 一直是 `running`）。因此凡是
   「pty 誕生時要做的事」，自癒那條路上都要自己再做一次：**推尺寸**（否則新 pty 一輩子停在 80×24）、
-  **沿用 session 記住的 cwd**（否則開在 worktree 的 session 會靜默站到別的地方）。
-  這兩件事**都是漏掉後才補的**，位置相同、疏漏同型。
+  **沿用 session 記住的 cwd**（否則開在 worktree 的 session 會靜默站到別的地方）、**帶上固定名字**
+  （`agent-peer-name`；否則自癒出來的 agent 以 CLI 自動產生的名字登記，告知給母子 session 的地址
+  就此失效）。前兩件事**都是漏掉後才補的**，位置相同、疏漏同型；名字是一開始就寫進 `#heal()` 的。
+- **同一個 session 的前一顆 pty 結束之前，不 spawn 新的。** renderer 重新載入時舊的 pty 被非同步地
+  殺掉，新頁面會立刻喚醒 focused 的 session。agent CLI 允許兩個同名行程並存（實測），於是那段窗口裡
+  以那個名字送出的訊息可能送進即將被終止的那一個。等待在 `TerminalService.create()` 裡（模組層級
+  的 `lastExit`，因為舊 pty 屬於被 dispose 的那個服務），上限 3 秒。
+- **`ptyEnv()` 剝掉所有從外層繼承來的 `SPEKTERM_*`**，之後才合併本 session 的專屬變數 —— 見
+  `docs/lessons/handoff.md` 第十二節。
 - **喚醒把「pty 先誕生、終端後掛載」的順序倒了過來。** `fit()` 在「尺寸沒變」時回 `null`。喚醒
   休眠 session 時：終端先顯示 → `fit()` 成功量到尺寸 → 送 resize → **pty 還不存在，被丟掉**；而
   `lastCols` 已記成那個尺寸 → 之後再 `fit()` 一律回 `null` → **再也沒有人告訴 pty 真正的尺寸**。

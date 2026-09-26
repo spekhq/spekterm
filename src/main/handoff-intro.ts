@@ -40,11 +40,18 @@ export const INTRO_ENV = 'SPEKTERM_HANDOFF_INTRO'
 /** 告知 agent 投遞落點的環境變數。 */
 export const OUTBOX_ENV = 'SPEKTERM_HANDOFF_DIR'
 
+/** 告知 agent 關係檔位置的環境變數（`session-lineage`）。 */
+export const RELATIONS_ENV = 'SPEKTERM_HANDOFF_RELATIONS'
+
 export interface IntroInput {
   /** 可交接的對象。**它就是查表的定義域所取自的同一份清單**（見 `handoff-target`）。 */
   folders: readonly Pick<WorkspaceFolder, 'name' | 'path'>[]
   /** 這個 session 的投遞落點。 */
   outbox: string
+  /** 這個 session 的固定名字（`agent-peer-name`）。沒有時不提名字那一句。 */
+  name?: string
+  /** 這個 session 的關係檔。沒有時不提關係那一段。 */
+  relations?: string
 }
 
 /**
@@ -53,7 +60,7 @@ export interface IntroInput {
  * **目標可以是名稱或絕對路徑，而這件事一定要講** —— 顯示名稱取自路徑的最後一段，同名是真實
  * 可達的，而歧義對 agent 是一條死路：它收不到任何回饋，不會自己想到換一種寫法。
  */
-export function introText({ folders, outbox }: IntroInput): string {
+export function introText({ folders, outbox, name, relations }: IntroInput): string {
   /**
    * **數字由實際生效的常數推導，不寫死。**
    *
@@ -102,8 +109,42 @@ export function introText({ folders, outbox }: IntroInput): string {
     'When that happens the user sees it in their inbox, but YOU are not told - there is no reply channel.',
     'A rejected handoff looks exactly like a successful one from where you stand.',
     'Say that you wrote the handoff, not that it was delivered.',
+    ...peerLines(name, relations),
   ]
   return lines.join('\n')
+}
+
+/**
+ * 名字與母子兄弟關係的那一段（`session-lineage`、`agent-peer-name`）。
+ *
+ * **它只指向關係檔，不列出關係** —— 這段文字只在 `SessionStart` 進入脈絡，而子 session 是在那
+ * 之後才長出來的。列在這裡的關係對母 session 永遠是過期的。
+ *
+ * **「使用者送出第一則 prompt 之前不要傳訊息」這句是承重的**：收到訊息的 agent 會立刻開始工作
+ * （實測），而收件匣判斷「使用者已送出預填的 prompt」的唯一線索就是 agent 開始工作 —— 一則
+ * 過早的訊息會讓那則交接被當成已送出，而預填的文字還在輸入處（`docs/lessons/handoff.md`）。
+ */
+function peerLines(name: string | undefined, relations: string | undefined): string[] {
+  if (!name && !relations) return []
+  return [
+    '',
+    ...(name ? [`Your name for Claude Code's local session messaging is: ${name}`] : []),
+    ...(relations
+      ? [
+          'Sessions related to you by handoff - your parent, your children, and your siblings (other',
+          'sessions your parent handed off) - are listed, with their current names and whether they are',
+          'running, in:',
+          `  ${relations}`,
+          'Read it when you need them. It is kept up to date, including sessions created after you started.',
+          'If this session was opened by a handoff, it has a parent.',
+          "To contact one of them, use Claude Code's own session messaging (ListAgents / SendMessage),",
+          'addressed by the name in that file. spekterm does not carry the message.',
+          'A session with "running": false has no process and cannot receive messages; spekterm will not',
+          'start it for you. A message can also go unanswered - if you need a reply, ask for one.',
+          'Do not message a session you just handed work to until the user has sent its first prompt.',
+        ]
+      : []),
+  ]
 }
 
 /** 寫出 hook 要 `cat` 的那份檔案。回傳它的路徑；寫不出來時回 `null`（降級為沒有自我介紹）。 */

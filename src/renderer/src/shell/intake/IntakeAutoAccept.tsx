@@ -49,9 +49,9 @@ export function IntakeAutoAccept({
 
   useEffect(
     () =>
-      window.workspace.intake.onAutoAccept((adapter, id, folderId) => {
+      window.workspace.intake.onAutoAccept((adapter, id, folderId, ticket) => {
         void (async () => {
-          const outcome = await latest.current.sessions.create(folderId, 'claude')
+          const outcome = await latest.current.sessions.create(folderId, 'claude', { ticket })
           // 建不起來時**不回報 attach** —— 那則交接於是留在待處理，使用者仍可自己接受它。
           // 靜默地把它標成已接受才是最糟的：一件工作從清單上消失，而沒有 session 對應它。
           if (outcome.status !== 'created') return

@@ -16,7 +16,7 @@ import { registerPanelHandlers } from './ipc/panel'
 import { registerSettingsHandlers } from './ipc/settings'
 import { registerSlackHandlers } from './ipc/slack'
 import { registerShellHandlers } from './ipc/shell'
-import { registerTerminalHandlers } from './ipc/terminal'
+import { currentRelationsWorld, onPtyChange, registerTerminalHandlers, runningAgents } from './ipc/terminal'
 import { applyNavigationGuards } from './navigation'
 import { formatScanSummary, scanRepo } from './openspec'
 import { guardUnsavedChanges } from './unsaved-changes'
@@ -32,7 +32,9 @@ import { IntakeService } from './intake-service'
 import { IntakeSource, inboxRoot } from './intake-source'
 import { configureHandoff, liveSessions } from './handoff-outbox'
 import { refreshIntros } from './handoff-injection'
+import { refreshRelations } from './handoff-relations'
 import { HandoffService, registerHandoffService } from './handoff-service'
+import { configureTicketLineage } from './handoff-ticket'
 import { RoutingStore, routingFile } from './intake-routing'
 import { IntakeStore } from './intake-store'
 import { PanelStore } from './panel-store'
@@ -252,6 +254,11 @@ void app.whenReady().then(async () => {
     join(app.getPath('userData'), 'sessions'),
   )
   sessionStore.load()
+  // **名字在載入時就決定，不延後到第一次 spawn**（`agent-peer-name`）—— 休眠的母 session 在被
+  // 喚醒之前，也要有名字可以告訴它的子 session。既有而尚無名字的 session 於此補上並寫回。
+  sessionStore.ensurePeerNames((folderId) =>
+    folderId === null ? null : store.list().find((folder) => folder.id === folderId)?.name,
+  )
 
   // 使用者偏好與 workspace 同一個落點，理由也一樣（`--user-data-dir` 可隔離驗收）。
   const preferencesStore = new PreferencesStore(join(app.getPath('userData'), 'preferences.json'))
@@ -283,6 +290,14 @@ void app.whenReady().then(async () => {
   const intakeService = new IntakeService({
     store: intakeStore,
     archiveRoot: contextRoot(app.getPath('userData')),
+  })
+  // 單次憑證 → 那一則交接記下的來源（`handoff-lineage` design D2）。**只讀 record 自己的欄位** ——
+  // 來源是攝入當下由落點推出的，不是建立 session 時才算。
+  configureTicketLineage(({ adapter, id }) => {
+    const source = intakeStore.get(adapter, id)?.content?.verified.source
+    return source
+      ? { parentId: source.sessionId, origin: source.origin, ...(source.title ? { parentTitle: source.title } : {}) }
+      : undefined
   })
 
   // Slack adapter 的兩份落盤 —— **刻意分成兩份檔案**。連線設定本來就要投影給 renderer
@@ -459,15 +474,22 @@ void app.whenReady().then(async () => {
    * 只能經參數供應。
    */
   configureHandoff(app.getPath('userData'))
+  const nameOf = (sessionId: string): string | undefined =>
+    sessionStore.view().find((entry) => entry.session.id === sessionId)?.session.peerName
   const handoffService = new HandoffService({
     service: intakeService,
     sourceOf: (sessionId) => {
-      const session = sessionStore.get(sessionId)
+      // **含暫定紀錄** —— 母 session 剛建好、renderer 還沒把它送來持久化的那 ~500ms 裡，它只在
+      // 暫定紀錄中。只查 `get()` 的話，那段時間裡投遞的交接會把來源記成「已結束」（探針抓到：
+      // 同 folder 的交接其來源的歸屬是 unknown）。
+      const session = sessionStore.view().find((entry) => entry.session.id === sessionId)?.session
       if (!session) return null
       const folder = session.folderId === null ? null : store.list().find((f) => f.id === session.folderId)
+      const title = session.customTitle ?? session.title
       return {
         folderId: session.folderId,
         label: session.folderId === null ? 'Global' : (folder?.name ?? session.folderId),
+        ...(title ? { title } : {}),
       }
     },
     // **與自我介紹的清單同源** —— 分成兩份的話，agent 手上的選項與接收端認得的選項會分岔。
@@ -490,8 +512,22 @@ void app.whenReady().then(async () => {
    * 得到一次它看不到的拒絕）。
    */
   store.subscribe(() => {
-    refreshIntros(liveSessions(), store.list())
+    refreshIntros(liveSessions(), store.list(), nameOf)
   })
+
+  /**
+   * 關係檔的**單一觸發點**（`handoff-lineage` design D6）：session 清單（含暫定紀錄、標籤）、pty 的
+   * 誕生與結束、folder 清單 —— 任何一個變了就整份重算，只寫有變的檔。
+   */
+  const refreshAllRelations = (): void =>
+    refreshRelations({
+      ...currentRelationsWorld(store, sessionStore),
+      agents: runningAgents(),
+      enabled: preferencesStore.get().agentHandoff !== false,
+    })
+  sessionStore.subscribe(refreshAllRelations)
+  onPtyChange(refreshAllRelations)
+  store.subscribe(refreshAllRelations)
 
   /**
    * 啟動後跑一輪 Slack 的回補。

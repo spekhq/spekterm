@@ -33,6 +33,8 @@
  * 漏掉任何一段都不會有東西變紅。既有的正確形式見 `preferences-store` 的 `sanitizeFamily`。
  */
 
+import type { HandoffSourceOrigin } from '../shared/lineage/types'
+
 /**
  * **第三方逐字撰寫**的本文其長度上限。**訂在「一個人會實際讀完」的量級，不是技術極限。**
  *
@@ -92,6 +94,72 @@ export interface IntakeVerified {
    * 交辦的工作會變成一份「請把裡面的祈使句抄一遍」的清單 —— 使用者按下送出之後什麼也沒發生。
    */
   firstPartyBody?: boolean
+  /**
+   * 交接的**來源 session** 與它於攝入當下的呈現快照（`session-lineage`）。
+   *
+   * 與 `targetFolderId` 同一個姿態：**payload 表達不出來** —— 它由接收端從落點推導。
+   * 建立子 session 時，主行程從這裡取來源寫進 session（見 `ipc/terminal.ts` 的 create），
+   * 於是一則降級為待處理、數天後才被接受的交接，其快照仍是**交接當下**的樣子。
+   */
+  source?: HandoffSource
+}
+
+/** 歸屬的三態定義在 `src/shared/lineage/types.ts`（renderer 也要用）。 */
+export type { HandoffSourceOrigin }
+
+export interface HandoffSource {
+  /** 來源 session 的 spekterm 識別碼（UUID）。 */
+  sessionId: string
+  origin: HandoffSourceOrigin
+  /** 來源 session 當時的標籤。**agent 可控的文字**（pty 宣告，或使用者輸入）—— 見 `sourceTitle()`。 */
+  title?: string
+}
+
+const UUID_SHAPE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+/**
+ * 來源標籤的正規化。
+ *
+ * 它放在「可驗證」這一組（不是 `actor`／`originLabel`）是因為那一組受 `MAX_FIELD_LENGTH` **拒絕**
+ * 且會進入 `digestOf` —— 一個很長的標題會讓交接被判過長（agent 對此無能為力），而監看與掃描兩次
+ * 讀取之間標題若恰好改變，就會產生一則假的「識別碼搶佔」。**但它仍是 agent 可控的文字**，所以
+ * 照樣過 `normalizeAuthored`，只是以**截斷**處理長度（以 code point 為單位），換行收成空白。
+ */
+export function sourceTitle(raw: string): string {
+  const flat = normalizeAuthored(raw).replace(/\n+/g, ' ').trim()
+  return [...flat].slice(0, MAX_FIELD_LENGTH).join('')
+}
+
+/**
+ * 讀回來源（**載入收件匣時**呼叫 —— 磁碟上的東西不受信任）。形狀不對一律回 `undefined`，
+ * 呼叫端丟掉這一組欄位即可，record 本身保留。
+ */
+export function parseHandoffSource(raw: unknown): HandoffSource | undefined {
+  if (typeof raw !== 'object' || raw === null) return undefined
+  const r = raw as Record<string, unknown>
+  if (typeof r.sessionId !== 'string' || !UUID_SHAPE.test(r.sessionId)) return undefined
+  const o = r.origin as Record<string, unknown> | undefined
+  if (typeof o !== 'object' || o === null) return undefined
+  let origin: HandoffSourceOrigin
+  switch (o.kind) {
+    case 'folder':
+      if (typeof o.folderId !== 'string' || o.folderId === '' || typeof o.folderName !== 'string') return undefined
+      origin = { kind: 'folder', folderId: o.folderId, folderName: o.folderName }
+      break
+    case 'global':
+      origin = { kind: 'global' }
+      break
+    case 'unknown':
+      origin = { kind: 'unknown' }
+      break
+    default:
+      return undefined
+  }
+  return {
+    sessionId: r.sessionId,
+    origin,
+    ...(typeof r.title === 'string' && r.title !== '' ? { title: sourceTitle(r.title) } : {}),
+  }
 }
 
 /**
@@ -105,6 +173,8 @@ export interface DeliveryProvenance {
   targetFolderId: string
   /** 見 `IntakeVerified.firstPartyBody`。 */
   firstPartyBody?: boolean
+  /** 見 `IntakeVerified.source`。 */
+  source?: HandoffSource
 }
 
 /** 第三方逐字撰寫的欄位 —— 投遞者完全控制其內容。 */
@@ -321,6 +391,7 @@ export function parseIntake(
         // **只從 `provenance` 取** —— payload 裡的同名欄位從未被讀到。
         ...(provenance ? { targetFolderId: provenance.targetFolderId } : {}),
         ...(provenance?.firstPartyBody ? { firstPartyBody: true } : {}),
+        ...(provenance?.source ? { source: provenance.source } : {}),
       },
       authored,
       receivedAt: Date.now(),

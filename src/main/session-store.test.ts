@@ -402,3 +402,95 @@ describe('view 的選擇跨重啟存活', () => {
     assert.equal('view' in written.sessions[0], false, '落盤時不得寫出該欄位')
   })
 })
+
+describe('主行程專屬的關係與名字（handoff-lineage）', () => {
+  const LINEAGE = { parentId: UUID_B, origin: { kind: 'folder' as const, folderId: 'f1', folderName: 'alpha' } }
+  const base = (id: string): RendererSession => ({ id, folderId: 'f1', spawnTarget: 'claude', ordinal: 0 })
+
+  it('renderer 送來的關係與名字被忽略', () => {
+    const s = store()
+    s.replace([{ ...base(UUID_A), lineage: LINEAGE, peerName: 'evil' } as unknown as RendererSession])
+    const reloaded = store()
+    assert.equal(reloaded.get(UUID_A)?.lineage, undefined)
+    assert.equal(reloaded.get(UUID_A)?.peerName, undefined)
+  })
+
+  it('暫定紀錄被 replace() 認領，關係與名字合併進正式紀錄且跨重啟保留', () => {
+    const s = store()
+    s.addProvisional({ id: UUID_A, folderId: 'f1', spawnTarget: 'claude', lineage: LINEAGE, peerName: 'alpha-1111' })
+    s.replace([base(UUID_A)])
+    const reloaded = store()
+    assert.deepEqual(reloaded.get(UUID_A)?.lineage, LINEAGE)
+    assert.equal(reloaded.get(UUID_A)?.peerName, 'alpha-1111')
+  })
+
+  it('renderer 之後沒送這兩個欄位不會清掉它們', () => {
+    const s = store()
+    s.addProvisional({ id: UUID_A, folderId: 'f1', spawnTarget: 'claude', lineage: LINEAGE, peerName: 'alpha-1111' })
+    s.replace([base(UUID_A)])
+    s.replace([{ ...base(UUID_A), customTitle: 'renamed' }])
+    assert.deepEqual(store().get(UUID_A)?.lineage, LINEAGE)
+  })
+
+  it('暫定紀錄在 view() 中可見、在 list() 中不可見', () => {
+    const s = store()
+    s.addProvisional({ id: UUID_A, folderId: 'f1', spawnTarget: 'claude', lineage: LINEAGE })
+    assert.equal(s.list().length, 0)
+    assert.deepEqual(s.view().map((v) => [v.session.id, v.provisional]), [[UUID_A, true]])
+  })
+
+  it('未被認領的暫定紀錄於 dropProvisional() 被清除', () => {
+    const s = store()
+    s.addProvisional({ id: UUID_A, folderId: 'f1', spawnTarget: 'claude' })
+    s.dropProvisional()
+    assert.equal(s.view().length, 0)
+  })
+
+  it('update() 早於 renderer 送來時，寫進暫定紀錄並於認領時保留', () => {
+    const s = store()
+    s.addProvisional({ id: UUID_A, folderId: 'f1', spawnTarget: 'claude' })
+    s.update(UUID_A, { claudeSessionId: UUID_C })
+    s.replace([base(UUID_A)])
+    assert.equal(store().get(UUID_A)?.claudeSessionId, UUID_C)
+  })
+
+  it('不合法的 parentId 只丟關係，不丟 session', () => {
+    write(JSON.stringify({ version: 1, sessions: [{ ...base(UUID_A), lineage: { ...LINEAGE, parentId: '../x' } }] }))
+    const s = store()
+    assert.ok(s.get(UUID_A))
+    assert.equal(s.get(UUID_A)?.lineage, undefined)
+  })
+
+  it('不合法的名字只丟名字，並由 ensurePeerNames 重新決定', () => {
+    write(JSON.stringify({ version: 1, sessions: [{ ...base(UUID_A), peerName: 'a"b $(x)' }] }))
+    const s = store()
+    assert.equal(s.get(UUID_A)?.peerName, undefined)
+    s.ensurePeerNames(() => 'alpha')
+    assert.equal(s.get(UUID_A)?.peerName, 'alpha-1111')
+  })
+
+  it('ensurePeerNames 不替 shell session 取名，也不改既有的名字', () => {
+    write(JSON.stringify({
+      version: 1,
+      sessions: [
+        { ...base(UUID_A), peerName: 'kept-1111' },
+        { ...base(UUID_B), spawnTarget: 'shell' },
+        { ...base(UUID_C), folderId: null },
+      ],
+    }))
+    const s = store()
+    s.ensurePeerNames((folderId) => (folderId === null ? null : 'alpha'))
+    assert.equal(s.get(UUID_A)?.peerName, 'kept-1111')
+    assert.equal(s.get(UUID_B)?.peerName, undefined)
+    assert.equal(s.get(UUID_C)?.peerName, 'global-3333')
+  })
+
+  it('subscribe 在落盤與暫定紀錄變動時通知', () => {
+    const s = store()
+    let count = 0
+    s.subscribe(() => { count += 1 })
+    s.addProvisional({ id: UUID_A, folderId: 'f1', spawnTarget: 'claude' })
+    s.replace([base(UUID_A)])
+    assert.ok(count >= 2)
+  })
+})

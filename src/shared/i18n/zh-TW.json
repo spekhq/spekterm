@@ -690,5 +690,12 @@
     "statusRateLimitedSoon": "Slack 要求我們放慢。你的設定沒有問題 —— 稍後會再試一次。",
     "statusFailureScopeUnknown": "你的 Slack token 有效，但缺少權限（{{error}}）。請補上缺少的 User Token Scope 並重新安裝該 app。"
   },
-  "languageName": "繁體中文"
+  "languageName": "繁體中文",
+  "lineage": {
+    "item": "{{repo}} › {{title}}",
+    "fromParent": "來自 {{item}}",
+    "fromClosed": "來自 {{item}}（已關閉）",
+    "fromUnknown": "來自一個已關閉的 session",
+    "children_other": "已交接 {{count}} 個 session"
+  }
 }

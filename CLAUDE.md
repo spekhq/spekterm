@@ -57,14 +57,20 @@ OpenSpec 結構的側欄，讓使用者不必另外開 IDE 就能一邊駕駛 ag
   **查表**解析目標，然後**到達即建立 session**（不經接受閘 —— 那道閘的前提是「本文為第三方
   逐字撰寫」，而這裡的本文是使用者自己 session 的 agent 寫的）。**prompt 仍然填好而不送出。**
   **它不是安全邊界**：agent 有 shell，落點的位置它算得出來，因此交接次數的上限是**全域**的。
-  完整的實測見 `docs/lessons/handoff.md`。
+  **交接出來的 session 記得它的母 session**（`handoff-lineage`）：同 repo 在 rail 上縮排、跨 repo
+  以「← 來源」「→ N」標示往返，母 session 關閉後呈現快照；關係由主行程在 **spawn 之前**寫入，
+  renderer 只能轉交一張主行程簽發的單次憑證。**每個 claude session 以固定名字啟動**
+  （`--name`，`<rail 項目>-<短碼>`，跨重啟／續接／自癒不變）—— 那是 Claude Code 本機訊息功能的
+  地址；agent 從關係檔（隨時更新）查得到母、子、兄弟的名字，**訊息本身由 Claude Code 傳遞**。
+  **代價：指定名字會把 agent 的終端標題固定成那個名字**（使用者以重新命名取回任務名稱）。
+  完整的實測見 `docs/lessons/handoff.md`（第十一、十二節）。
 - **鍵盤** —— 見下文「快捷鍵」。
 
 **Linux 打包已可用**（`npm run dist:linux` → AppImage，`npm run install:desktop` 裝進應用程式
 選單）。**版號逐次遞增**且產物與執行中的 app 說得出同一個建置身分（Settings 的「About」段）。
 **尚未開始**：macOS／Windows 產物、自動更新與簽章（Phase 6 其餘）。
-**交接已交付第一段**（agent → 另一個 repo）；**回程**（接手的 repo 做完回報發起者）與
-**以工具而非寫檔投遞**（MCP）仍未做 —— 後者的代價是 agent **收不到投遞的結果**，而那條缺口
+**交接已交付**（agent → 另一個 repo，以及母、子、兄弟之間經 Claude Code 本機訊息功能的往來）；
+**以工具而非寫檔投遞**（MCP）仍未做 —— 代價是 agent **收不到投遞的結果**，而那條缺口
 明文寫在 `agent-handoff-source` 的規格裡。
 **session 常駐**（讓 pty 活過 app 的生命）已排入路線圖但**刻意不做** —— 見 `docs/PRD.md` §11 的
 tmux 與自寫 daemon 取捨。**不要把「重建」誤當成「常駐」**：關掉 app，pty 一定會死（master fd
@@ -184,7 +190,9 @@ npm run probe:intake    # agent-intake / intake-routing（收件匣的兩條入�
                         #   producer，共用同一套替身與落點佈置。**`runHandoffRestored` 種
                         #   `sessions.json` ＋ 既有的落點目錄**：落點被重新準備之後還收不收得到，
                         #   只有「session 被還原」這個形狀驗得出來（新建落點是唯一沒壞的那一種）。
-                        #   對照組見 `scripts/intake-control-groups.mjs`（**40** 個 mutation，
+                        #   **母子關係的兩段**（`runLineage` / `runLineageDrag`）：替身回報每次
+                        #   啟動拿到的 `--name` 與環境變數；拖曳一律三個以上兄弟、往下拖
+                        #   對照組見 `scripts/intake-control-groups.mjs`（**61** 個 mutation，
                         #   每一個都指名哪一條斷言必須變紅；`section` 欄位讓它只跑需要的那一段）
                         #   **失敗的可見性也在這一支**：`TOO_LONG` / `TOO_LARGE` 的通知、
                         #   痕跡逐則呈現與逐則清除、痕跡活過重啟

@@ -75,6 +75,14 @@ export function makeStubAgent(
   /** 每條 hook 命令的 stdout，各自一個檔（`<事件>-<第幾條>`）。 */
   const hookOutDir = join(home, 'hook-stdout')
   mkdirSync(hookOutDir, { recursive: true })
+  /**
+   * 每一次啟動拿到的固定名字（`agent-peer-name`）：一行一次，`<對話 id>\t<--name 的值>\t<環境變數的值>`。
+   *
+   * **兩個來源都記** —— 產品以環境變數交付、命令列只引用它；只記其中一個的話，「名字被拼進命令字串」
+   * 與「環境變數沒帶」這兩種錯誤會各自對一半的斷言透明。以對話 id 為鍵：自癒會換對話 id，
+   * 而那正是要驗「名字不變」的地方。
+   */
+  const nameLog = join(home, 'peer-names.log')
 
   const script = [
     '#!/bin/sh',
@@ -95,11 +103,13 @@ export function makeStubAgent(
     */
     `(while :; do stty size < /dev/tty > "${sizeReceipt}" 2>/dev/null || echo "0 0" > "${sizeReceipt}"; sleep 0.3; done) &`,
     // 對話識別碼由產品以 `--session-id` 或 `--resume` 指定，兩者都掃。
-    'sid=""; prev=""; settings=""',
+    'sid=""; prev=""; settings=""; pname="-"',
     'for a in "$@"; do',
     '  case "$prev" in --session-id|--resume) sid="$a" ;; --settings) settings="$a" ;; esac',
+    '  case "$a" in --name=*) pname="${a#--name=}" ;; esac',
     '  prev="$a"',
     'done',
+    `printf '%s\t%s\t%s\n' "$sid" "$pname" "\${SPEKTERM_PEER_NAME:--}" >> ${JSON.stringify(nameLog)}`,
     // 紀錄的位置：與產品相同的推導規則。
     `slug=$(printf %s "$PWD" | sed 's/[^0-9A-Za-z]/-/g')`,
     `dir="${configDir}/projects/$slug"`,
@@ -228,6 +238,20 @@ export function makeStubAgent(
         return readFileSync(join(hookOutDir, `${event}-${index}`), 'utf8')
       } catch {
         return ''
+      }
+    },
+    /** 每一次啟動拿到的名字（`-` ＝ 沒有）。 */
+    peerNames: () => {
+      try {
+        return readFileSync(nameLog, 'utf8')
+          .split('\n')
+          .filter(Boolean)
+          .map((line) => {
+            const [conversation, argv, env] = line.split('\t')
+            return { conversation, argv, env }
+          })
+      } catch {
+        return []
       }
     },
     /** 某個事件上被執行的命令條數。 */

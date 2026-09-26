@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 
-import type { DeliveryProvenance } from './intake-schema'
+import type { DeliveryProvenance, HandoffSource } from './intake-schema'
 
 /** 交接的 adapter 名。去重的主鍵之一（`(adapter, id)`）。 */
 export const HANDOFF_ADAPTER = 'handoff'
@@ -80,6 +80,8 @@ export interface DeliveryInput {
   originLabel: string
   /** 查表解析出的目標。 */
   targetFolderId: string
+  /** 來源 session 與它於此刻的快照（`session-lineage`）。識別碼不合法時缺席。 */
+  source?: HandoffSource
 }
 
 /** 交給 `deliver()` 的兩樣東西：投遞的文字，以及接收端算出來的 provenance。 */
@@ -114,6 +116,7 @@ export function buildDelivery(input: DeliveryInput): {
       // 本文由使用者自己 session 裡的 agent 撰寫 —— 它就是那件要做的事，
       // 不是一份要 agent 先抄一遍的第三方文字。
       firstPartyBody: true,
+      ...(input.source ? { source: input.source } : {}),
     },
   }
 }

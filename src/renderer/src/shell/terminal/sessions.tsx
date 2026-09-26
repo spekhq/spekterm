@@ -1,4 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
+import type { SessionLineage } from '../../../../shared/lineage/types'
+import { buildForest, childInsertIndex } from '../session-forest'
 import type { FsFailure, SpawnTarget } from '../types'
 
 /**
@@ -66,6 +68,11 @@ export interface SessionState {
    * 交還命名權：把名字清空（見 `rename`）。
    */
   customTitle?: string
+  /**
+   * 這個 session 是由哪一個 session 交接出來的（`session-lineage`）。**唯讀** —— 權威在主行程，
+   * 它只經 restore 與 `create` 的回傳進來，**不送回持久化**（主行程也不會採信）。
+   */
+  lineage?: SessionLineage
 }
 
 export type CreateOutcome =
@@ -98,7 +105,11 @@ export interface SessionsApi {
   create(
     folderId: string | null,
     spawnTarget: SpawnTarget,
-    options?: { worktreeKey?: string },
+    options?: {
+      worktreeKey?: string
+      /** 交接的單次憑證 —— 主行程簽發，renderer 原樣轉交（見 `handoff-ticket.ts`）。 */
+      ticket?: string
+    },
   ): Promise<CreateOutcome>
   /**
    * 喚醒一個休眠的 session（＝為它 spawn pty）。
@@ -121,6 +132,13 @@ export interface SessionsApi {
   rename(sessionId: string, name: string): void
   /** 重排同一個 folder 之內的 session 順序。索引是該 folder 之內的序位。 */
   reorder(folderId: string | null, fromIndex: number, toIndex: number): void
+  /**
+   * 以一整份新的次序取代某個 folder 的 session 順序（rail 上帶子孫的整塊移動，`session-forest`）。
+   *
+   * `reorder` 一次只能移一個項目，表達不出「節點連同子孫」。`ids` 必須恰為該 folder 目前的
+   * session 集合（次序不同），否則為無操作 —— 飛行中的清單可能已經變了。
+   */
+  setOrder(folderId: string | null, ids: readonly string[]): void
   /**
    * 把一段文字送進某個 session 的 pty，**並把焦點交還該 session 的終端**。
    * 換行不自動附加 —— 要不要送出由呼叫端決定（本 change 的續寫入口是要的）。
@@ -168,6 +186,49 @@ const SessionsContext = createContext<SessionsApi | null>(null)
  * **必須位於 `MainStage` 之上**：session 綁在 folder 上，切換選中的 repo 不該讓清單消失，
  * 而 rail 要同時呈現**所有** folder 的 session（design D9）。
  */
+/**
+ * 以新的次序填回某個 folder 原本佔據的那些位置 —— 其餘 folder 的相對順序完全不動（與 `reorder`
+ * 同一個作法）。`ids` 必須恰為該 folder 目前的 session 集合，否則回傳原陣列。
+ */
+function applyOrder(previous: SessionState[], folderId: string | null, ids: readonly string[]): SessionState[] {
+  const slots = previous.reduce<number[]>((acc, session, index) => {
+    if (session.folderId === folderId) acc.push(index)
+    return acc
+  }, [])
+  const byId = new Map(slots.map((index) => [previous[index].id, previous[index]]))
+  if (ids.length !== slots.length || new Set(ids).size !== ids.length || !ids.every((id) => byId.has(id))) {
+    return previous
+  }
+  const next = [...previous]
+  slots.forEach((index, position) => {
+    next[index] = byId.get(ids[position]) as SessionState
+  })
+  return next
+}
+
+/**
+ * 交接出來、且與母 session 同一個 rail 項目的新 session，放到「母 session 與它所有子孫」裡位置
+ * 最後的那一個之後（`workspace-layout`），使分頁列中它也緊鄰母 session。其餘照舊留在最後。
+ */
+function placeChild(sessions: SessionState[], newId: string): SessionState[] {
+  const created = sessions.find((session) => session.id === newId)
+  const parentId = created?.lineage?.parentId
+  if (!created || !parentId) return sessions
+  const group = sessions.filter((session) => session.folderId === created.folderId)
+  const present = new Set(group.filter((session) => session.status !== 'exited').map((session) => session.id))
+  if (!present.has(parentId)) return sessions
+
+  const without = group.filter((session) => session.id !== newId)
+  const forest = buildForest(
+    without.map((session) => ({ id: session.id, parentId: session.lineage?.parentId })),
+    present,
+  )
+  const order = without.map((session) => session.id)
+  const at = childInsertIndex(order, forest, parentId)
+  order.splice(at, 0, newId)
+  return applyOrder(sessions, created.folderId, order)
+}
+
 export function SessionsProvider({ children }: { children: React.ReactNode }): React.JSX.Element {
   const [sessions, setSessions] = useState<SessionState[]>([])
   // 鍵是 session 的歸屬（`null` ＝ 全域）。Map 對 `null` 鍵完全合法，於是全域項目的 focus
@@ -275,6 +336,7 @@ export function SessionsProvider({ children }: { children: React.ReactNode }): R
               title: entry.title,
               customTitle: entry.customTitle,
               worktreeKey: entry.worktreeKey,
+              lineage: entry.lineage,
             }))
           // 重建的排在前面 —— 它們是上次的順序，而在它們之前建立的那些是「新的」。
           return [...restoredSessions, ...previous]
@@ -369,20 +431,19 @@ export function SessionsProvider({ children }: { children: React.ReactNode }): R
     async (
       folderId: string,
       spawnTarget: SpawnTarget,
-      options?: { worktreeKey?: string },
+      options?: { worktreeKey?: string; ticket?: string },
     ): Promise<CreateOutcome> => {
       const worktreeKey = options?.worktreeKey
-      const result = await window.workspace.terminal.create(folderId, spawnTarget, worktreeKey)
+      const result = await window.workspace.terminal.create(folderId, spawnTarget, worktreeKey, options?.ticket)
       if (!result.ok) return { status: 'failed', failure: result }
 
-      const { sessionId } = result.value
+      const { sessionId, lineage } = result.value
       const ordinal = (nextOrdinal.current.get(folderId) ?? 0) + 1
       nextOrdinal.current.set(folderId, ordinal)
 
-      setSessions((previous) => [
-        ...previous,
-        { id: sessionId, folderId, spawnTarget, status: 'running', ordinal, worktreeKey },
-      ])
+      setSessions((previous) =>
+        placeChild([...previous, { id: sessionId, folderId, spawnTarget, status: 'running', ordinal, worktreeKey, lineage }], sessionId),
+      )
       setFocused((previous) => new Map(previous).set(folderId, sessionId))
 
       return { status: 'created', sessionId }
@@ -497,6 +558,10 @@ export function SessionsProvider({ children }: { children: React.ReactNode }): R
     })
   }, [])
 
+  const setOrder = useCallback((folderId: string | null, ids: readonly string[]) => {
+    setSessions((previous) => applyOrder(previous, folderId, ids))
+  }, [])
+
   const restoredScrollbackOf = useCallback(
     (sessionId: string): string | undefined => restoredScrollback.current.get(sessionId),
     [],
@@ -550,6 +615,7 @@ export function SessionsProvider({ children }: { children: React.ReactNode }): R
       setTitle,
       rename,
       reorder,
+      setOrder,
       attach,
       sendInput,
       registerFocus,
@@ -565,6 +631,7 @@ export function SessionsProvider({ children }: { children: React.ReactNode }): R
       setTitle,
       rename,
       reorder,
+      setOrder,
       attach,
       sendInput,
       registerFocus,

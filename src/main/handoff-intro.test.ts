@@ -110,3 +110,32 @@ test('告知的內容給出「內容太長時怎麼辦」的做法', () => {
   const text = introText({ folders: [], outbox: '/out' })
   assert.ok(/write the detail to a file/i.test(text))
 })
+
+{
+  const text = introText({
+    folders: [],
+    outbox: '/o',
+    name: 'alpha-1111',
+    relations: '/data/handoff/relations/s1.json',
+  })
+
+  test('名字與關係：說出自己的名字', () => assert.ok(text.includes('alpha-1111')))
+  test('名字與關係：指出關係檔的位置，並說明它會隨時更新', () => {
+    assert.ok(text.includes('/data/handoff/relations/s1.json'))
+    assert.match(text, /kept up to date/)
+  })
+  test('名字與關係：涵蓋母、子、兄弟', () => {
+    for (const word of ['parent', 'children', 'siblings']) assert.ok(text.includes(word), word)
+  })
+  test('名字與關係：說明以名字經 Claude Code 的訊息功能聯絡、不在執行者收不到且不會被喚醒', () => {
+    assert.match(text, /SendMessage/)
+    assert.match(text, /"running": false/)
+    assert.match(text, /will not\s+start it/)
+  })
+  test('名字與關係：要求在使用者送出第一則 prompt 之前不傳訊息給剛交接出去的 session', () => {
+    assert.match(text, /until the user has sent its first prompt/)
+  })
+  test('名字與關係：沒有名字與關係檔時不出現那一段', () => {
+    assert.ok(!introText({ folders: [], outbox: '/o' }).includes('SendMessage'))
+  })
+}

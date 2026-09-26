@@ -5,7 +5,7 @@ import type { IntakeRecord } from './intake-store'
  * 建過一個」（預填逾時退回待處理時，那個 session 仍然存在）。
  */
 export type IntakeAcceptResult =
-  | { ok: true; folderId: string; existingSessionId?: string }
+  | { ok: true; folderId: string; existingSessionId?: string; ticket?: string }
   | { ok: false; reason: 'unknown' | 'prefillUnavailable' | 'FOLDER_GONE' }
 
 /**

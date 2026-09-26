@@ -344,3 +344,69 @@ describe('永久性拒絕的痕跡', () => {
     assert.equal(parsed?.notices?.length, 1)
   })
 })
+
+describe('交接的來源（handoff-lineage）', () => {
+  const SESSION = 'c463620e-cfbf-40e4-9732-685d0ea94b89'
+  function withSource(source: unknown) {
+    const result = parseIntake(
+      { id: 'h1', title: 't', body: 'b' },
+      'handoff',
+      {
+        origin: { kind: 'handoff', id: 'f1', label: 'spekterm' },
+        targetFolderId: 'f2',
+        firstPartyBody: true,
+        source: source as never,
+      },
+    )
+    assert.equal(result.ok, true)
+    if (!result.ok) throw new Error('unreachable')
+    return result.value
+  }
+
+  for (const origin of [
+    { kind: 'folder', folderId: 'f1', folderName: 'spekterm' },
+    { kind: 'global' },
+    { kind: 'unknown' },
+  ] as const) {
+    it(`歸屬 ${origin.kind} 寫入後重新載入不變`, () => {
+      const file = tempFile()
+      const store = new IntakeStore(file)
+      store.add(withSource({ sessionId: SESSION, origin, title: 'Session 交接' }))
+      const reloaded = new IntakeStore(file)
+      reloaded.load()
+      assert.deepEqual(reloaded.get('handoff', 'h1')?.content?.verified.source, {
+        sessionId: SESSION,
+        origin,
+        title: 'Session 交接',
+      })
+    })
+  }
+
+  for (const [label, source] of [
+    ['識別碼不是 UUID', { sessionId: '../../etc', origin: { kind: 'global' } }],
+    ['歸屬的種類不認得', { sessionId: SESSION, origin: { kind: 'elsewhere' } }],
+    ['folder 歸屬缺名稱', { sessionId: SESSION, origin: { kind: 'folder', folderId: 'f1' } }],
+  ] as const) {
+    it(`載入時丟棄不合法的來源（${label}），record 保留`, () => {
+      const file = tempFile()
+      const store = new IntakeStore(file)
+      store.add(withSource({ sessionId: SESSION, origin: { kind: 'global' } }))
+      // 直接改磁碟上的內容 —— 那才是不受信任的來源。
+      const data = JSON.parse(fs.readFileSync(file, 'utf8'))
+      data.entries[0].content.verified.source = source
+      fs.writeFileSync(file, JSON.stringify(data))
+
+      const reloaded = new IntakeStore(file)
+      reloaded.load()
+      const record = reloaded.get('handoff', 'h1')
+      assert.ok(record?.content, 'record 與內容仍在')
+      assert.equal(record?.content?.verified.source, undefined)
+    })
+  }
+
+  it('來源不進入內容摘要 —— 標題不同的同一份投遞仍是同一則', () => {
+    const a = withSource({ sessionId: SESSION, origin: { kind: 'global' }, title: 'before' })
+    const b = withSource({ sessionId: SESSION, origin: { kind: 'global' }, title: 'after' })
+    assert.equal(digestOf(a.authored, a.verified), digestOf(b.authored, b.verified))
+  })
+})

@@ -21,7 +21,7 @@ interface Harness {
 }
 
 function harness(options: {
-  sources?: Record<string, { folderId: string | null; label: string }>
+  sources?: Record<string, { folderId: string | null; label: string; title?: string }>
   candidates?: { id: string; name: string; path: string }[]
   eventsEnabled?: boolean
   enabled?: boolean
@@ -349,4 +349,61 @@ test('投遞內容自稱 firstPartyBody 不被採信', async () => {
   await h.handoff.deliverFile(fs.readFileSync(file, 'utf8'), file)
 
   assert.equal(h.store.list()[0].content?.verified.firstPartyBody, true)
+})
+
+// ---- 來源（handoff-lineage）
+
+const P = 'c463620e-cfbf-40e4-9732-685d0ea94b89'
+
+async function sourceAfter(sources: Record<string, { folderId: string | null; label: string; title?: string }>, from = P, payload: unknown = good) {
+  const h = harness({ sources })
+  const file = h.file(from, 'a.json', payload)
+  await h.handoff.deliverFile(fs.readFileSync(file, 'utf8'), file)
+  return h.store.list()[0]?.content?.verified.source
+}
+
+test('來源：folder 的 session ⇒ 識別碼、folder 名稱與當下的標籤', async () => {
+  assert.deepEqual(await sourceAfter({ [P]: { folderId: 'f1', label: 'alpha', title: 'Session 交接' } }), {
+    sessionId: P,
+    origin: { kind: 'folder', folderId: 'f1', folderName: 'alpha' },
+    title: 'Session 交接',
+  })
+})
+
+test('來源：全域 session ⇒ 全域，不含字面名稱', async () => {
+  const source = await sourceAfter({ [P]: { folderId: null, label: 'Global' } })
+  assert.deepEqual(source, { sessionId: P, origin: { kind: 'global' } })
+  assert.ok(!JSON.stringify(source).includes('Global'))
+})
+
+test('來源：攝入時已結束 ⇒ 未知（不是全域），沒有快照', async () => {
+  assert.deepEqual(await sourceAfter({}), { sessionId: P, origin: { kind: 'unknown' } })
+})
+
+test('來源：投遞內容自稱的來源不影響它', async () => {
+  const source = await sourceAfter(
+    { [P]: { folderId: 'f1', label: 'alpha' } },
+    P,
+    { ...good, source: { sessionId: '11111111-2222-3333-4444-555555555555', origin: { kind: 'global' } } },
+  )
+  assert.equal(source?.sessionId, P)
+  assert.equal(source?.origin.kind, 'folder')
+})
+
+test('來源：落點目錄名不是 UUID ⇒ 不帶來源，交接照常被攝入', async () => {
+  const h = harness({ sources: { s1: { folderId: 'f1', label: 'alpha' } } })
+  const file = h.file('s1', 'a.json', good)
+  const outcome = await h.handoff.deliverFile(fs.readFileSync(file, 'utf8'), file)
+  assert.equal(outcome.ok, true)
+  assert.equal(h.store.list()[0]?.content?.verified.source, undefined)
+})
+
+test('來源：超長且含控制字元的標題被正規化截斷，交接照常被攝入', async () => {
+  const h = harness({ sources: { [P]: { folderId: 'f1', label: 'alpha', title: `a\u202e${'x'.repeat(500)}` } } })
+  const file = h.file(P, 'a.json', good)
+  const outcome = await h.handoff.deliverFile(fs.readFileSync(file, 'utf8'), file)
+  assert.equal(outcome.ok, true)
+  const title = h.store.list()[0]?.content?.verified.source?.title ?? ''
+  assert.ok(!title.includes('\u202e'))
+  assert.ok([...title].length <= 200)
 })

@@ -205,3 +205,29 @@ describe('發生時間（intake-inbox-usability）', () => {
     assert.equal(taipei.value.authored.occurredAt, Date.UTC(2026, 8, 22, 7, 41, 0, 500))
   })
 })
+
+describe('交接來源的正規化（handoff-lineage）', () => {
+  it('標題經正規化、換行收成空白、以 code point 截斷', async () => {
+    const { sourceTitle, MAX_FIELD_LENGTH } = await import('./intake-schema')
+    assert.equal(sourceTitle('a‮b\n\nc'), 'ab c')
+    const long = sourceTitle('𝒜'.repeat(MAX_FIELD_LENGTH + 10))
+    assert.equal([...long].length, MAX_FIELD_LENGTH)
+  })
+
+  it('投遞內容中自稱的 source 不被採信', async () => {
+    const { parseIntake } = await import('./intake-schema')
+    const result = parseIntake(
+      {
+        id: 'h1',
+        origin: { kind: 'slack', id: 'C1', label: '#dev' },
+        title: 't',
+        body: 'b',
+        actor: 'a',
+        source: { sessionId: 'c463620e-cfbf-40e4-9732-685d0ea94b89', origin: { kind: 'global' } },
+      },
+      'file',
+    )
+    assert.equal(result.ok, true)
+    if (result.ok) assert.equal(result.value.verified.source, undefined)
+  })
+})

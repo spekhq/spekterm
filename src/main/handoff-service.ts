@@ -3,12 +3,38 @@ import { clearOutbox, outboxRoot, sourceSessionOf } from './handoff-outbox'
 import { HandoffThrottle, type ThrottleOptions } from './handoff-throttle'
 import { resolveTarget, type TargetCandidate } from './handoff-target'
 import type { DeliverOutcome, IntakeService } from './intake-service'
+import { sourceTitle, type HandoffSource as LineageSource } from './intake-schema'
 import { IntakeSource } from './intake-source'
+import { isUuid } from './session-store'
 
 /** 來源 session 的座標。`folderId` 為 `null` ＝ 全域 session。 */
 export interface HandoffSource {
   folderId: string | null
   label: string
+  /** 來源 session 當下的標籤（`customTitle ?? title`）。沒有時缺席。 */
+  title?: string
+}
+
+/**
+ * 由落點推出的識別碼與它當下的座標，組出要跟著 intake 落盤的來源（`session-lineage`）。
+ *
+ * **識別碼先驗形狀** —— `sourceSessionOf` 回傳任何目錄名，而這個值之後會被寫進 session、於下次
+ * 啟動時被解析。形狀不對時不帶來源（交接照常處理：它只是建不起關係）。
+ *
+ * 歸屬是三態：查無（已結束）⇒ `unknown`，**不是**全域。
+ */
+export function lineageSourceOf(sessionId: string, source: HandoffSource | null): LineageSource | undefined {
+  if (!isUuid(sessionId)) return undefined
+  const title = source?.title ? sourceTitle(source.title) : ''
+  return {
+    sessionId,
+    origin: !source
+      ? { kind: 'unknown' }
+      : source.folderId === null
+        ? { kind: 'global' }
+        : { kind: 'folder', folderId: source.folderId, folderName: source.label },
+    ...(title !== '' ? { title } : {}),
+  }
 }
 
 /** 來源 session 已結束時用的座標識別碼。**不是一個 folder** —— 只是一個座標。 */
@@ -169,6 +195,7 @@ export class HandoffService {
       originId,
       originLabel,
       targetFolderId: target.folderId,
+      source: lineageSourceOf(sessionId, source),
     })
 
     // **失敗的診斷欄位一律帶上** —— 共用路徑的拒絕（本文過長、識別碼不合法…）同樣要說得出

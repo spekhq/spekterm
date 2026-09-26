@@ -136,7 +136,44 @@ export function ptyEnv(
 ): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...source, ...user, TERM: 'xterm-256color' }
   for (const key of NESTED_CLAUDE_ENV) delete env[key]
+  // **本應用程式替 session 設定的專屬變數一律不從外層繼承**（`agent-peer-name`）。
+  //
+  // 開發時 spekterm 常在另一個 spekterm 的 session 裡被啟動（`npm run dev`），於是 `process.env`
+  // 帶著外層那個 session 的 `SPEKTERM_PEER_NAME`、`SPEKTERM_HANDOFF_DIR`、`SPEKTERM_EVENT_DIR`…
+  // 內層只要有一條路沒帶自己的值（例如某個注入被關掉），就拿到**外層仍在執行**的那個名字與落點 ——
+  // 兩個 agent 同名、交接寫進別人的目錄，而沒有任何東西會紅。各 session 的值在這之後由呼叫端合併。
+  for (const key of Object.keys(env)) {
+    if (key.startsWith('SPEKTERM_')) delete env[key]
+  }
   return env
+}
+
+/** 固定名字經這個環境變數交給 agent CLI（`agent-peer-name`）。 */
+export const PEER_NAME_ENV = 'SPEKTERM_PEER_NAME'
+
+/**
+ * 同一個 session 的前一顆 pty 的結束。
+ *
+ * **模組層級**，因為 renderer 重新載入時舊的 `TerminalService` 被 dispose、新的被建立 —— 前一顆
+ * pty 屬於舊的那個服務，新的服務要能等到它。
+ */
+const lastExit = new Map<string, Promise<void>>()
+
+/** 等前一顆 pty 結束的上限。逾時照樣 spawn（記錄下來）—— 卡住的是一個看不見的舊行程，不是使用者。 */
+export const PREVIOUS_PTY_WAIT_MS = 3_000
+
+async function previousExited(sessionId: string): Promise<void> {
+  const pending = lastExit.get(sessionId)
+  if (!pending) return
+  let timer: NodeJS.Timeout | undefined
+  const timedOut = await Promise.race([
+    pending.then(() => false),
+    new Promise<boolean>((resolve) => {
+      timer = setTimeout(() => resolve(true), PREVIOUS_PTY_WAIT_MS)
+    }),
+  ])
+  if (timer) clearTimeout(timer)
+  if (timedOut) console.error('[terminal] the previous pty of this session did not exit in time; spawning anyway')
 }
 
 /**
@@ -152,6 +189,7 @@ function spawnArgs(
   target: SpawnTarget,
   conversation: ClaudeConversation | undefined,
   injection: Injection | null,
+  peerName?: string,
 ): string[] {
   // claude 目標**恆有**一個對話（`create()` 不是續接就是新建）—— 沒有「不帶 id 的 claude」。
   if (target !== 'claude' || !conversation) return ['-l']
@@ -163,7 +201,11 @@ function spawnArgs(
   // 注入的片段已在 `agent-status` 內 shell-quote 過；`null` 代表不注入（偏好關閉，或使用者有
   // 自訂 statusline 而我們串不上 —— 那時寧可不做，也不弄壞他現有的）。
   const settings = injection ? `${injection.commandFragment} ` : ''
-  return ['-l', '-c', `claude ${settings}${flag} ${id}`]
+  // **名字不拼進命令字串** —— 它含 folder 名稱，而那是使用者檔案系統上的任意字串。命令裡只有這個
+  // 固定片段，值由環境變數交付（雙引號內的展開結果不會被 shell 再解析一次）。**不經
+  // `composeInjection`**：那些功能全關時它回 `null`，名字會跟著消失（`agent-peer-name`）。
+  const name = peerName ? ` --name="$${PEER_NAME_ENV}"` : ''
+  return ['-l', '-c', `claude ${settings}${flag} ${id}${name}`]
 }
 
 interface ClaudeConversation {
@@ -179,6 +221,11 @@ export interface SpawnOptions {
   sessionId?: string
   /** claude：續接這個對話。非 UUID 一律忽略並以全新對話開始 —— 絕不拼接未經驗證的值。 */
   resumeConversationId?: string
+  /**
+   * claude：固定名字（`agent-peer-name`）。**由呼叫端決定並落盤**，這裡只負責交付 —— 名字要在
+   * session 建立時就決定（休眠的 session 也要有），而 `TerminalService` 不認識 session 清單。
+   */
+  peerName?: string
   /** shell：最後已知的工作目錄。夾制於下方 `worktreeRoots` 所定義的範圍內；越界或不可用時退回根目錄。 */
   cwd?: string
   /**
@@ -231,6 +278,8 @@ interface Session {
   startedAt: number
   /** 自癒已經用掉了 —— 至多一次（否則 `claude` 沒安裝時會無限重試）。 */
   healed: boolean
+  /** claude 目標的固定名字。**自癒要沿用它** —— 那是 pty 誕生時要做的事的又一例。 */
+  peerName?: string
 }
 
 /**
@@ -358,6 +407,11 @@ export class TerminalService {
   }
 
   /** 還活著的 pty 數量。驗收「關閉／dispose 後確實清理」用得上。 */
+  /** 目前持有 pty 的 claude session（關係檔的範圍：「是否在執行」即由它回答）。 */
+  runningAgents(): string[] {
+    return [...this.#sessions].filter(([, session]) => session.target === 'claude').map(([id]) => id)
+  }
+
   get sessionCount(): number {
     return this.#sessions.size
   }
@@ -396,6 +450,9 @@ export class TerminalService {
     const folderPath = global ? os.homedir() : this.#folderPathOf(folderId)
 
     const sessionId = options.sessionId ?? randomUUID()
+    // 同一個 session 的前一顆 pty（renderer 重新載入時被非同步地殺掉）還沒結束的話，兩個同名的
+    // agent 會並存 —— 實測 CLI 不會替其中一個改名，於是那段期間名字是歧義的。
+    await previousExited(sessionId)
 
     // 續接的 id 不合法時**不是錯誤，是「沒有東西可以續接」** —— 以全新對話開始，而不是把一個
     // 未經驗證的字串拼進命令，也不是讓這個 session 就此死掉（design D8、spec 的「不合法的對話
@@ -420,6 +477,7 @@ export class TerminalService {
       rows: INITIAL_ROWS,
       healed: false,
       global,
+      peerName: target === 'claude' ? options.peerName : undefined,
     })
 
     return { sessionId, conversationId: conversation?.id }
@@ -473,6 +531,7 @@ export class TerminalService {
       healed: boolean
       global: boolean
       worktreeRoots?: readonly string[]
+      peerName?: string
     },
   ): void {
     const { cwd, cols, rows, healed, global } = options
@@ -495,7 +554,8 @@ export class TerminalService {
         : null
     let pty: IPty
     try {
-      pty = spawn(resolveShell(), spawnArgs(target, conversation, injection), {
+      const peerName = target === 'claude' ? options.peerName : undefined
+      pty = spawn(resolveShell(), spawnArgs(target, conversation, injection, peerName), {
         name: 'xterm-256color',
         cols,
         rows,
@@ -503,7 +563,7 @@ export class TerminalService {
         // TERM 明確設定以對齊前端 xterm；其餘環境自 process.env 繼承，但抹掉「巢狀 Claude Code」
         // 的標記（見 `ptyEnv` —— 少了那一步，裡面的 claude 不寫 transcript，續接永遠失敗）。
         // encoding 不設，node-pty 預設 utf8，onData 交付 string。
-        env: { ...ptyEnv(), ...injection?.env },
+        env: { ...ptyEnv(), ...injection?.env, ...(peerName ? { [PEER_NAME_ENV]: peerName } : {}) },
       })
     } catch (error) {
       // 罕見：底層 pty 配置不出來時 node-pty 才會同步拋錯。
@@ -524,10 +584,15 @@ export class TerminalService {
       conversation,
       startedAt: Date.now(),
       healed,
+      peerName: options.peerName,
     })
+
+    let exited!: () => void
+    lastExit.set(sessionId, new Promise<void>((resolve) => { exited = resolve }))
 
     pty.onData((chunk) => this.sink.data(sessionId, chunk))
     pty.onExit(({ exitCode }) => {
+      exited()
       const session = this.#sessions.get(sessionId)
       // 這一輪的 pty 已經不是當下這個 session 的 pty（自癒已重新 spawn 過）—— 忽略遲到的 exit。
       if (session && session.pty !== pty) return
@@ -583,6 +648,8 @@ export class TerminalService {
         // 於是它的 cwd 從此受路徑夾制 —— 而自癒對 renderer 完全不可見，沒有任何訊號。
         // 這一行與上面的 `cwd`／`cols`／`rows` 是同一種疏漏，那三個都是漏掉後才補的。
         global: session.global,
+        // 名字同理：自癒出來的 agent 若沒有名字，告知給母子 session 的地址就此失效，而它不可見。
+        peerName: session.peerName,
       })
     } catch {
       // 連新的 pty 都配置不出來 —— 讓原本的失敗照常呈現。

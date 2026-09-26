@@ -1,5 +1,6 @@
 import { useCallback, useRef, useState } from 'react'
 import { ContextMenu, type MenuItem } from '../files/dialogs'
+import { LineageMarkers } from './lineage'
 import type { SpawnTarget } from '../types'
 import { SessionNameDialog } from './SessionNameDialog'
 import { StatusDot, sessionLabel, sessionTitle, statusTitle } from './session-badge'
@@ -188,6 +189,9 @@ export function SessionTabs({
                 )}
                 <PrefillBadge sessionId={session.id} />
               </button>
+
+              {/* 在分頁按鈕之外 —— 按鈕不能巢狀，而標示有自己的動作（跳到母／子 session）。 */}
+              <LineageMarkers session={session} />
 
               <button
                 type="button"

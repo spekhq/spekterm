@@ -76,7 +76,7 @@ test('清單變動時重寫活著的 session 的自我介紹', () => {
   prepareHandoffInjection('s1', true, folders)
   assert.equal(introContext('s1').includes('beta'), false)
 
-  refreshIntros(['s1'], [...folders, { name: 'beta', path: '/repos/beta' }])
+  refreshIntros(['s1'], [...folders, { name: 'beta', path: '/repos/beta' }], () => undefined)
 
   assert.ok(introContext('s1').includes('beta'))
   assert.ok(introContext('s1').includes('/repos/beta'))
@@ -96,4 +96,21 @@ test('上一輪未被消費的投遞不會在重建時被清掉', () => {
   prepareHandoffInjection('s1', true, folders)
 
   assert.deepEqual(fs.readdirSync(outboxDir('s1')), ['leftover.json'])
+})
+
+test('folder 清單變動後重寫的自我介紹仍含名字與關係檔位置', () => {
+  setup()
+  prepareHandoffInjection('s1', true, folders, { name: 'alpha-1111' })
+  assert.ok(introContext('s1').includes('alpha-1111'))
+
+  refreshIntros(['s1'], [...folders, { name: 'beta', path: '/repos/beta' }], (id) => (id === 's1' ? 'alpha-1111' : undefined))
+
+  assert.ok(introContext('s1').includes('alpha-1111'), '名字仍在')
+  assert.ok(introContext('s1').includes(path.join('relations', 's1.json')), '關係檔位置仍在')
+})
+
+test('注入的環境變數含關係檔位置', () => {
+  setup()
+  const contribution = prepareHandoffInjection('s1', true, folders, { name: 'alpha-1111' })
+  assert.ok(contribution?.env?.SPEKTERM_HANDOFF_RELATIONS?.endsWith(path.join('relations', 's1.json')))
 })

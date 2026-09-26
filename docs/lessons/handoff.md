@@ -262,3 +262,82 @@ session 之前擋下它，且 `DUPLICATE` 是 `consume: true`。
 東西 —— 那正是啟動掃描本來就會讀到的。真正沒人清的孤兒落點（app 被強制結束、該 session
 再也不會被 spawn）它**永遠碰不到**。清得到的幾乎是空集合，代價卻是真的：一則**尚未被消費**
 的待處理交接會在下次 spawn 時被銷毀，而投遞端與使用者兩邊都不會知道。
+
+## 十一、agent CLI 的本機訊息與 `--name`（`handoff-lineage` 的前提）
+
+**實測於 Claude Code 2.1.282（2026-09-25）。以下全部是 agent CLI 的行為，CLI 換版之後要重測 ——
+任何一條改變，母子 session 互相聯絡就可能靜默失效：agent 送出的訊息找不到人，而它不會抱怨。**
+
+| 問題 | 結果 |
+|---|---|
+| 本機 session 名冊 | `~/.claude/sessions/<pid>.json`：`sessionId`（對話 id）、`name`、`nameSource`、`messagingSocketPath` |
+| 未指定名字 | `nameSource: "derived"`，由工作目錄加兩碼產生（`spekterm-3c`），**每個行程不同**；目錄名全為非 ASCII 時是 `claude-01` |
+| `claude --name X` | 名冊 `name: "X"`、`nameSource: "user"`，有自己的訊息 socket |
+| **以名字跨工作目錄送達** | ✅ 從 `spekterm` 的 session 以 `SendMessage` 送給另一個目錄中 `--name` 指定的 session，對方收到並回覆 |
+| 名字的字元 | 空白、CJK、雙引號、82 字元皆**原樣**登記（CLI 不正規化） |
+| `--resume <id> --name Y` | 名冊為 `Y`，不沿用那段對話先前的名字 |
+| 兩個同名行程同時執行 | **兩者都保留同一個名字**，未觀察到改名（二進位檔中有 `collision` 的處置，但這個情境沒觸發）⇒ 同名的風險是**歧義**，不是地址被改掉 |
+| 指定名字對終端標題 | 未指定：`✳ Claude Code` → 送出 prompt 後 `✳ <任務名>`。指定：**恆為 `✳ X`** |
+| 收件方的 agent | 訊息抵達即**自行開始工作**（不等使用者）|
+| 讀 userData 下的檔案 | 使用者的預設模式（auto）下**不詢問權限**；其他模式**未測** |
+
+三個會讓人白花時間的量測陷阱：
+
+- **在一個 claude session 裡啟動另一個 claude 來測**，它會繼承 `CLAUDE_CODE_CHILD_SESSION` 等巢狀標記
+  （`terminal.ts` 的 `NESTED_CLAUDE_ENV`），於是「Transcript saving is off」而且行為與真的 session 不同。
+  量測時用 `env -u` 把那組變數（外加 `CLAUDE_CODE_MESSAGING_*`、`CLAUDE_PID`）剝掉 —— spekterm 的
+  pty 本來就會剝。
+- **`pkill -f <樣式>` 會殺掉執行它的那個 shell**（命令列本身含那個樣式）。症狀是 exit 144 而沒有輸出。
+- **從未送過 prompt 的 session 沒有 transcript**，拿它測 `--resume` 會找不到對話。
+
+另見 `SendMessage` 的說明：**收件方與寄件方的權限模式不同時，訊息會先等收件方的使用者同意**。
+母子 session 的權限模式一致（都是使用者的預設）時不受影響。
+
+有一次以 `--name` 啟動**完全沒有輸出**，換名字重跑正常；之後以同名、殘留名冊、並行同名皆未重現。
+
+## 十二、母子關係：寫入的時機、查詢的範圍、以及一個冒泡
+
+`handoff-lineage` 讓交接出來的 session 記住母 session，並讓母、子、兄弟的 agent 以固定名字互相
+聯絡。三個不知道就會踩的地方：
+
+### 12.1 關係在 spawn 之前寫入，而且只能由主行程簽發的單次憑證觸發
+
+自我介紹與關係檔都在 spawn 時寫出。關係若在 spawn 之後才寫（例如在 `attach`），子 session 的
+agent 第一次被注入時看不到母 session —— 而 `attach` 的 sessionId 由 renderer 提供、不檢查狀態，
+在那裡寫等於讓 renderer 能把任何既有 session 掛成子節點。因此：
+
+- renderer 建立 session 時只能轉交一張**主行程簽發**的憑證（`handoff-ticket.ts`），綁定 record、
+  folder 與 claude 目標，用過即廢；只對**待處理**的交接簽發（record 永不刪除、了結之後仍是
+  accepted —— 以主鍵當憑證的話，歷史上的交接能被無限次引用）。
+- `createSession` 先產生識別碼、再寫**暫定紀錄**、最後 spawn（順序見 `session-create.ts`）。
+
+### 12.2 「查某個 session」要看暫定紀錄 —— 否則最快的那一則交接會把來源記成「已結束」
+
+新 session 在 renderer 把它送來持久化之前（~500ms 的 debounce）只存在於暫定紀錄。`SessionStore`
+的 `list()`／`get()` **看不到它**，要用 `view()`。
+
+實際咬到的一次：母 session 建好後立刻投遞的交接，`sourceOf()` 用 `get()` 查不到母 session，
+於是來源的歸屬被記成 `unknown`（「攝入時來源已結束」）。**跨 folder 的那一則晚一點投遞，所以
+是對的** —— 第一版 probe 只驗了跨 folder 那一則的快照，整段照樣綠，直到「母 session 關閉之後
+呈現快照」那條才露出來。**凡是「以識別碼找一個 session」的地方，都問一次：它可能還在暫定紀錄裡嗎？**
+
+### 12.3 選單的點擊會沿著 React 元件樹冒泡，不管它畫在畫面的哪裡
+
+母 session 的「→ N」標示打開的選單，是那一列 session 的子元件。選一個子 session 的那次點擊，
+合成事件沿著**元件樹**冒到那一列的 `onClick` —— 把焦點選回母 session，蓋掉剛才的跳轉。
+症狀是「點了沒反應」（選中項停在母 session 的 folder）。`ContextMenu` 用 `position: fixed` 畫在
+別處，這件事從畫面上完全看不出來。處置：標示的外層同時停下 `mousedown`、`keydown`、`click`。
+
+### 12.4 `SPEKTERM_` 前綴是保留的
+
+`ptyEnv()` 會剝掉所有從外層繼承來的 `SPEKTERM_*`（開發時 spekterm 常在另一個 spekterm 的
+session 裡啟動，外層的名字與落點會被繼承）。**測試或使用者自己設的變數不要用這個前綴** ——
+`user-env.spawn.test.ts` 的哨兵原本叫 `SPEKTERM_RC_SENTINEL`，改規則之後它「消失」了。
+
+### 12.5 已知的缺口
+
+- **peer 訊息會被誤判為「使用者已送出預填的 prompt」**：收件的 agent 一收到訊息就開始工作，而那正是
+  「已送出」唯一的判準。自我介紹要求 agent 在使用者送出第一則 prompt 之前不要傳訊息給剛交接出去的
+  session；根本的修正（以 `UserPromptSubmit` 作為真正的送出事件）未做。
+- **在 claude 裡用它自己的 `/rename` 會改掉名字**，直到下一次 spawn 被 spekterm 指定回來。
+- **休眠的 session 收不到訊息**（沒有行程）；關係檔以 `running: false` 標明，spekterm 不代為喚醒。

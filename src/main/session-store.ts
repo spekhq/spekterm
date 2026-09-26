@@ -1,5 +1,8 @@
 import fs from 'node:fs'
 import path from 'node:path'
+import type { SessionLineage } from '../shared/lineage/types'
+import { parseHandoffSource } from './intake-schema'
+import { decidePeerName, isValidPeerName } from './peer-name'
 import type { SpawnTarget } from './terminal'
 import { isWorktreeKey } from './worktree-key'
 
@@ -90,6 +93,35 @@ export interface PersistedSession {
   claudeSessionId?: string
   /** 最後已知的工作目錄（僅 shell 目標有意義）。恆為絕對路徑，恆由主行程供應。 */
   cwd?: string
+  /**
+   * 這個 session 是由哪一個 session 交接出來的（`session-lineage`）。**主行程供應**。
+   *
+   * 它決定 agent 被告知「誰是你的母 session」—— 一份關於身分的事實。renderer 若能寫入它，
+   * 就能讓 agent 把訊息送給錯的對象，所以它與 `claudeSessionId` 走同一條路：不在
+   * `RendererSession` 裡、`replace()` 保留、讀回時逐欄驗證。
+   */
+  lineage?: SessionLineage
+  /**
+   * claude 目標的固定名字（`agent-peer-name`）。**主行程供應**，決定一次之後不再改變。
+   *
+   * 它會成為 agent CLI 的參數，所以讀回時以 `isValidPeerName` 驗證；不合法就丟掉、重新決定。
+   */
+  peerName?: string
+}
+
+export type { SessionLineage }
+
+/** 讀回一筆關係。任何一個欄位不對就整筆丟掉（只丟關係，不丟 session）。 */
+export function parseLineage(raw: unknown): SessionLineage | undefined {
+  if (typeof raw !== 'object' || raw === null) return undefined
+  const r = raw as Record<string, unknown>
+  const parsed = parseHandoffSource({ sessionId: r.parentId, origin: r.origin, title: r.parentTitle })
+  if (!parsed) return undefined
+  return {
+    parentId: parsed.sessionId,
+    origin: parsed.origin,
+    ...(parsed.title ? { parentTitle: parsed.title } : {}),
+  }
 }
 
 interface PersistedSessions {
@@ -97,8 +129,14 @@ interface PersistedSessions {
   sessions: PersistedSession[]
 }
 
-/** renderer 送來的部分 —— 明確地**不含** `claudeSessionId` 與 `cwd`。 */
-export type RendererSession = Omit<PersistedSession, 'claudeSessionId' | 'cwd'>
+/** renderer 送來的部分 —— 明確地**不含**主行程供應的欄位。 */
+export type RendererSession = Omit<PersistedSession, MainOwnedField>
+
+/** 只有主行程能寫的欄位。**加一個進來，這裡、`replace()`、`parseSessionEntry` 三處都要改。** */
+type MainOwnedField = 'claudeSessionId' | 'cwd' | 'lineage' | 'peerName'
+
+/** 主行程專屬欄位的暫存形狀。 */
+type MainFields = Partial<Pick<PersistedSession, MainOwnedField>>
 
 function isSpawnTarget(value: unknown): value is SpawnTarget {
   return value === 'claude' || value === 'shell'
@@ -163,6 +201,9 @@ export function parseSessionEntry(entry: unknown): PersistedSession | null {
     claudeSessionId,
     // 絕對路徑才有意義；相對路徑無從解讀，丟棄後退回 folder 根目錄。
     cwd: typeof raw.cwd === 'string' && path.isAbsolute(raw.cwd) ? raw.cwd : undefined,
+    // 兩者都是「不合法只丟該欄位」：關係丟了只是不再縮排；名字丟了會在 `ensurePeerNames` 重新決定。
+    lineage: parseLineage(raw.lineage),
+    peerName: raw.spawnTarget === 'claude' && isValidPeerName(raw.peerName) ? raw.peerName : undefined,
   }
 }
 
@@ -238,7 +279,19 @@ export class SessionStore {
    * `update()`，清單裡還沒有這一筆，那個識別碼就被靜默丟棄，**下次重開時無從續接**（症狀是
    * 「每個 claude session 都從新對話開始」，而且不會有任何錯誤訊息）。
    */
-  #pendingMainFields = new Map<string, Partial<Pick<PersistedSession, 'claudeSessionId' | 'cwd'>>>()
+  #pendingMainFields = new Map<string, MainFields>()
+
+  /**
+   * **暫定紀錄**：主行程剛建立、renderer 還沒送來持久化的 session（`handoff-lineage` design D2）。
+   *
+   * `#pendingMainFields` 只有主行程欄位，算不出一個新子 session 屬於哪個 repo；而關係檔與
+   * 「誰是我的子 session」在那 ~500ms 的 debounce 裡就要看得到它。暫定紀錄帶齊歸屬與目標，
+   * 由 `replace()` 認領；renderer 在送來之前重新載入的話，由 `dropProvisional()` 清掉 ——
+   * 否則母 session 會一直看到一個永遠不會被持久化的子 session。
+   */
+  #provisional = new Map<string, PersistedSession>()
+
+  #listeners = new Set<() => void>()
 
   /**
    * 已經確定結束（pty 自己死了、或使用者關掉）的 session。**它們不得被復活。**
@@ -293,6 +346,74 @@ export class SessionStore {
     return this.#sessions.map((session) => ({ ...session }))
   }
 
+  /**
+   * 含暫定紀錄的讀取視圖。**關係的計算一律走這裡**（`list()` 看不到剛建立的子 session）。
+   * 已被認領或已被移除的不會同時出現在兩邊。
+   */
+  view(): { session: PersistedSession; provisional: boolean }[] {
+    const known = new Set(this.#sessions.map((session) => session.id))
+    return [
+      ...this.#sessions.map((session) => ({ session: { ...session }, provisional: false })),
+      ...[...this.#provisional.values()]
+        .filter((session) => !known.has(session.id))
+        .map((session) => ({ session: { ...session }, provisional: true })),
+    ]
+  }
+
+  /** 登記一筆暫定紀錄。`folderId`／`spawnTarget` 必填；`ordinal` 由 renderer 決定，這裡填 0。 */
+  addProvisional(entry: Pick<PersistedSession, 'id' | 'folderId' | 'spawnTarget'> & MainFields): void {
+    if (!isUuid(entry.id) || this.#gone.has(entry.id)) return
+    this.#provisional.set(entry.id, { ordinal: 0, ...entry })
+    this.#emit()
+  }
+
+  /** renderer 重新載入：尚未被認領的暫定紀錄永遠不會被持久化了。 */
+  dropProvisional(): void {
+    if (this.#provisional.size === 0) return
+    this.#provisional.clear()
+    this.#emit()
+  }
+
+  /** 已被使用的名字（含暫定紀錄）—— 決定新名字時的相撞集合。 */
+  peerNames(): string[] {
+    return this.view()
+      .map(({ session }) => session.peerName)
+      .filter((name): name is string => typeof name === 'string')
+  }
+
+  /**
+   * 替尚無名字的 claude session 決定名字並寫回（載入之後呼叫一次）。
+   *
+   * **不延後到第一次 spawn** —— 休眠的母 session 在被喚醒之前，也要有名字可以告訴它的子 session。
+   * `labelOf` 回該 session 所屬 rail 項目的名稱（`null` ＝ 全域；`undefined` ＝ 查無，用代替字）。
+   */
+  ensurePeerNames(labelOf: (folderId: string | null) => string | null | undefined): void {
+    let changed = false
+    for (const session of this.#sessions) {
+      if (session.spawnTarget !== 'claude' || session.peerName) continue
+      const label = labelOf(session.folderId)
+      session.peerName = decidePeerName(label === undefined ? '' : label, session.id, this.peerNames())
+      changed = true
+    }
+    if (changed) this.save()
+  }
+
+  /** 任何會改變 `view()` 的事之後通知（關係檔的單一觸發點接在這裡）。 */
+  subscribe(listener: () => void): () => void {
+    this.#listeners.add(listener)
+    return () => this.#listeners.delete(listener)
+  }
+
+  #emit(): void {
+    for (const listener of this.#listeners) {
+      try {
+        listener()
+      } catch (error) {
+        console.error(`[sessions] listener failed: ${String(error)}`)
+      }
+    }
+  }
+
   get(sessionId: string): PersistedSession | undefined {
     const found = this.#sessions.find((session) => session.id === sessionId)
     return found ? { ...found } : undefined
@@ -317,9 +438,10 @@ export class SessionStore {
       if (!folderId.ok) continue
       // 已經確定結束的 session，不因為一份過期的清單而復活（見 `#gone`）。
       if (this.#gone.has(entry.id)) continue
-      const kept = previous.get(entry.id)
+      const kept = previous.get(entry.id) ?? this.#provisional.get(entry.id)
       const waiting = this.#pendingMainFields.get(entry.id)
       this.#pendingMainFields.delete(entry.id)
+      this.#provisional.delete(entry.id)
       // **逐欄位挑，不用 `...entry`。** renderer 送來的物件是不受信任的輸入，原樣展開等於讓
       // 落盤的形狀由對方決定 —— 一個過期的 renderer（或一次沒清乾淨的重構）送來已被移除的欄位，
       // 它們會靜默地寫進 `sessions.json`，而 `session-persistence` 明文要求側欄座標
@@ -334,6 +456,10 @@ export class SessionStore {
         worktreeKey: entry.worktreeKey,
         claudeSessionId: waiting?.claudeSessionId ?? kept?.claudeSessionId,
         cwd: waiting?.cwd ?? kept?.cwd,
+        // **只取主行程已知的值** —— `entry` 裡同名的欄位即使存在也從未被讀到（型別上它根本不在
+        // `RendererSession` 裡；執行期則由這裡的逐欄位挑選保證）。
+        lineage: kept?.lineage,
+        peerName: kept?.peerName,
       })
     }
 
@@ -356,6 +482,11 @@ export class SessionStore {
     patch: Partial<Pick<PersistedSession, 'claudeSessionId' | 'cwd'>>,
   ): void {
     const target = this.#sessions.find((session) => session.id === sessionId)
+    const provisional = this.#provisional.get(sessionId)
+    if (!target && provisional) {
+      Object.assign(provisional, patch)
+      return
+    }
     if (!target) {
       this.#pendingMainFields.set(sessionId, {
         ...this.#pendingMainFields.get(sessionId),
@@ -378,6 +509,7 @@ export class SessionStore {
 
   remove(sessionId: string): void {
     this.#pendingMainFields.delete(sessionId)
+    if (this.#provisional.delete(sessionId)) this.#emit()
     // 墓碑必須在「這筆是否存在」之前立起來 —— 一個尚未被 renderer persist 過的 session 也可能
     // 已經死了（例如 claude 啟動失敗），而它的 id 仍然躺在待寫入的清單裡。
     if (isUuid(sessionId)) this.#gone.add(sessionId)
@@ -458,5 +590,6 @@ export class SessionStore {
     } catch (error) {
       console.error(`[sessions] write failed: ${String(error)}`)
     }
+    this.#emit()
   }
 }
