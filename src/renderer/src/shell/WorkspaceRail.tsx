@@ -138,6 +138,7 @@ function SessionGroup({
   forest,
   byId,
   focusedSessionId,
+  onStage,
   rowRefs,
   onSelectSession,
   onCloseSession,
@@ -149,6 +150,12 @@ function SessionGroup({
   forest: Forest
   byId: ReadonlyMap<string, SessionState>
   focusedSessionId: string | null
+  /**
+   * 這一組所屬的 rail 項目是否為選中的那一個。每個項目都各自記著一個 focused session，
+   * 但**只有選中項目的那一個正顯示在主畫面上** —— 兩者的呈現必須分得開，否則畫面上同時有
+   * 好幾列看起來「被選中」。
+   */
+  onStage: boolean
   /** 以 ref 物件傳入 —— 渲染期間不讀它，只在 ref callback 與命中判定裡讀。 */
   rowRefs: React.RefObject<Map<string, HTMLDivElement>>
   onSelectSession: (sessionId: string) => void
@@ -225,7 +232,15 @@ function SessionGroup({
                 // 靜止時 pointer：點一下會切換 focused session —— 那才是主要的可供性
                 // （design D8）。拖曳中的 grabbing 由 `body[data-dragging]` 全域覆蓋。
                 'cursor-pointer ' +
-                (isFocused ? 'bg-stage text-ink' : 'text-ink-dim hover:bg-hover/60')
+                // 主畫面正在顯示的那一列：琥珀邊條＋亮灰底＋粗體。**底色必須比 hover 亮** ——
+                // 反過來的話，滑過的那一列看起來比選中的更像被選中（雛型的 `--bg-2` 與 rail
+                // 背景幾乎同色，就是這樣）。邊條用 inset shadow 而不是 border，才不會推動縮排。
+                // 其他項目記住的 focused session 只提亮文字、不加底：它不在主畫面上。
+                (isFocused && onStage
+                  ? 'bg-hover text-ink font-semibold shadow-[inset_2px_0_0_var(--color-accent)]'
+                  : isFocused
+                    ? 'text-ink font-semibold hover:bg-hover/60'
+                    : 'text-ink-dim hover:bg-hover/60')
               }
             >
               <StatusDot session={session} />
@@ -255,6 +270,7 @@ function SessionGroup({
                   forest={forest}
                   byId={byId}
                   focusedSessionId={focusedSessionId}
+                  onStage={onStage}
                   rowRefs={rowRefs}
                   onSelectSession={onSelectSession}
                   onCloseSession={onCloseSession}
@@ -643,6 +659,7 @@ function RailRow({
             forest={forest}
             byId={byId}
             focusedSessionId={focusedSessionId}
+            onStage={selected}
             rowRefs={rowRefs}
             onSelectSession={onSelectSession}
             onCloseSession={onCloseSession}
