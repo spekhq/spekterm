@@ -7,7 +7,7 @@ session per repository in a single window, and puts an [OpenSpec](https://github
 side panel right next to it — so you can drive your agents and read the change they're working on
 without opening an IDE.
 
-> **Status:** early, and Linux only. `0.2.0` is the first public version. macOS and Windows builds,
+> **Status:** early, and Linux only. `0.2.1` is the first published release. macOS and Windows builds,
 > auto-update, and code signing are not available yet.
 
 ## Why
@@ -69,9 +69,19 @@ agent writes to disk.
 - [Claude Code](https://code.claude.com/docs) (`claude` on your `PATH`) for agent sessions. spekterm runs
   the real CLI with your own subscription — it never asks for an API key.
 
+## Install
+
+Download the latest `Spekterm-<version>.AppImage` from the
+[Releases page](https://github.com/spekhq/spekterm/releases), then:
+
+```bash
+chmod +x Spekterm-<version>.AppImage
+./Spekterm-<version>.AppImage
+```
+
 ## Install from source
 
-No prebuilt releases are published yet. You'll need Node.js 22 (see [`.nvmrc`](.nvmrc)).
+You'll need Node.js 22 (see [`.nvmrc`](.nvmrc)).
 
 ```bash
 git clone https://github.com/spekhq/spekterm.git

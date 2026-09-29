@@ -6,7 +6,7 @@
 [Claude Code](https://code.claude.com/docs) session，旁邊再放一塊懂 [OpenSpec](https://github.com/Fission-AI/OpenSpec)
 的側欄 —— 讓你不必另開 IDE，就能一邊駕駛 agent、一邊讀它正在做的那個 change。
 
-> **現況：** 早期版本，目前只支援 Linux。`0.2.0` 是第一個公開版本。macOS 與 Windows 的產物、
+> **現況：** 早期版本，目前只支援 Linux。`0.2.1` 是第一個發佈的版本。macOS 與 Windows 的產物、
 > 自動更新與程式碼簽章都還沒有。
 
 ## 為什麼
@@ -60,9 +60,18 @@ spec —— 並且在 agent 寫入磁碟時跟著更新。
 - [Claude Code](https://code.claude.com/docs)（`claude` 在 `PATH` 上），用於 agent session。spekterm
   執行的是真正的 CLI、用你自己的訂閱 —— 從不要求 API key。
 
+## 安裝
+
+從 [Releases 頁面](https://github.com/spekhq/spekterm/releases)下載最新的 `Spekterm-<version>.AppImage`，然後：
+
+```bash
+chmod +x Spekterm-<version>.AppImage
+./Spekterm-<version>.AppImage
+```
+
 ## 從原始碼安裝
 
-目前還沒有發佈預先建好的產物。需要 Node.js 22（見 [`.nvmrc`](.nvmrc)）。
+需要 Node.js 22（見 [`.nvmrc`](.nvmrc)）。
 
 ```bash
 git clone https://github.com/spekhq/spekterm.git
