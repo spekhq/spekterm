@@ -143,5 +143,8 @@ privately as described in [SECURITY.md](SECURITY.md).
 [MIT](./LICENSE). Packaged builds also include `THIRD_PARTY_LICENSES.txt`, which lists every
 third-party package bundled into the app and its license.
 
-If spekterm is useful to you, you can support its maintainer through
-[GitHub Sponsors](https://github.com/sponsors/kewang).
+## Disclaimer
+
+spekterm is an independent open-source project. It is not affiliated with, endorsed by, or sponsored by
+Anthropic. Claude and Claude Code are trademarks of Anthropic, PBC. OpenSpec is a separate project by its own
+authors.

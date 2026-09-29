@@ -1,7 +1,7 @@
 # spekterm — Product Requirements Document
 
 > 狀態：整合定案（consolidated draft）
-> 更新：2026-09-29（§2、§10、§13–15、附錄重評競品與官方現況；前一版 2026-07-08）
+> 更新：2026-09-29（§2 related projects, §10 business model, §13–15; previous version 2026-07-08）
 > 這份 PRD 是後續開發的**單一權威來源**，已整合先前散落的規劃文件（roadmap / 競品分析 / handoff 概念與設計）。
 > 唯一並存的補充素材是 [`workspace-mockup.html`](./workspace-mockup.html) — 定案互動雛型（OpenSpec × terminal × Handoff），因為它是互動原型、無法併入 markdown。
 
@@ -18,14 +18,12 @@
 7. [護城河：跨 agent、磁碟狀態驗證的 Handoff](#7-護城河跨-agent磁碟狀態驗證的-handoff)
 8. [系統架構](#8-系統架構)
 9. [與既有 spek 的關係](#9-與既有-spek-的關係)
-10. [商業模式（已裁決：MIT 開源，不做付費層）](#10-商業模式已裁決mit-開源不做付費層)
+10. [Business model](#10-business-model)
 11. [開發路線圖](#11-開發路線圖)
 12. [橫切關注點](#12-橫切關注點)
 13. [技術風險與緩解](#13-技術風險與緩解)
 14. [開放問題](#14-開放問題)
 15. [建議的下一步（2026-09-29 改寫）](#15-建議的下一步2026-09-29-改寫)
-- [附錄 A：競品詳細檔案](#附錄-a競品詳細檔案)
-- [附錄 B：資料來源與信度](#附錄-b資料來源與信度)
 
 ---
 
@@ -33,13 +31,13 @@
 
 **spekterm** 是一個**以 agent 為核心的本地開發工作台**——一個獨立的 Electron 桌面 app（以 MIT 授權開源），把多個「一個 repo／資料夾各自一個 `claude` session」的 terminal 包在一個殼裡，並加上一塊**懂 OpenSpec 結構的側欄**，讓使用者不必另外開 IDE 就能一邊駕駛 agent、一邊看著 spec 上下文。
 
-core 邏輯重用開源的 [`@spekjs/core`](https://github.com/spekhq/spek)（MIT）；app 本身同樣以 MIT 開源（2026-09-29 裁決，見 §10.3）。
+core 邏輯重用開源的 [`@spekjs/core`](https://github.com/spekhq/spek)（MIT）；app 本身同樣以 MIT 開源（2026-09-29 裁決，見 §10）。
 
 **一句話定位（headline）**：spec-driven 的多 agent 開發工作台。
 
 **護城河（moat，非 headline）**：跨異質 agent、以**磁碟狀態驗證**為核心的**結構化工作交接（handoff）**——一級功能、不綁 OpenSpec，任何 repo 都能用；工作對應到 OpenSpec change 時再額外錨定 change 做語意增強。見 §7。
 
-**現況**（2026-09）：Phase 0–5 已封存；Linux AppImage 可用；Phase 7 的本機收件匣、Slack 來件、agent 發起的跨 repo 交接與母子關係已交付。macOS／Windows 產物未做；Phase 8+ 付費層已裁決不做（§10.3）。UI 定案雛型見 `workspace-mockup.html`。
+**現況**（2026-09）：Phase 0–5 已封存；Linux AppImage 可用；Phase 7 的本機收件匣、Slack 來件、agent 發起的跨 repo 交接與母子關係已交付。macOS／Windows 產物未做；Phase 8+ 付費層已裁決不做（§10）。UI 定案雛型見 `workspace-mockup.html`。
 
 ---
 
@@ -52,107 +50,50 @@ core 邏輯重用開源的 [`@spekjs/core`](https://github.com/spekhq/spek)（MI
 - agent 缺乏共享的、可驗證的上下文；工作在 session／agent／人之間交接時只能靠聊天摘要，會失真。
 - 現有 IDE 不理解 spec-driven 工作流（OpenSpec 的 change 生命週期），無法把 spec 上下文與終端機並排。
 
-### 2.2 競爭態勢（2026-09-29 重評；詳細檔案見 [附錄 A](#附錄-a競品詳細檔案)）
+### 2.2 Related projects (snapshot: 2026-09-29)
 
-> **2026-07 的地圖已經不成立。** 當時的判讀是「三個不同的 job」：claude-view 負責監看、cmux 負責駕駛、spekterm
-> 負責駕駛並把 spec 並排在旁。兩個月後，**「一個殼包多個 agent session、每個 session 一個 worktree」已經是
-> 每個玩家的基本配備** —— 包括 Anthropic 自己，而且它**附在訂閱裡、不另收費**。
+Running several coding agents side by side is a busy space. The projects below overlap with spekterm in
+some way; they are listed so readers can compare approaches, not ranked. Details change quickly — check each
+project for its current state.
 
-| 產品 | 形態 | 平台 | agent | 懂 spec | session／agent 之間的交接 | 授權／定價 | traction（2026-09） |
-|---|---|---|---|---|---|---|---|
-| **Claude Code Desktop**（Anthropic 官方） | 桌面 app＋CLI＋web／手機 | macOS／Windows 正式版；**Linux beta**（Debian 系，2026-06-29 那週） | 僅 Claude | 沒有自家 spec 格式（plan mode、`/goal`；Ultraplan 已撤） | **同一使用者**的 session 互傳訊息（同機走本機 socket，跨機經 Remote Control） | 含在 Claude 訂閱 | — |
-| **better-agent-terminal**（BAT，TonyQ） | Tauri 2 桌面＋headless server＋手機 app | Win／macOS／Linux AppImage；iOS TestFlight、Android | Claude（SDK 與 CLI）、Codex（app-server 與 CLI） | **無**（repo 內 0 筆 OpenSpec） | 「Handoff → Codex」：**同一個 repo 換廠牌**，作者稱仍在驗證 | **MIT、完全免費** | 513★、292 個 release、約 20 位貢獻者 |
-| **Nimbalyst**（原 Crystal） | 桌面 | macOS／Windows／Linux＋iOS | Claude／Codex／OpenCode／Copilot | 自家的 plans／specs／tasks，**非 OpenSpec** | 無 | MIT；個人免費、Teams $20/人 | 1,796★ |
-| **cmux** | 原生終端 | macOS；Linux 只有 Chromium 殼的 nightly | 十幾種 CLI agent | 無 | 無 | 桌面 GPL、server 改 BSL；Pro $50／Max $200／Team $60 | 27.5k★（7 月 23.8k） |
-| **Superset** | 桌面 | macOS；Linux experimental | 任何 CLI agent | 無 | 無 | ELv2；Pro $20 | 14.7k★ |
-| **Conductor** | 桌面 | 只有 Mac | Claude／Codex／Cursor | 無 | 無 | Pro $50／Teams $60；募資 $24.5M | — |
-| **GitHub Copilot app**＋Spec Kit canvases | 桌面 | macOS／Windows／Linux（2026-06 GA） | Copilot；Agent HQ 可跑 Claude／Codex | **Spec Kit 的視覺化工作台**（`github/spec-kit-copilot`） | Agent HQ 是多家**平行比較**，不是接力 | Copilot 訂閱 | Spec Kit 139k★ |
-| **OpenAI Codex app** | ChatGPT 桌面內 | macOS／Windows；Linux preview（2026-08） | Codex | 無 | 無 | ChatGPT 訂閱 | — |
-| **claude-view** | 監看 dashboard | macOS | Claude | 無 | 無 | MIT；Pro $20 | 110★，近 30 天 0 commit |
-| **spekterm** | Electron 桌面 | Linux AppImage（macOS／Windows 未出） | 僅 Claude（真 CLI pty） | **OpenSpec 語意側欄** | **agent 自己發起、跨 repo、有母子關係與完成報告** | MIT 開源、尚未對外發佈 | — |
+**Multi-session agent workbenches and terminals**
 
-**懂 OpenSpec 的工作台已經有人做，但都很小**：OpenSpec Workbench（VS Code 擴充＋本機網頁，功能定義幾乎與
-spekterm 的護城河相同，6★、111 次安裝，2026-08 才建立）、`jixoai/openspecui`（網頁 UI，118★）。
-**有資金或有 traction 的玩家，沒有一個支援 OpenSpec。**
+- [Claude Code Desktop](https://code.claude.com/docs/en/desktop) — Anthropic's own desktop app: parallel
+  sessions with per-session worktrees, cross-session messaging, and Remote Control from web and mobile.
+- [better-agent-terminal](https://github.com/tony1223/better-agent-terminal) — an open-source (MIT)
+  multi-workspace terminal aggregator with Claude Code and Codex integration, remote access, and a mobile app.
+- [Nimbalyst](https://github.com/nimbalyst/nimbalyst) — an open-source (MIT) desktop workbench for Claude
+  Code, Codex and others, with worktrees and its own plans / specs / tasks.
+- [cmux](https://github.com/manaflow-ai/cmux) — a native macOS terminal built for running many agents in
+  parallel.
+- [Superset](https://github.com/superset-sh/superset), [Conductor](https://conductor.build) — desktop apps
+  for running parallel agents across worktrees.
+- [GitHub Copilot app](https://github.com/features/copilot), [OpenAI Codex app](https://openai.com/codex) —
+  first-party apps from other agent vendors.
+- [claude-view](https://github.com/tombelieber/claude-view) — a monitoring dashboard for Claude Code
+  sessions.
 
-**跨廠牌 agent 接力只有小型 OSS 在做**：AgentBridge（364★）、Concord MCP（341★）、dazuiba/handoff（91★）等。
-沒有一個有 GUI 且真的有人在用。
+**Spec-driven development**
 
-### 2.3 戰略結論（2026-09-29 重寫）
+- [OpenSpec](https://github.com/Fission-AI/OpenSpec) — the format spekterm's side panel understands.
+- [GitHub Spec Kit](https://github.com/github/spec-kit), [Kiro](https://kiro.dev),
+  [BMAD](https://github.com/bmad-code-org/BMAD-METHOD) — other spec-driven workflows.
+- Smaller OpenSpec viewers and editor extensions exist (for example
+  [openspecui](https://github.com/jixoai/openspecui)); spekterm's own sibling viewer is
+  [spek](https://github.com/spekhq/spek).
 
-> 2026-07 的結論是「可守護的差異化 = **OpenSpec 語意深度 × cmux 到不了的 Windows／Linux**」，並據此導出
-> 「agent 中立」與「跨平台是被低估的優勢」兩個產品決策。**後半句已經失效。**
+### 2.3 Where spekterm fits
 
-**已經失效的前提：**
+Hosting several agent sessions in one window is now common, including in first-party tools. What spekterm
+adds is narrower:
 
-1. **Linux 空窗已關閉。** Claude Code Desktop（beta）、BAT、Nimbalyst、Copilot app、Codex app（preview）都已
-   上 Linux。Electron 不再是「在這裡反而變成武器」—— 它回到單純的成本。
-2. **「殼包多 session＋worktree」完全商品化**，而且官方免費附在訂閱裡。
-3. **原規劃的付費層大半被吃掉**（逐項見 §10）：同一人的跨機傳訊與手機核准，官方已經有；BAT 又免費做了遠端
-   server 與手機 app。
+- **A side panel that understands OpenSpec** — the change a session is working on, its artifacts, its tasks,
+  and its specs — and follows along as the agent writes to disk.
+- **Agent-initiated handoffs with a lifecycle** — an agent hands work to another repository; the child
+  session remembers its parent, reports back, and its state is visible on both ends.
 
-**截至 2026-09-29 仍然獨有的：**
-
-- **OpenSpec 的語意側欄。** 格式沒有被吃掉 —— OpenSpec 的 npm 月下載從 3 月的 25.1 萬長到 9 月的 177.9 萬
-  （含 CI 流量），市場正收斂成「Spec Kit＋OpenSpec」雙格式。風險不是格式消失，而是 **GitHub 先把 Spec Kit
-  的視覺工作台做成預設**。
-- **由 agent 自己發起、跨 repo、帶母子關係與完成報告的交接。** 官方給的是**傳輸**（訊息），BAT 給的是
-  **同 repo 換廠牌**；沒有人做「交接單＋生命週期」這一層。但要記得：**spekterm 的母子往來本身就建在官方的
-  訊息功能上**。
-
-**不能再算成護城河的：**
-
-- **真終端 agent 的語意狀態**（hooks＋transcript）—— BAT 已經有同一套架構，目前放在除錯模式，一旦轉正就不再
-  獨有。
-- **§7.2 宣稱的兩個可守護條件都還沒實作**：交接單目前是 agent 寫的一段文字（也就是 §7.2 自己歸在「約半年
-  被抄走」的那一欄），不含磁碟狀態驗證；原始碼裡也沒有任何 Codex／Gemini 的路徑。
-
-**最危險的三個對手：**
-
-1. **Anthropic 官方** —— 同時吃掉外殼與付費層，而且免費附在訂閱裡。
-2. **Nimbalyst** —— MIT、三平台＋iOS、已經把 plans／specs／tasks 跟 session 放在一起，**只差「懂 OpenSpec」
-   這一步**。
-3. **GitHub Copilot app＋Spec Kit canvases** —— 平台方親手做「懂 spec 的工作台」，押的是星數兩倍的 Spec Kit。
-
-**BAT 另外值得單獨記一筆**：同在台灣、同一種產品形狀、MIT 免費、發版極快（2026-04 單月 91 個 release），
-而且正在把主力從 SDK 轉向「真 CLI＋transcript＋hooks」—— 也就是 spekterm 的架構。在中文開發者圈，它是
-最直接的正面對手。
-
-**結論**：spekterm 作為**付費產品**的空間已大幅縮小。可守的只剩「OpenSpec 語意深度」與「交接生命週期」，
-而這兩者都比較適合當**功能**，很難單獨撐起一道收費牆（見 §10）。**2026-09-29 裁決：改以 MIT 開源，不做付費層**（§10.3）。
-
-### 2.4 SWOT（2026-09-29 重評）
-
-**Strengths**
-- **唯一有實際深度的 OpenSpec 工作台**：側欄跟隨當前 change（artifact 分頁、deltas、tasks、Graph／Timeline、
-  worktree 聚合）。其他懂 OpenSpec 的工具都 <120★ 且只做到檢視。
-- **agent 自己發起的跨 repo 交接**：母子關係、完成報告、狀態呈現於兩端 —— 目前沒有對手有這一層。
-- **跑真 `claude`、吃使用者自己的訂閱**。據 BAT 的規劃文件，Anthropic 自 2026-06-15 起讓 SDK 走另計的用量
-  額度（**未經官方查證**），這讓「跑真 CLI」的既有決策更站得住。
-- **`@spekjs/core`（MIT）** 仍可能成為 OpenSpec 生態的解析引擎。
-
-**Weaknesses**
-- **TAM 最小**：Claude Code ∩ OpenSpec 使用者。
-- **只有 Linux**，對上一排三平台的對手。（重評當時還有「不開源、要付費」這一條 —— 開發者對「本機功能免費」的
-  預期已被錨定得更死 —— 已由 2026-09-29 改為 MIT 開源的裁決消除，見 §10.3。）
-- **單 agent**：只有 `claude`，而 BAT、Nimbalyst、cmux 都已經多廠牌。
-- **無聲量基礎**，也尚未對外發佈。
-- **§7 宣稱的護城河有一半還沒蓋**（磁碟狀態驗證、跨異質 agent）。
-
-**Opportunities**
-- **OpenSpec 在長**，而有資金的玩家沒有一個支援它 —— 窗口還開著，但 Nimbalyst 補一步就關。
-- **跨人交接、交接稽核、跨廠牌接力**仍是空白（官方明確只做「你自己的 session」、所有 worker 都是 Claude）。
-  需求尚未驗證。
-- **OpenSpec 的 Stores（beta）** 在做跨 repo planning，與 spekterm 的跨 repo 交接有交集 —— 可能是整合點，也
-  可能是被上游吃掉的方向。
-
-**Threats**
-- **Anthropic 官方向上吃 —— 2026-07 列為威脅，2026-09 已經發生**：Linux 桌面 app、worktree 平行 session、
-  跨 session 訊息、Remote Control、手機派工與推播。
-- **Nimbalyst 補上 OpenSpec**。
-- **GitHub 把 Spec Kit 視覺工作台做成預設**，讓 OpenSpec 側欄被邊緣化。
-- **BAT 的 CLI＋transcript＋hooks 路徑轉正**，並以 MIT 免費在中文圈擴散。
-- **對官方介面的依賴**：`--name` 撞名自動改名、組織可以關掉注入的 hooks（見 §13）。
+Both are features, not a moat, and they are why spekterm is developed as an open-source project rather than
+a commercial one (see §10).
 
 ---
 
@@ -161,7 +102,7 @@ spekterm 的護城河相同，6★、111 次安裝，2026-08 才建立）、`jix
 ### 3.1 目標使用者
 
 - 採用 **OpenSpec / spec-driven 工作流**、且同時操作**多個 agent session**（多 repo／多 worktree）的重度開發者。
-- ~~首發平台優先補 cmux 的空窗：Windows / Linux 使用者。~~ **2026-09 重評：Linux 空窗已關閉**（Claude Code Desktop、BAT、Nimbalyst、Copilot app 皆已上 Linux），平台不再是選擇目標使用者的理由，見 §2.3。
+- ~~首發平台優先補 cmux 的空窗：Windows / Linux 使用者。~~ **2026-09 重評：Linux 空窗已關閉**（Claude Code Desktop、better-agent-terminal、Nimbalyst、Copilot app 皆已上 Linux），平台不再是選擇目標使用者的理由，見 §2.3。
 
 ### 3.2 明確不做（防止範圍蔓延）
 
@@ -198,7 +139,7 @@ Electron，目標產出 macOS / Windows / Linux 三平台安裝檔。
 | F7 | 打包發佈 | electron-builder 三平台安裝檔、主題、持久化 layout | Phase 6 |
 | F7b | UI 語言 | 介面文案可切換語言（`en` / `zh-TW`），立即生效且跨重啟保留；首次啟動取自作業系統的偏好語言。**寫給 agent 讀的文字不在地化**（見下） | Phase 6 ✅ |
 | F8 | Handoff（本機免費） | 寫 handoff → daemon probe → 同機自動開 session + context 注入 | Phase 7（moat）|
-| F9 | Handoff（跨機/跨人/編排，付費） | relay、跨人核准、自動編排 Claude→Codex→Gemini、稽核、遠端核准。**2026-09-29 已裁決不做**：同一人的跨機與手機核准已由官方覆蓋（§10.3） | —（不做） |
+| F9 | Handoff（跨機/跨人/編排，付費） | relay、跨人核准、自動編排 Claude→Codex→Gemini、稽核、遠端核准。**2026-09-29 已裁決不做**：同一人的跨機與手機核准已由官方覆蓋（§10） | —（不做） |
 
 ---
 
@@ -338,7 +279,7 @@ Gemini   跑 review / 測試
 
 ### 7.4 Handoff 產物內容（schema，初步）
 
-格式須 **agent-agnostic**（markdown + frontmatter）。frontmatter 帶狀態、來源、目標、主題與時間（目標可為人、群組或 repo），並有確認的生命週期，加上 spek 專屬欄位。分**核心（恆有）**與 **OpenSpec 增強（選配）**兩層：
+格式須 **agent-agnostic**（markdown + frontmatter）。frontmatter 帶狀態、來源、目標、主題與時間（目標可為人、群組或 repo），並有確認的生命週期；再加上 spek 專屬欄位。分**核心（恆有）**與 **OpenSpec 增強（選配）**兩層：
 
 **核心欄位（每個 handoff 都有，不依賴 OpenSpec）**
 - **錨點**：repo / worktree / branch。
@@ -384,7 +325,7 @@ spek 背景 router 主動 probe → 比對 to 命中的 repo-B
    - **內容（payload）= 磁碟狀態快照（git diff／檔案）為底**；當工作對應到 change 時，再連到 repo 內的 OpenSpec change、不重抄（豐富內容跟著 repo 走 git、天然 spec 錨定）。無 change 時就只有磁碟快照。
    - **跨機 / 跨人 = relay**（spek 自己的中繼）：本機 daemon 把 outbox 同步到 relay，relay 送到別台機 / 別人的 daemon。
    - **不採**「主要存 repo 內用 git 傳」：解不了跨 repo 路由、又會弄髒版控。
-3. **Freemium**：本機單人 handoff 免費；跨機 / 跨人 / 自動編排 / 稽核 / 遠端核准付費（見 §10）。**2026-09-29 已裁決不做付費層**（§10.3）。
+3. **Freemium**：本機單人 handoff 免費；跨機 / 跨人 / 自動編排 / 稽核 / 遠端核准付費（見 §10）。**2026-09-29 已裁決不做付費層**（§10）。
 
 ### 7.7 元件（work breakdown）
 
@@ -394,7 +335,7 @@ spek 背景 router 主動 probe → 比對 to 命中的 repo-B
 4. **Router / probe daemon** — Electron 主行程背景 watcher：監看 inbox、比對 `to`、依信任邊界路由、repo 沒開時先進 pending。
 5. **Spawner + context 注入器** — 開新 pty session + 把 handoff 餵進目標 agent；每種 agent 注入方式不同，需抽象層。
 6. **Consumer / ack** — 回寫處理紀錄、狀態流轉、通知發送方 ack。
-7. **Relay（付費）** — 跨機 / 跨人中繼 + 身分 / Team registry + 存取控制。（已裁決不做，§10.3。）
+7. **Relay（付費）** — 跨機 / 跨人中繼 + 身分 / Team registry + 存取控制。（已裁決不做，§10。）
 8. **UI** — 見 §6.4。
 
 ---
@@ -510,50 +451,18 @@ spekterm
 
 ---
 
-## 10. 商業模式（已裁決：MIT 開源，不做付費層）
+## 10. Business model
 
-### 10.1 原規劃（2026-07，Freemium；已被 §10.3 取代）
+spekterm is open source under the MIT license, and has no paid tier.
 
-原則：按**價值放大的邊界**切，不按「handoff 存不存在」切。若把 handoff 整個鎖付費，免費版只剩「terminal 殼 + OpenSpec viewer」，正面對上 cmux（免費 / 原生 / 開源）會輸、且沒漏斗。
+Earlier planning (2026-07) assumed a freemium model: local features free, with paid cross-machine relay,
+cross-person routing, remote approval from a phone, and automatic orchestration across agent vendors. In
+2026-09 that plan was dropped — the same-person parts are now covered by first-party tooling, and a closed,
+paid local app has little room next to free open-source alternatives. The project was released as MIT
+instead (change `open-source-mit`), and Phase 8+ is not planned.
 
-| | 免費（單人、本機） | 付費（跨機 / 團隊 / 編排） |
-|---|---|---|
-| 工作台 | 多 session 殼、OpenSpec 側欄 | — |
-| Handoff | **本機自己 session / repo 之間**：寫 → daemon probe → 自動開 session | **跨人**路由（隊友 probe 你的 repo）、**跨機**（spek relay）、handoff 歷史 / 稽核 |
-| 跨 agent | 手動接力 | **自動編排** Claude→Codex→Gemini（旗艦） |
-| 遠端 | — | 手機核准來件 handoff |
-
-- 免費送「無 infra 成本、能驚豔拉新」的本機 handoff；付費收「會花錢的 relay + 隨團隊放大」的價值。
-- 與 claude-view（$0 本機 → 雲付費）、cmux（本機免費 → 雲付費）已驗證模式一致。
-- 防白嫖：本機 handoff 天生受限（一機 / 一人 / 跨 agent 要手動），有隊友、第二台機、或想自動接力就撞牆。
-
-授權（原規劃）：app 不開源、不公開原始碼；`@spekjs/core` 維持 MIT。
-
-### 10.2 2026-09-29 重評：每一個付費項目現在由誰覆蓋
-
-| 原付費項目 | 2026-09 現況 | 還能單獨收錢嗎 |
-|---|---|---|
-| **跨機 relay（同一個人）** | 官方跨 session 訊息＋Remote Control：跨機、跨雲端 session 互傳，含在訂閱 | **否** |
-| **手機核准** | 官方 Remote Control 轉送權限提示並推播（2026-08 脫離 preview）；BAT 免費手機 app；cmux／Conductor 收 $50/月（含雲端 VM） | **否** |
-| **跨人路由** | 官方只限「你自己的 session」；團隊面由 Claude Tag 佔住 Slack 頻道（Team／Enterprise） | 空白，但要自建身分、團隊名冊、存取控制、多租戶後端 —— 成本最高，而 Slack 那次已實測「多租戶交付不了」 |
-| **handoff 歷史／稽核** | 沒找到對應功能 | 空白，但單獨很難成為付費理由 |
-| **自動編排 Claude→Codex→Gemini** | 官方明言所有 worker 都是 Claude；BAT 有「Handoff → Codex」（免費、仍在驗證）；小型 OSS 若干 | 空白，**需求未驗證**；且 Gemini CLI 已於 2026-06-18 對個人用戶停止、由 Antigravity CLI 接替 |
-
-**業界的定價共識**：本機免費，雲端 VM／手機／團隊收費（cmux Pro $50、Conductor Pro $50、Superset Pro $20、
-Nimbalyst Teams $20）。**這些付費點全都靠雲端基礎設施撐著，沒有一家在收本機功能的錢。** 原規劃本身就是這個
-模式，所以它**不構成差異**；而它的付費那一半，同一個人的部分已被官方免費覆蓋。
-
-### 10.3 裁決（2026-09-29）：MIT 開源，不做付費層
-
-- **授權**：app 以 **MIT** 開源（`LICENSE`，著作權人 Kewang，與 `spek` 一致），沿用現在的 GitHub repo 公開，
-  保留完整 git 歷史（公開前已改寫歷史，移除任職公司的內部名稱與同事名字）。見 change `open-source-mit`。
-- **不做 Phase 8+ 的付費層**（relay、手機核准、稽核、自動編排）。
-- **收入**：只有贊助 —— GitHub Sponsors（維護者個人帳號）。贊助是給維護者的支持，不依貢獻分配
-  （`CONTRIBUTING.md`）。**期待要放低**：開源工具的贊助通常補不回時間成本，真正的回報是 OpenSpec 社群的能見度。
-- **考慮過而沒選的**：
-  - 維持私有自用 —— 不需要任何動作，但放棄能見度。
-  - 付費線改劃在跨人交接或跨廠牌接力 —— 官方與 BAT 都還沒做，但需求沒有被驗證；面對一排 MIT／免費的對手，
-    一個不開源、要付費的本機 app 幾乎沒有空間。
+The only income is sponsorship, which supports the maintainer personally and is not distributed based on
+contributions (see `CONTRIBUTING.md`).
 
 ---
 
@@ -799,7 +708,7 @@ session 脈絡裡送出的，彙整成一份跨數十天、跨數十個專案的
 
 ### Phase 8+ — Handoff 付費層與 agent 擴充
 
-> **2026-09-29：已裁決不做付費層（§10.3）。** relay（同一人跨機）與手機核准已由官方覆蓋。跨廠牌 agent 的擴充是否還要做，見 §14。
+> **2026-09-29：已裁決不做付費層（§10）。** relay（同一人跨機）與手機核准已由官方覆蓋。跨廠牌 agent 的擴充是否還要做，見 §14。
 
 - **Relay**：跨機 / 跨人中繼 + 身分 / Team registry + 存取控制 + 跨人核准。
 - **多 agent**：擴充 spawner 注入抽象至 Codex / Gemini；**自動編排** Claude→Codex→Gemini。
@@ -844,14 +753,13 @@ session 脈絡裡送出的，彙整成一份跨數十天、跨數十個專案的
 | **`--name` 撞名自動改名**（Claude Code v2.1.232 起：同機已有活著的同名 session 時，新的會被加上後綴） | spekterm 自己的 session 之間已由 `decidePeerName` 避開撞名；**與 spekterm 之外的 claude session 撞名時，實際名字會與關係檔記錄的名字不同，母子訊息靜默送錯或送不到**。待確認：是否能從 SessionStart 取回實際名字 |
 | **組織可以關掉注入的 hooks**（`allowManagedHooksOnly`、`disableAllHooks`） | Team／Enterprise 使用者的對話 view 狀態、交接的自我介紹全部失效，而沒有錯誤。待評估：偵測並呈現 |
 | **`SessionStart` 的 `additionalContext` 上限 1 萬字**（超過存成檔案、只留前 2000 字預覽） | 交接自我介紹＋repo 清單隨 folder 數成長；需量測目前長度與上限的距離 |
-| **Claude Agent SDK 另計用量**（據 BAT 規劃文件，2026-06-15 起；**未經官方查證**） | 無需動作 —— 支持「跑真 CLI、吃使用者訂閱」的既有決策 |
 
 ---
 
 ## 14. 開放問題
 
 ### 策略
-- ~~spekterm 還要不要當付費產品？授權模式？~~ **已裁決（2026-09-29）：MIT 開源，不做付費層**，見 §10.3。
+- ~~spekterm 還要不要當付費產品？授權模式？~~ **已裁決（2026-09-29）：MIT 開源，不做付費層**，見 §10。
 - **跨廠牌 agent**：是否真的要做 Codex（與 Antigravity CLI）的注入路徑，還是承認「只做 Claude」並把原則 3
   （agent 中立）降級。
 
@@ -871,178 +779,10 @@ session 脈絡裡送出的，彙整成一份跨數十天、跨數十個專案的
 Phase 0–5 已封存，Phase 6 的 Linux 打包與 Phase 7 的本機收件匣、交接、母子關係已交付。原本這一節的
 「先做 Phase 0」已完成，不再適用。
 
-1. **開源已裁決**（§10.3）。接下來要決定的是 macOS／Windows 產物值不值得出，以及跨廠牌 agent 還做不做（§14）。
+1. **開源已裁決**（§10）。接下來要決定的是 macOS／Windows 產物值不值得出，以及跨廠牌 agent 還做不做（§14）。
 2. **不論裁決結果都值得做的**：處理 §13 新增的三條官方介面風險（`--name` 撞名、組織關閉 hooks、
    `additionalContext` 上限）—— 它們影響的是已交付的功能。
 3. 若要保住「交接」這條差異化，**補上 §7.2 的磁碟狀態驗證**（交接單自動附 diff stat 與 tasks 進度），
-   讓它從「agent 自述」變成「磁碟驗證」。那是官方與 BAT 都沒有的一層，而且不需要任何雲端。
+   讓它從「agent 自述」變成「磁碟驗證」。那是目前其他工具都沒有的一層，而且不需要任何雲端。
 
 > 開新 change 用 `/openspec-new-change` 或 `/opsx:new`。
-
----
-
-## 附錄 A：競品詳細檔案
-
-> 研究：2026-09-29 重查（官方文件、GitHub API 直取、官網定價頁，佐以新聞）。星數、版本、定價皆為當日快照，會過時。
-> 括號內的「7 月」數字是 2026-07 那一輪的快照，保留作為趨勢對照。
-
-### Anthropic 官方 Claude Code —「外殼與付費層都已經在訂閱裡」
-
-- **桌面 app**：多 session 平行、每個 session 可勾選 worktree。macOS／Windows 正式版，**Linux beta**
-  （Debian 系：Ubuntu 22.04+、Debian 12+，apt／.deb；2026-06-29 那週推出；缺 Computer Use 與語音輸入）。
-  2026-08-24 那週起可在桌面 app 以 `/resume` 接手 CLI 開的 session。需付費訂閱。
-- **web（claude.ai/code）與手機**：操作雲端 session（Anthropic VM）、經 Remote Control 操作本機 session、
-  Dispatch（手機派工給桌面 app，限 Pro／Max）。「Projects」（多條雲端工作線）為 Pro／Max 公開 beta。
-- **Remote Control**：從網頁或手機接手本機 session，權限提示與提問轉送遠端、手機推播；server 模式一個行程
-  服務多個 session（預設上限 32）。**2026-08-17 那週脫離 research preview**。Team／Enterprise 需管理員開啟；
-  遠端不能選 Auto 或 Bypass 模式。
-- **跨 session 訊息**：`ListAgents`／`SendMessage`，以 `--name`／`/rename` 的名字定址。同機走本機 socket
-  （不經伺服器），跨機或雲端經 Remote Control 由 Anthropic 伺服器轉送。**只限同一個使用者自己的 session，
-  沒有跨人。** 2026-08-03 那週推出、預設開啟（macOS／Linux v2.1.224+，Windows v2.1.234+）。
-- **agent teams**：仍是實驗功能、預設關閉（`CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`），只在 CLI。
-- **編排**：subagents（正式、預設背景跑）、agent view（`claude agents`，research preview）、動態 workflows
-  （正式）、routines（`/schedule`，research preview）、channels（Telegram／Discord／webhook 推進 session，
-  research preview）。官方原話：「In every approach the workers are Claude sessions」—— **不做跨廠牌編排**。
-- **Claude Tag**（Slack）：頻道共用一個 @Claude、任何人都能派工，跑在雲端沙盒、可開 PR。公開 beta，**只限
-  Team／Enterprise**，從組織預儲額度扣款；2026-06-23 上線（新聞）。取代舊版 Claude Code in Slack。
-- **spec**：**沒有自家 spec 格式**。只有 plan mode（`plansDirectory`）、`/goal`、最佳實務建議寫 `SPEC.md`；
-  Ultraplan 已於 2026-08-03 那週移除。（「沒有」是查無結果的結論，信度中。）
-- **worktree**：正式且完整 —— `claude -w`（v2.1.49）、`.claude/worktrees/`、`.worktreeinclude`、從 PR 開
-  worktree；2026-08-03 那週起連 Bash 碰主 checkout 也擋。
-- **價格**：Pro $20（年繳 $17）；Max 5x／20x 頁面只寫「From $100」（20x 實價未能確認）；Team 標準 seat $25、
-  premium seat $125；Enterprise $20/seat＋API 費率用量。
-
-### better-agent-terminal（BAT，tony1223／TonyQ）—「同一種產品形狀，MIT 免費」
-
-- **定位**：「A Tauri-powered terminal aggregator with multi-workspace support and built-in AI agent
-  integration」。作者 TonyQ Wang（台灣，TonyQ Co., Ltd.，AI 顧問）。官網
-  [tonyq.org/en/products/better-agent-terminal](https://tonyq.org/en/products/better-agent-terminal)。
-- **技術棧**：v1／v2 是 Electron；**v3（2026-05-19 起）整個換成 Tauri 2**（Rust＋React 18＋內建 Node 小程序
-  跑 SDK）。終端是 xterm.js＋node-pty（WebGL），資料存 SQLite。
-- **平台**：Windows、macOS（arm64／x64，Homebrew cask）、Linux AppImage（x86_64／arm64）、headless 的
-  `bat-server`（附 systemd 腳本）；手機 iOS TestFlight、Android Google Play。介面英文、繁中、簡中（另有日文字典）。
-- **agent**：預設是 **Claude Agent（走 `@anthropic-ai/claude-agent-sdk`，自繪對話介面）**；另有 Claude CLI（真
-  pty）、Codex Agent（app-server）、Codex CLI，皆可選 worktree。**「Claude CLI Agent (Subscription)」—— pty＋讀
-  `~/.claude/projects` jsonl＋注入 `--settings` hooks，與 spekterm 幾乎同一套架構 —— 目前只在除錯模式**。
-  轉向 CLI 的理由寫在它的規劃文件：Anthropic 自 2026-06-15 起 SDK 走另計用量額度，只有互動式 CLI 吃訂閱
-  （它的說法，**未經官方查證**）。Gemini 只剩舊型別定義，沒有建立選項。
-- **功能**：多 workspace（拖曳、分組、設定檔、拆成獨立視窗、各自環境變數）、檔案瀏覽與多格式預覽、`Ctrl+P`、
-  **無檔案編輯器**、Git／GitHub PR 與 issue 面板、snippet、Procfile 面板、通知（Dock 徽章、音效、系統通知；
-  issue #134 回報完成通知失效）、SDK 對話續接與分岔、休眠喚醒、多 Claude 帳號、用量／context／cache 監控、
-  `/auto-continue`。
-- **狀態偵測**：SDK／Codex 吃結構化事件；**pty session 只看最後一次輸出時間**，看不出「在等你」。
-- **交接**：「**Handoff → Codex**」—— Claude SDK session 限定，把對話快照、工具輸出、git 狀態（遮蔽憑證）
-  交給新開的 Codex session。**同一個 repo 換廠牌**，不是 agent 發起、不跨 repo、沒有母子關係。作者在 issue
-  #130 說仍在驗證。跨 session 編排由第三方 `bat-agent-connector`（2026-09-26 建立，2★）補。
-- **遠端**：內建 WebSocket 伺服器（token＋憑證指紋），BAT 連 BAT、手機掃 QR 連線，建議搭配 Tailscale；標示
-  experimental。
-- **spec**：**完全沒有**（OpenSpec、spec-kit 皆 0 筆），只有 plan mode 與 Codex 的計畫核准。
-- **授權／定價**：MIT，官網寫明完全免費。
-- **traction**：513★、126 forks、約 20 位貢獻者（作者約 1,462 commits）。首發 v1.0.0 2025-12-17，最新 v3.2.12
-  2026-09-25，共 292 個 release（2026-04 單月 91 個；7–8 月放緩、9 月回升）。GitHub release 附檔累計下載 5,563
-  次（不含 Homebrew）。
-
-### Nimbalyst（原 Crystal，nimbalyst/nimbalyst）—「只差 OpenSpec 一步」
-
-- MIT，1,796★，v0.78.5（2026-09-24）。macOS／Windows／Linux（.deb、AppImage）＋iOS。
-- Claude Code、Codex、OpenCode、Copilot；一鍵 worktree、kanban，**plans／specs／task trackers 與 session 放在
-  一起**（自家格式；repo 搜 openspec 0 筆，GitHub 程式碼索引可能不全，信度中）。
-- 個人免費；Teams $20/人/月（beta 期間免費）。
-
-### cmux（manaflow-ai/cmux，YC S24）
-
-- **27,475★**（7 月約 23.8k）。桌面 GPL-3.0-or-later；**server／relay 改 BSL 1.1**（正式使用或自架需商業授權）。
-  v0.64.25（2026-09-17），近 30 天 commit ≥100。
-- **平台**：README 仍寫「macOS only, for now」。另有「cmux Browser for Linux」（Chromium 殼＋workspace＋終端），
-  **只有 nightly**、當機 issue 多。無 Windows。「要 Linux」的 issue #330 仍開著（217 個反應）。
-- **worktree**：#156 於 2026-02-20 關閉；正式版有基本的 Project Worktrees 側欄，刪除／清理／`.worktreeinclude`
-  仍是 open issue，#3414 仍開。
-- **spec**：無（issue 搜 openspec 0 筆）。**多 agent**：可接十幾種 agent 的 session，沒有 agent 之間的交接。
-- **定價**：Free／Pro $50（雲端 VM、iOS app）／Max $200／Team $60/人／Enterprise。7 月的「Founders Edition 約
-  $30/月」已查不到。
-
-### Superset（superset-sh/superset）
-- 14,716★，**Elastic License 2.0**，desktop v1.31.0（2026-09-28）。macOS 為主，Linux AppImage experimental，
-  無 Windows。任何 CLI agent。Free（1 人）／Pro $20/人（年繳 $15），含遠端、自動化、Slack／Linear、手機。無 spec。
-
-### Conductor（conductor.build，Melty Labs）
-- 只有 Mac。Claude Code、Codex、Cursor。Free／Pro $50（雲端 workspace、多人、手機）／Teams $60/人。募資 $24.5M
-  （YC、Matrix；二手）。無 spec、無跨 agent 交接。
-
-### GitHub Copilot app／Agent HQ／Spec Kit
-- **Copilot app**：每個 session 各自一個 worktree，有 canvases；2026-06-17 GA，macOS／Windows／Linux（GA 日期為
-  新聞）。
-- **Agent HQ**：2026-02-04 起可在 GitHub、VS Code、手機上跑 Claude 與 Codex（Copilot Pro+／Enterprise），形式是
-  **多家平行比較**，官方沒寫「做到一半換另一家接手」。
-- **Spec Kit**：139,291★，v1.0.0 於 2026-08-21 發布（已到 v1.0.12），38 種 agent 整合。**`github/spec-kit-copilot`
-  在 Copilot app 裡用 canvas 把 Spec Kit 流程做成視覺化介面** —— 平台方親手做的「懂 spec 的工作台」。
-
-### OpenAI Codex app
-- 內含於 ChatGPT 桌面 app：macOS、Windows（2026-03-04）、Linux preview（2026-08-11，新聞）。平行 agent、worktree、
-  自動化、review queue。
-
-### 其他（一行）
-- **Cursor 3**（2026-04-02）：Agents Window，最多 8 個 agent 平行、worktree、雲端、SSH。Pro $20；雲端／背景 agent
-  要 Pro+ $60 或 Ultra $200。
-- **Warp**：2026-04 起整合 Claude Code、Codex、Gemini CLI、OpenCode，垂直分頁、手機遙控；原始碼改 MIT／AGPL 雙授權。
-- **Claude Squad**：AGPL-3.0，8,543★，tmux TUI。
-- **Vibe Kanban**：母公司 bloop 於 2026-04-10 收掉，轉社群維護（Apache-2.0），28k★ 但近 30 天 10 commit。
-- **Sculptor（Imbue）**：MIT，233★，有 Linux，beta 免費，附 spec 類 skill。
-- **Terragon**：2026-02-09 停止營運。
-- **Google**：Antigravity 2.0（2026-05-19，桌面／CLI／SDK，個人 $0）；**Gemini CLI 於 2026-06-18 對個人與免費用戶
-  停止服務，由 Antigravity CLI 接替**；Jules 2026-05 GA。
-
-### claude-view（tombelieber/claude-view）
-- MIT，110★（7 月約 90）。最後 release v0.45.0（2026-07-04），**近 30 天 0 commit，動能停滯**。只有 macOS
-  （「Linux coming in v2.1」）。定價與 7 月相同：Free／Pro $20／Max $100／Team $30/人。監看 dashboard，威脅低。
-
-### Spec-driven 生態
-- **OpenSpec**（Fission-AI/OpenSpec）：70,602★，MIT，9 月內發了 v1.12.0–1.13.2，近 30 天 commit ≥100。npm 月下載
-  3 月 25.1 萬 → 6 月 74.7 萬 → 7 月 133.8 萬 → 8 月 166.1 萬 → 9 月（1–28 日）177.9 萬（含 CI 流量）。2026-03 YC
-  Launch（二手）。**Stores（beta）** 用獨立 repo 放規劃、做跨 repo planning。無付費產品。
-- **GitHub Spec Kit**：見上。
-- **BMAD**：53,601★，v6.12.0；npm 月下載從 3 月 11.4 萬降到 9 月 6.5 萬，**在下滑**。
-- **Kiro**（AWS）：自家 EARS 格式，住在 IDE 與 CLI；Free 50 credits／Pro $20／Pro+ $40／Pro Max $100／Power $200。
-- **Tessl**：Registry open beta，Framework 未 GA（二手）。
-- **判讀**（推論，信度中）：OpenSpec 沒有被吃掉，市場收斂成「Spec Kit＋OpenSpec」雙格式；Spec Kit 星數約兩倍且有
-  平台撐腰，OpenSpec 下載成長更陡、定位在既有 codebase 的 change／delta 管理。
-
-### 懂 OpenSpec 的工具、跨廠牌接力的工具
-- **OpenSpec Workbench**（VeryComplexAndLongName/OpenSpec-UI，openspec-ui.dev）：在 OpenSpec change 上啟動並監督
-  Claude／Copilot／Codex／Gemini／DeepSeek，有 Change Graph、Pipeline、Human-Only Inbox；VS Code 擴充＋本機網頁。
-  **6★、Marketplace 111 次安裝**，2026-08 建立。功能定義與 spekterm 的護城河幾乎相同，但沒有 traction。
-- **jixoai/openspecui**：118★，網頁 UI，跟著 OpenSpec 1.13 適配。其餘（mykola-melnik/openspec-workbench、
-  RandyZ/openspec-ext、coderj001/openspec-ui-vscode）皆 <10★。
-- **跨廠牌接力**：AgentBridge（364★）、Concord MCP（341★）、dazuiba/handoff（91★）、Crewplane（41★）、
-  OpenMOSS/claude-codex-handoff（40★）。**沒有一個有 GUI 且真的有人在用。**
-
----
-
-## 附錄 B：資料來源與信度
-
-2026-09-29 那一輪（前一輪 2026-07 的來源見 git 歷史）：
-
-- **高信度（直取）**
-  - Anthropic 官方文件：[desktop](https://code.claude.com/docs/en/desktop)、[desktop-linux](https://code.claude.com/docs/en/desktop-linux)、
-    [claude-code-on-the-web](https://code.claude.com/docs/en/claude-code-on-the-web)、[mobile](https://code.claude.com/docs/en/mobile)、
-    [remote-control](https://code.claude.com/docs/en/remote-control)、[cross-session-messaging](https://code.claude.com/docs/en/cross-session-messaging)、
-    [agent-teams](https://code.claude.com/docs/en/agent-teams)、[agents](https://code.claude.com/docs/en/agents)、
-    [workflows](https://code.claude.com/docs/en/workflows)、[routines](https://code.claude.com/docs/en/routines)、
-    [worktrees](https://code.claude.com/docs/en/worktrees)、[hooks](https://code.claude.com/docs/en/hooks)、
-    [cli-reference](https://code.claude.com/docs/en/cli-reference)、[feature-availability](https://code.claude.com/docs/en/feature-availability)、
-    [changelog](https://code.claude.com/docs/en/changelog)、週報 w27／w32／w34；[Claude Tag](https://claude.com/docs/claude-tag/overview)；
-    [claude.com/pricing](https://claude.com/pricing)。
-  - GitHub API（2026-09-29）：tony1223/better-agent-terminal（README、292 個 release、issue、原始碼 HEAD 5a61d43）、
-    manaflow-ai/cmux、tombelieber/claude-view、nimbalyst/nimbalyst、superset-sh/superset、Claude Squad、
-    Vibe Kanban、Sculptor、Fission-AI/OpenSpec、github/spec-kit、github/spec-kit-copilot、BMAD，
-    以及上文列出的 OpenSpec 相關小工具與跨廠牌接力 repo。
-  - 官網定價頁：cmux.com/pricing、claudeview.ai、conductor.build、superset.sh、nimbalyst、kiro.dev/pricing；
-    [tonyq.org BAT 產品頁](https://tonyq.org/en/products/better-agent-terminal)。
-  - npm 下載量（OpenSpec、BMAD）、PyPI（specify-cli）。
-- **中信度（新聞／部落格）**：Claude Tag 上線日（TechCrunch 2026-06-23）、Claude Desktop Linux 釋出日（OMG Ubuntu）、
-  Codex app Windows／Linux 日期、Copilot app GA 日期、Cursor 3、Warp、Antigravity 2.0、Jules、Conductor 募資、
-  OpenSpec YC Launch。
-- **未能確認**：Claude Max 20x 實價；BAT 的 star 成長曲線、手機 app 下載數與價格、「Handoff → Codex」是否已算正式
-  可用；Anthropic SDK 自 2026-06-15 起另計用量（僅見於 BAT 的規劃文件）；各 repo 近 30 天新增星數（API 回空）；
-  Nimbalyst 是否真的沒有 OpenSpec（GitHub 程式碼索引可能不全）。
-- **本輪刻意未查**：中國大廠（百度、阿里、騰訊、字節）的 AI coding 工具。

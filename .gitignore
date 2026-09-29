@@ -10,3 +10,8 @@ release/
 secrets.json
 secrets.json.tmp
 secrets.json.corrupt-*
+
+# Local environment and per-user Claude Code settings
+.env
+.env.*
+.claude/settings.local.json

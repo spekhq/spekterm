@@ -1326,7 +1326,9 @@ export const TABLE = [
     + '不做成常駐檢查，是因為開 sourcemap 會改變建置設定，而探針驗的是出貨的那一份建置。'
     + '`third-party-licenses.test.mjs` 驗的是「給定模組清單，對應得對」，驗不出收集端**漏收**'],
   ['貢獻說明寫明兩項條件', '貢獻說明寫明貢獻依 MIT 提供、贊助歸維護者且不依貢獻分配', false, '刪掉贊助那一段', ''],
-  ['贊助入口指向維護者帳號', '贊助入口指向維護者帳號', false, '帳號改成組織', ''],
+  ['贊助入口指向維護者帳號', 'sponsor links appear only together with FUNDING.yml', false,
+    'keep a README sponsor link after removing FUNDING.yml',
+    'The main spec replaced this scenario after archiving (the sponsor entry was removed until the Sponsors profile exists); the carrier checks the new rule'],
 
   // ── open-source-mit：遞增層級（build-identity）────────────────────────────
   ['未指定層級時遞增 patch', '未指定層級時遞增 patch', false, '預設值改成 minor', ''],

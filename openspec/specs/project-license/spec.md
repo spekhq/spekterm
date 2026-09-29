@@ -113,14 +113,18 @@ repo 根目錄 SHALL 有一份 `CONTRIBUTING.md`，SHALL 寫明：
 - 對本 repo 的貢獻依 MIT 授權提供（與專案本身的授權相同）；
 - 贊助是給維護者個人的支持，不是專案共有的基金，不依貢獻分配。
 
-repo SHALL 以 `.github/FUNDING.yml` 宣告贊助入口，其中 GitHub Sponsors 的帳號為 `kewang`。
+A sponsorship entry point (`.github/FUNDING.yml`, and sponsor links in the READMEs) SHALL exist only while
+the maintainer has an active GitHub Sponsors profile. A sponsor button that leads to a page that doesn't
+exist is worse than no button. When it exists, `.github/FUNDING.yml` SHALL name the GitHub Sponsors account
+`kewang`, and the READMEs SHALL link only to that account.
 
 #### Scenario: 貢獻說明寫明兩項條件
 
 - **WHEN** 讀取 `CONTRIBUTING.md`
 - **THEN** 它寫明貢獻依 MIT 授權提供，且寫明贊助歸維護者、不依貢獻分配
 
-#### Scenario: 贊助入口指向維護者帳號
+#### Scenario: Sponsor links appear only together with FUNDING.yml
 
-- **WHEN** 讀取 `.github/FUNDING.yml`
-- **THEN** 其中 GitHub Sponsors 的帳號為 `kewang`
+- **WHEN** the READMEs are read
+- **THEN** they link to a GitHub Sponsors page only if `.github/FUNDING.yml` exists, and then only to the
+  account it names

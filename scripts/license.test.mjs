@@ -140,10 +140,19 @@ test('README 的授權段落寫明 MIT 並指向 LICENSE', () => {
 test('貢獻說明寫明貢獻依 MIT 提供、贊助歸維護者且不依貢獻分配', () => {
   const text = read('CONTRIBUTING.md')
   assert.match(text, /contributions will be licensed under the\s+\[MIT License\]\(LICENSE\)/)
-  assert.match(text, /supports the \*\*maintainer personally\*\*/)
-  assert.match(text, /\*\*not distributed based on contributions\*\*/)
+  assert.match(text, /supports the\s+\*\*maintainer personally\*\*/)
+  assert.match(text, /\*\*not distributed\s+based on contributions\*\*/)
 })
 
-test('贊助入口指向維護者帳號', () => {
-  assert.match(read('.github/FUNDING.yml'), /^github:\s*\[\s*kewang\s*\]\s*$/m)
+test('sponsor links appear only together with FUNDING.yml', () => {
+  // Until the maintainer's GitHub Sponsors profile exists, there is no FUNDING.yml and no sponsor link:
+  // a button that leads to a missing page is worse than none. Once it exists, both must name the same account.
+  const funding = existsSync(join(repoRoot, '.github/FUNDING.yml')) ? read('.github/FUNDING.yml') : null
+  const account = funding?.match(/^github:\s*\[\s*([\w-]+)\s*\]\s*$/m)?.[1] ?? null
+  if (funding !== null) assert.equal(account, 'kewang', 'FUNDING.yml must name the maintainer account')
+  for (const file of ['README.md', 'README.zh-TW.md']) {
+    const linked = [...read(file).matchAll(/github\.com\/sponsors\/([\w-]+)/g)].map((match) => match[1])
+    if (account === null) assert.deepEqual(linked, [], `${file} links to a sponsors page but there is no FUNDING.yml`)
+    else assert.ok(linked.every((name) => name === account), `${file} links to a different sponsors account`)
+  }
 })

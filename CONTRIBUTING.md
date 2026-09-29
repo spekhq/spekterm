@@ -150,6 +150,6 @@ against undocumented internal conventions — if a convention matters, it belong
 By contributing, you agree that your contributions will be licensed under the
 [MIT License](LICENSE) that covers this project.
 
-The sponsorship link on this repository (GitHub Sponsors) supports the **maintainer personally**. It
-is not a shared project fund, and sponsorship income is **not distributed based on contributions**;
-contributing does not create any claim to it.
+If the maintainer accepts sponsorship (for example through GitHub Sponsors), it supports the
+**maintainer personally**. It is not a shared project fund, and sponsorship income is **not distributed
+based on contributions**; contributing does not create any claim to it.

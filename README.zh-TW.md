@@ -131,4 +131,7 @@ npm run install:desktop                          # → ~/.local/bin ＋ 應用�
 [MIT](./LICENSE)。打包出的產物另附 `THIRD_PARTY_LICENSES.txt`，列出被打包進 app 的每一個第三方套件
 與它的授權。
 
-如果 spekterm 對你有幫助，可以透過 [GitHub Sponsors](https://github.com/sponsors/kewang) 支持維護者。
+## 聲明
+
+spekterm 是獨立的開源專案，與 Anthropic 沒有隸屬、背書或贊助關係。Claude 與 Claude Code 是 Anthropic, PBC
+的商標。OpenSpec 是另一群作者的獨立專案。
