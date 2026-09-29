@@ -11,7 +11,7 @@
 > | **M5／M6／M7** 清查不完整 | `verification.md` **逐條 scenario 重建**，未覆蓋 23 條各自附理由 |
 > | **m8** 座標污染那條沒有鑑別力 | 重寫為「先設成非預設值、切走的目標刻意選另一個 repo」 |
 > | **m9** 往回捲那條在對照組裡是綠的 | 加「先強制捲到底」的前置 + 「`scrollTop` 真的變小了」的判準 |
-> | **m16** 字面 NUL 讓 grep 瞎掉 | 兩個檔案一併改為 escape 序列（比照 `ff4fb29`），並寫進 CLAUDE.md |
+> | **m16** 字面 NUL 讓 grep 瞎掉 | 兩個檔案一併改為 escape 序列（比照 `c017432`），並寫進 CLAUDE.md |
 > | **m10** `## Purpose` 同步不完整 | `keyboard-navigation` 與 `workspace-layout` 兩份主 spec 的 Purpose 已補（前者作用域改為「rail 上的項目」並補上捲動；後者寫明 rail 的項目不等於 folder） |
 > | **m14** scenario 歸錯 requirement | 「header 可區分」自「focus 記憶」移到「主舞台呈現其分頁列」之下 |
 > | m11／m12／m13／m15 | 併入 `verification.md` 的未覆蓋清單或已於該表註明。**m11（`SessionsApi` 的參數雙變性）與 m12（git 偵測的跳過比 spec 寬）維持現狀** —— 執行期皆正確，且兩者都不是本輪的封存阻礙 |
@@ -172,7 +172,7 @@ folder 的 fixture 上，**無法區分「恆常呈現」與「有 folder 時才
   `SidePanel.tsx`，它的 diff 無法審閱），而**純 `grep` 回空且 exit 1**，連「binary file」都不說。
   tasks 2.2 的 D1a 清查（「21 處命中」）因此對 `dirty-buffers.tsx` 的 5 處
   `folderId ===`／`!==` **結構性地瞎掉**。那五處都是檔案定址，結論不變 —— 但 design 倚賴的
-  清查技術有一個沒人發現的盲點。**commit `ff4fb29` 修過完全同型的坑**（在另一個檔案），
+  清查技術有一個沒人發現的盲點。**commit `c017432` 修過完全同型的坑**（在另一個檔案），
   這兩個漏了。建議獨立處理（一行修掉，或開 issue）。
 
 ---

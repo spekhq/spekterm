@@ -33,7 +33,7 @@
 - [x] 4.5 對照組：拿掉 `extraFiles` 以同樣方式重建，4.4 的兩條新斷言變紅；還原後重建、再次通過。結果記在本 task 底下
   - 結果：拿掉 `extraFiles` 重建的產物上，`LICENSE`、彙總、內嵌聲明三條變紅（12/16）；`package.json` 以備份還原（與 4.4 通過的那份產物同一份設定）。另以改寫前的正式 0.1.18 產物跑同一支探針，同樣三條紅
 - [x] 4.6 完整的 `RELEASE_LEVEL=minor npm run probe:package` 於封存 commit 之後執行（使用者裁決：第一個公開版本是 0.2.0）；產物為 `Spekterm-0.2.0.AppImage`、全部段落通過才打勾
-  - 結果：於實作 commit `834ddee` 之後執行，換版提交 `chore(release): 0.2.0`，`release/Spekterm-0.2.0.AppImage`，**16/16 全過**（含四條授權斷言與恢復綠燈的 pty 那條）
+  - 結果：於實作 commit `bf39085` 之後執行，換版提交 `chore(release): 0.2.0`，`release/Spekterm-0.2.0.AppImage`，**16/16 全過**（含四條授權斷言與恢復綠燈的 pty 那條）
 
 ## 5. 守衛
 
