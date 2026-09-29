@@ -26,7 +26,7 @@ jobs:
       # directories — so every interactive zsh stops at "Ignore insecure directories [y/n]?".
       - run: |
           sudo apt-get update && sudo apt-get install -y --no-install-recommends zsh
-          zsh -c 'autoload -U compinit; compaudit' | xargs -r sudo chmod g-w,o-w
+          zsh -fc 'autoload -Uz compaudit; compaudit' | tee /dev/stderr | xargs -r sudo chmod g-w,o-w
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
