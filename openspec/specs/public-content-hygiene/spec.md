@@ -38,11 +38,14 @@ dogfood 紀錄在封存時把名字帶回來。
 repo 中的檔案 SHALL NOT 含有維護者本機家目錄的絕對路徑。範例與 fixture SHALL 使用通用的家目錄路徑（例如
 `/home/me`、`/home/u`）。檢查範圍與上一條相同，不排除任何路徑。
 
+This includes the encoded form Claude Code uses for per-project directory names, where every `/` is
+replaced by `-` (for example `~/.claude/projects/-home-<user>-git-<repo>`).
+
 維護者的使用者名稱本身不受此限 —— 它是公開的 GitHub 帳號，出現在 `LICENSE` 與 `FUNDING.yml` 是應該的。
 
 #### Scenario: 家目錄路徑不出現
 
-- **WHEN** 在檢查範圍內搜尋維護者的家目錄路徑
+- **WHEN** 在檢查範圍內搜尋維護者的家目錄路徑（含以 `-` 取代 `/` 的編碼形式）
 - **THEN** 沒有任何命中
 
 ### Requirement: git 歷史不含內部識別資訊

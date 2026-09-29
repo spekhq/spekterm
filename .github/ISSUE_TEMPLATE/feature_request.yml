@@ -1,0 +1,51 @@
+name: 💡 Feature request
+description: Suggest a new capability or an improvement
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the idea! The more concrete the problem and use case, the easier it is to evaluate.
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: Preflight
+      options:
+        - label: I searched [existing issues](https://github.com/spekhq/spekterm/issues) and this isn't already requested.
+          required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Which area?
+      description: Where would this feature live?
+      options:
+        - Terminal / sessions
+        - OpenSpec side panel
+        - Files (tree, viewer, editor)
+        - Inbox, Slack, or agent handoffs
+        - Keyboard shortcuts
+        - Packaging / installation
+        - Cross-cutting / not sure
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      description: Describe the situation you're in and why the current behavior falls short.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would you like to happen?
+      description: The behavior you have in mind. Mockups or examples are welcome.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Other approaches or workarounds you've tried.
+    validations:
+      required: false

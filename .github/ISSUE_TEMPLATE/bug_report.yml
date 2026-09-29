@@ -1,0 +1,77 @@
+name: 🐛 Bug report
+description: Report something that isn't working the way it should
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug! Please fill out the sections below so we can
+        reproduce and fix it quickly. For security vulnerabilities, **don't** use this form —
+        follow [SECURITY.md](https://github.com/spekhq/spekterm/blob/master/SECURITY.md) instead.
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: Preflight
+      options:
+        - label: I searched [existing issues](https://github.com/spekhq/spekterm/issues) and this isn't a duplicate.
+          required: true
+        - label: I can reproduce this on the latest release (or on `master`).
+          required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Which area?
+      description: Where does the bug happen?
+      options:
+        - Terminal / sessions
+        - OpenSpec side panel
+        - Files (tree, viewer, editor)
+        - Inbox, Slack, or agent handoffs
+        - Keyboard shortcuts
+        - Packaging / installation
+        - Not sure
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Settings → About shows the version, build time, and commit.
+      placeholder: "0.2.0 (commit abc1234)"
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: A clear description of the bug, including what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: Minimal steps to trigger the bug. A sample `openspec/` layout helps if the bug is content-specific.
+      placeholder: |
+        1. Add a folder that '...'
+        2. Open a claude session
+        3. Click '...'
+        4. See the error
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Linux distribution, desktop environment, and your Claude Code version (`claude --version`).
+      placeholder: "Ubuntu 24.04, GNOME 46, Claude Code 2.1.x"
+    validations:
+      required: false
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / screenshots
+      description: Launch spekterm from a terminal to see main-process output, or attach screenshots. Paste text in a code block.
+      render: shell
+    validations:
+      required: false

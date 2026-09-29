@@ -130,8 +130,8 @@ test('package.json 宣告 MIT，且仍不發佈到 npm', () => {
 
 test('README 的授權段落寫明 MIT 並指向 LICENSE', () => {
   const readme = read('README.md')
-  const at = readme.indexOf('\n## 授權\n')
-  assert.ok(at !== -1, 'README 沒有「授權」段落')
+  const at = readme.indexOf('\n## License\n')
+  assert.ok(at !== -1, 'README 沒有 License 段落')
   const section = readme.slice(at, readme.indexOf('\n## ', at + 1) === -1 ? undefined : readme.indexOf('\n## ', at + 1))
   assert.match(section, /MIT/)
   assert.match(section, /\(\.\/LICENSE\)/)
@@ -139,9 +139,9 @@ test('README 的授權段落寫明 MIT 並指向 LICENSE', () => {
 
 test('貢獻說明寫明貢獻依 MIT 提供、贊助歸維護者且不依貢獻分配', () => {
   const text = read('CONTRIBUTING.md')
-  assert.match(text, /依同一份 MIT 授權提供/)
-  assert.match(text, /給維護者個人的支持/)
-  assert.match(text, /不依貢獻分配/)
+  assert.match(text, /contributions will be licensed under the\s+\[MIT License\]\(LICENSE\)/)
+  assert.match(text, /supports the \*\*maintainer personally\*\*/)
+  assert.match(text, /\*\*not distributed based on contributions\*\*/)
 })
 
 test('贊助入口指向維護者帳號', () => {

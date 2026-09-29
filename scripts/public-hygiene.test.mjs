@@ -43,6 +43,13 @@ const KNOWN_PUBLIC_WORD = '3b2b56084f042d3c2911f846265b790a5559e43924330ed2af082
 /** 維護者的家目錄。使用者名稱本身是公開的 GitHub 帳號（`LICENSE`、`FUNDING.yml`），不在禁止之列。 */
 const MAINTAINER_HOME = ['', 'home', 'kewang'].join('/')
 
+/**
+ * The same path in the form Claude Code uses for its per-project directory names (`/` replaced by `-`,
+ * e.g. `~/.claude/projects/-home-<user>-git-<repo>`). The history rewrite before going public missed this
+ * form at first — a check that only knows the slash form reports zero hits while the path is still there.
+ */
+const MAINTAINER_HOME_ENCODED = ['', 'home', 'kewang', ''].join('-')
+
 const sha256 = (word) => createHash('sha256').update(word).digest('hex')
 
 /** 檢查範圍：追蹤的檔案 ＋ 未追蹤但未被 `.gitignore` 忽略的檔案，不排除任何路徑。 */
@@ -110,6 +117,9 @@ test('repo 不含維護者宣告為內部的識別字詞', () => {
 })
 
 test('repo 不含維護者的本機家目錄路徑', () => {
-  const hits = files.filter((file) => textOf(file)?.includes(MAINTAINER_HOME))
+  const hits = files.filter((file) => {
+    const text = textOf(file)
+    return text !== null && (text.includes(MAINTAINER_HOME) || text.includes(MAINTAINER_HOME_ENCODED))
+  })
   assert.deepEqual(hits, [], `家目錄路徑出現在：${hits.join(', ')}`)
 })

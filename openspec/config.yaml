@@ -17,4 +17,5 @@ context: |
   Verification: 驗收走 scripts/probe-*.mjs（以 CDP 連進真正執行中的 app）與 npm test
                 （node:test 單元測試）。不在產品程式碼裡塞測試分支，也不為驗收而在
                 產品 UI 上掛 data-* 屬性。
-  Conventions: 程式碼英文，註解與文件繁體中文（台灣用語）
+  Conventions: English is the single source of truth for everything committed — code, comments,
+               openspec/ artifacts, docs. Existing Chinese text stays; everything new is written in English.

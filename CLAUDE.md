@@ -399,11 +399,16 @@ addon-unicode-graphemes、i18next、electron-builder（Phase 6）。
 
 ## Conventions
 
-- 程式碼用英文撰寫
-- 註解與文件使用繁體中文（台灣用語）
+- **English is the single source of truth for everything committed to the repo** (same rule as `spek`,
+  adopted when the repo went public): code, comments, `openspec/` artifacts, `docs/`, and community
+  files. The maintainer may think and draft in Traditional Chinese, but what gets committed is
+  English. **Existing Chinese comments and docs stay as they are** — no wholesale back-translation — but
+  anything new is English, including new sections added to this file. Exceptions: the README is
+  bilingual (`README.md` + `README.zh-TW.md`, kept in sync); the UI's `zh-TW` dictionary; and
+  conversation with the user, which stays in Traditional Chinese.
 - **UI 文案為英文，且一律來自字典**（`src/shared/i18n/en.json`）—— 見下文「UI 文案與 i18n」。
-  註解仍是繁中：那兩件事是分開的，而它們曾經混在一起（於是每個作者一邊用中文寫註解，一邊很自然地
-  把中文寫進 `aria-label`）。
+  （舊的繁中註解與這條是分開的兩件事，而它們曾經混在一起：作者一邊用中文寫註解，一邊很自然地
+  把中文寫進 `aria-label`。）
 - 本 repo 的 Node 版本固定在 `.nvmrc`（22.22.0），與 `../spek` 一致
 - **repo 是公開的（MIT）。不要寫進維護者任職公司的內部名稱、同事的名字、維護者的家目錄路徑** —— 包括 dogfood
   紀錄、實測數字的出處、測試 fixture。範例一律用通用名（`api-server`、`@alex`、`/home/me`）。
