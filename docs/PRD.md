@@ -18,7 +18,7 @@
 7. [護城河：跨 agent、磁碟狀態驗證的 Handoff](#7-護城河跨-agent磁碟狀態驗證的-handoff)
 8. [系統架構](#8-系統架構)
 9. [與既有 spek 的關係](#9-與既有-spek-的關係)
-10. [商業模式（2026-09 重評：付費層待裁決）](#10-商業模式2026-09-重評付費層待裁決)
+10. [商業模式（已裁決：MIT 開源，不做付費層）](#10-商業模式已裁決mit-開源不做付費層)
 11. [開發路線圖](#11-開發路線圖)
 12. [橫切關注點](#12-橫切關注點)
 13. [技術風險與緩解](#13-技術風險與緩解)
@@ -31,15 +31,15 @@
 
 ## 1. 產品概述
 
-**spekterm** 是一個**以 agent 為核心的本地開發工作台**——一個獨立的 Electron 桌面 app（私有、專有授權），把多個「一個 repo／資料夾各自一個 `claude` session」的 terminal 包在一個殼裡，並加上一塊**懂 OpenSpec 結構的側欄**，讓使用者不必另外開 IDE 就能一邊駕駛 agent、一邊看著 spec 上下文。
+**spekterm** 是一個**以 agent 為核心的本地開發工作台**——一個獨立的 Electron 桌面 app（以 MIT 授權開源），把多個「一個 repo／資料夾各自一個 `claude` session」的 terminal 包在一個殼裡，並加上一塊**懂 OpenSpec 結構的側欄**，讓使用者不必另外開 IDE 就能一邊駕駛 agent、一邊看著 spec 上下文。
 
-core 邏輯重用開源的 [`@spekjs/core`](https://github.com/spekhq/spek)（MIT）；app 本身封閉、商業授權。
+core 邏輯重用開源的 [`@spekjs/core`](https://github.com/spekhq/spek)（MIT）；app 本身同樣以 MIT 開源（2026-09-29 裁決，見 §10.3）。
 
 **一句話定位（headline）**：spec-driven 的多 agent 開發工作台。
 
 **護城河（moat，非 headline）**：跨異質 agent、以**磁碟狀態驗證**為核心的**結構化工作交接（handoff）**——一級功能、不綁 OpenSpec，任何 repo 都能用；工作對應到 OpenSpec change 時再額外錨定 change 做語意增強。見 §7。
 
-**現況**（2026-09）：Phase 0–5 已封存；Linux AppImage 可用；Phase 7 的本機收件匣、Slack 來件、agent 發起的跨 repo 交接與母子關係已交付。macOS／Windows 產物、Phase 8+ 付費層未做 —— 後者待 §10.3 裁決。UI 定案雛型見 `workspace-mockup.html`。
+**現況**（2026-09）：Phase 0–5 已封存；Linux AppImage 可用；Phase 7 的本機收件匣、Slack 來件、agent 發起的跨 repo 交接與母子關係已交付。macOS／Windows 產物未做；Phase 8+ 付費層已裁決不做（§10.3）。UI 定案雛型見 `workspace-mockup.html`。
 
 ---
 
@@ -69,7 +69,7 @@ core 邏輯重用開源的 [`@spekjs/core`](https://github.com/spekhq/spek)（MI
 | **GitHub Copilot app**＋Spec Kit canvases | 桌面 | macOS／Windows／Linux（2026-06 GA） | Copilot；Agent HQ 可跑 Claude／Codex | **Spec Kit 的視覺化工作台**（`github/spec-kit-copilot`） | Agent HQ 是多家**平行比較**，不是接力 | Copilot 訂閱 | Spec Kit 139k★ |
 | **OpenAI Codex app** | ChatGPT 桌面內 | macOS／Windows；Linux preview（2026-08） | Codex | 無 | 無 | ChatGPT 訂閱 | — |
 | **claude-view** | 監看 dashboard | macOS | Claude | 無 | 無 | MIT；Pro $20 | 110★，近 30 天 0 commit |
-| **spekterm** | Electron 桌面 | Linux AppImage（macOS／Windows 未出） | 僅 Claude（真 CLI pty） | **OpenSpec 語意側欄** | **agent 自己發起、跨 repo、有母子關係與完成報告** | 私有、未發佈 | — |
+| **spekterm** | Electron 桌面 | Linux AppImage（macOS／Windows 未出） | 僅 Claude（真 CLI pty） | **OpenSpec 語意側欄** | **agent 自己發起、跨 repo、有母子關係與完成報告** | MIT 開源、尚未對外發佈 | — |
 
 **懂 OpenSpec 的工作台已經有人做，但都很小**：OpenSpec Workbench（VS Code 擴充＋本機網頁，功能定義幾乎與
 spekterm 的護城河相同，6★、111 次安裝，2026-08 才建立）、`jixoai/openspecui`（網頁 UI，118★）。
@@ -119,7 +119,7 @@ spekterm 的護城河相同，6★、111 次安裝，2026-08 才建立）、`jix
 最直接的正面對手。
 
 **結論**：spekterm 作為**付費產品**的空間已大幅縮小。可守的只剩「OpenSpec 語意深度」與「交接生命週期」，
-而這兩者都比較適合當**功能**，很難單獨撐起一道收費牆（見 §10）。
+而這兩者都比較適合當**功能**，很難單獨撐起一道收費牆（見 §10）。**2026-09-29 裁決：改以 MIT 開源，不做付費層**（§10.3）。
 
 ### 2.4 SWOT（2026-09-29 重評）
 
@@ -133,8 +133,8 @@ spekterm 的護城河相同，6★、111 次安裝，2026-08 才建立）、`jix
 
 **Weaknesses**
 - **TAM 最小**：Claude Code ∩ OpenSpec 使用者。
-- **封閉、付費、只有 Linux**，對上一排 MIT／免費／三平台的對手 —— 開發者對「本機功能免費」的預期已被錨定得
-  更死。
+- **只有 Linux**，對上一排三平台的對手。（重評當時還有「不開源、要付費」這一條 —— 開發者對「本機功能免費」的
+  預期已被錨定得更死 —— 已由 2026-09-29 改為 MIT 開源的裁決消除，見 §10.3。）
 - **單 agent**：只有 `claude`，而 BAT、Nimbalyst、cmux 都已經多廠牌。
 - **無聲量基礎**，也尚未對外發佈。
 - **§7 宣稱的護城河有一半還沒蓋**（磁碟狀態驗證、跨異質 agent）。
@@ -198,7 +198,7 @@ Electron，目標產出 macOS / Windows / Linux 三平台安裝檔。
 | F7 | 打包發佈 | electron-builder 三平台安裝檔、主題、持久化 layout | Phase 6 |
 | F7b | UI 語言 | 介面文案可切換語言（`en` / `zh-TW`），立即生效且跨重啟保留；首次啟動取自作業系統的偏好語言。**寫給 agent 讀的文字不在地化**（見下） | Phase 6 ✅ |
 | F8 | Handoff（本機免費） | 寫 handoff → daemon probe → 同機自動開 session + context 注入 | Phase 7（moat）|
-| F9 | Handoff（跨機/跨人/編排，付費） | relay、跨人核准、自動編排 Claude→Codex→Gemini、稽核、遠端核准。**2026-09：同一人的跨機與手機核准已由官方覆蓋，待 §10.3 裁決** | Phase 8+（暫停） |
+| F9 | Handoff（跨機/跨人/編排，付費） | relay、跨人核准、自動編排 Claude→Codex→Gemini、稽核、遠端核准。**2026-09-29 已裁決不做**：同一人的跨機與手機核准已由官方覆蓋（§10.3） | —（不做） |
 
 ---
 
@@ -384,7 +384,7 @@ spek 背景 router 主動 probe → 比對 to 命中的 repo-B
    - **內容（payload）= 磁碟狀態快照（git diff／檔案）為底**；當工作對應到 change 時，再連到 repo 內的 OpenSpec change、不重抄（豐富內容跟著 repo 走 git、天然 spec 錨定）。無 change 時就只有磁碟快照。
    - **跨機 / 跨人 = relay**（spek 自己的中繼）：本機 daemon 把 outbox 同步到 relay，relay 送到別台機 / 別人的 daemon。
    - **不採**「主要存 repo 內用 git 傳」：解不了跨 repo 路由、又會弄髒版控。
-3. **Freemium**：本機單人 handoff 免費；跨機 / 跨人 / 自動編排 / 稽核 / 遠端核准付費（見 §10）。
+3. **Freemium**：本機單人 handoff 免費；跨機 / 跨人 / 自動編排 / 稽核 / 遠端核准付費（見 §10）。**2026-09-29 已裁決不做付費層**（§10.3）。
 
 ### 7.7 元件（work breakdown）
 
@@ -394,7 +394,7 @@ spek 背景 router 主動 probe → 比對 to 命中的 repo-B
 4. **Router / probe daemon** — Electron 主行程背景 watcher：監看 inbox、比對 `to`、依信任邊界路由、repo 沒開時先進 pending。
 5. **Spawner + context 注入器** — 開新 pty session + 把 handoff 餵進目標 agent；每種 agent 注入方式不同，需抽象層。
 6. **Consumer / ack** — 回寫處理紀錄、狀態流轉、通知發送方 ack。
-7. **Relay（付費）** — 跨機 / 跨人中繼 + 身分 / Team registry + 存取控制。
+7. **Relay（付費）** — 跨機 / 跨人中繼 + 身分 / Team registry + 存取控制。（已裁決不做，§10.3。）
 8. **UI** — 見 §6.4。
 
 ---
@@ -510,9 +510,9 @@ spekterm
 
 ---
 
-## 10. 商業模式（2026-09 重評：付費層待裁決）
+## 10. 商業模式（已裁決：MIT 開源，不做付費層）
 
-### 10.1 原規劃（2026-07，Freemium）
+### 10.1 原規劃（2026-07，Freemium；已被 §10.3 取代）
 
 原則：按**價值放大的邊界**切，不按「handoff 存不存在」切。若把 handoff 整個鎖付費，免費版只剩「terminal 殼 + OpenSpec viewer」，正面對上 cmux（免費 / 原生 / 開源）會輸、且沒漏斗。
 
@@ -527,7 +527,7 @@ spekterm
 - 與 claude-view（$0 本機 → 雲付費）、cmux（本機免費 → 雲付費）已驗證模式一致。
 - 防白嫖：本機 handoff 天生受限（一機 / 一人 / 跨 agent 要手動），有隊友、第二台機、或想自動接力就撞牆。
 
-授權：app 專有、保留所有權利（All rights reserved），私有 repo、非開源；`@spekjs/core` 維持 MIT。
+授權（原規劃）：app 不開源、不公開原始碼；`@spekjs/core` 維持 MIT。
 
 ### 10.2 2026-09-29 重評：每一個付費項目現在由誰覆蓋
 
@@ -543,13 +543,17 @@ spekterm
 Nimbalyst Teams $20）。**這些付費點全都靠雲端基礎設施撐著，沒有一家在收本機功能的錢。** 原規劃本身就是這個
 模式，所以它**不構成差異**；而它的付費那一半，同一個人的部分已被官方免費覆蓋。
 
-### 10.3 建議（**待使用者裁決**，見 §14）
+### 10.3 裁決（2026-09-29）：MIT 開源，不做付費層
 
-1. **暫停 Phase 8+ 的付費層**，不再投入 relay、手機核准。
-2. 若仍要商業化，付費線只能重新劃在**官方與 BAT 都沒做**的地方 —— 跨人交接（含稽核）或跨廠牌接力 —— 而且
-   **先驗證需求再蓋**（例如：自己一個月內有沒有真的想把工作從 Claude 交給 Codex；有沒有隊友會接你的交接單）。
-3. 否則把 spekterm 定位為**自用工作台**。若要對外，面對一排 MIT／免費的對手，「封閉＋付費的本機 app」幾乎沒有
-   空間 —— 授權模式本身要一起重新決定。
+- **授權**：app 以 **MIT** 開源（`LICENSE`，著作權人 Kewang，與 `spek` 一致），沿用現在的 GitHub repo 公開，
+  保留完整 git 歷史（公開前已改寫歷史，移除任職公司的內部名稱與同事名字）。見 change `open-source-mit`。
+- **不做 Phase 8+ 的付費層**（relay、手機核准、稽核、自動編排）。
+- **收入**：只有贊助 —— GitHub Sponsors（維護者個人帳號）。贊助是給維護者的支持，不依貢獻分配
+  （`CONTRIBUTING.md`）。**期待要放低**：開源工具的贊助通常補不回時間成本，真正的回報是 OpenSpec 社群的能見度。
+- **考慮過而沒選的**：
+  - 維持私有自用 —— 不需要任何動作，但放棄能見度。
+  - 付費線改劃在跨人交接或跨廠牌接力 —— 官方與 BAT 都還沒做，但需求沒有被驗證；面對一排 MIT／免費的對手，
+    一個不開源、要付費的本機 app 幾乎沒有空間。
 
 ---
 
@@ -795,7 +799,7 @@ session 脈絡裡送出的，彙整成一份跨數十天、跨數十個專案的
 
 ### Phase 8+ — Handoff 付費層與 agent 擴充
 
-> **2026-09-29：暫停，待 §10.3 裁決。** relay（同一人跨機）與手機核准已由官方覆蓋；跨人、稽核、跨廠牌接力仍是空白但需求未驗證。
+> **2026-09-29：已裁決不做付費層（§10.3）。** relay（同一人跨機）與手機核准已由官方覆蓋。跨廠牌 agent 的擴充是否還要做，見 §14。
 
 - **Relay**：跨機 / 跨人中繼 + 身分 / Team registry + 存取控制 + 跨人核准。
 - **多 agent**：擴充 spawner 注入抽象至 Codex / Gemini；**自動編排** Claude→Codex→Gemini。
@@ -846,11 +850,8 @@ session 脈絡裡送出的，彙整成一份跨數十天、跨數十個專案的
 
 ## 14. 開放問題
 
-### 策略（2026-09-29 新增，**待使用者裁決**）
-- **spekterm 還要不要當付費產品？** 選項：(a) 暫停付費層、維持私有自用；(b) 付費線改劃在跨人交接／跨廠牌接力，
-  先驗證需求；(c) 轉為開源或免費發佈、以 `@spekjs` 生態為主。依據見 §2.3、§10.2。
-- **授權模式**：對手幾乎全是 MIT／免費（BAT、Nimbalyst）或開源＋雲端收費（cmux、Superset），「封閉的本機 app」
-  是否仍合理。
+### 策略
+- ~~spekterm 還要不要當付費產品？授權模式？~~ **已裁決（2026-09-29）：MIT 開源，不做付費層**，見 §10.3。
 - **跨廠牌 agent**：是否真的要做 Codex（與 Antigravity CLI）的注入路徑，還是承認「只做 Claude」並把原則 3
   （agent 中立）降級。
 
@@ -870,7 +871,7 @@ session 脈絡裡送出的，彙整成一份跨數十天、跨數十個專案的
 Phase 0–5 已封存，Phase 6 的 Linux 打包與 Phase 7 的本機收件匣、交接、母子關係已交付。原本這一節的
 「先做 Phase 0」已完成，不再適用。
 
-1. **先裁決 §14 的策略問題** —— 它決定 Phase 8+ 還做不做、macOS／Windows 產物值不值得出。
+1. **開源已裁決**（§10.3）。接下來要決定的是 macOS／Windows 產物值不值得出，以及跨廠牌 agent 還做不做（§14）。
 2. **不論裁決結果都值得做的**：處理 §13 新增的三條官方介面風險（`--name` 撞名、組織關閉 hooks、
    `additionalContext` 上限）—— 它們影響的是已交付的功能。
 3. 若要保住「交接」這條差異化，**補上 §7.2 的磁碟狀態驗證**（交接單自動附 diff stat 與 tasks 進度），

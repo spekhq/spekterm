@@ -74,8 +74,12 @@ const SHELL_PATH = '/bin/sh'
 /**
  * 把一個獨一無二的字串塞進 app 的環境，pty 會整份繼承 —— 於是讀 `/proc` 底下每個行程的
  * `environ` 就認得出「這一輪」開出來的 pty，不會把別處跑著的 shell 算進來。
+ *
+ * **名字不得以 `SPEKTERM_` 開頭。** `ptyEnv()` 會剝掉所有 `SPEKTERM_` 開頭的變數（`agent-peer-name`：
+ * 那是本應用程式替 session 設定的專屬變數，不從外層繼承）—— 標記曾經就叫 `SPEKTERM_PROBE_MARKER`，
+ * 於是在那次改動之後 pty 裡根本沒有它，「產生了一個真實 pty」這條恆紅，而產品完全沒壞。
  */
-const MARKER_VAR = 'SPEKTERM_PROBE_MARKER'
+const MARKER_VAR = 'PROBE_PACKAGE_MARKER'
 const marker = `spekterm-package-${process.pid}-${process.hrtime.bigint()}`
 
 // ── 產物 ────────────────────────────────────────────────────────────────────
@@ -136,6 +140,22 @@ function ptyPids() {
     }
   }
   return pids
+}
+
+/**
+ * 這一輪啟動的 AppImage 掛載在哪裡：**啟動之後比啟動之前多出來的那一個掛載點**。
+ *
+ * 另外兩個看起來更直接的做法都實測失敗過，別換回去：
+ *
+ * - **列舉 `/tmp/.mount_*`** —— 使用者自己正在跑的 Spekterm 也有一個掛載點，會抓錯。
+ * - **讀行程的 `APPDIR` 或 `/proc/<pid>/exe`** —— 探針若在一個由 Spekterm 開出來的終端裡被
+ *   執行，它繼承的 `APPDIR` 是**那一份**產物的，而 runtime 不會覆寫它；Electron 的行程又把
+ *   自己設成不可 dump，`environ` 與 `exe` 都讀不到。掛載表裡的來源只記檔名，與使用者那份同名。
+ *
+ * 集合相減之後必須**恰好一個** —— 多於一個代表同一時間有別的 AppImage 被啟動，那時寧可紅也不猜。
+ */
+function newMountPoints(before) {
+  return [...mountPoints()].filter((name) => !before.has(name)).map((name) => join('/tmp', name))
 }
 
 async function waitForPty(expected, timeoutMs = 20_000) {
@@ -323,6 +343,9 @@ try {
   // production CSP 的前提是「沒有 dev server」。`electron-vite dev` 會把這個變數洩漏到 shell，
   // 而繼承到它的話，打包產物會拿到 **dev 政策** —— 那條斷言就會以最難解讀的方式紅掉。
   delete env.ELECTRON_RENDERER_URL
+  // 同理：探針若在一個由 AppImage 版 Spekterm 開出來的終端裡執行，這幾個變數描述的是**那一份**
+  // 產物（實測 runtime 不會覆寫繼承來的 `APPDIR`）。
+  for (const name of ['APPDIR', 'APPIMAGE', 'ARGV0', 'OWD']) delete env[name]
 
   // 被測 app 的語言是**被指定的**：全新的 profile 會觸發首次啟動的語言偵測，
   // 而在一台非英文的機器上，那會讓每一條 `aria-label` 選擇器選不到元素。
@@ -352,6 +375,36 @@ try {
   check(results, '產物脫離 repo 仍可執行', !appImage.startsWith(repoRoot), appImage)
 
   await awaitMounted(client, { expression: MOUNTED })
+
+  // ── 授權文字（project-license）────────────────────────────────────────────
+  /**
+   * MIT 要求散布的副本附上授權聲明 —— spekterm 自己的，與被打包的第三方套件的。
+   * 驗的是**執行中的產物**的根目錄，不是 `release/` 裡那個檔案被解開的樣子。
+   */
+  const appDirs = newMountPoints(mountsBefore)
+  check(results, '找得到這一輪產物的掛載點', appDirs.length === 1, `新增的掛載點：${JSON.stringify(appDirs)}`)
+  const appDir = appDirs[0]
+  const shippedLicense = appDir && existsSync(join(appDir, 'LICENSE')) ? readFileSync(join(appDir, 'LICENSE')) : null
+  check(results, '產物根目錄的 LICENSE 與版控中的逐位元組相同',
+    shippedLicense !== null && shippedLicense.equals(readFileSync(join(repoRoot, 'LICENSE'))),
+    shippedLicense === null ? `${appDir ?? '(無掛載點)'}/LICENSE 不存在` : `${shippedLicense.length} bytes`)
+  const summaryPath = appDir ? join(appDir, 'THIRD_PARTY_LICENSES.txt') : null
+  const summary = summaryPath && existsSync(summaryPath) ? readFileSync(summaryPath, 'utf8') : ''
+  // 點名的五個：三個被打進 renderer bundle、兩個原樣出貨 —— 兩種來源各自漏掉都會紅。
+  const REQUIRED = ['react', 'monaco-editor', '@xterm/xterm', 'i18next', 'node-pty']
+  const lines = summary.split('\n')
+  const missingPackages = REQUIRED.filter((name) => {
+    const at = lines.findIndex((line, index) => line.startsWith(`${name}@`) && lines[index + 1]?.startsWith('License: '))
+    // 條目之後（隔一條分隔線）緊接的是授權本文，不是「沒有授權檔」的註記。
+    return at === -1 || lines[at + 3]?.includes('does not include a license file')
+  })
+  check(results, '產物根目錄的第三方授權彙總涵蓋被打包與原樣出貨的套件，且各帶授權本文',
+    summary !== '' && missingPackages.length === 0,
+    summary === '' ? `${summaryPath ?? '(無掛載點)'} 不存在` : `缺少或無本文：${missingPackages.join(', ') || '無'}`)
+  check(results, '第三方授權彙總保留了內嵌第三方原始碼的聲明',
+    summary.includes('@license DOMPurify'),
+    'monaco-editor 內嵌的 DOMPurify —— 它不是獨立套件，打包後的程式碼裡已沒有這段註解')
+
 
   // ── production CSP ────────────────────────────────────────────────────────
   // **導航完成之後**才武裝收集器（見 `CSP_ARM` 的說明）—— 此時 MOUNTED 已成立。

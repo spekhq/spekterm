@@ -1,10 +1,12 @@
-import { readFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import { defineConfig, externalizeDepsPlugin } from 'electron-vite'
+import type { Plugin } from 'vite'
 import { buildIdentity, devIdentity } from './scripts/lib/build-info.mjs'
 import type { BuildIdentity, DevIdentity } from './scripts/lib/build-info.mjs'
+import { legalCommentsOf, packageRootOf, packageRootsOf } from './scripts/lib/third-party-licenses.mjs'
 
 /** 字典住在 `src/shared`，main 與 renderer 都要解析得到它（見 `src/shared/i18n`）。 */
 const alias = { '@shared': fileURLToPath(new URL('src/shared', import.meta.url)) }
@@ -48,11 +50,48 @@ function resolveBuildInfo(command: string): BuildIdentity | DevIdentity {
   return command === 'serve' ? devIdentity(version) : buildIdentity(root, version, new Date().toISOString())
 }
 
+/**
+ * 第三方授權彙總的收集端 —— 見 `project-license`「被出貨的產物附帶本身與第三方的授權文字」。
+ *
+ * 每個 build 目標把**建置工具自己的模組清單**對應成套件根目錄，寫進 `out/licenses/<target>.json`；
+ * `scripts/third-party-licenses.mjs` 再合併成產物裡的那份彙總。devDependencies 裡哪些真的被
+ * 打進 bundle，只有 bundler 知道 —— 從依賴宣告去推，會漏掉被打包的、或多列沒被打包的。
+ *
+ * **只在 build 時執行**：dev server 不產出產物，也沒有完整的模組清單。
+ */
+function collectBundledPackages(target: 'main' | 'preload' | 'renderer'): Plugin {
+  return {
+    name: 'spekterm:collect-bundled-packages',
+    apply: 'build',
+    generateBundle() {
+      const dir = fileURLToPath(new URL('out/licenses/', import.meta.url))
+      mkdirSync(dir, { recursive: true })
+      const ids = [...this.getModuleIds()]
+      writeFileSync(`${dir}${target}.json`, `${JSON.stringify(packageRootsOf(ids), null, 2)}\n`)
+      // 打包會剝掉原始檔裡的授權註解 —— 從磁碟上的原始檔收回來（見 `legalCommentsOf`）。
+      const notices = ids.flatMap((id) => {
+        const root = packageRootOf(id)
+        if (!root) return []
+        const file = id.split('?')[0]
+        let source: string
+        try {
+          source = readFileSync(file, 'utf8')
+        } catch {
+          return []
+        }
+        const where = `${root.slice(root.lastIndexOf('/node_modules/') + '/node_modules/'.length)}${file.slice(root.length)}`
+        return legalCommentsOf(source).map((comment) => ({ source: where, comment }))
+      })
+      writeFileSync(`${dir}${target}.notices.json`, `${JSON.stringify(notices, null, 2)}\n`)
+    },
+  }
+}
+
 export default defineConfig(({ command }) => ({
   // main / preload 執行於 Node 環境，依賴一律 external 而非 bundle：
   // native 模組（node-pty）無法被 bundler 處理。
   main: {
-    plugins: [externalizeDepsPlugin()],
+    plugins: [externalizeDepsPlugin(), collectBundledPackages('main')],
     resolve: { alias },
     build: {
       rollupOptions: {
@@ -71,11 +110,11 @@ export default defineConfig(({ command }) => ({
     },
   },
   preload: {
-    plugins: [externalizeDepsPlugin()],
+    plugins: [externalizeDepsPlugin(), collectBundledPackages('preload')],
     resolve: { alias },
   },
   renderer: {
-    plugins: [react(), tailwindcss()],
+    plugins: [react(), tailwindcss(), collectBundledPackages('renderer')],
     resolve: { alias },
     build: {
       rollupOptions: {

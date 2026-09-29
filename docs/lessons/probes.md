@@ -1049,3 +1049,19 @@ agent 目標走 `$SHELL -l -c claude` —— **login shell 會重設 PATH**，`~
 一個字面控制字元。**
 
 查法：`python3 -c "print(len([b for b in open(f,'rb').read() if b<9 or (10<b<32 and b!=13)]))"`
+
+## `probe:package` 的兩個「探針在 Spekterm 裡被執行」的陷阱
+
+`open-source-mit` 替 `probe:package` 加授權檔的斷言時，連踩兩個與產品無關、只與「探針從哪裡被啟動」有關的坑。
+**這個 repo 的探針大多是在一個 Spekterm 開出來的終端裡被執行的** —— 那是 dogfood 的日常，也是 agent 的日常。
+
+- **標記變數不得以 `SPEKTERM_` 開頭。** `ptyEnv()` 會剝掉所有 `SPEKTERM_` 開頭的變數（`agent-peer-name`：本應用程式
+  替 session 設定的專屬變數不從外層繼承）。探針的標記原本叫 `SPEKTERM_PROBE_MARKER`，於是從那次改動起 pty 裡根本
+  沒有它，「產生了一個真實 pty」恆紅 —— **而產品完全沒壞**。它躲了好幾個 change，因為 `probe:package` 不在
+  `test:e2e` 裡、只在換版前跑。**一般形式：探針用來「認出自己造的東西」的標記，要避開產品會過濾的命名空間。**
+- **不要從環境變數或 `/proc/<pid>/exe` 找「這一輪」的 AppImage 掛載點。**
+  - 外層 Spekterm 是 AppImage 時，探針的環境裡有**它的** `APPDIR`，而 AppImage 的 runtime **不覆寫**繼承來的值 ——
+    讀到的是使用者正在用的那份產物。啟動前要清掉 `APPDIR`／`APPIMAGE`／`ARGV0`／`OWD`。
+  - Electron 的行程把自己設成不可 dump，`/proc/<pid>/environ` 與 `exe` 都讀不到（權限錯誤，不是空值）。
+  - 掛載表的來源只記檔名 `Spekterm.AppImage`，與使用者那份同名。
+  - **能用的是「啟動後比啟動前多出來的那一個掛載點」**，且要求恰好一個 —— 多於一個就紅，不猜。

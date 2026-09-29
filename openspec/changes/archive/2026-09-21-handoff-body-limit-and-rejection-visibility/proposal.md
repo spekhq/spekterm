@@ -135,4 +135,4 @@ spekterm 在一秒內讀到它、**拒絕、刪檔**，然後什麼也沒發生�
 - 交接的回程與以 MCP 工具投遞 —— 既有缺口，與本 change 正交。
 - `expireContent()` 沒有 production 呼叫端（內容永不過期）—— 既有缺口；spec 只承諾
   「內容 SHALL **可**過期」，本 change 記錄它與新上限的交互但不實作。
-- `src/main/index.ts` 中 `app.on('activate')` 回呼內重複的 service 建立 —— **已於 `cd7290b` 修正**。
+- `src/main/index.ts` 中 `app.on('activate')` 回呼內重複的 service 建立 —— **已於 `540ce3e` 修正**。

@@ -1,7 +1,7 @@
 # 收斂前的斷言數基準
 
 **取得時間**：2026-08-14
-**HEAD**：`0650dc3`（`feat(probe): 探針時序的結構保證`）
+**HEAD**：`04f427a`（`feat(probe): 探針時序的結構保證`）
 **工作區**：`scripts/` 未有任何本 change 的改動（僅 `openspec/changes/probe-retry-guarantees/` 為新增）
 **方式**：`npm run build` 一次，其後三支各以 `PROBE_SKIP_BUILD=1` 依序執行（非並行）
 **環境**：Node 22.22.0；機器上無其他 spekterm 行程

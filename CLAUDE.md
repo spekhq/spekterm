@@ -13,7 +13,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-spekterm 是一個以 agent 為核心的本地開發工作台 —— 獨立的 Electron 桌面 app（私有、專有授權），
+spekterm 是一個以 agent 為核心的本地開發工作台 —— 獨立的 Electron 桌面 app（以 MIT 授權開源），
 把多個「一個 repo／資料夾各自一個 `claude` session」的 terminal 包在一個殼裡，並加上一塊懂
 OpenSpec 結構的側欄，讓使用者不必另外開 IDE 就能一邊駕駛 agent、一邊看著 spec 上下文。
 
@@ -73,7 +73,8 @@ OpenSpec 結構的側欄，讓使用者不必另外開 IDE 就能一邊駕駛 ag
   完整的實測見 `docs/lessons/handoff.md`（第十一至十四節）。
 - **鍵盤** —— 見下文「快捷鍵」。
 
-**Linux 打包已可用**（`npm run dist:linux` → AppImage，`npm run install:desktop` 裝進應用程式
+**以 MIT 開源**（`open-source-mit`：`LICENSE`、`CONTRIBUTING.md`、產物根目錄附本身與第三方的授權文字；
+公開前已改寫全部 git 歷史）。**Linux 打包已可用**（`npm run dist:linux` → AppImage，`npm run install:desktop` 裝進應用程式
 選單）。**版號逐次遞增**且產物與執行中的 app 說得出同一個建置身分（Settings 的「About」段）。
 **尚未開始**：macOS／Windows 產物、自動更新與簽章（Phase 6 其餘）。
 **交接已交付**（agent → 另一個 repo，以及母、子、兄弟之間經 Claude Code 本機訊息功能的往來）；
@@ -121,6 +122,8 @@ npm run dev             # electron-vite dev（開發模式）
 npm run build           # 建置至 out/
 npm run dist:linux      # 換版 → 建置 → 打包 AppImage → 清掉更舊的產物（首次需要網路下載 Electron binary）
                         #   **第一步會 bump patch 版本並 commit**（`chore(release): <v>`，不打 tag）。
+                        #   要升 minor／major 用 `RELEASE_LEVEL=minor npm run dist:linux` —— **不是**
+                        #   `-- minor`：npm 把引數接在 `&&` 串的最後一步，而 bump 是第一步。
                         #   `package.json` / `package-lock.json` 任一已被改過時它**拒絕執行** ——
                         #   換版提交只能指名這兩個檔案，而遞增與你的編輯在同一個檔案裡。
 npm run install:desktop # 把產物裝進應用程式選單（~/.local/bin ＋ .desktop ＋ 圖示，尊重 XDG_*）
@@ -277,7 +280,7 @@ port 通不通 —— 任一不成立就**立刻失敗並指出處置**，不進
 
 - 開源的 [`spek`](https://github.com/spekhq/spek)（MIT）是 OpenSpec 內容檢視器 monorepo，本機
   clone 在 `../spek`。
-- **本 repo 是獨立的私有 repo**，專有授權，**不是** spek monorepo 的 npm workspace 成員。
+- **本 repo 是獨立的 repo**（同樣以 MIT 開源），**不是** spek monorepo 的 npm workspace 成員。
 - 重用 core 引擎與部分前端元件，詳見 `docs/PRD.md` §9。
 
 ### `@spekjs/core` 與 `@spekjs/ui`
@@ -402,6 +405,11 @@ addon-unicode-graphemes、i18next、electron-builder（Phase 6）。
   註解仍是繁中：那兩件事是分開的，而它們曾經混在一起（於是每個作者一邊用中文寫註解，一邊很自然地
   把中文寫進 `aria-label`）。
 - 本 repo 的 Node 版本固定在 `.nvmrc`（22.22.0），與 `../spek` 一致
+- **repo 是公開的（MIT）。不要寫進維護者任職公司的內部名稱、同事的名字、維護者的家目錄路徑** —— 包括 dogfood
+  紀錄、實測數字的出處、測試 fixture。範例一律用通用名（`api-server`、`@alex`、`/home/me`）。
+  `scripts/public-hygiene.test.mjs` 擋著，**且不排除 archive**；它的清單是雜湊，紅了只印雜湊前綴，
+  明文清單在維護者本機（`~/spekterm-oss/`），不在 repo 裡。**這條最容易在「照著使用者的全域設定或 memory
+  寫實測紀錄」時被違反** —— 那些地方正寫著那些名字。
 
 ## 快捷鍵
 

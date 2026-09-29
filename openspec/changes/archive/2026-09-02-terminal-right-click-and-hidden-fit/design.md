@@ -9,9 +9,9 @@
 | | 容器 `display:none` 時 `proposeDimensions()` 回傳 |
 |---|---|
 | `@xterm/addon-fit@0.11.0`（`^0.11.0`，本 repo 至 2026-08-18） | `parseInt('auto')` → `NaN`（`Math.max(0, NaN)` 仍是 `NaN`）一路傳到底 ⇒ **`{cols: NaN, rows: NaN}`** ⇒ 防護攔下 |
-| `@xterm/addon-fit@0.12.0-beta.299`（`bd9d0dd` 起） | 上游加了 `parseInt(...) \|\| 0` ⇒ 可用空間為負 ⇒ 夾到 `MINIMUM_COLS/ROWS` ⇒ **`{cols: 2, rows: 1}`** ⇒ **三道防護全部放行** |
+| `@xterm/addon-fit@0.12.0-beta.299`（`40943b2` 起） | 上游加了 `parseInt(...) \|\| 0` ⇒ 可用空間為負 ⇒ 夾到 `MINIMUM_COLS/ROWS` ⇒ **`{cols: 2, rows: 1}`** ⇒ **三道防護全部放行** |
 
-那次升級（`bd9d0dd`，2026-08-18，為了修游標閃爍計時器的外洩）**一行 `.ts` 都沒改**，
+那次升級（`40943b2`，2026-08-18，為了修游標閃爍計時器的外洩）**一行 `.ts` 都沒改**，
 `npm test` 與九支探針全綠。**沒有任何載體在看「session 被隱藏時 pty 的尺寸」** —— 於是這個
 缺陷在 master 上活了 14 個 commit，直到 dogfood 從畫面症狀反推出來。
 

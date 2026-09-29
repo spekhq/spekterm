@@ -1,6 +1,6 @@
 # spekterm
 
-商業版 spek —— 一個以 agent 為核心的本地開發工作台，獨立的 Electron app（私有、專有授權）。
+一個以 agent 為核心、懂 OpenSpec 的本地開發工作台 —— 獨立的 Electron app，以 [MIT 授權](./LICENSE)開源。
 
 把多個「一個 repo／資料夾各自一個 `claude` session」的 terminal 包在一個殼裡，
 再加上一塊**懂 OpenSpec 結構**的側欄 —— 讓你不必另開 IDE，就能一邊駕駛 agent、一邊看著
@@ -13,12 +13,12 @@ core 邏輯與視覺化元件重用開源的
 
 ## 現況
 
-**Phase 5（`openspec-side-panel`）已封存。** 主舞台能駕駛 agent、側欄能看懂 OpenSpec，
-而且兩者已經對上 —— 這正是這個 app 相對於「開四個終端機分頁」的增量價值。
+**Phase 0–5 已封存。** 主舞台能駕駛 agent、側欄能看懂 OpenSpec，而且兩者已經對上 —— 這正是這個
+app 相對於「開四個終端機分頁」的增量價值。
 
-**Linux 產物已可打包**（AppImage —— 見下方「打包與安裝」）。Phase 6 的其餘項目
-（macOS／Windows 產物、自動更新、程式碼簽章、主題與原生選單）與 **handoff（Phase 7+，護城河）**
-尚未開始。
+**Linux 產物已可打包**（AppImage —— 見下方「打包與安裝」）。**收件匣與交接（Phase 7）已交付**：
+Slack 提及成為待處理項目、agent 可以把工作交接給另一個 repo 的 session。
+**尚未開始**：macOS／Windows 產物、自動更新、程式碼簽章。
 
 ### 已經可以用的
 
@@ -69,6 +69,15 @@ core 邏輯與視覺化元件重用開源的
 - 檔案系統的每一次存取都受 workspace folder 邊界約束：renderer 以 `(folderId, relPath)` 定址，
   **它沒有詞彙可以表達 workspace 之外的位置**
 - 主行程直接 `import` `@spekjs/core` 掃描 OpenSpec，全程不開任何 TCP 埠
+
+**收件匣與交接**
+
+- 活動列的 `Handoffs` 收件匣：外部來源投遞的工作項目，使用者看過本文、確認要開在哪個 folder
+  之後，得到一個 context 備妥、第一則 prompt 已填好的 agent session
+- **Slack**：有人在 Slack 提及你，那件事就成為一則待處理項目（啟動時、每五分鐘、存下憑證時各回補一次）
+- **agent 自己發起的交接**：agent 把工作交接給另一個 repo，spekterm 在那裡開好 session 並送出第一則
+  prompt；交接出來的 session 記得它的母 session，做完會回報，完成時發一則通知
+- 待處理數的計數標示，與新項目到達時的作業系統原生通知
 
 ## 文件
 
@@ -127,6 +136,8 @@ npm run install:desktop # → ~/.local/bin/Spekterm.AppImage ＋ 應用程式選
 ### 換版是兩步，而版號每次都會變
 
 `dist:linux` 的第一步是**遞增 patch 版本並提交**（`chore(release): <version>`，不打 tag）。
+要升 minor 或 major 時以環境變數指定：`RELEASE_LEVEL=minor npm run dist:linux`（值不是 `patch`／`minor`／
+`major` 時，它在動手之前就拒絕執行）。
 這不是儀式 —— 在此之前檔名恆為 `Spekterm-0.1.0.AppImage`、app 內也不顯示版本，於是換版後行為
 若沒變，「**修正沒生效**」與「**根本還在跑舊的**」分不出來，而這兩者要用完全不同的方式處理。
 
@@ -191,7 +202,7 @@ npm run install:desktop # → ~/.local/bin/Spekterm.AppImage ＋ 應用程式選
 ## 與 `spek` 的關係
 
 開源的 [`spek`](https://github.com/spekhq/spek)（MIT）是 OpenSpec 的內容檢視器。
-本 repo 是**獨立的私有 repo**、不是它的 npm workspace 成員，透過 npm 消費它的兩個套件：
+本 repo 是**獨立的 repo**（同樣以 MIT 開源）、不是它的 npm workspace 成員，透過 npm 消費它的兩個套件：
 
 - **`@spekjs/core`** — scanner / tasks / git-cache / worktrees / types。主行程直接 `import`
   （純 Node 模組，行程內函式呼叫，不需要 HTTP server）。
@@ -205,4 +216,7 @@ npm run install:desktop # → ~/.local/bin/Spekterm.AppImage ＋ 應用程式選
 
 ## 授權
 
-專有，保留所有權利（All rights reserved）。此 repo 為私有，非開源。
+[MIT](./LICENSE)。打包出去的產物另附一份第三方授權彙總（`THIRD_PARTY_LICENSES.txt`），列出被打包進去的
+每一個套件與它的授權。
+
+想參與貢獻或贊助，請先看 [CONTRIBUTING.md](./CONTRIBUTING.md)。

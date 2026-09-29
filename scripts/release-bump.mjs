@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * 換版：遞增 patch 版本並提交。`dist:linux` 的第一步。
+ * 換版：遞增版本（預設 patch）並提交。`dist:linux` 的第一步。
  *
  * ## 為什麼是打包指令自己做
  *
@@ -42,6 +42,15 @@ import { fileURLToPath } from 'node:url'
 /** 預設為本 repo；測試以第一個引數指向暫存的 git fixture（見檔頭）。 */
 const repoRoot = process.argv[2] ?? dirname(dirname(fileURLToPath(import.meta.url)))
 
+/**
+ * 遞增的層級（`build-identity`「遞增的層級可由執行者指定，預設為 patch」）。
+ *
+ * **經由環境變數，不經由 argv**：`dist:linux` 是一串 `&&`，`npm run dist:linux -- minor` 會把引數
+ * 接在**最後一個**步驟後面，而這支是第一個。`argv[2]` 另有用途（repo 根的覆寫，見檔頭）。
+ */
+const LEVELS = ['patch', 'minor', 'major']
+const level = process.env.RELEASE_LEVEL || 'patch'
+
 /** 版本同時記載於這些檔案，而遞增工具會**一併改寫它們** —— 提交範圍必須涵蓋全部。 */
 const VERSION_FILES = ['package.json', 'package-lock.json']
 
@@ -60,6 +69,12 @@ function fail(message) {
 }
 
 // ── 1. 先拒絕，再動手 ────────────────────────────────────────────────────────
+
+// 拼錯的層級若靜默退回 patch，執行者拿到的是一個他沒有要的版本 —— 而且已經被提交了。
+if (!LEVELS.includes(level)) {
+  fail(`RELEASE_LEVEL=${level} 不是可用的層級 —— 可用的值：${LEVELS.join('、')}（未設定時為 patch）`)
+}
+
 // 版本宣告的檔案若已被修改，**提交範圍解決不了它**：遞增與那些變更落在同一個檔案裡，
 // 一次提交必然把兩者一起帶走。這是唯一必須在動手之前擋下來的情況。
 
@@ -86,7 +101,7 @@ try {
 
 // ── 2. 遞增 ─────────────────────────────────────────────────────────────────
 
-execFileSync('npm', ['version', 'patch', '--no-git-tag-version'], {
+execFileSync('npm', ['version', level, '--no-git-tag-version'], {
   cwd: repoRoot,
   stdio: ['ignore', 'ignore', 'inherit'],
 })

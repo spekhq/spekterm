@@ -3,8 +3,14 @@
   "productName": "Spekterm",
   "version": "0.1.18",
   "private": true,
-  "license": "UNLICENSED",
+  "license": "MIT",
+  "author": "Kewang",
   "description": "Spec-driven multi-agent development workbench (Electron desktop app)",
+  "homepage": "https://github.com/spekhq/spekterm#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/spekhq/spekterm.git"
+  },
   "type": "module",
   "main": "./out/main/index.js",
   "build": {
@@ -16,7 +22,19 @@
     "files": [
       "out/**",
       "package.json",
-      "!**/*.map"
+      "!**/*.map",
+      "!out/licenses/**",
+      "!out/THIRD_PARTY_LICENSES.txt"
+    ],
+    "extraFiles": [
+      {
+        "from": "LICENSE",
+        "to": "LICENSE"
+      },
+      {
+        "from": "out/THIRD_PARTY_LICENSES.txt",
+        "to": "THIRD_PARTY_LICENSES.txt"
+      }
     ],
     "asarUnpack": [
       "**/node_modules/node-pty/**"
@@ -41,7 +59,7 @@
   },
   "scripts": {
     "dev": "XDG_CONFIG_HOME=$HOME/.config/spekterm-dev electron-vite dev",
-    "build": "electron-vite build",
+    "build": "electron-vite build && node scripts/third-party-licenses.mjs",
     "dist:linux": "node scripts/release-bump.mjs && npm run build && electron-builder --linux && node scripts/prune-release.mjs",
     "install:desktop": "node scripts/install-desktop.mjs",
     "uninstall:desktop": "node scripts/uninstall-desktop.mjs",

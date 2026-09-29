@@ -27,22 +27,22 @@ import { fileURLToPath } from 'node:url'
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..')
 const BUMP = join(repoRoot, 'scripts', 'release-bump.mjs')
 
-function makeRepo({ withLock = true } = {}) {
+function makeRepo({ withLock = true, version = '0.1.0' } = {}) {
   const root = mkdtempSync(join(tmpdir(), 'spekterm-bump-'))
   const git = (...args) =>
     execFileSync('git', args, { cwd: root, stdio: 'ignore', env: { ...process.env, LC_ALL: 'C' } })
   const gitOut = (...args) =>
     execFileSync('git', args, { cwd: root, encoding: 'utf8', env: { ...process.env, LC_ALL: 'C' } }).trim()
 
-  writeFileSync(join(root, 'package.json'), JSON.stringify({ name: 'fx', version: '0.1.0' }, null, 2) + '\n')
+  writeFileSync(join(root, 'package.json'), JSON.stringify({ name: 'fx', version }, null, 2) + '\n')
   if (withLock) {
     // 形狀與真實 lockfile 一致：**root 與 packages[""] 兩處都有 version**，兩處都會被改寫。
     const lock = {
       name: 'fx',
-      version: '0.1.0',
+      version,
       lockfileVersion: 3,
       requires: true,
-      packages: { '': { name: 'fx', version: '0.1.0' } },
+      packages: { '': { name: 'fx', version } },
     }
     writeFileSync(join(root, 'package-lock.json'), JSON.stringify(lock, null, 2) + '\n')
   }
@@ -55,9 +55,12 @@ function makeRepo({ withLock = true } = {}) {
 }
 
 /** 跑 release-bump，回傳 `{ status, stderr }`（不拋，讓測試自己斷言結束碼）。 */
-function bump(root) {
+function bump(root, level) {
+  const env = { ...process.env }
+  delete env.RELEASE_LEVEL
+  if (level !== undefined) env.RELEASE_LEVEL = level
   try {
-    execFileSync('node', [BUMP, root], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+    execFileSync('node', [BUMP, root], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env })
     return { status: 0, stderr: '' }
   } catch (error) {
     return { status: error.status ?? 1, stderr: String(error.stderr ?? '') }
@@ -166,6 +169,45 @@ test('無法提交時明確告知 —— detached HEAD', () => {
     assert.equal(status, 1)
     assert.match(stderr, /detached/)
     assert.equal(versionOf(root), '0.1.0')
+  } finally {
+    cleanup()
+  }
+})
+
+// ── 遞增的層級（`build-identity`「遞增的層級可由執行者指定，預設為 patch」）──────
+
+test('未指定層級時遞增 patch', () => {
+  const { root, cleanup } = makeRepo({ version: '0.1.18' })
+  try {
+    assert.equal(bump(root).status, 0)
+    assert.equal(versionOf(root), '0.1.19')
+  } finally {
+    cleanup()
+  }
+})
+
+test('指定 minor 時遞增 minor 並把 patch 歸零，且該遞增被提交', () => {
+  const { root, gitOut, cleanup } = makeRepo({ version: '0.1.18' })
+  try {
+    assert.equal(bump(root, 'minor').status, 0)
+    assert.equal(versionOf(root), '0.2.0')
+    assert.equal(gitOut('log', '-1', '--no-color', '--format=%s'), 'chore(release): 0.2.0')
+    assert.equal(gitOut('status', '--porcelain'), '')
+  } finally {
+    cleanup()
+  }
+})
+
+test('不認得的層級被拒絕，版本不動、沒有新的提交', () => {
+  const { root, gitOut, cleanup } = makeRepo({ version: '0.1.18' })
+  try {
+    const before = gitOut('rev-parse', 'HEAD')
+    const { status, stderr } = bump(root, 'minr')
+    assert.notEqual(status, 0)
+    assert.match(stderr, /patch、minor、major/)
+    assert.equal(versionOf(root), '0.1.18')
+    assert.equal(gitOut('rev-parse', 'HEAD'), before)
+    assert.equal(gitOut('status', '--porcelain'), '')
   } finally {
     cleanup()
   }
