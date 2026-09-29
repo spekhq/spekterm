@@ -247,7 +247,7 @@ HOME     存在      NODE_OPTIONS     **不存在**      ELECTRON_RUN_AS_NODE   
 | `@xterm/addon-fit` | 容器 `display:none` 時 `proposeDimensions()` 回傳 |
 |---|---|
 | `0.11.0`（本 repo 至 2026-08-18） | `parseInt('auto')` → `NaN`（`Math.max(0, NaN)` 仍是 `NaN`）⇒ **`{cols: NaN, rows: NaN}`** ⇒ `Number.isFinite` 攔得下 |
-| `0.12.0-beta.299`（`40943b2` 起） | 上游加了 `parseInt(...) \|\| 0` ⇒ 可用空間為負 ⇒ 夾到 `MINIMUM_COLS=2` / `MINIMUM_ROWS=1` ⇒ **`{cols: 2, rows: 1}`** ⇒ **三道防護全部放行** |
+| `0.12.0-beta.299`（`d7d85fe` 起） | 上游加了 `parseInt(...) \|\| 0` ⇒ 可用空間為負 ⇒ 夾到 `MINIMUM_COLS=2` / `MINIMUM_ROWS=1` ⇒ **`{cols: 2, rows: 1}`** ⇒ **三道防護全部放行** |
 
 **後果有三個，全部靜默：**
 

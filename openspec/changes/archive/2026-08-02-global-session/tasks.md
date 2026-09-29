@@ -220,7 +220,7 @@
       新測試斷言**列舉未被呼叫** —— 那是「空集合短路」與「列舉後沒命中」唯一的差別。
       對照組：把短路改回「先列舉」⇒ 2 條變紅
 - [x] 13b.3 **`SidePanel.tsx` 與 `dirty-buffers.tsx` 的字面 NUL 位元組改為 escape 序列**
-      （比照 `a9ebeb5` 對 `data.tsx` 的修正）。它讓 `git diff` 把整個檔案當二進位、讓 `grep`
+      （比照 `ff4fb29` 對 `data.tsx` 的修正）。它讓 `git diff` 把整個檔案當二進位、讓 `grep`
       **回空且 exit 1**，於是 D1a 的「把 `folderId ===` grep 一遍」清查對 `dirty-buffers.tsx`
       的 5 處命中**結構性地瞎掉**（結論不變 —— 那五處都是檔案定址）
 - [x] 13b.4 **`probe:openspec` 的座標污染那條重寫為有鑑別力的版本** —— 舊版在「已經清回未選定」
