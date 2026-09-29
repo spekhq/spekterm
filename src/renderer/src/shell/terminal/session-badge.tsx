@@ -1,6 +1,7 @@
 import { t } from '@shared/i18n'
 import type { SpawnTarget } from '../types'
 import type { SessionState } from './sessions'
+import { preferredTitle } from '@shared/lineage/label'
 
 const SPAWN_LABEL: Record<SpawnTarget, string> = {
   claude: 'claude',
@@ -15,6 +16,8 @@ const MAX_LABEL = 28
  *
  * 1. **使用者親自取的名字** —— 他**永久**接管了命名權，pty 其後宣告的標題一律靜默地不予呈現
  *    （不覆蓋、不確認、不提示）。交還命名權的唯一路徑是把名字清空。
+ * 1½. **交接的標題**（由交接建立的 session，`handoff-brief`）—— 前兩層與它的取用順序在
+ *    `@shared/lineage/label` 的 `preferredTitle`，三個計算點共用。
  * 2. **pty 以 OSC 序列宣告的標題** —— 跑在裡面的程式最清楚自己是誰（`claude` 會主動送這個，
  *    那正是終端模擬器的分頁會自動改名的機制）。**僅 `claude` 目標**：login shell 宣告的是它
  *    預設的 prompt 標題（`使用者@主機:/路徑`），對使用者零識別意義，且會讓分頁寬度在眼前
@@ -22,9 +25,7 @@ const MAX_LABEL = 28
  * 3. **本地流水號** —— 兩者都沒有時的退路（login shell 恆走這條）。
  */
 export function sessionTitle(session: SessionState): string {
-  return (
-    session.customTitle ?? session.title ?? `${SPAWN_LABEL[session.spawnTarget]} ${session.ordinal}`
-  )
+  return preferredTitle(session) ?? `${SPAWN_LABEL[session.spawnTarget]} ${session.ordinal}`
 }
 
 /** 呈現用的標籤：截斷是呈現上的取捨，完整標題仍可自 tooltip 取得（見 `sessionTitle`）。 */

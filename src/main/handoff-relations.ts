@@ -2,6 +2,8 @@ import fs from 'node:fs'
 import path from 'node:path'
 
 import { sessionExists } from '../shared/lineage/existence'
+import { preferredTitle } from '../shared/lineage/label'
+import type { LifecycleState } from '../shared/lineage/lifecycle'
 import { relationsDir, relationsFile } from './handoff-outbox'
 import type { PersistedSession } from './session-store'
 
@@ -28,6 +30,13 @@ export interface RelatedSession {
   repo: string
   title?: string
   running: boolean
+  /**
+   * 生命週期（`handoff-completion`）—— 只有由交接建立的子／兄弟 session 才有。`idle` ＝ 此刻沒有狀態可說
+   * （休眠、已結束、或等待狀態未知）。
+   */
+  state?: LifecycleState
+  /** 最新一份完成報告的摘要（有的話）。母 session 錯過訊息時從這裡讀得到結果。 */
+  summary?: string
 }
 
 export interface ClosedParent {
@@ -50,10 +59,12 @@ export interface RelationsWorld {
   folders: readonly { id: string; name: string }[]
   /** 目前持有 pty 的 session。 */
   running: ReadonlySet<string>
+  /** 由交接建立的 session 的生命週期（`handoff-completion`）。缺席 ＝ 不提供。 */
+  lifecycle?: ReadonlyMap<string, { state: LifecycleState; summary?: string }>
 }
 
 function labelOf(session: PersistedSession): string | undefined {
-  return session.customTitle ?? session.title
+  return preferredTitle(session)
 }
 
 /**
@@ -77,13 +88,16 @@ export function relationsOf(selfId: string, world: RelationsWorld): Relations | 
   const self = byId.get(selfId)
   if (!self) return null
 
-  const describe = (session: PersistedSession): RelatedSession => {
+  const describe = (session: PersistedSession, withLifecycle = false): RelatedSession => {
     const title = labelOf(session)
+    const lifecycle = withLifecycle ? world.lifecycle?.get(session.id) : undefined
     return {
       ...(session.peerName ? { name: session.peerName } : {}),
       repo: session.folderId === null ? GLOBAL_REPO : (folderNames.get(session.folderId) ?? ''),
       ...(title ? { title } : {}),
       running: world.running.has(session.id),
+      ...(lifecycle ? { state: lifecycle.state } : {}),
+      ...(lifecycle?.summary ? { summary: lifecycle.summary } : {}),
     }
   }
 
@@ -108,14 +122,14 @@ export function relationsOf(selfId: string, world: RelationsWorld): Relations | 
 
   const children = live
     .filter((entry) => entry.session.lineage?.parentId === selfId)
-    .map((entry) => describe(entry.session))
+    .map((entry) => describe(entry.session, true))
 
   // **兄弟以同一個 parentId 判定，不以母 session 是否存在判定** —— 母 session 關閉之後，它交接出來
   // 的那幾件事並沒有因此結束，它們之間仍可能需要協調。
   const siblings = lineage
     ? live
         .filter((entry) => entry.session.id !== selfId && entry.session.lineage?.parentId === lineage.parentId)
-        .map((entry) => describe(entry.session))
+        .map((entry) => describe(entry.session, true))
     : []
 
   return { self: { ...(self.peerName ? { name: self.peerName } : {}) }, parent, children, siblings }

@@ -203,6 +203,8 @@ const PROBE_EXPRESSION = `(async () => {
           'app',
           'shell',
           'panel',
+          // handoff 於 handoff-session-lifecycle 引入：交接單與生命週期。只收 session 識別碼。
+          'handoff',
           'insights',
           'conversation',
           'intake',
@@ -221,6 +223,12 @@ const PROBE_EXPRESSION = `(async () => {
       (key) => !['watch', 'onUpdate', 'onWait', 'send'].includes(key),
     ),
     surplusPanelKeys: Object.keys(api?.panel ?? {}).filter((key) => !['get', 'persist'].includes(key)),
+    // handoff 於 handoff-session-lifecycle 引入（handoff-brief 規格）：以 session 識別碼查詢交接單，
+    // 主行程只對存在且帶交接單的 session 回應；參數沒有任何可解析為路徑的形狀。
+    // lifecycle／onLifecycle（handoff-completion）：唯讀的生命週期投影，沒有任何寫入的能力 ——
+    // 完成由子 agent 的報告宣告，renderer 表達不出「把某個 session 標成已完成」。
+    // onReveal：觸發完成通知時主行程送來一個 session 識別碼，renderer 只拿它去跳轉與打開交接單。
+    surplusHandoffKeys: Object.keys(api?.handoff ?? {}).filter((key) => !['brief', 'lifecycle', 'onLifecycle', 'onReveal'].includes(key)),
     // **insights 底下也要逐成員列舉。** 只在頂層 namespace 清單裡登記的話，
     // 底下再加幾個方法這支探針一聲都不會響 —— 而讀後感往這裡加了四個會送出使用者訊息的入口。
     surplusInsightsKeys: Object.keys(api?.insights ?? {}).filter(
@@ -375,6 +383,9 @@ try {
   check(results, 'conversation 介面只暴露已定義邊界要求的能力',
     r?.surplusConversationKeys?.length === 0,
     r?.surplusConversationKeys?.length ? `多出：${r.surplusConversationKeys.join(', ')}` : '無多餘能力')
+  check(results, 'handoff 介面只暴露已定義邊界要求的能力',
+    r?.surplusHandoffKeys?.length === 0,
+    r?.surplusHandoffKeys?.length ? `多出：${r.surplusHandoffKeys.join(', ')}` : '無多餘能力')
   check(results, 'intake 介面只暴露已定義邊界要求的能力',
     r?.surplusIntakeKeys?.length === 0,
     r?.surplusIntakeKeys?.length ? `多出：${r.surplusIntakeKeys.join(', ')}` : '無多餘能力')

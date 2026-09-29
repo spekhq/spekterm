@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto'
 import type { SessionLineage } from '../shared/lineage/types'
+import { bodyOf } from './intake-schema'
 import type { IntakeRecord } from './intake-store'
 
 /**
@@ -77,9 +78,18 @@ export const handoffTickets = new TicketStore()
  * 由憑證綁定的 record 取出它記下的來源。**由主行程啟動時接上**（`index.ts`）—— 這個模組不認識
  * 收件匣的 store，與 `configureHandoff` 同一個姿態。
  */
-let resolveSource: ((claim: TicketClaim) => SessionLineage | undefined) | null = null
+/**
+ * 一張憑證解析出來的東西：來源（`lineage`，含交接單留在清單裡的標題），以及交接單的本文
+ * （`handoff-brief`）—— 本文另存一個檔，於是它不能跟著 `lineage` 進 `sessions.json`。
+ */
+export interface TicketResolution {
+  lineage: SessionLineage
+  briefBody?: string
+}
 
-export function configureTicketLineage(resolve: ((claim: TicketClaim) => SessionLineage | undefined) | null): void {
+let resolveSource: ((claim: TicketClaim) => TicketResolution | undefined) | null = null
+
+export function configureTicketLineage(resolve: ((claim: TicketClaim) => TicketResolution | undefined) | null): void {
   resolveSource = resolve
 }
 
@@ -87,7 +97,7 @@ export function configureTicketLineage(resolve: ((claim: TicketClaim) => Session
  * 建立 session 時呼叫：消費憑證並回傳要寫進新 session 的來源。**沒有憑證、不相符、或那一則沒有
  * 來源時回 `undefined`** —— session 照常建立，只是沒有來源。
  */
-export function lineageFromTicket(token: unknown, folderId: string | null, spawnTarget: string): SessionLineage | undefined {
+export function lineageFromTicket(token: unknown, folderId: string | null, spawnTarget: string): TicketResolution | undefined {
   if (token === undefined) return undefined
   const claim = handoffTickets.consume(token, folderId, spawnTarget)
   return claim ? resolveSource?.(claim) : undefined
@@ -106,4 +116,27 @@ export function ticketFor(
 ): string | undefined {
   if (!record?.content?.verified.source || record.state !== 'pending') return undefined
   return tickets.issue({ adapter: record.adapter, id: record.id, folderId })
+}
+
+/**
+ * 由一則 intake 紀錄推出「為它建立的 session」該帶的來源與交接單。
+ *
+ * **交接單只給 agent 發起的交接**（`handoff-brief`），取攝入時正規化過的那一份 —— 與 context 檔、
+ * 收件匣的呈現是同一個值。**它是快照**：intake 的內容有保留期限，以主鍵回查會在某一天查到空的。
+ */
+export function ticketResolutionFor(record: IntakeRecord | undefined): TicketResolution | undefined {
+  const content = record?.content
+  const source = content?.verified.source
+  if (!record || !content || !source) return undefined
+  const brief = content.verified.firstPartyBody === true
+  return {
+    lineage: {
+      parentId: source.sessionId,
+      origin: source.origin,
+      ...(source.title ? { parentTitle: source.title } : {}),
+      ...(brief ? { brief: { title: content.authored.title, receivedAt: content.receivedAt } } : {}),
+    },
+    // **經 `bodyOf()`** —— 呈現、交付與交接單取的是同一個值（`intake-context-source` 守著這條）。
+    ...(brief ? { briefBody: bodyOf({ id: record.id, ...content }) } : {}),
+  }
 }

@@ -215,6 +215,8 @@ export type IntakeRejection =
   | 'TARGET_NOT_FOUND'
   | 'TARGET_AMBIGUOUS'
   | 'PREFILL_UNAVAILABLE'
+  /** 完成報告來自一個**不是**由交接建立的 session（`handoff-completion`）。 */
+  | 'REPORT_NOT_HANDOFF'
   | 'MALFORMED'
   | 'MISSING_ID'
   | 'INVALID_ID'

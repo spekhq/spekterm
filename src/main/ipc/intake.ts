@@ -4,8 +4,7 @@ import { bodyOf } from '../intake-schema'
 import { buildContext, buildPrompt, createNonce, writeContext } from '../intake-context'
 import { decideAccept, type IntakeAcceptResult } from '../intake-accept'
 import { ticketFor } from '../handoff-ticket'
-import { cancelPrefill, isSubmitted, schedulePrefill } from '../intake-prefill'
-import { subscribeWait } from '../agent-wait'
+import { cancelPrefill, prefillModeFor, schedulePrefill, watchSubmission } from '../intake-prefill'
 import {
   isAuthoredCriterion,
   type RoutingConfig,
@@ -332,7 +331,10 @@ export function registerIntakeHandlers(deps: IntakeHandlerDeps): void {
       }
       const nonce = createNonce()
       const target = await writeContext(contextRoot, record.id, buildContext(bodyOf(intake), nonce))
-      const prompt = buildPrompt(target, nonce, record.content.verified.firstPartyBody === true)
+      const firstPartyBody = record.content.verified.firstPartyBody === true
+      const prompt = buildPrompt(target, nonce, firstPartyBody)
+      // **沿用既有 session 由主行程判定**（record 上已經記著的那一個），不採信 renderer 的說法。
+      const mode = prefillModeFor({ firstPartyBody, reusedSession: record.sessionId === sessionId })
 
       service.store.setState(adapter, id, 'accepted', sessionId)
       broadcast()
@@ -341,22 +343,27 @@ export function registerIntakeHandlers(deps: IntakeHandlerDeps): void {
       schedulePrefill(sessionId, prompt, {
         write: (target_, data) => existingTerminalService(sender.id)?.write(target_, data),
         onFilled: () => {
-          if (!sender.isDestroyed()) sender.send(INTAKE_CHANNELS.prefill, sessionId, 'pending')
           /**
            * 「使用者送出了」**發生在 pty 之內** —— renderer 與主行程都收不到自己發出的訊號。
            * 唯一的線索是 agent **開始工作了**（判定見 `isSubmitted`：落回未知的不算）。
-           * 訂閱一次，見到就撤掉標示、把這一則標為了結（它不必再留在收件匣裡等人讀），並退訂。
+           * 見到就撤掉標示、把這一則標為了結（它不必再留在收件匣裡等人讀）。
+           *
+           * 代為送出時同一個判定照用：送出字元偶爾不生效，那時它退回「待送出」的標示
+           * （`watchSubmission` 的退路），其後由使用者送出。
            */
-          const stop = subscribeWait(sessionId, (snapshot) => {
-            if (!isSubmitted(snapshot.state)) return
-            stop()
-            if (!sender.isDestroyed()) sender.send(INTAKE_CHANNELS.prefill, sessionId, 'sent')
-            // **只了結這個 session 所屬的那一則**：再次接受時 record 上的關聯會被換成新的
-            // session，舊訂閱若晚到，不能把新的那一次一併了結。
-            if (service.store.get(adapter, id)?.sessionId === sessionId) {
-              service.store.settle(adapter, id)
-              broadcast()
-            }
+          watchSubmission(sessionId, mode, {
+            onPending: () => {
+              if (!sender.isDestroyed()) sender.send(INTAKE_CHANNELS.prefill, sessionId, 'pending')
+            },
+            onSubmitted: () => {
+              if (!sender.isDestroyed()) sender.send(INTAKE_CHANNELS.prefill, sessionId, 'sent')
+              // **只了結這個 session 所屬的那一則**：再次接受時 record 上的關聯會被換成新的
+              // session，舊訂閱若晚到，不能把新的那一次一併了結。
+              if (service.store.get(adapter, id)?.sessionId === sessionId) {
+                service.store.settle(adapter, id)
+                broadcast()
+              }
+            },
           })
         },
         onTimeout: () => {
@@ -365,7 +372,7 @@ export function registerIntakeHandlers(deps: IntakeHandlerDeps): void {
           if (!sender.isDestroyed()) sender.send(INTAKE_CHANNELS.prefill, sessionId, 'timedOut')
           broadcast()
         },
-      })
+      }, mode)
 
       return { ok: true }
     },

@@ -18,7 +18,7 @@
 session 當時的標籤（未知時缺席）。標籤是 pty 宣告或使用者輸入的文字，SHALL 經與投遞內容相同的
 正規化並截斷長度之後才被記下。
 
-**快照 SHALL 取自攝入的那一刻，SHALL NOT 取自 session 建立的那一刻。** 一則降級為待處理的交接
+**快照 SHALL 取自攝入的那一刻，SHALL NOT 取自 session 建立的那一刻。** 一則退回待處理的交接（預填逾時）
 可能在數天之後才被接受，那時來源 session 可能已經改名或關閉。
 
 **來源 SHALL 由主行程於建立該 session 的當下寫入**，取自 `agent-handoff-source` 由落點推導出的
@@ -31,7 +31,7 @@ session 當時的標籤（未知時缺席）。標籤是 pty 宣告或使用者�
   交接建立 session 時簽發（到達即建立，或使用者接受）—— 一則歷史上的交接 SHALL NOT 能被重複引用
   來產生子 session。**對一個已經存在的 session，SHALL NOT 有任何途徑寫入來源**。
 
-**兩條建立路徑皆適用**：到達即建立的交接，以及因上限降級為待處理、其後由使用者接受的交接。
+**兩條建立路徑皆適用**：到達即建立的交接，以及因預填逾時退回待處理、其後由使用者接受的交接。
 使用者接受之前改選了 folder 時，來源不變。同一則交接因重新處理而建立了第二個 session 時，
 兩者 SHALL 皆以同一個來源 session 為母 session。
 
@@ -53,7 +53,7 @@ session 當時的標籤（未知時缺席）。標籤是 pty 宣告或使用者�
 
 #### Scenario: 降級為待處理後接受的交接，快照是攝入當下的
 
-- **WHEN** 一則由 session S 投遞的交接因上限成為待處理，使用者其後把 S 重新命名，再接受該則交接
+- **WHEN** 一則由 session S 投遞的交接因預填逾時退回待處理，使用者其後把 S 重新命名，再接受該則交接
 - **THEN** 建立的 session 其來源為 S，且其快照中的標籤為重新命名之前的標籤
 
 #### Scenario: 一則交接建立兩個 session 時兩者皆為子 session
@@ -207,6 +207,11 @@ rail 項目** —— 同一個 rail 項目中的樹狀呈現（見 `workspace-la
 母 session 的其他 session，不含它自己）；每一個對象 SHALL 附帶它的固定名字
 （見 `agent-peer-name`）、所屬的 rail 項目名稱與標籤。
 
+**子 session 與兄弟 session 另 SHALL 附帶它的生命週期狀態（見 `handoff-completion`：已完成、進行中、
+等你，或不呈現狀態 —— 後者含休眠者），以及它最新的完成結果（若有）。** 生命週期狀態改變時 SHALL
+視同關係改變，agent 下一次查詢即得到新的值。 這是結果抵達母 session 的補償路徑：子 session 完成時母 session 可能不在
+執行中，或子 agent 送出的訊息可能被忽略 —— 母 session 的 agent 仍查得到結果，而系統不必經手訊息。
+
 **自我介紹只在 agent 的脈絡被建立或重建時注入**，而母 session 的子 session 是在它啟動**之後**才
 長出來的，兄弟亦然。關係 SHALL NOT 只經由自我介紹提供；關係改變時（子或兄弟 session 建立、任一方不再存在、
 改名、進入或離開執行中）SHALL NOT 需要重建 agent 的脈絡，agent 下一次查詢即得到新的值。
@@ -266,6 +271,16 @@ SHALL 標明它不在執行中，本能力 SHALL NOT 為此喚醒它。
 
 - **WHEN** 使用者把交接偏好關閉
 - **THEN** 任何 session 都查詢不到關係
+
+#### Scenario: 母 session 查得到子 session 的狀態與結果
+
+- **WHEN** session P 的子 session C 投遞了摘要為 S 的完成報告
+- **THEN** P 此時查詢自己的關係，結果中 C 標明為已完成，並附帶 S
+
+#### Scenario: 尚未完成的子 session 沒有結果
+
+- **WHEN** P 的子 session C 尚未投遞任何完成報告
+- **THEN** P 查詢自己的關係，結果中 C 標明其狀態，且沒有結果
 
 ### Requirement: 關係的標示文案來自字典
 

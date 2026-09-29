@@ -3,6 +3,7 @@ import { describe, it } from 'node:test'
 
 import {
   buildPayload,
+  COMPLETION_ADAPTER,
   FIELD_MAX,
   IntakeNotifier,
   reduceForNotification,
@@ -321,5 +322,48 @@ describe('第三方欄位進入通知之前的縮減', () => {
       assert.equal(payload.body.includes(ch), false, JSON.stringify(ch))
     }
     assert.ok(payload.body.includes('ABCD'), '正規化之後它們就是相連的')
+  })
+})
+
+describe('完成通知（handoff-completion）', () => {
+  it('只有一份報告時：系統標題、內文含交接標題與摘要，主鍵指向那個 session', () => {
+    const backend = recorder()
+    const clock = fakeClock()
+    const notifier = new IntakeNotifier({ backend, clock, windowMs: 1000 })
+    notifier.completed('sess-1', 'Fix login', 'Done: patched the form')
+    clock.advance(1000)
+    assert.equal(backend.sent.length, 1)
+    assert.equal(backend.sent[0].title, 'Handoff completed')
+    assert.ok(backend.sent[0].body.includes('Fix login') && backend.sent[0].body.includes('Done: patched the form'), backend.sent[0].body)
+    assert.deepEqual(backend.keys[0], [{ adapter: COMPLETION_ADAPTER, id: 'sess-1' }])
+  })
+
+  it('摘要中的網址不進入通知', () => {
+    // **對照組**：把摘要不經縮減直接放進內文 → 這條必須變紅。
+    const payload = buildPayload([{ kind: 'completion', sessionId: 's', title: 'T', summary: 'see https://evil.example/x now' }])
+    assert.ok(!payload.body.includes('evil.example'), payload.body)
+  })
+
+  it('與到達落在同一個窗裡 ⇒ 合併的那一則（不說出任何一件）', () => {
+    const backend = recorder()
+    const clock = fakeClock()
+    const notifier = new IntakeNotifier({ backend, clock, windowMs: 1000 })
+    notifier.completed('sess-1', 'Fix login', 'SECRET-SUMMARY')
+    notifier.arrived(record())
+    clock.advance(1000)
+    assert.equal(backend.sent.length, 1)
+    assert.ok(!backend.sent[0].body.includes('SECRET-SUMMARY'))
+    assert.equal(backend.keys[0].length, 2, '兩個主鍵 ⇒ 觸發時打開收件匣')
+  })
+
+  it('與收件匣的通知共用上界', () => {
+    const backend = recorder()
+    const clock = fakeClock()
+    const notifier = new IntakeNotifier({ backend, clock, windowMs: 1000, burstMax: 1 })
+    notifier.arrived(record())
+    clock.advance(1000)
+    notifier.completed('sess-1', 'T', 'S')
+    clock.advance(1000)
+    assert.equal(backend.sent.length, 1)
   })
 })

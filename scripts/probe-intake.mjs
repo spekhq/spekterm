@@ -1322,7 +1322,7 @@ async function awaitOutbox(profile, label_) {
  * **來源必須是一個真的 agent session** —— 落點是 spawn 時才建立的，而它的目錄名就是來源身分。
  * 因此這一段先用既有的接受路徑在第一個 folder 開一個 session，再從**它的**落點投遞。
  */
-async function runHandoff(_mode, _modeConfig, context) {
+async function runHandoffScenario(context, variant) {
   const { profile, folders } = seedProfile()
   seedRouting(profile, { fallbackFolderId: folders[0].id })
   const configDir = mkTemp('spekterm-intake-config-')
@@ -1337,7 +1337,14 @@ async function runHandoff(_mode, _modeConfig, context) {
   //
   // **`busySeconds`**：收到一行時先宣告忙碌 —— 「使用者送出」唯一的線索是 agent 開始工作
   // （intake-inbox-usability）。它只在收到一行時作用，在此之前的斷言不受影響。
-  const stub = makeStubAgent(mkTemp, configDir, { readyDelaySeconds: 2, busySeconds: 1 })
+  //
+  // **`dropFirstSubmit`（只在 `unsent` 變體）**：吞掉每個 session 的第一個送出字元 —— 真實 CLI
+  // 偶爾會這樣（`docs/lessons/handoff.md` 第十三節），而產品的退路（呈現待送出）只有它造得出來。
+  const stub = makeStubAgent(mkTemp, configDir, {
+    readyDelaySeconds: 2,
+    busySeconds: 1,
+    dropFirstSubmit: variant === 'unsent',
+  })
 
   drop(profile, 'source', intake({ id: 'src-1', title: 'SOURCE-TITLE' }))
 
@@ -1352,34 +1359,36 @@ async function runHandoff(_mode, _modeConfig, context) {
 
   const outbox = await awaitOutbox(profile, '來源 session 的投遞落點出現')
 
-  /**
-   * **自我介紹真的被交出去了。**
-   *
-   * 可觀察的不是「設定檔裡有那條命令」（那只證明我們寫了它），是**命令的 stdout**。
-   * 而 `SessionStart` 上有**兩條**命令（事件橋接 ＋ 自我介紹）—— 兩條都要被執行，
-   * 那正是合成器把 hooks 串接而非覆蓋的行為後果。
-   */
-  const introOut = await pollFor({
-    read: () => [1, 2, 3].map((n) => stub.hookStdout('SessionStart', n)),
-    settled: (outs) => outs.some((text) => text.includes('additionalContext')),
-    timeoutMs: 20_000,
-    label: '自我介紹的 stdout 落盤',
-  }).catch(() => [1, 2, 3].map((n) => stub.hookStdout('SessionStart', n)))
-  const introText = introOut.find((text) => text.includes('additionalContext')) ?? ''
-  check(
-    results,
-    'SessionStart 上兩條注入的命令都被執行',
-    stub.hookCommandCount('SessionStart') >= 2,
-    `執行了 ${stub.hookCommandCount('SessionStart')} 條`,
-  )
-  check(results, '自我介紹進入 agent 的脈絡（hook 的 stdout 帶 additionalContext）', introText.includes('additionalContext'), introText.slice(0, 60))
-  check(
-    results,
-    '自我介紹列出 workspace 裡每一個可交接的對象',
-    folders.every((folder) => introText.includes(basename(folder.path))),
-    introText.slice(0, 200),
-  )
-  check(results, '自我介紹告知這個 session 自己的投遞落點', introText.includes(basename(outbox)), basename(outbox))
+  if (variant === 'sent') {
+    /**
+     * **自我介紹真的被交出去了。**
+     *
+     * 可觀察的不是「設定檔裡有那條命令」（那只證明我們寫了它），是**命令的 stdout**。
+     * 而 `SessionStart` 上有**兩條**命令（事件橋接 ＋ 自我介紹）—— 兩條都要被執行，
+     * 那正是合成器把 hooks 串接而非覆蓋的行為後果。
+     */
+    const introOut = await pollFor({
+      read: () => [1, 2, 3].map((n) => stub.hookStdout('SessionStart', n)),
+      settled: (outs) => outs.some((text) => text.includes('additionalContext')),
+      timeoutMs: 20_000,
+      label: '自我介紹的 stdout 落盤',
+    }).catch(() => [1, 2, 3].map((n) => stub.hookStdout('SessionStart', n)))
+    const introText = introOut.find((text) => text.includes('additionalContext')) ?? ''
+    check(
+      results,
+      'SessionStart 上兩條注入的命令都被執行',
+      stub.hookCommandCount('SessionStart') >= 2,
+      `執行了 ${stub.hookCommandCount('SessionStart')} 條`,
+    )
+    check(results, '自我介紹進入 agent 的脈絡（hook 的 stdout 帶 additionalContext）', introText.includes('additionalContext'), introText.slice(0, 60))
+    check(
+      results,
+      '自我介紹列出 workspace 裡每一個可交接的對象',
+      folders.every((folder) => introText.includes(basename(folder.path))),
+      introText.slice(0, 200),
+    )
+    check(results, '自我介紹告知這個 session 自己的投遞落點', introText.includes(basename(outbox)), basename(outbox))
+  }
 
   const sessionsBefore = ptySessionPids(marker).length
 
@@ -1431,19 +1440,141 @@ async function runHandoff(_mode, _modeConfig, context) {
   }).catch(() => ptySessionPids(marker).length)
   check(results, '交接於到達時直接建立 session（使用者未執行任何接受動作）', sessionsAfter > sessionsBefore, `前=${sessionsBefore} 後=${sessionsAfter}`)
 
-  /**
-   * **待送出的標示，而不是替身的位元組收據。**
-   *
-   * 收據是**整個替身共用一份**（同一個 `$HOME`），三個並行的 session 寫進同一個檔案 ——
-   * 「新增了幾則」在那上面是不可靠的（實測：三個 prefill 全部 `fill()` 了，收據只看得到兩則）。
-   * 而這裡真正要斷言的是 requirement 說的事：**prompt 填好了、而且還沒被送出**，
-   * 那正是這個標示的語意，且它是 per-session 的。
-   *
-   * 標示只在該 folder 被顯示時才在 DOM 裡 —— 因此**先驗焦點沒被切走，再由探針自己切過去**
-   * （那是使用者的動作，不是系統的）。
-   */
   const railAfter = await app.client.evaluate(RAIL_SELECTION)
   check(results, 'rail 上選中的項目未因交接而改變', railAfter === railBefore, `前=${railBefore} 後=${railAfter}`)
+
+  if (variant === 'sent') {
+    /**
+     * **第一則 prompt 被代為送出**（`handoff-session-lifecycle`）—— 以**每個 session 各自的**收據斷言：
+     * 共用的那一份分不出「送到哪一個 session」（`docs/lessons/handoff.md` 5.1）。
+     *
+     * 反向對照：**來源 session 的第三方 prompt 沒有被送出** —— 否則「一律附送出字元」也會讓上一條通過。
+     */
+    const FIRST_PARTY_MARK = 'written for you by another agent session'
+    const THIRD_PARTY_MARK = 'written by someone else'
+    const inputs = await pollFor({
+      read: () => stub.sessionInputs(),
+      settled: (all) => Object.values(all).some((entry) => entry.lines.some((line) => line.includes(FIRST_PARTY_MARK))),
+      timeoutMs: 30_000,
+      label: '交接建立的 session 收到一整行',
+    }).catch(() => stub.sessionInputs())
+    const receivers = Object.entries(inputs).filter(([, entry]) => entry.lines.some((line) => line.includes(FIRST_PARTY_MARK)))
+    check(
+      results,
+      '交接建立的 session 其第一則 prompt 被代為送出（恰好一個 session 收到恰好一行）',
+      receivers.length === 1 && receivers[0][1].lines.length === 1,
+      JSON.stringify(Object.fromEntries(Object.entries(inputs).map(([id, entry]) => [id.slice(0, 8), entry.lines.length]))),
+    )
+    check(
+      results,
+      '第三方的 prompt 未被代為送出（來源 session 沒有收到任何一行）',
+      !Object.values(inputs).some((entry) => entry.lines.some((line) => line.includes(THIRD_PARTY_MARK))) &&
+        Object.values(inputs).some((entry) => entry.bytes.includes(THIRD_PARTY_MARK)),
+      `第三方 prompt 有填入=${Object.values(inputs).some((entry) => entry.bytes.includes(THIRD_PARTY_MARK))}`,
+    )
+
+    await openInbox(app)
+    const afterSent = await pollFor({
+      read: () => app.client.evaluate(`document.querySelector('${label('intake.openedLabel')}')?.textContent ?? ''`),
+      settled: (text) => !text.includes('HANDOFF-TITLE') && text.includes('SOURCE-TITLE'),
+      timeoutMs: 20_000,
+      label: '代為送出的交接離開已開好那一段',
+    }).catch(() => '')
+    const sentEntry = JSON.parse(readFileSync(join(profile, 'intake.json'), 'utf8')).entries.find(
+      (entry) => entry.content?.authored?.title === 'HANDOFF-TITLE',
+    )
+    check(
+      results,
+      '代為送出的交接離開已開好那一段，且了結落盤（第三方那一則仍在）',
+      !afterSent.includes('HANDOFF-TITLE') && afterSent.includes('SOURCE-TITLE') && typeof sentEntry?.settledAt === 'number',
+      `仍在=${afterSent.includes('HANDOFF-TITLE')} 來源仍在=${afterSent.includes('SOURCE-TITLE')} settledAt=${sentEntry?.settledAt}`,
+    )
+    /**
+     * **通知的效果分流。**
+     *
+     * 一則已經開好 session 的交接，其通知 SHALL 聚焦那個 session，SHALL NOT 打開收件匣 ——
+     * 它在收件匣裡沒有任何待辦動作，把使用者送去那裡等於要他再點一次。
+     *
+     * 前置有兩個，缺一這條就恆真：**收件匣此刻是關的**（否則「沒有打開」無從分辨），
+     * 且**rail 選的不是目標 folder**（否則「切過去了」無從分辨）。
+     */
+    // **關閉走 overlay 自己的關閉鈕**，不是再點一次活動列的入口 —— 那個入口只負責開啟，
+    // 而 overlay 是全視窗的，點擊也到不了它（實測：窗口耗盡，收件匣一直開著）。
+    const closeButton = label('intake.close')
+    await pollFor({
+      read: () => app.client.evaluate(`(() => {
+        const d = document
+        const dialog = d.querySelector(${JSON.stringify(inboxDialog)})
+        if (dialog) dialog.querySelector(${JSON.stringify(closeButton)})?.click()
+        return !d.querySelector(${JSON.stringify(inboxDialog)})
+      })()`),
+      settled: Boolean,
+      timeoutMs: 15_000,
+      label: '前置：收件匣已關閉',
+    })
+    /**
+     * **切回來源 folder** —— 上面為了看「待送出」的標示已經切到目標去了。
+     * 少了這一步，「通知把我帶到那個 session」與「我本來就在那裡」分不開。
+     */
+    await pollFor({
+      read: () =>
+        app.client.evaluate(`(() => {
+          ${railRowClick(sourceName)}
+          return ${RAIL_SELECTION} === ${JSON.stringify(sourceName)}
+        })()`),
+      settled: Boolean,
+      timeoutMs: 15_000,
+      label: '切回來源 folder',
+    })
+    const railBeforeActivate = await app.client.evaluate(RAIL_SELECTION)
+    check(results, '前置：rail 選的不是目標 folder', railBeforeActivate !== basename(folders[1].path), railBeforeActivate)
+
+    /**
+     * **等那一則通知真的被呈現了再觸發。**
+     *
+     * 觸發檔模擬的是「點了**最新**的那一則」，而合併窗是秒級的 —— 在它結算之前按下去，
+     * 觸發到的是**上一則**，於是這條斷言測的是別的東西（實測三次有兩次）。
+     * 替身把每一則涵蓋的主鍵一起落盤，正是為了讓這個前置寫得出來。
+     */
+    const presented = await pollFor({
+      read: () => notifications(profile),
+      settled: (list) => list.some((entry) => (entry.keys ?? []).some((key) => key.adapter === 'handoff')),
+      timeoutMs: 20_000,
+      label: '交接的那一則通知已呈現',
+    }).catch(() => notifications(profile))
+    const handoffNotice = presented.filter((entry) => (entry.keys ?? []).some((key) => key.adapter === 'handoff'))
+    check(
+      results,
+      '前置：最新的那一則通知恰好涵蓋這一則交接',
+      handoffNotice.length === 1 && handoffNotice[0].keys.length === 1,
+      JSON.stringify(handoffNotice.map((entry) => entry.keys)),
+    )
+
+    fireNotification(profile, 1)
+    const afterActivate = await pollFor({
+      read: () =>
+        app.client.evaluate(`(() => ({
+          inbox: !!document.querySelector(${JSON.stringify(inboxDialog)}),
+          rail: ${RAIL_SELECTION},
+        }))()`),
+      settled: (state) => state.rail === basename(folders[1].path),
+      timeoutMs: 20_000,
+      label: '觸發通知之後焦點落在交接建立的 session',
+    }).catch(() =>
+      app.client.evaluate(`(() => ({
+        inbox: !!document.querySelector(${JSON.stringify(inboxDialog)}),
+        rail: ${RAIL_SELECTION},
+      }))()`),
+    )
+    check(
+      results,
+      '觸發交接的通知會聚焦它建立的 session',
+      afterActivate.rail === basename(folders[1].path),
+      `rail=${afterActivate.rail}`,
+    )
+    check(results, '觸發交接的通知不打開收件匣', afterActivate.inbox === false, `inbox=${afterActivate.inbox}`)
+    return
+  }
 
   const targetName = basename(folders[1].path)
   await pollFor({
@@ -1464,12 +1595,20 @@ async function runHandoff(_mode, _modeConfig, context) {
     timeoutMs: 30_000,
     label: '新 session 上出現「待送出」的標示',
   }).catch(() => false)
-  check(results, '第一則 prompt 填入新 session 的輸入處且標示為待送出', pending === true, `pty=${ptySessionPids(marker).length}`)
+  check(results, '代為送出後未見開始工作，新 session 呈現待送出的標示', pending === true, `pty=${ptySessionPids(marker).length}`)
+  /**
+   * **退路不補送。** 產品只寫過一次送出字元 —— 那一個被替身吞掉了，於是 agent 的紀錄裡沒有任何一行。
+   * 對照：一個「逾時就再送一次 `\\r`」的實作會讓那一行出現。
+   */
+  const unsentInputs = stub.sessionInputs()
+  const child = Object.values(unsentInputs).find((entry) => entry.bytes.includes('written for you by another agent session'))
+  // 送出字元以 CR 或 LF 計 —— 替身的 tty 開著 ICRNL，產品寫的 `\r` 讀到時已經是 `\n`。
+  const submits = child ? (child.bytes.match(/[\r\n]/g) ?? []).length : -1
   check(
     results,
-    '該 prompt 未被送出（沒有任何一行進入 agent 的紀錄）',
-    stub.input() === '',
-    JSON.stringify(stub.input().slice(0, 60)),
+    '退路不補送：送出字元只寫過一次，且沒有任何一行進入 agent 的紀錄',
+    child !== undefined && submits === 1 && child.lines.length === 0,
+    child ? `送出字元=${submits} 行=${child.lines.length}` : '(找不到交接建立的 session)',
   )
 
   // 收件匣裡看得見「已經開好」那一段 —— 否則使用者收到通知、打開收件匣、什麼都沒有。
@@ -1531,91 +1670,6 @@ async function runHandoff(_mode, _modeConfig, context) {
   )
 
   /**
-   * **通知的效果分流。**
-   *
-   * 一則已經開好 session 的交接，其通知 SHALL 聚焦那個 session，SHALL NOT 打開收件匣 ——
-   * 它在收件匣裡沒有任何待辦動作，把使用者送去那裡等於要他再點一次。
-   *
-   * 前置有兩個，缺一這條就恆真：**收件匣此刻是關的**（否則「沒有打開」無從分辨），
-   * 且**rail 選的不是目標 folder**（否則「切過去了」無從分辨）。
-   */
-  // **關閉走 overlay 自己的關閉鈕**，不是再點一次活動列的入口 —— 那個入口只負責開啟，
-  // 而 overlay 是全視窗的，點擊也到不了它（實測：窗口耗盡，收件匣一直開著）。
-  const closeButton = label('intake.close')
-  await pollFor({
-    read: () => app.client.evaluate(`(() => {
-      const d = document
-      const dialog = d.querySelector(${JSON.stringify(inboxDialog)})
-      if (dialog) dialog.querySelector(${JSON.stringify(closeButton)})?.click()
-      return !d.querySelector(${JSON.stringify(inboxDialog)})
-    })()`),
-    settled: Boolean,
-    timeoutMs: 15_000,
-    label: '前置：收件匣已關閉',
-  })
-  /**
-   * **切回來源 folder** —— 上面為了看「待送出」的標示已經切到目標去了。
-   * 少了這一步，「通知把我帶到那個 session」與「我本來就在那裡」分不開。
-   */
-  await pollFor({
-    read: () =>
-      app.client.evaluate(`(() => {
-        ${railRowClick(sourceName)}
-        return ${RAIL_SELECTION} === ${JSON.stringify(sourceName)}
-      })()`),
-    settled: Boolean,
-    timeoutMs: 15_000,
-    label: '切回來源 folder',
-  })
-  const railBeforeActivate = await app.client.evaluate(RAIL_SELECTION)
-  check(results, '前置：rail 選的不是目標 folder', railBeforeActivate !== basename(folders[1].path), railBeforeActivate)
-
-  /**
-   * **等那一則通知真的被呈現了再觸發。**
-   *
-   * 觸發檔模擬的是「點了**最新**的那一則」，而合併窗是秒級的 —— 在它結算之前按下去，
-   * 觸發到的是**上一則**，於是這條斷言測的是別的東西（實測三次有兩次）。
-   * 替身把每一則涵蓋的主鍵一起落盤，正是為了讓這個前置寫得出來。
-   */
-  const presented = await pollFor({
-    read: () => notifications(profile),
-    settled: (list) => list.some((entry) => (entry.keys ?? []).some((key) => key.adapter === 'handoff')),
-    timeoutMs: 20_000,
-    label: '交接的那一則通知已呈現',
-  }).catch(() => notifications(profile))
-  const handoffNotice = presented.filter((entry) => (entry.keys ?? []).some((key) => key.adapter === 'handoff'))
-  check(
-    results,
-    '前置：最新的那一則通知恰好涵蓋這一則交接',
-    handoffNotice.length === 1 && handoffNotice[0].keys.length === 1,
-    JSON.stringify(handoffNotice.map((entry) => entry.keys)),
-  )
-
-  fireNotification(profile, 1)
-  const afterActivate = await pollFor({
-    read: () =>
-      app.client.evaluate(`(() => ({
-        inbox: !!document.querySelector(${JSON.stringify(inboxDialog)}),
-        rail: ${RAIL_SELECTION},
-      }))()`),
-    settled: (state) => state.rail === basename(folders[1].path),
-    timeoutMs: 20_000,
-    label: '觸發通知之後焦點落在交接建立的 session',
-  }).catch(() =>
-    app.client.evaluate(`(() => ({
-      inbox: !!document.querySelector(${JSON.stringify(inboxDialog)}),
-      rail: ${RAIL_SELECTION},
-    }))()`),
-  )
-  check(
-    results,
-    '觸發交接的通知會聚焦它建立的 session',
-    afterActivate.rail === basename(folders[1].path),
-    `rail=${afterActivate.rail}`,
-  )
-  check(results, '觸發交接的通知不打開收件匣', afterActivate.inbox === false, `inbox=${afterActivate.inbox}`)
-
-  /**
    * **送出之後，它離開已開好那一段**（intake-inbox-usability）。
    *
    * 焦點此刻在交接建立的那個 session（上一條剛驗過）。Enter 必須是**真的**按鍵事件 ——
@@ -1662,6 +1716,527 @@ async function runHandoff(_mode, _modeConfig, context) {
       typeof handoffEntry?.settledAt === 'number',
     `送出=${JSON.stringify(submitted.slice(0, 40))} 仍在=${afterSubmit.includes('HANDOFF-TITLE')} 來源仍在=${afterSubmit.includes('SOURCE-TITLE')} settledAt=${handoffEntry?.settledAt}`,
   )
+}
+
+/**
+ * 交接單（`handoff-brief`）：送出之後、重新啟動之後，都打得開那一則交接的原文。
+ *
+ * **本文的比對基準是 context 檔界線之內的內容**，不是探針自己寫下的原始本文 —— fixture 含會被
+ * 攝入正規化移除的字元（零寬、雙向控制），於是「交接單取了未正規化的本文」這種錯誤會紅。
+ */
+const BRIEF_TITLE = 'BRIEF-TITLE'
+const BRIEF_BODY = 'BRIEF-HEAD\n​zero-width and ‮bidi\n# heading **bold** <b>tag</b> [link](https://example.com)\nBRIEF-TAIL'
+
+async function runBrief(_mode, _modeConfig, context) {
+  const { profile, folders } = seedProfile()
+  seedRouting(profile, { fallbackFolderId: folders[0].id })
+  const configDir = mkTemp('spekterm-intake-config-')
+  const marker = `spek-intake-${process.pid}-${Date.now()}`
+  const stub = makeStubAgent(mkTemp, configDir, { readyDelaySeconds: 2, busySeconds: 1 })
+
+  drop(profile, 'source', intake({ id: 'brief-src', title: 'BRIEF-SOURCE' }))
+  const app = await freshApp(context, { profile, configDir, stub, marker })
+  await openInbox(app)
+  await pollFor({
+    read: () => app.client.evaluate(acceptExpression('BRIEF-SOURCE')),
+    settled: Boolean,
+    timeoutMs: 20_000,
+    label: '來源 session 已由接受路徑建立',
+  })
+  const outbox = await awaitOutbox(profile, '來源 session 的投遞落點出現')
+  const sessionsBefore = ptySessionPids(marker).length
+  writeFileSync(
+    join(outbox, 'brief.json'),
+    JSON.stringify({ target: basename(folders[1].path), title: BRIEF_TITLE, body: BRIEF_BODY }),
+  )
+  await pollFor({
+    read: () => ptySessionPids(marker).length,
+    settled: (count) => count > sessionsBefore,
+    timeoutMs: 30_000,
+    label: '交接建立了 session',
+  })
+
+  const closeInbox = `(() => {
+    const dialog = document.querySelector('[role="dialog"]${label('intake.label')}')
+    if (dialog) dialog.querySelector(${JSON.stringify(label('intake.close'))})?.click()
+    return !document.querySelector('[role="dialog"]${label('intake.label')}')
+  })()`
+  await pollFor({ read: () => app.client.evaluate(closeInbox), settled: Boolean, timeoutMs: 15_000, label: '收件匣已關閉' })
+
+  const sourceName = basename(folders[0].path)
+  const targetName = basename(folders[1].path)
+  const selectFolder = (name) => `(() => {
+    ${railRowClick(name)}
+    return ${RAIL_SELECTION} === ${JSON.stringify(name)}
+  })()`
+
+  // ── 標籤是交接的標題 ──
+  // 替身不宣告終端標題，於是「pty 標題蓋過交接標題」在這裡造不出來 —— 那一半由單元測試承擔
+  // （`preferredTitle`）。這裡驗的是「標題真的抵達了分頁與 rail」。
+  await pollFor({ read: () => app.client.evaluate(selectFolder(targetName)), settled: Boolean, timeoutMs: 15_000, label: '切到目標 folder' })
+  const labelsNamed = await pollFor({
+    read: () =>
+      app.client.evaluate(`[...document.querySelectorAll('[role="tab"], [aria-label]')].filter((el) => (el.textContent ?? '').includes(${JSON.stringify(BRIEF_TITLE)})).length`),
+    settled: (n) => n >= 2,
+    timeoutMs: 15_000,
+    label: '分頁與 rail 的標籤為交接標題',
+  }).catch(() => 0)
+  check(results, '交接建立的 session 於分頁與 rail 的標籤皆為交接標題', labelsNamed >= 2, `命中 ${labelsNamed} 處`)
+
+  // ── 從 rail 打開交接單，不改變選取 ──
+  await pollFor({ read: () => app.client.evaluate(selectFolder(sourceName)), settled: Boolean, timeoutMs: 15_000, label: '切回來源 folder' })
+  const railBefore = await app.client.evaluate(RAIL_SELECTION)
+  const briefDialog = `[role="dialog"]${label('handoffBrief.dialog', { title: BRIEF_TITLE })}`
+  const openFromRail = `(() => {
+    if (document.querySelector(${JSON.stringify(briefDialog)})) return true
+    const rail = document.querySelector('aside')
+    rail?.querySelector(${JSON.stringify(label('handoffBrief.open'))})?.click()
+    return !!document.querySelector(${JSON.stringify(briefDialog)})
+  })()`
+  const opened = await pollFor({ read: () => app.client.evaluate(openFromRail), settled: Boolean, timeoutMs: 15_000, label: '交接單對話框開啟' }).catch(() => false)
+  const railAfter = await app.client.evaluate(RAIL_SELECTION)
+  check(results, '從 rail 觸發交接單入口：對話框呈現，且 rail 選中的項目未改變', opened === true && railAfter === railBefore, `開啟=${opened} 前=${railBefore} 後=${railAfter}`)
+
+  // ── 送出之後仍看得到本文，且與交付給 agent 的逐字元相同 ──
+  const contextDir = join(profile, 'intake')
+  const contextFile = existsSync(contextDir)
+    ? readdirSync(contextDir).find((name) => name.endsWith('.md') && readFileSync(join(contextDir, name), 'utf8').includes('BRIEF-HEAD'))
+    : undefined
+  const fenced = contextFile
+    ? (readFileSync(join(contextDir, contextFile), 'utf8').match(/<<<untrusted-[0-9a-f]+>>>\n([\s\S]*)\n<<<\/untrusted-[0-9a-f]+>>>/)?.[1] ?? null)
+    : null
+  const bodyText = (dialog) => `(() => {
+    const section = document.querySelector(${JSON.stringify(dialog)})?.querySelector(${JSON.stringify(label('handoffBrief.bodyLabel'))})
+    return section?.querySelector('p')?.textContent ?? null
+  })()`
+  const shown = await pollFor({
+    read: () => app.client.evaluate(bodyText(briefDialog)),
+    settled: (text) => typeof text === 'string' && text.includes('BRIEF-TAIL'),
+    timeoutMs: 15_000,
+    label: '交接單的本文載入',
+  }).catch(() => null)
+  check(
+    results,
+    '交接單的本文逐字元等於交給 agent 的 context 檔界線之內的內容',
+    fenced !== null && shown === fenced && !fenced.includes('​'),
+    `界線內=${fenced === null ? '(無)' : fenced.length} 畫面=${shown === null ? '(無)' : shown.length} 相等=${shown === fenced}`,
+  )
+  const media = await app.client.evaluate(`(() => {
+    const d = document.querySelector(${JSON.stringify(briefDialog)})
+    return d ? { b: d.querySelectorAll('b').length, a: d.querySelectorAll('a').length, h: d.querySelectorAll('h1').length } : null
+  })()`)
+  check(
+    results,
+    '交接單的本文以純文字呈現（markdown 與 HTML 未被轉譯）',
+    media !== null && media.b === 0 && media.a === 0 && media.h === 0 && typeof shown === 'string' && shown.includes('<b>tag</b>') && shown.includes('**bold**'),
+    JSON.stringify(media),
+  )
+
+  // 關掉對話框（Esc）。
+  await app.client.evaluate(`document.querySelector(${JSON.stringify(briefDialog)})?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`)
+
+  // ── 使用者自建的 session 沒有入口 ──
+  // 來源 session 是接受第三方 intake 建立的（沒有交接單），而它**有**母子標示（它是母 session）——
+  // 標示元件因此會為它渲染。rail 上兩列都在時，交接單的入口必須**恰好一個**（子 session 那一列）。
+  // 前置「來源那一列的子 session 標示在」不可省：少了它，「來源那一列根本沒畫標示」也會讓數量是一。
+  const entryCount = await app.client.evaluate(`(() => ({
+    entries: document.querySelectorAll('aside ' + ${JSON.stringify(label('handoffBrief.open'))}).length,
+    parentMarker: document.querySelectorAll('aside ' + ${JSON.stringify(label('lineage.children_one', { count: 1 }))}).length,
+  }))()`)
+  check(
+    results,
+    '沒有交接單的 session 沒有交接單的入口',
+    entryCount.parentMarker >= 1 && entryCount.entries === 1,
+    JSON.stringify(entryCount),
+  )
+
+  // ── 重新啟動之後交接單內容不變 ──
+  const restarted = await freshApp(context, { profile, configDir, stub, marker, port: RESTART_PORT })
+  await pollFor({ read: () => restarted.client.evaluate(selectFolder(targetName)), settled: Boolean, timeoutMs: 20_000, label: '重啟後切到目標 folder' })
+  const reopened = await pollFor({
+    read: () =>
+      restarted.client.evaluate(`(() => {
+        if (!document.querySelector(${JSON.stringify(briefDialog)})) document.querySelector(${JSON.stringify(label('handoffBrief.open'))})?.click()
+        return ${bodyText(briefDialog)}
+      })()`),
+    settled: (text) => typeof text === 'string' && text.includes('BRIEF-TAIL'),
+    timeoutMs: 20_000,
+    label: '重啟後交接單的本文載入',
+  }).catch(() => null)
+  check(results, '重新啟動之後交接單的內容不變', reopened !== null && reopened === shown, `相等=${reopened === shown}`)
+}
+
+/**
+ * 交接 session 的生命週期（`handoff-completion`）：子 agent 宣告完成、狀態呈現於母子兩端、
+ * 結果查得到、收掉已完成。
+ *
+ * **時序由探針自己排**：替身收到指令才在它自己的 shell 裡寫報告、發事件（`stub.command`）。
+ * 每一條「已完成之後再如何」的斷言都先以 `pollFor` 等到畫面／關係檔真的呈現已完成 —— 否則後續的
+ * 忙碌可能在報告被採納之前就已經被輪詢掉，而那時對照組照樣是綠的。
+ */
+async function runCompletion(_mode, _modeConfig, context) {
+  const { profile, folders } = seedProfile()
+  seedRouting(profile, { fallbackFolderId: folders[0].id })
+  const configDir = mkTemp('spekterm-intake-config-')
+  const marker = `spek-intake-${process.pid}-${Date.now()}`
+  const stub = makeStubAgent(mkTemp, configDir, { readyDelaySeconds: 2, busySeconds: 1 })
+
+  drop(profile, 'source', intake({ id: 'life-src', title: 'LIFE-SOURCE' }))
+  const app = await freshApp(context, { profile, configDir, stub, marker })
+  await openInbox(app)
+  await pollFor({
+    read: () => app.client.evaluate(acceptExpression('LIFE-SOURCE')),
+    settled: Boolean,
+    timeoutMs: 20_000,
+    label: '母 session 已由接受路徑建立',
+  })
+  const outbox = await awaitOutbox(profile, '母 session 的投遞落點出現')
+  const parentId = basename(outbox)
+  const closeInbox = `(() => {
+    const dialog = document.querySelector('[role="dialog"]${label('intake.label')}')
+    if (dialog) dialog.querySelector(${JSON.stringify(label('intake.close'))})?.click()
+    return !document.querySelector('[role="dialog"]${label('intake.label')}')
+  })()`
+  await pollFor({ read: () => app.client.evaluate(closeInbox), settled: Boolean, timeoutMs: 15_000, label: '收件匣已關閉' })
+
+  // ── 交接出六個子 session，跨兩個 folder ──
+  const plan = [
+    ['C1', folders[1]],
+    ['C2', folders[1]],
+    ['C3', folders[2]],
+    ['D1', folders[2]],
+    ['D2', folders[1]],
+    ['D3', folders[2]],
+  ]
+  for (const [title, folder] of plan) {
+    writeFileSync(join(outbox, `${title}.json`), JSON.stringify({ target: basename(folder.path), title: `LIFE-${title}`, body: `work ${title}` }))
+  }
+  const childrenReady = await pollFor({
+    read: () =>
+      persistedSessions(profile).filter(
+        (session) => session.lineage?.parentId === parentId && typeof session.claudeSessionId === 'string',
+      ),
+    settled: (list) => list.length === plan.length,
+    timeoutMs: 60_000,
+    label: '六個子 session 都已建立並持久化',
+  }).catch(() => [])
+  check(results, '前置：六個子 session 都已建立', childrenReady.length === plan.length, `得到 ${childrenReady.length}`)
+  const byTitle = new Map(
+    childrenReady.map((session) => [session.lineage?.brief?.title?.replace('LIFE-', ''), session]),
+  )
+  const conv = (title) => byTitle.get(title)?.claudeSessionId
+  const peer = (title) => byTitle.get(title)?.peerName
+  // 等每個子 session 收到第一則 prompt、並做完那一輪（替身：忙碌一秒之後 Stop）。
+  await pollFor({
+    read: () => stub.sessionInputs(),
+    settled: (all) => plan.every(([title]) => (all[conv(title)]?.lines.length ?? 0) >= 1),
+    timeoutMs: 30_000,
+    label: '每個子 session 都收到第一則 prompt',
+  })
+
+  // ── 還沒有任何已完成者：全域入口不呈現 ──
+  const globalEntryText = (count) => copy(count === 1 ? 'handoffLifecycle.closeCompletedAll_one' : 'handoffLifecycle.closeCompletedAll_other', { count })
+  const globalEntryShown = () =>
+    app.client.evaluate(`[...document.querySelectorAll('aside button')].some((b) => (b.textContent ?? '').startsWith(${JSON.stringify(prefixOf('handoffLifecycle.closeCompletedAll_other'))}) || (b.textContent ?? '').startsWith(${JSON.stringify(prefixOf('handoffLifecycle.closeCompletedAll_one'))}))`)
+  check(results, '沒有已完成的 session 時全域入口不呈現', (await globalEntryShown()) === false, '')
+
+  // ── 非由交接建立的 session（母 session 本身）投遞報告 ⇒ 拒絕，通知與收件匣痕跡兩者皆可見 ──
+  const notesBefore = notifications(profile).length
+  writeFileSync(join(outbox, 'not-a-child.json'), JSON.stringify({ kind: 'report', summary: 'I am not a child' }))
+  const reason = copy('intake.rejectReason.REPORT_NOT_HANDOFF')
+  const rejectNote = await pollFor({
+    read: () => notifications(profile).slice(notesBefore),
+    settled: (list) => list.some((entry) => JSON.stringify(entry).includes(reason)),
+    timeoutMs: 20_000,
+    label: '拒絕的通知',
+  }).catch(() => [])
+  await openInbox(app)
+  const inboxText = await pollFor({
+    read: () => app.client.evaluate(`document.querySelector('[role="dialog"]${label('intake.label')}')?.textContent ?? ''`),
+    settled: (text) => text.includes(reason),
+    timeoutMs: 15_000,
+    label: '收件匣中的拒絕痕跡',
+  }).catch(() => '')
+  check(
+    results,
+    '非由交接建立的 session 投遞報告被拒絕：通知與收件匣痕跡兩者皆可見',
+    rejectNote.some((entry) => JSON.stringify(entry).includes(reason)) && inboxText.includes(reason),
+    `通知=${rejectNote.length} 痕跡=${inboxText.includes(reason)}`,
+  )
+  await pollFor({ read: () => app.client.evaluate(closeInbox), settled: Boolean, timeoutMs: 15_000, label: '收件匣已關閉' })
+
+  const childState = (title) => relationsOf(profile, parentId)?.children?.find((child) => child.name === peer(title))
+  const awaitState = (title, predicate, label_) =>
+    pollFor({ read: () => childState(title) ?? null, settled: (c) => c !== null && predicate(c), timeoutMs: 20_000, label: label_ }).catch(
+      () => childState(title) ?? null,
+    )
+  /** rail 上那一列（以交接標題定位）裡的狀態標記文字。 */
+  const railMark = (title) =>
+    app.client.evaluate(`(() => {
+      const row = [...document.querySelectorAll('aside [role="button"]')].find((el) => (el.textContent ?? '').includes(${JSON.stringify(`LIFE-${title}`)}))
+      if (!row) return '(no row)'
+      const marks = [${['working', 'waiting', 'done'].map((key) => JSON.stringify(copy(`handoffLifecycle.${key}`))).join(', ')}]
+      const found = [...row.querySelectorAll('[role="img"]')].map((el) => el.getAttribute('aria-label')).find((l) => marks.includes(l))
+      return found ?? '(none)'
+    })()`)
+  const DONE = copy('handoffLifecycle.done')
+  /**
+   * **等到「已落定」再讓它忙碌。** 畫面顯示已完成的那一刻，報告剛被採納、還沒見過一次就緒 ——
+   * 這時送出的忙碌會與報告落在同一次輪詢裡，狀態機分不出它是收尾還是新的交辦（依規格它不算重新
+   * 開始）。落定只落盤、不呈現，所以讀 `sessions.json`。
+   */
+  const awaitSettled = (title) =>
+    pollFor({
+      read: () => persistedSessions(profile).find((s) => s.lineage?.brief?.title === `LIFE-${title}`)?.completion ?? null,
+      settled: (completion) => completion?.settled === true,
+      timeoutMs: 15_000,
+      label: `${title} 已落定`,
+    })
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+
+  // ── C1：報告之後還有收尾（回送訊息的那次工具呼叫），收尾不推翻完成 ──
+  stub.command(conv('C1'), ['fire PreToolUse', stub.report.stage('C1 DONE: fixed it'), stub.report.commit(), 'sleep 1', 'fire PreToolUse', 'sleep 1', 'fire Stop'].join('\n'))
+  const c1 = await awaitState('C1', (c) => c.state === 'done' && c.summary === 'C1 DONE: fixed it', 'C1 在關係檔中為已完成且附摘要')
+  const c1Mark = await pollFor({ read: () => railMark('C1'), settled: (m) => m === DONE, timeoutMs: 15_000, label: 'C1 的 rail 列呈現已完成' }).catch(() => railMark('C1'))
+  check(results, '子 session 投遞報告後：rail 呈現已完成，母 session 的關係檔附帶摘要', c1?.state === 'done' && c1?.summary === 'C1 DONE: fixed it' && c1Mark === DONE, `關係=${JSON.stringify(c1)} rail=${c1Mark}`)
+  await sleep(2_500)
+  check(results, '報告之後的收尾（忙碌、再就緒）不推翻完成', childState('C1')?.state === 'done', JSON.stringify(childState('C1')))
+  const entries = JSON.parse(readFileSync(join(profile, 'intake.json'), 'utf8')).entries
+  check(results, '完成報告不成為收件匣的項目', entries.length === 1 + plan.length, `收件匣紀錄 ${entries.length} 筆`)
+  const parentBytes = stub.sessionInputs()[persistedSessions(profile).find((s) => s.id === parentId)?.claudeSessionId]?.bytes ?? ''
+  check(results, '報告到達時母 session 的終端未被寫入', parentBytes.length > 0 && !parentBytes.includes('C1 DONE'), `母 session 收據 ${parentBytes.length} 位元組`)
+  const childIntro = [1, 2, 3].map((n) => stub.hookStdout('SessionStart', n)).find((text) => text.includes('additionalContext')) ?? ''
+  check(results, '子 session 的自我介紹含完成報告的說明（hook 的 stdout）', childIntro.includes('\\"kind\\": \\"report\\"'), childIntro.slice(0, 80))
+
+  // ── 完成的那一刻發通知；觸發它帶使用者去看結果 ──
+  const c1Id = byTitle.get('C1')?.id
+  const completionNotes = () =>
+    notifications(profile).filter((entry) => (entry.keys ?? []).some((key) => key.adapter === 'handoff-completion'))
+  const c1Note = await pollFor({
+    read: () => completionNotes().filter((entry) => entry.keys.some((key) => key.id === c1Id)),
+    settled: (list) => list.length >= 1,
+    timeoutMs: 20_000,
+    label: 'C1 的完成通知已呈現',
+  }).catch(() => [])
+  check(
+    results,
+    '報告被採納時發出通知：內文含交接標題與摘要',
+    c1Note.length === 1 && String(c1Note[0].body ?? '').includes('LIFE-C1') && String(c1Note[0].body ?? '').includes('C1 DONE: fixed it'),
+    JSON.stringify(c1Note.map((entry) => entry.body)),
+  )
+  // 前置：焦點在母 session 的 folder（不是 C1 的），否則「帶使用者過去」無從分辨。
+  await pollFor({
+    read: () => app.client.evaluate(`(() => { ${railRowClick(basename(folders[0].path))} return ${RAIL_SELECTION} === ${JSON.stringify(basename(folders[0].path))} })()`),
+    settled: Boolean,
+    timeoutMs: 15_000,
+    label: '切到母 session 的 folder',
+  })
+  fireNotification(profile, 1)
+  const c1BriefDialog = `[role="dialog"]${label('handoffBrief.dialog', { title: 'LIFE-C1' })}`
+  const revealed = await pollFor({
+    read: () =>
+      app.client.evaluate(`(() => ({
+        rail: ${RAIL_SELECTION},
+        dialog: document.querySelector(${JSON.stringify(c1BriefDialog)})?.textContent ?? null,
+      }))()`),
+    settled: (state) => state.dialog !== null && state.dialog.includes('C1 DONE'),
+    timeoutMs: 20_000,
+    label: '觸發通知之後交接單打開',
+  }).catch(() => null)
+  check(
+    results,
+    '觸發完成通知：選中子 session 所屬的 folder，並打開它的交接單呈現結果',
+    revealed !== null && revealed.rail === basename(folders[1].path) && (revealed.dialog ?? '').includes('C1 DONE'),
+    JSON.stringify(revealed && { rail: revealed.rail, dialog: (revealed.dialog ?? '').slice(0, 60) }),
+  )
+  await app.client.evaluate(`document.querySelector(${JSON.stringify(c1BriefDialog)})?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`)
+
+  // ── C2：agent 已停下之後報告才被讀到；其後的忙碌即重新開始 ──
+  stub.command(conv('C2'), ['fire PreToolUse', stub.report.stage('C2 DONE'), 'fire Stop', 'sleep 1.5', stub.report.commit()].join('\n'))
+  await awaitState('C2', (c) => c.state === 'done', 'C2 為已完成')
+  await awaitSettled('C2')
+  stub.command(conv('C2'), 'fire PreToolUse')
+  const c2 = await awaitState('C2', (c) => c.state === 'working', 'C2 重新開始')
+  check(results, '報告於 agent 已停下之後才被採納：其後的忙碌 ⇒ 進行中', c2?.state === 'working', JSON.stringify(c2))
+  stub.command(conv('C2'), 'fire Stop')
+  await awaitState('C2', (c) => c.state === 'waiting', 'C2 等你')
+
+  // ── 母 session 的清單附帶子 session 的狀態 ──
+  const parentName = basename(folders[0].path)
+  const childrenLabel = label('lineage.children_other', { count: plan.length })
+  const openParentMenu = `(() => {
+    if (document.querySelector('[role="menu"]')) return true
+    const list = document.querySelector(${JSON.stringify(label('rail.folderSessions', { name: parentName }))})
+    list?.querySelector(${JSON.stringify(childrenLabel)})?.click()
+    return !!document.querySelector('[role="menu"]')
+  })()`
+  await pollFor({ read: () => app.client.evaluate(openParentMenu), settled: Boolean, timeoutMs: 15_000, label: '打開母 session 的子 session 清單' })
+  const menuText = await app.client.evaluate(`document.querySelector('[role="menu"]')?.textContent ?? ''`)
+  check(
+    results,
+    '母 session 的清單附帶子 session 的狀態',
+    menuText.includes(`${DONE} — C1 DONE: fixed it`) && menuText.includes(copy('handoffLifecycle.waiting')),
+    menuText.slice(0, 200),
+  )
+  await app.client.evaluate(`document.querySelector('[role="menu"]')?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`)
+
+  // ── 從母 session 收掉已完成：C1、C3 已完成，C2 沒有 ⇒ 只關兩個 ──
+  stub.command(conv('C3'), ['fire PreToolUse', stub.report.stage('C3 DONE'), stub.report.commit(), 'fire Stop'].join('\n'))
+  await awaitState('C3', (c) => c.state === 'done', 'C3 為已完成')
+  await pollFor({ read: () => app.client.evaluate(openParentMenu), settled: Boolean, timeoutMs: 15_000, label: '再打開母 session 的清單' })
+  const closeChildrenLabel = copy('handoffLifecycle.closeCompletedChildren_other', { count: 2 })
+  const closeDialog = (count) => `[role="dialog"]${label(count === 1 ? 'handoffLifecycle.closeDialog_one' : 'handoffLifecycle.closeDialog_other', { count })}`
+  await pollFor({
+    read: () =>
+      app.client.evaluate(`(() => {
+        const item = [...document.querySelectorAll('[role="menuitem"]')].find((el) => (el.textContent ?? '').includes(${JSON.stringify(closeChildrenLabel)}))
+        item?.click()
+        return !!document.querySelector(${JSON.stringify(closeDialog(2))})
+      })()`),
+    settled: Boolean,
+    timeoutMs: 15_000,
+    label: '「收掉已完成」的確認對話框開啟',
+  })
+  const dialogText = await app.client.evaluate(`document.querySelector(${JSON.stringify(closeDialog(2))})?.textContent ?? ''`)
+  check(results, '確認對話框列出各自的結果', dialogText.includes('C1 DONE: fixed it') && dialogText.includes('C3 DONE'), dialogText.slice(0, 160))
+  const clickIn = (dialog, text) => `(() => {
+    const d = document.querySelector(${JSON.stringify(dialog)})
+    const button = [...(d?.querySelectorAll('button') ?? [])].find((b) => b.textContent === ${JSON.stringify(text)})
+    button?.click()
+    return !document.querySelector(${JSON.stringify(dialog)})
+  })()`
+  const confirmText = (count) => copy(count === 1 ? 'handoffLifecycle.closeConfirm_one' : 'handoffLifecycle.closeConfirm_other', { count })
+  await pollFor({ read: () => app.client.evaluate(clickIn(closeDialog(2), confirmText(2))), settled: Boolean, timeoutMs: 15_000, label: '確認收掉' })
+  const afterParentClose = await pollFor({
+    read: () => persistedSessions(profile).filter((s) => s.lineage?.parentId === parentId).map((s) => s.lineage?.brief?.title),
+    settled: (titles) => !titles.includes('LIFE-C1') && !titles.includes('LIFE-C3'),
+    timeoutMs: 20_000,
+    label: 'C1、C3 被關閉',
+  }).catch(() => persistedSessions(profile).filter((s) => s.lineage?.parentId === parentId).map((s) => s.lineage?.brief?.title))
+  check(
+    results,
+    '從母 session 收掉已完成：兩個已完成的不再存在，未完成的仍在',
+    !afterParentClose.includes('LIFE-C1') && !afterParentClose.includes('LIFE-C3') && afterParentClose.includes('LIFE-C2'),
+    JSON.stringify(afterParentClose),
+  )
+
+  const aliveTitles = () => persistedSessions(profile).filter((s) => s.lineage?.parentId === parentId).map((s) => s.lineage?.brief?.title)
+  const report = (title, summary) =>
+    stub.command(conv(title), ['fire PreToolUse', stub.report.stage(summary), stub.report.commit(), 'fire Stop'].join('\n'))
+  const clickGlobalEntry = (count) => `(() => {
+    if (document.querySelector(${JSON.stringify(closeDialog(count))})) return true
+    const entry = [...document.querySelectorAll('aside button')].find((b) => b.textContent === ${JSON.stringify(globalEntryText(count))})
+    entry?.click()
+    return !!document.querySelector(${JSON.stringify(closeDialog(count))})
+  })()`
+
+  // ── 全域：C2（乙）與 D1（丙）已完成，D2 沒有；先取消一次，再確認 ──
+  report('C2', 'C2 DONE')
+  report('D1', 'D1 DONE')
+  await awaitState('C2', (c) => c.state === 'done', 'C2 為已完成')
+  await awaitState('D1', (c) => c.state === 'done', 'D1 為已完成')
+  const shown = await pollFor({ read: () => app.client.evaluate(clickGlobalEntry(2)), settled: Boolean, timeoutMs: 15_000, label: '全域入口呈現並開啟對話框' }).catch(() => false)
+  check(results, '有已完成的 session 時全域入口呈現', shown === true, '')
+  const beforeCancel = aliveTitles().length
+  await pollFor({ read: () => app.client.evaluate(clickIn(closeDialog(2), copy('common.cancel'))), settled: Boolean, timeoutMs: 15_000, label: '取消' })
+  await sleep(1_000)
+  check(results, '取消確認不關閉任何 session', aliveTitles().length === beforeCancel, `前=${beforeCancel} 後=${aliveTitles().length}`)
+  await pollFor({ read: () => app.client.evaluate(clickGlobalEntry(2)), settled: Boolean, timeoutMs: 15_000, label: '再開一次全域對話框' })
+  await pollFor({ read: () => app.client.evaluate(clickIn(closeDialog(2), confirmText(2))), settled: Boolean, timeoutMs: 15_000, label: '確認全域收掉' })
+  const afterGlobal = await pollFor({
+    read: aliveTitles,
+    settled: (titles) => !titles.includes('LIFE-C2') && !titles.includes('LIFE-D1'),
+    timeoutMs: 20_000,
+    label: 'C2、D1 被關閉',
+  }).catch(aliveTitles)
+  check(
+    results,
+    '全域收掉跨 folder 的已完成 session，進行中的仍在',
+    !afterGlobal.includes('LIFE-C2') && !afterGlobal.includes('LIFE-D1') && afterGlobal.includes('LIFE-D2') && afterGlobal.includes('LIFE-D3'),
+    JSON.stringify(afterGlobal),
+  )
+
+  // ── 對話框開著的期間：列出的 D2 重新開始、沒列出的 D3 才完成 ⇒ 確認之後兩個都還在 ──
+  report('D2', 'D2 DONE')
+  await awaitState('D2', (c) => c.state === 'done', 'D2 為已完成')
+  await awaitSettled('D2')
+  await pollFor({ read: () => app.client.evaluate(clickGlobalEntry(1)), settled: Boolean, timeoutMs: 15_000, label: '全域對話框（列出 D2）' })
+  stub.command(conv('D2'), 'fire PreToolUse')
+  report('D3', 'D3 DONE')
+  await awaitState('D2', (c) => c.state === 'working', 'D2 重新開始')
+  await awaitState('D3', (c) => c.state === 'done', 'D3 為已完成')
+  await sleep(1_000)
+  await pollFor({ read: () => app.client.evaluate(clickIn(closeDialog(1), confirmText(1))), settled: Boolean, timeoutMs: 15_000, label: '確認' })
+  await sleep(2_000)
+  const afterRace = aliveTitles()
+  check(
+    results,
+    '確認前重新開始的 session 與對話框開啟期間才完成的 session 都不被關閉（經畫面確認）',
+    afterRace.includes('LIFE-D2') && afterRace.includes('LIFE-D3'),
+    JSON.stringify(afterRace),
+  )
+
+  // ── 全部子 session 都完成 ⇒ 母 session 的「→ N」換樣式 ──
+  stub.command(conv('D2'), ['fire Stop', 'sleep 1', 'fire PreToolUse', stub.report.stage('D2 DONE AGAIN'), stub.report.commit(), 'fire Stop'].join('\n'))
+  await awaitState('D2', (c) => c.state === 'done' && c.summary === 'D2 DONE AGAIN', 'D2 再次完成')
+  const parentMarker = await pollFor({
+    read: () =>
+      app.client.evaluate(`(() => {
+        const list = document.querySelector(${JSON.stringify(label('rail.folderSessions', { name: parentName }))})
+        return list?.querySelector(${JSON.stringify(label('lineage.children_other', { count: 2 }))})?.textContent ?? ''
+      })()`),
+    settled: (text) => text.includes('✓'),
+    timeoutMs: 15_000,
+    label: '母 session 的標示換成全部完成的樣式',
+  }).catch(() => '')
+  check(results, '全部子 session 皆已完成時，母 session 的標示以不同樣式呈現', parentMarker.includes('✓'), JSON.stringify(parentMarker))
+
+  // ── 同一份報告只通知一次：每個 session 的完成通知數不超過它實際投遞的報告數 ──
+  // （C2、D2 各回報了兩次；其餘各一次。合併的通知一則涵蓋好幾個主鍵，各算一次。上界可能讓後面幾則不發 ——
+  // 所以是「不超過」，而「至少一則」由上面 C1 那條承擔。）
+  const reportsMade = { C1: 1, C2: 2, C3: 1, D1: 1, D2: 2, D3: 1 }
+  const perSession = new Map()
+  for (const entry of completionNotes()) for (const key of entry.keys) perSession.set(key.id, (perSession.get(key.id) ?? 0) + 1)
+  const over = Object.entries(reportsMade).filter(([title, made]) => (perSession.get(byTitle.get(title)?.id) ?? 0) > made)
+  check(
+    results,
+    '每一份被採納的報告至多一則完成通知',
+    over.length === 0 && perSession.size >= 1,
+    JSON.stringify(Object.fromEntries(Object.keys(reportsMade).map((title) => [title, perSession.get(byTitle.get(title)?.id) ?? 0]))),
+  )
+
+  // ── 重新啟動之後已完成保留，且不重新通知 ──
+  const notesBeforeRestart = completionNotes().length
+  const restarted = await freshApp(context, { profile, configDir, stub, marker, port: RESTART_PORT })
+  const persisted = await pollFor({
+    read: () =>
+      restarted.client.evaluate(`(() => {
+        const row = [...document.querySelectorAll('aside [role="button"]')].find((el) => (el.textContent ?? '').includes('LIFE-D3'))
+        return row ? [...row.querySelectorAll('[role="img"]')].map((el) => el.getAttribute('aria-label')) : null
+      })()`),
+    settled: (marks) => Array.isArray(marks) && marks.includes(DONE),
+    timeoutMs: 20_000,
+    label: '重啟後 D3 仍呈現已完成',
+  }).catch(() => null)
+  check(results, '已完成跨重啟保留', Array.isArray(persisted) && persisted.includes(DONE), JSON.stringify(persisted))
+  await sleep(NOTIFY_QUIET_MS)
+  check(results, '重新啟動不對既有的已完成狀態重新通知', completionNotes().length === notesBeforeRestart, `前=${notesBeforeRestart} 後=${completionNotes().length}`)
+}
+
+/**
+ * 交接到達即建立 session，且**第一則 prompt 被代為送出**（`handoff-session-lifecycle`）。
+ */
+async function runHandoff(_mode, _modeConfig, context) {
+  return runHandoffScenario(context, 'sent')
+}
+
+/**
+ * **送出字元沒有生效時的退路**：一段時間內沒見到 agent 開始工作 ⇒ 呈現待送出、留在已開好那一段，
+ * 之後由使用者自己按 Enter。此前「prompt 填好而不送出」的所有斷言（本文全文、長度、跨行程的逐字元
+ * 相等、Enter 之後了結）改在這個形狀下驗 —— 它是交接的本文唯一還會停在收件匣的情形。
+ */
+async function runHandoffUnsent(_mode, _modeConfig, context) {
+  return runHandoffScenario(context, 'unsent')
 }
 
 /**
@@ -3376,6 +3951,9 @@ const SECTIONS = [
   { name: 'runNotifyActivate', run: runNotifyActivate },
   { name: 'runFocusStability', run: runFocusStability },
   { name: 'runHandoff', run: runHandoff },
+  { name: 'runHandoffUnsent', run: runHandoffUnsent },
+  { name: 'runBrief', run: runBrief },
+  { name: 'runCompletion', run: runCompletion },
   { name: 'runHandoffRestored', run: runHandoffRestored },
   { name: 'runHandoffFailure', run: runHandoffFailure },
   { name: 'runHandoffDisabled', run: runHandoffDisabled },

@@ -21,7 +21,9 @@
 重建一個 session 所需的**事實** SHALL 被持久化，並於下次開啟應用程式時重建：**它的歸屬**
 （某個 folder，或**全域** —— 見 `global-session`）、spawn 目標、使用者取的名字、分頁順序、
 **它開在哪個工作目錄**、**pty 最近一次宣告的終端標題**，以及由主行程寫入的**交接來源**（見
-`session-lineage`）與 claude 目標的**固定名字**（見 `agent-peer-name`）。renderer 重新載入時 SHALL 同樣重建。
+`session-lineage`）、**交接單**（見 `handoff-brief`）、**完成狀態與最新結果**（見 `handoff-completion`）與
+claude 目標的**固定名字**（見 `agent-peer-name`）。完成狀態不是衍生狀態 —— 它由一次已消費的投遞與
+其後的等待狀態序列決定，重啟之後無從重算。renderer 重新載入時 SHALL 同樣重建。
 
 **歸屬為全域** SHALL 以一個明確的狀態表示，SHALL NOT 以一個保留的 folder 識別碼字串表示 ——
 後者會使每一處「以識別碼查找 folder」的讀取靜默地查無此 folder。

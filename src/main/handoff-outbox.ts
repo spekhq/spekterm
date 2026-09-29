@@ -11,8 +11,8 @@ import path from 'node:path'
  *
  * **但它擋不掉「agent 直接寫進別人的目錄」**：落點的根位置算得出來（`SPEKTERM_EVENT_DIR` 已經
  * 把 userData 交給它了，argv 上還有 `--settings` 的路徑），而 agent 有完整的檔案系統寫入權。
- * **這不是一道安全邊界**，任何倚賴「來源不可偽造」的下游設計都不成立 —— 交接次數的上限因此
- * 必須是全域的，見 `handoff-throttle`。
+ * **這不是一道安全邊界**，任何倚賴「來源不可偽造」的下游設計都不成立（此前的交接次數上限因此
+ * 是全域的；上限已於 `handoff-session-lifecycle` 移除）。
  *
  * ## 兩個目錄分開，而那是承重的
  *

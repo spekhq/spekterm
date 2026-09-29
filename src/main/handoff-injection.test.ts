@@ -109,6 +109,27 @@ test('folder 清單變動後重寫的自我介紹仍含名字與關係檔位置'
   assert.ok(introContext('s1').includes(path.join('relations', 's1.json')), '關係檔位置仍在')
 })
 
+test('由交接建立的 session，spawn 時的自我介紹含完成報告的說明；其他 session 沒有（handoff-completion）', () => {
+  setup()
+  prepareHandoffInjection('s1', true, folders, { name: 'alpha-1111', reportable: true })
+  prepareHandoffInjection('s2', true, folders, { name: 'alpha-2222' })
+  assert.ok(introContext('s1').includes('"kind": "report"'))
+  assert.ok(!introContext('s2').includes('"kind": "report"'))
+})
+
+test('folder 清單變動後重寫的自我介紹仍含完成報告的說明', () => {
+  setup()
+  prepareHandoffInjection('s1', true, folders, { name: 'alpha-1111', reportable: true })
+  refreshIntros(
+    ['s1'],
+    [...folders, { name: 'beta', path: '/repos/beta' }],
+    () => 'alpha-1111',
+    (id) => id === 's1',
+  )
+  assert.ok(introContext('s1').includes('"kind": "report"'), '完成報告那一段仍在')
+  assert.ok(introContext('s1').includes('/repos/beta'), '前置：真的重寫了（新 folder 在）')
+})
+
 test('注入的環境變數含關係檔位置', () => {
   setup()
   const contribution = prepareHandoffInjection('s1', true, folders, { name: 'alpha-1111' })

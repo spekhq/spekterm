@@ -4,6 +4,7 @@ import {
   mkdirSync,
   readdirSync,
   readFileSync,
+  renameSync,
   writeFileSync,
 } from 'node:fs'
 import { join } from 'node:path'
@@ -52,6 +53,14 @@ export function makeStubAgent(
      * 它們的選擇器。只有要驗「系統不代為命名」的段落需要它。
      */
     announceTitle = '',
+    /**
+     * **吞掉每個 session 收到的第一個送出字元**（它不結束一行，那一行繼續累積）。
+     *
+     * 模擬真實 CLI 的一個實測行為：首次就緒時寫入的 `prompt\r` 偶爾只有文字進了輸入框、送出字元
+     * 沒有生效（2.1.283，1/13，`docs/lessons/handoff.md` 第十三節）。產品對它的退路是「一段時間內
+     * 沒見到開始工作就呈現待送出」—— 少了這個選項，那條退路沒有載體。
+     */
+    dropFirstSubmit = false,
   } = {},
 ) {
   const home = mkTemp('spekterm-agentview-stub-')
@@ -83,6 +92,18 @@ export function makeStubAgent(
    * 而那正是要驗「名字不變」的地方。
    */
   const nameLog = join(home, 'peer-names.log')
+  /**
+   * **每個 session 各自一份**的輸入收據（以對話 id 命名）：`<id>.bytes`（逐位元組）與 `<id>.lines`。
+   *
+   * 共用的那兩份（`inputLog` / `byteLog`）是**整個替身一份**，並行的 session 寫進同一個檔案 ——
+   * 「這一則送到了**哪一個** session」「某個 session 什麼都沒收到」在它們上面都無從判定
+   * （`docs/lessons/handoff.md` 5.1）。
+   */
+  const perSessionDir = join(home, 'per-session')
+  mkdirSync(perSessionDir, { recursive: true })
+  const commandDir = join(home, 'commands')
+  mkdirSync(commandDir, { recursive: true })
+  let commandSeq = 0
 
   const script = [
     '#!/bin/sh',
@@ -151,11 +172,14 @@ export function makeStubAgent(
     '    oct=$(dd bs=1 count=1 2>/dev/null | od -An -v -to1 | tr -d " \\n")',
     '    [ -n "$oct" ] || break',
     `    printf '%s ' "$oct" >> ${JSON.stringify(byteLog)}`,
+    `    printf '%s ' "$oct" >> "${perSessionDir}/$sid.bytes"`,
     '    case "$oct" in',
     '      015|012) : ;;',
     '      *) line="$line$(printf "\\\\$oct")"; continue ;;',
     '    esac',
+    dropFirstSubmit ? `    if [ ! -e "${perSessionDir}/$sid.dropped" ]; then : > "${perSessionDir}/$sid.dropped"; continue; fi` : '',
     `    printf '%s\\n' "$line" >> "${inputLog}"`,
+    `    printf '%s\\n' "$line" >> "${perSessionDir}/$sid.lines"`,
     // 延遲補寫紀錄 —— 用來驗「送出後在它出現於紀錄之前標示為未確認」。
     echoDelaySeconds ? `  sleep ${echoDelaySeconds}` : '',
     `    printf '{"type":"user","uuid":"u-%s","timestamp":"2026-09-06T00:00:01.000Z","message":{"role":"user","content":"%s"}}\\n' "$$" "$line" >> "$tp"`,
@@ -211,6 +235,13 @@ export function makeStubAgent(
     unreadable ? 'chmod 000 "$tp"' : '',
     'fire Stop',
     ') &',
+    /*
+      **探針下的指令**（`handoff-completion`）：`<commands>/<對話 id>.*` 出現就在**這個 shell 裡**執行它
+      （於是 `fire` 可用），執行完刪掉。完成報告的時序只能這樣造：真實 agent 寫報告是一次工具呼叫
+      （PreToolUse 在前），而「agent 已停下之後報告才被讀到」這個順序靠探針自己排。
+      `$SPEKTERM_HANDOFF_DIR` 是產品交給 agent 的投遞落點 —— 與真實 agent 同一條路徑，不另外接。
+    */
+    `(while :; do for f in "${commandDir}/$sid".*; do [ -e "$f" ] || continue; . "$f"; rm -f "$f"; done; sleep 0.2; done) &`,
     /*
       讀 pty 的輸入。**逐位元組落盤，並自行組行** —— 每組成一行才補一則使用者訊息與一次 Stop。
 
@@ -288,6 +319,60 @@ export function makeStubAgent(
         .filter(Boolean)
         .map((oct) => String.fromCharCode(parseInt(oct, 8)))
         .join('')
+    },
+    /**
+     * 每個 session（以對話 id 為鍵）收到的輸入：組成的行、以及逐位元組還原的文字。
+     * 見 `perSessionDir` 的註解 —— 判定「送到哪一個 session」只能用這一份。
+     */
+    sessionInputs: () => {
+      const result = {}
+      let names
+      try {
+        names = readdirSync(perSessionDir)
+      } catch {
+        return result
+      }
+      for (const name of names) {
+        const match = name.match(/^(.+)\.(bytes|lines)$/)
+        if (!match) continue
+        const entry = (result[match[1]] ??= { lines: [], bytes: '' })
+        const text = readFileSync(join(perSessionDir, name), 'utf8')
+        if (match[2] === 'lines') entry.lines = text.split('\n').filter(Boolean)
+        else
+          entry.bytes = text
+            .trim()
+            .split(/\s+/)
+            .filter(Boolean)
+            .map((oct) => String.fromCharCode(parseInt(oct, 8)))
+            .join('')
+      }
+      return result
+    },
+    /**
+     * 叫某個 session（以對話 id 指定）的替身執行一段 shell（`fire <事件>` 可用）。
+     * 以原子改名投遞，替身不會讀到寫到一半的指令。
+     */
+    command: (conversationId, script) => {
+      const seq = ++commandSeq
+      const final = join(commandDir, `${conversationId}.${seq}`)
+      // 暫存名以點開頭 —— 替身的 glob（`<id>.*`）碰不到它，不會讀到寫到一半的指令。
+      const staging = join(commandDir, `.staging-${conversationId}-${seq}`)
+      writeFileSync(staging, `${script}\n`)
+      renameSync(staging, final)
+    },
+    /**
+     * 完成報告（`handoff-completion`）的 shell 片段，寫到**該 session 自己的**投遞落點
+     * （`$SPEKTERM_HANDOFF_DIR`，產品交給 agent 的那一個）。
+     *
+     * `stage` 寫成以點開頭的暫存名（產品不讀它），`commit` 才改名成 `.json` —— 兩者分開，呼叫端才排得出
+     * 「agent 已停下之後報告才被讀到」的順序。`write` ＝ 兩者連續。事件（`fire …`）由呼叫端自己排。
+     */
+    report: {
+      stage: (summary) => {
+        const payload = JSON.stringify({ kind: 'report', summary }).replace(/'/g, "'\\''")
+        return `printf '%s' '${payload}' > "$SPEKTERM_HANDOFF_DIR/.report.partial"`
+      },
+      commit: () => 'mv "$SPEKTERM_HANDOFF_DIR/.report.partial" "$SPEKTERM_HANDOFF_DIR/report-$(date +%s%N).json"',
     },
     /** 替身宣告就緒的那一刻是否已經到了。 */
     ready: () => existsSync(readyReceipt),

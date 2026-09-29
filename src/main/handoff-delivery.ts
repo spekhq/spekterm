@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 
-import type { DeliveryProvenance, HandoffSource } from './intake-schema'
+import { type DeliveryProvenance, type HandoffSource, normalizeAuthored } from './intake-schema'
 
 /** 交接的 adapter 名。去重的主鍵之一（`(adapter, id)`）。 */
 export const HANDOFF_ADAPTER = 'handoff'
@@ -20,6 +20,52 @@ export interface HandoffPayload {
 export type PayloadResult =
   | { ok: true; value: HandoffPayload }
   | { ok: false; reason: 'MALFORMED' | 'FIELD_TYPE' }
+
+/**
+ * 完成報告的摘要上限（`handoff-completion`）。它是給人一眼看完的東西 —— 詳細的內容由 agent 經訊息
+ * 或寫檔交給母 session。**自我介紹由這個常數推導**（`handoff-intro-source` 守衛擋字面值）。
+ */
+export const MAX_REPORT_LENGTH = 4_000
+
+/**
+ * 落點裡的一份投遞是哪一種東西。**種類欄位缺席 ⇒ 交接**（既有格式不變）。
+ *
+ * - `report` —— 完成報告（`handoff-completion`）。
+ * - 其餘值 —— 不認得，拒絕且可見。
+ * - `malformed` —— 讀不成一個 JSON 物件：**不消費**，可能只是寫到一半（與交接同一條處置）。
+ */
+export type OutboxKind = 'handoff' | 'report' | 'unknown' | 'malformed'
+
+export function outboxKindOf(contents: string): OutboxKind {
+  let raw: unknown
+  try {
+    raw = JSON.parse(contents)
+  } catch {
+    return 'malformed'
+  }
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return 'malformed'
+  const kind = (raw as Record<string, unknown>).kind
+  if (kind === undefined) return 'handoff'
+  return kind === 'report' ? 'report' : 'unknown'
+}
+
+export type ReportResult =
+  | { ok: true; summary: string }
+  | { ok: false; reason: 'FIELD_TYPE' | 'EMPTY' | 'TOO_LONG'; length?: number }
+
+/**
+ * 讀出完成報告的摘要。**走與其他非第三方欄位相同的攝入正規化** —— 它會呈現在畫面上，也會寫進另一個
+ * agent 讀的關係檔。正規化之後為空 ⇒ 拒絕；超過上限 ⇒ 拒絕，**不截斷**：截斷後的摘要看起來是完整的，
+ * 而它的結尾從未抵達。
+ */
+export function parseReport(contents: string): ReportResult {
+  const raw = JSON.parse(contents) as Record<string, unknown>
+  if (typeof raw.summary !== 'string') return { ok: false, reason: 'FIELD_TYPE' }
+  const summary = normalizeAuthored(raw.summary)
+  if (summary.trim() === '') return { ok: false, reason: 'EMPTY' }
+  if (summary.length > MAX_REPORT_LENGTH) return { ok: false, reason: 'TOO_LONG', length: summary.length }
+  return { ok: true, summary }
+}
 
 /**
  * 讀出 agent 寫下的那三個欄位。

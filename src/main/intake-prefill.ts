@@ -60,6 +60,115 @@ export function isSubmitted(state: WaitState): boolean {
 
 export const PREFILL_TIMEOUT_MS = 30_000
 
+/**
+ * 寫入之後**要不要一併送出**（`handoff-session-lifecycle` design D1）。
+ *
+ * - **第三方的本文**：只填入 —— 送出是使用者的動作，那是這條管線唯一的人類閘門。
+ * - **非第三方的本文**（agent 發起的交接）：送出 —— 本文是使用者自己 session 裡的 agent 寫的。
+ * - **沿用既有 session**（逾時退回後在同一個 folder 再次接受）：**一律只填入**。那時使用者面對的是
+ *   一個空的 session，可能已經在裡面打了字；`schedulePrefill` 在已就緒時立刻寫，`prompt\r` 會接在
+ *   他打到一半的內容後面一起送出，而他在那之前看不到。
+ *
+ * 判定依**本文的來源**，不依「是誰觸發了建立」—— 退回待處理的交接由使用者接受而**新建**
+ * session 時仍然送出。
+ */
+export type PrefillMode = 'fill' | 'submit'
+
+export function prefillModeFor(input: { firstPartyBody: boolean; reusedSession: boolean }): PrefillMode {
+  return input.firstPartyBody && !input.reusedSession ? 'submit' : 'fill'
+}
+
+/**
+ * 送出字元（Enter）。**與文字分開、隔一段時間才寫**（見 `SUBMIT_KEY_DELAY_MS`）。
+ */
+export const SUBMIT_KEY = '\r'
+
+/**
+ * 文字寫進去之後，隔多久才送出字元。
+ *
+ * **不能與文字一起寫。** 實測（CLI 2.1.283，`docs/lessons/handoff.md` 第十三節）：一段長文字
+ * （真實的 prompt 約 300 字元、含非 ASCII）一次抵達時被 agent 當成**貼上**，緊跟在後的 `\r`
+ * 被併進貼上成為換行 —— 文字停在輸入框、沒有送出，畫面上沒有任何錯誤。分開寫時的門檻落在
+ * 100–150ms 之間（100ms 仍失敗，150ms 以上 8/8 送出）；取 500ms，約為門檻的三倍。
+ *
+ * 第一版 dogfood 就是這樣壞的：探針的替身不做貼上偵測、第一次實測用的是 50 字元的短 prompt，
+ * 兩者都測不出來。**送出字元仍可能沒生效**，退路見 `SUBMIT_CONFIRM_MS`。
+ */
+export const SUBMIT_KEY_DELAY_MS = 500
+
+/**
+ * 代為送出之後，多久沒見到 agent 開始工作就**退回「待送出」的標示**。
+ *
+ * 實測（CLI 2.1.283，`docs/lessons/handoff.md` 第十三節）：首次就緒時寫入的 `prompt\r` 偶爾
+ * （1/13）只有文字進了輸入框、送出字元沒有生效。失效方向是溫和的（退化成填入），但若產品以為已
+ * 送出而不呈現標示，使用者就看不到它在等他。
+ *
+ * **不自動補送一次 `\r`** —— 那段時間使用者可能已經在那個 session 裡打字。
+ */
+export const SUBMIT_CONFIRM_MS = 10_000
+
+export interface SubmissionHandlers {
+  /** 呈現「待送出」的標示。每次監看至多一次。 */
+  onPending(): void
+  /** agent 開始工作了（`isSubmitted`）。每次監看至多一次，之後監看即結束。 */
+  onSubmitted(): void
+}
+
+export interface SubmissionDeps {
+  subscribe: (sessionId: string, subscriber: (snapshot: { state: WaitState }) => void) => () => void
+  setTimer: (fn: () => void, ms: number) => unknown
+  clearTimer: (handle: unknown) => void
+}
+
+const defaultSubmissionDeps: SubmissionDeps = {
+  subscribe: subscribeWait,
+  setTimer: (fn, ms) => setTimeout(fn, ms),
+  clearTimer: (handle) => clearTimeout(handle as NodeJS.Timeout),
+}
+
+/**
+ * 寫入之後，監看「送出了沒」。
+ *
+ * - 只填入：立刻呈現待送出；見到 agent 開始工作即視為使用者送出了。
+ * - 送出：不呈現；`SUBMIT_CONFIRM_MS` 內沒見到開始工作才呈現（退路）。
+ *
+ * 回傳結束監看的函式。
+ */
+export function watchSubmission(
+  sessionId: string,
+  mode: PrefillMode,
+  handlers: SubmissionHandlers,
+  deps: SubmissionDeps = defaultSubmissionDeps,
+): () => void {
+  let done = false
+  let pendingShown = false
+  const showPending = (): void => {
+    if (done || pendingShown) return
+    pendingShown = true
+    handlers.onPending()
+  }
+
+  let timer: unknown = undefined
+  if (mode === 'fill') showPending()
+  else timer = deps.setTimer(showPending, SUBMIT_CONFIRM_MS)
+
+  // 訂閱回呼可能在 `subscribe` 回傳之前就同步觸發 —— 那時退訂函式還沒拿到，所以放在一個容器裡。
+  const subscription: { unsubscribe?: () => void } = {}
+  const stop = (): void => {
+    if (done) return
+    done = true
+    if (timer !== undefined) deps.clearTimer(timer)
+    subscription.unsubscribe?.()
+  }
+  subscription.unsubscribe = deps.subscribe(sessionId, (snapshot) => {
+    if (done || !isSubmitted(snapshot.state)) return
+    stop()
+    handlers.onSubmitted()
+  })
+  if (done) subscription.unsubscribe()
+  return stop
+}
+
 export interface PrefillDeps {
   /** 往 pty 寫入。由呼叫端注入，於是本模組不認識終端服務。 */
   write(sessionId: string, data: string): void
@@ -87,7 +196,12 @@ export function pendingPrefillCount(): number {
  * 已就緒時**立刻寫**（那不是「太早」——狀態已經是就緒了）；否則訂閱等待狀態，
  * 首次就緒時寫一次即退訂。
  */
-export function schedulePrefill(sessionId: string, prompt: string, deps: PrefillDeps): void {
+export function schedulePrefill(
+  sessionId: string,
+  prompt: string,
+  deps: PrefillDeps,
+  mode: PrefillMode = 'fill',
+): void {
   cancelPrefill(sessionId)
 
   let done = false
@@ -107,6 +221,8 @@ export function schedulePrefill(sessionId: string, prompt: string, deps: Prefill
   const fill = (): void => {
     // **不附送出字元，且換行由編碼器濾掉** —— 單行是編碼器的性質，不是呼叫端的義務。
     deps.write(sessionId, encodePrefill(prompt))
+    // 送出字元**分開、稍後**才寫 —— 與文字一起到達會被當成貼上的一部分（見 `SUBMIT_KEY_DELAY_MS`）。
+    if (mode === 'submit') setTimeout(() => deps.write(sessionId, SUBMIT_KEY), SUBMIT_KEY_DELAY_MS)
     finish(true)
   }
 

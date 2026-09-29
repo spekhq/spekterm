@@ -10,6 +10,8 @@ import { OpenSpecProvider } from './openspec/data'
 import { PanelCoordinateProvider } from './panel-coordinate'
 import { SessionsProvider } from './terminal/sessions'
 import { LineageProvider } from './terminal/lineage'
+import { HandoffBriefProvider } from './terminal/HandoffBrief'
+import { LifecycleProvider } from './terminal/lifecycle'
 import { IntakeProvider } from './intake/intake-state'
 import { IntakeAutoAccept } from './intake/IntakeAutoAccept'
 import { PrefillProvider } from './intake/prefill-state'
@@ -53,6 +55,10 @@ export function AppShell(): React.JSX.Element {
               folderId === null ? select({ kind: 'global' }) : select(folderSelection(folderId))
             }
           >
+          {/* 交接單（`handoff-brief`）—— 入口在 rail 與分頁列兩處，它要 `useLineage()`，所以在它之內。 */}
+          <HandoffBriefProvider>
+          {/* 生命週期（`handoff-completion`）—— 狀態標記與「收掉已完成」。要 `useLineage()`。 */}
+          <LifecycleProvider>
           <PanelCoordinateProvider>
           <OpenSpecProvider>
             {/*
@@ -129,6 +135,8 @@ export function AppShell(): React.JSX.Element {
             </div>
           </OpenSpecProvider>
           </PanelCoordinateProvider>
+          </LifecycleProvider>
+          </HandoffBriefProvider>
           </LineageProvider>
           </IntakeProvider>
           </PrefillProvider>

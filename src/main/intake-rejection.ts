@@ -55,6 +55,7 @@ export function isPermanentRejection({ code, notify }: RejectionOutcome): boolea
     case 'FIELD_TYPE':
     case 'TARGET_NOT_FOUND':
     case 'TARGET_AMBIGUOUS':
+    case 'REPORT_NOT_HANDOFF': // 同一個 session 再報告一次，它仍然不是交接建立的。
       return true
 
     // ── 暫時：狀態或設定改變後可能成功 ──────────────────────────────────────

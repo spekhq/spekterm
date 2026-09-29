@@ -1,7 +1,8 @@
 import fs from 'node:fs'
 import path from 'node:path'
-import type { SessionLineage } from '../shared/lineage/types'
-import { parseHandoffSource } from './intake-schema'
+import { type CompletionState, parseCompletion } from '../shared/lineage/lifecycle'
+import type { HandoffBrief, SessionLineage } from '../shared/lineage/types'
+import { MAX_FIELD_LENGTH, parseHandoffSource } from './intake-schema'
 import { decidePeerName, isValidPeerName } from './peer-name'
 import type { SpawnTarget } from './terminal'
 import { isWorktreeKey } from './worktree-key'
@@ -102,6 +103,11 @@ export interface PersistedSession {
    */
   lineage?: SessionLineage
   /**
+   * 交接 session 的完成狀態（`handoff-completion`）。**主行程供應** —— 由子 agent 的完成報告與其後的
+   * 等待狀態推導而來，renderer 沒有任何途徑寫入。它不是衍生狀態：重啟之後無從重算。
+   */
+  completion?: CompletionState
+  /**
    * claude 目標的固定名字（`agent-peer-name`）。**主行程供應**，決定一次之後不再改變。
    *
    * 它會成為 agent CLI 的參數，所以讀回時以 `isValidPeerName` 驗證；不合法就丟掉、重新決定。
@@ -117,11 +123,55 @@ export function parseLineage(raw: unknown): SessionLineage | undefined {
   const r = raw as Record<string, unknown>
   const parsed = parseHandoffSource({ sessionId: r.parentId, origin: r.origin, title: r.parentTitle })
   if (!parsed) return undefined
+  const brief = parseHandoffBrief(r.brief)
   return {
     parentId: parsed.sessionId,
     origin: parsed.origin,
     ...(parsed.title ? { parentTitle: parsed.title } : {}),
+    ...(brief ? { brief } : {}),
   }
+}
+
+/**
+ * 交接單留在清單裡的那一部分。**壞掉的丟棄，關係的其餘部分照留**（`handoff-brief`：損毀的交接單
+ * 不使 session 或它的母子關係消失）。
+ */
+export function parseHandoffBrief(raw: unknown): HandoffBrief | undefined {
+  if (typeof raw !== 'object' || raw === null) return undefined
+  const { title, receivedAt } = raw as Record<string, unknown>
+  if (typeof title !== 'string' || title.length > MAX_FIELD_LENGTH) return undefined
+  if (typeof receivedAt !== 'number' || !Number.isFinite(receivedAt)) return undefined
+  return { title, receivedAt }
+}
+
+/** `<id>.handoff.json` 的形狀 —— 交接單的本文，以及（`handoff-completion`）最新的完成報告。 */
+export interface HandoffBriefFile {
+  /**
+   * 交接單的本文。**缺席**＝這個 session 沒有交接單，檔案只為了保存完成報告而存在
+   * （本 change 之前建立的交接 session 也能回報完成）。
+   */
+  body?: string
+  report?: { summary: string; reportedAt: number }
+}
+
+export function parseHandoffBriefFile(raw: string): HandoffBriefFile | null {
+  let data: unknown
+  try {
+    data = JSON.parse(raw)
+  } catch {
+    return null
+  }
+  if (typeof data !== 'object' || data === null) return null
+  const { body, report } = data as Record<string, unknown>
+  if (body !== undefined && typeof body !== 'string') return null
+  let parsedReport: HandoffBriefFile['report']
+  if (typeof report === 'object' && report !== null) {
+    const { summary, reportedAt } = report as Record<string, unknown>
+    if (typeof summary === 'string' && typeof reportedAt === 'number' && Number.isFinite(reportedAt)) {
+      parsedReport = { summary, reportedAt }
+    }
+  }
+  return { ...(typeof body === 'string' ? { body } : {}), ...(parsedReport ? { report: parsedReport } : {}) }
 }
 
 interface PersistedSessions {
@@ -133,7 +183,7 @@ interface PersistedSessions {
 export type RendererSession = Omit<PersistedSession, MainOwnedField>
 
 /** 只有主行程能寫的欄位。**加一個進來，這裡、`replace()`、`parseSessionEntry` 三處都要改。** */
-type MainOwnedField = 'claudeSessionId' | 'cwd' | 'lineage' | 'peerName'
+type MainOwnedField = 'claudeSessionId' | 'cwd' | 'lineage' | 'peerName' | 'completion'
 
 /** 主行程專屬欄位的暫存形狀。 */
 type MainFields = Partial<Pick<PersistedSession, MainOwnedField>>
@@ -204,6 +254,8 @@ export function parseSessionEntry(entry: unknown): PersistedSession | null {
     // 兩者都是「不合法只丟該欄位」：關係丟了只是不再縮排；名字丟了會在 `ensurePeerNames` 重新決定。
     lineage: parseLineage(raw.lineage),
     peerName: raw.spawnTarget === 'claude' && isValidPeerName(raw.peerName) ? raw.peerName : undefined,
+    // 沒有來源的 session 不會有完成狀態 —— 一份壞掉或憑空出現的只丟該欄位。
+    completion: raw.lineage !== undefined ? parseCompletion(raw.completion) : undefined,
   }
 }
 
@@ -460,6 +512,7 @@ export class SessionStore {
         // `RendererSession` 裡；執行期則由這裡的逐欄位挑選保證）。
         lineage: kept?.lineage,
         peerName: kept?.peerName,
+        completion: kept?.completion,
       })
     }
 
@@ -507,12 +560,36 @@ export class SessionStore {
     if (changed) this.save()
   }
 
+  /**
+   * 寫入完成狀態（`handoff-completion`）。**涵蓋暫定紀錄**（報告可能在 renderer 把新 session 送來
+   * 持久化之前就到了），並一律發出變更通知 —— 關係檔與畫面的狀態要跟著更新。
+   * 回傳是否找到該 session。
+   */
+  setCompletion(sessionId: string, completion: CompletionState): boolean {
+    const target = this.#sessions.find((session) => session.id === sessionId)
+    if (target) {
+      target.completion = completion
+      this.save()
+      return true
+    }
+    const provisional = this.#provisional.get(sessionId)
+    if (provisional) {
+      provisional.completion = completion
+      this.#emit()
+      return true
+    }
+    return false
+  }
+
   remove(sessionId: string): void {
     this.#pendingMainFields.delete(sessionId)
     if (this.#provisional.delete(sessionId)) this.#emit()
     // 墓碑必須在「這筆是否存在」之前立起來 —— 一個尚未被 renderer persist 過的 session 也可能
     // 已經死了（例如 claude 啟動失敗），而它的 id 仍然躺在待寫入的清單裡。
     if (isUuid(sessionId)) this.#gone.add(sessionId)
+
+    // 交接單在 spawn **之前**就寫出了 —— 一個還只在暫定紀錄裡就結束的 session 也有它要收。
+    this.deleteHandoffBrief(sessionId)
 
     const next = this.#sessions.filter((session) => session.id !== sessionId)
     if (next.length === this.#sessions.length) return
@@ -543,7 +620,45 @@ export class SessionStore {
   }
 
   deleteScrollback(sessionId: string): void {
+    // **同一條路徑一併刪掉交接單** —— 它的壽命等於 session 的存在（`handoff-brief`）。
+    this.deleteHandoffBrief(sessionId)
     const file = this.scrollbackPath(sessionId)
+    if (!file) return
+    try {
+      fs.rmSync(file, { force: true })
+    } catch {
+      // 刪不掉就留著，下次 prune 會處理。
+    }
+  }
+
+  /**
+   * 寫出交接單（`handoff-brief`）。**在 spawn 之前、由主行程**呼叫（`session-create.ts`）。
+   * 寫不進去不致命 —— 交接單只呈現標題與來源，並說明本文無法取得。
+   */
+  writeHandoffBrief(sessionId: string, brief: HandoffBriefFile): void {
+    const file = this.handoffPath(sessionId)
+    if (!file) return
+    try {
+      fs.mkdirSync(this.scrollbackDir, { recursive: true })
+      writeFileAtomic(file, `${JSON.stringify(brief)}\n`)
+    } catch (error) {
+      console.error(`[sessions] handoff brief write failed: ${String(error)}`)
+    }
+  }
+
+  /** 讀交接單。不存在或損毀時回 `null`。 */
+  readHandoffBrief(sessionId: string): HandoffBriefFile | null {
+    const file = this.handoffPath(sessionId)
+    if (!file) return null
+    try {
+      return parseHandoffBriefFile(fs.readFileSync(file, 'utf8'))
+    } catch {
+      return null
+    }
+  }
+
+  private deleteHandoffBrief(sessionId: string): void {
+    const file = this.handoffPath(sessionId)
     if (!file) return
     try {
       fs.rmSync(file, { force: true })
@@ -561,10 +676,13 @@ export class SessionStore {
       return
     }
 
-    const known = new Set(this.#sessions.map((session) => session.id))
+    // **含暫定紀錄** —— 交接單在 spawn 之前、renderer 把新 session 送來持久化之前就已寫出
+    // （`handoff-lineage` 12.2 同一個形狀：以識別碼找 session 的地方，都要問它是不是還在暫定紀錄裡）。
+    const known = new Set(this.view().map(({ session }) => session.id))
     for (const entry of entries) {
-      if (!entry.endsWith('.scrollback')) continue
-      const id = entry.slice(0, -'.scrollback'.length)
+      const suffix = ['.scrollback', '.handoff.json'].find((ending) => entry.endsWith(ending))
+      if (!suffix) continue
+      const id = entry.slice(0, -suffix.length)
       if (known.has(id)) continue
       try {
         fs.rmSync(path.join(this.scrollbackDir, entry), { force: true })
@@ -572,6 +690,12 @@ export class SessionStore {
         // 忽略：孤兒檔案留著只是佔空間。
       }
     }
+  }
+
+  /** 與快照同一個目錄、同一條 UUID 規則。 */
+  private handoffPath(sessionId: string): string | null {
+    if (!isUuid(sessionId)) return null
+    return path.join(this.scrollbackDir, `${sessionId}.handoff.json`)
   }
 
   /** 檔名由 UUID 構成，因此不可能逸出 `scrollbackDir`。非 UUID 一律拒絕。 */

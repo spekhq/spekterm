@@ -617,7 +617,8 @@
       "CAPACITY": "inbox is full",
       "TARGET_NOT_FOUND": "named a repo that is not in this workspace",
       "TARGET_AMBIGUOUS": "named a repo whose name is not unique",
-      "PREFILL_UNAVAILABLE": "could not be opened — agent event reporting is off"
+      "PREFILL_UNAVAILABLE": "could not be opened — agent event reporting is off",
+      "REPORT_NOT_HANDOFF": "reported completion from a session that was not opened by a handoff"
     },
     "rules": {
       "label": "Routing rules",
@@ -711,5 +712,40 @@
     "fromUnknown": "From a session that has closed",
     "children_one": "Handed off {{count}} session",
     "children_other": "Handed off {{count}} sessions"
+  },
+  "handoffBrief": {
+    "open": "Open handoff brief",
+    "dialog": "Handoff brief: {{title}}",
+    "untitled": "(untitled handoff)",
+    "receivedAt": "arrived {{time}}",
+    "bodyLabel": "Handoff text",
+    "loading": "Loading…",
+    "bodyUnavailable": "The handoff text could not be read.",
+    "resultLabel": "Latest result",
+    "reportedAt": "Reported {{time}}",
+    "noResult": "No result has been reported yet.",
+    "close": "Close"
+  },
+  "handoffLifecycle": {
+    "working": "Working",
+    "waiting": "Waiting for you",
+    "done": "Done",
+    "allDone_one": "The {{count}} session handed off from here is done",
+    "allDone_other": "All {{count}} sessions handed off from here are done",
+    "closeCompletedChildren_one": "Close {{count}} completed session",
+    "closeCompletedChildren_other": "Close {{count}} completed sessions",
+    "closeCompletedAll_one": "Close {{count}} completed handoff",
+    "closeCompletedAll_other": "Close {{count}} completed handoffs",
+    "closeDialog_one": "Close {{count}} completed handoff session?",
+    "closeDialog_other": "Close {{count}} completed handoff sessions?",
+    "closeHint": "Closing ends each session's terminal. Check each result below first.",
+    "closeList": "Sessions to close",
+    "closeConfirm_one": "Close {{count}}",
+    "closeConfirm_other": "Close {{count}}",
+    "notify": {
+      "title": "Handoff completed",
+      "single": "{{title}}: {{summary}}",
+      "singleUntitled": "{{summary}}"
+    }
   }
 }

@@ -38,6 +38,8 @@ const GUARDED = [
   { name: 'MAX_FIELD_LENGTH', file: 'src/main/intake-schema.ts' },
   { name: 'MAX_FIRST_PARTY_BODY_LENGTH', file: 'src/main/intake-schema.ts' },
   { name: 'MAX_DELIVERY_BYTES', file: 'src/main/intake-source.ts' },
+  // 完成報告的摘要上限（handoff-completion）—— 子 session 的自我介紹會說出它。
+  { name: 'MAX_REPORT_LENGTH', file: 'src/main/handoff-delivery.ts' },
 ]
 
 function constantValue(file, name) {

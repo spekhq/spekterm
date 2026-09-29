@@ -233,8 +233,11 @@ export const MUTATIONS = [
   {
     name: 'handoff-stays-pending',
     file: 'src/main/handoff-service.ts',
-    from: `    if (this.#throttle.take()) {`,
-    to: `    if (false && this.#throttle.take()) {`,
+    section: 'runHandoff',
+    // 上限已於 handoff-session-lifecycle 移除 —— 此前這個 mutation 下手在上限的判斷上，
+    // 現在直接拿掉到達即接受本身（那是這條斷言唯一要驗的事）。
+    from: `    this.#deps.requestAutoAccept(HANDOFF_ADAPTER, outcome.record.id, target.folderId)`,
+    to: `    void this.#deps.requestAutoAccept`,
     expectRed: '交接於到達時直接建立 session（使用者未執行任何接受動作）',
     why: '**拿掉自動接受。** 交接退回成一則普通的待處理項目 —— 使用者剛親口交辦的事，他得再同意一次。',
   },
@@ -488,12 +491,129 @@ export const MUTATIONS = [
   {
     name: 'settle-not-on-submit',
     file: 'src/main/ipc/intake.ts',
-    section: 'runHandoff',
+    // 使用者自己按 Enter 的那一條住在退路的變體裡（handoff-session-lifecycle 起交接被代為送出）。
+    section: 'runHandoffUnsent',
     from: `              service.store.settle(adapter, id)`,
     to: ``,
     expectRed: '送出之後不再呈現，且了結落盤',
     why: '**送出之後只撤標示、不落盤了結。** 畫面上它照樣離開不了已開好那一段 ——\n'
       + '> 而只看「載入時帶 settledAt 就不呈現」的斷言對它是綠的。',
+  },
+  // ── handoff-session-lifecycle ───────────────────────────────────────────────
+  {
+    name: 'handoff-not-submitted',
+    file: 'src/main/intake-prefill.ts',
+    section: 'runHandoff',
+    from: `  return input.firstPartyBody && !input.reusedSession ? 'submit' : 'fill'`,
+    to: `  return 'fill'`,
+    expectRed: '交接建立的 session 其第一則 prompt 被代為送出（恰好一個 session 收到恰好一行）',
+    why: '**交接改回填好而不送出。** 使用者得回到 spekterm 按下送出 —— 這個 change 要拿掉的正是那一趟。',
+  },
+  {
+    name: 'fallback-resubmits',
+    file: 'src/main/ipc/intake.ts',
+    section: 'runHandoffUnsent',
+    from: `            onPending: () => {`,
+    to: `            onPending: () => {
+              existingTerminalService(sender.id)?.write(sessionId, '\\r')`,
+    expectRed: '退路不補送：送出字元只寫過一次，且沒有任何一行進入 agent 的紀錄',
+    why: '**退路補送一次送出字元。** 那段時間使用者可能已經在那個 session 裡打字 —— 補送會把他打到\n'
+      + '> 一半的內容一起送出。',
+  },
+  {
+    name: 'submit-joined',
+    file: 'src/main/intake-prefill.ts',
+    command: 'test',
+    from: `    if (mode === 'submit') setTimeout(() => deps.write(sessionId, SUBMIT_KEY), SUBMIT_KEY_DELAY_MS)`,
+    to: `    if (mode === 'submit') deps.write(sessionId, SUBMIT_KEY)`,
+    expectRed: 'schedulePrefill 以送出模式寫入時，就緒後寫下的內容以送出字元結尾',
+    why: '**送出字元緊跟著文字寫。** 長文字一次抵達被 agent 當成貼上，緊跟在後的 `\\r` 被併進貼上成為換行 ——\n'
+      + '> 文字停在輸入框、沒有送出（dogfood 實際踩到，CLI 2.1.283）。',
+  },
+  {
+    name: 'completion-note-unreduced',
+    file: 'src/main/intake-notify.ts',
+    command: 'test',
+    from: `    const summary = reduceForNotification(completions[0].summary)`,
+    to: `    const summary = completions[0].summary`,
+    expectRed: '摘要中的網址不進入通知',
+    why: '**摘要不經縮減就進通知。** 桌面服務會把其中的網址變成可點的連結 —— 而摘要是 agent 寫的。',
+  },
+  {
+    name: 'completion-reveal-as-intake',
+    file: 'src/main/index.ts',
+    section: 'runCompletion',
+    from: `    if (keys.length === 1 && keys[0].adapter === COMPLETION_ADAPTER) {`,
+    to: `    if (false) {`,
+    expectRed: '觸發完成通知：選中子 session 所屬的 folder，並打開它的交接單呈現結果',
+    why: '**完成通知走收件匣的分流。** 它不是 intake，查不到任何紀錄 ⇒ 打開收件匣 —— 結果不在那裡。',
+  },
+  {
+    name: 'reuse-also-submits',
+    file: 'src/main/intake-prefill.ts',
+    command: 'test',
+    from: `  return input.firstPartyBody && !input.reusedSession ? 'submit' : 'fill'`,
+    to: `  return input.firstPartyBody ? 'submit' : 'fill'`,
+    expectRed: '非第三方本文、新建的 session ⇒ 送出；其餘一律只填入',
+    why: '**沿用既有 session 時也代為送出。** 逾時退回之後使用者可能已經在那個 session 裡打了字 ——\n'
+      + '> `prompt\\r` 會接在他打到一半的內容後面一起送出。',
+  },
+  {
+    name: 'label-pty-first',
+    file: 'src/shared/lineage/label.ts',
+    command: 'test',
+    from: `  return session.customTitle ?? (handoffTitle && handoffTitle.trim() !== '' ? handoffTitle : undefined) ?? session.title`,
+    to: `  return session.customTitle ?? session.title ?? (handoffTitle && handoffTitle.trim() !== '' ? handoffTitle : undefined)`,
+    expectRed: '交接的標題是預設：高於 pty 宣告的標題',
+    why: '**pty 標題排在交接標題之前。** 交接出來的 session 以固定名字啟動，pty 標題恆為那個名字 ——\n'
+      + '> 交接的標題從此不會被看見。',
+  },
+  {
+    name: 'report-truncated',
+    file: 'src/main/handoff-delivery.ts',
+    command: 'test',
+    from: `  if (summary.length > MAX_REPORT_LENGTH) return { ok: false, reason: 'TOO_LONG', length: summary.length }`,
+    to: `  if (summary.length > MAX_REPORT_LENGTH) return { ok: true, summary: summary.slice(0, MAX_REPORT_LENGTH) }`,
+    expectRed: '摘要過長被拒絕而非截斷',
+    why: '**超長的摘要截斷後採納。** 截斷後的摘要看起來是完整的，而它的結尾從未抵達。',
+  },
+  {
+    name: 'reopen-before-settle',
+    file: 'src/shared/lineage/lifecycle.ts',
+    command: 'test',
+    from: `  if (!completion.settled) return wait === 'ready' ? { ...completion, settled: true } : completion`,
+    to: `  if (!completion.settled) return wait === 'ready' ? { ...completion, settled: true } : wait === 'busy' ? { ...completion, reopenedAt: now } : completion`,
+    expectRed: '報告之後的收尾不推翻完成：忙碌、再就緒 ⇒ 仍為已完成',
+    why: '**報告之後的第一次忙碌就算重新開始。** 子 agent 寫完報告通常還會回送訊息（一次工具呼叫）——\n'
+      + '> 每一份報告都會被它自己的收尾推翻。',
+  },
+  {
+    name: 'settle-by-transition',
+    file: 'src/main/handoff-completion.ts',
+    section: 'runCompletion',
+    from: `      const next = onWaitTick(current, snapshot.state, this.#now())`,
+    to: `      const next = onWaitTick(current, snapshot.state === 'ready' && lastWait === 'ready' ? 'unknown' : snapshot.state, this.#now())`,
+    expectRed: '報告於 agent 已停下之後才被採納：其後的忙碌 ⇒ 進行中',
+    why: '**落定改依「轉變為就緒」。** agent 停下之後報告才被讀到時，狀態不會再「成為」就緒 —— 永遠不落定，\n'
+      + '> 其後的追問整段都顯示已完成（design D6）。',
+  },
+  {
+    name: 'close-without-recheck',
+    file: 'src/renderer/src/shell/terminal/lifecycle.tsx',
+    section: 'runCompletion',
+    from: `              for (const sessionId of closableNow(listed, isDoneNow)) sessions.close(sessionId)`,
+    to: `              for (const sessionId of listed) sessions.close(sessionId)`,
+    expectRed: '確認前重新開始的 session 與對話框開啟期間才完成的 session 都不被關閉（經畫面確認）',
+    why: '**確認時不重新判定。** 對話框開著的期間重新開始的 session 被關掉 —— 關閉 pty 不可逆。',
+  },
+  {
+    name: 'close-all-current',
+    file: 'src/renderer/src/shell/terminal/lifecycle.tsx',
+    section: 'runCompletion',
+    from: `              for (const sessionId of closableNow(listed, isDoneNow)) sessions.close(sessionId)`,
+    to: `              for (const sessionId of sessions.all().map((s) => s.id).filter(isDoneNow)) sessions.close(sessionId)`,
+    expectRed: '確認前重新開始的 session 與對話框開啟期間才完成的 session 都不被關閉（經畫面確認）',
+    why: '**確認時關掉「此刻所有已完成的」。** 對話框開著的期間才完成、使用者根本沒看到的 session 被關掉。',
   },
   // ── handoff-lineage ─────────────────────────────────────────────────────────
   {
@@ -593,10 +713,21 @@ export const MUTATIONS = [
     name: 'intro-refresh-drops-name',
     file: 'src/main/handoff-injection.ts',
     command: 'test',
-    from: `    writeIntroFile(introFile(sessionId), { folders, outbox, name: nameOf(sessionId), relations: relationsFile(sessionId) })`,
-    to: `    writeIntroFile(introFile(sessionId), { folders, outbox })`,
+    from: `      name: nameOf(sessionId),
+      relations: relationsFile(sessionId),`,
+    to: ``,
     expectRed: 'folder 清單變動後重寫的自我介紹仍含名字與關係檔位置',
     why: '**folder 清單一變，自我介紹就被重寫成不含名字的版本。** 下一次續接、壓縮、清除時 agent 就不知道自己叫什麼、關係檔在哪裡。',
+  },
+  {
+    name: 'intro-refresh-drops-report',
+    file: 'src/main/handoff-injection.ts',
+    command: 'test',
+    from: `      reportable: reportableOf(sessionId),`,
+    to: ``,
+    expectRed: 'folder 清單變動後重寫的自我介紹仍含完成報告的說明',
+    why: '**folder 清單一變，子 session 的自我介紹就被重寫成不含完成回報的版本。** 下一次續接、壓縮、\n'
+      + '> 清除之後子 agent 就不知道要回報，那個 session 永遠停在「等你」，而沒有任何東西會紅。',
   },
   {
     name: 'name-needs-injection',

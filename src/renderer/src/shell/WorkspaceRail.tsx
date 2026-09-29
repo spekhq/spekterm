@@ -5,6 +5,7 @@ import { SessionNameDialog } from './terminal/SessionNameDialog'
 import { StatusDot, sessionLabel, sessionTitle, statusTitle } from './terminal/session-badge'
 import { type SessionState, useSessions } from './terminal/sessions'
 import { LineageMarkers, useLineage } from './terminal/lineage'
+import { useCompletedAmong, useLifecycle } from './terminal/lifecycle'
 import { type Forest, ROOT, blockOf, buildForest, moveBlock } from './session-forest'
 import { dividerRowOf, folderIndexToRow, placeFromRow, rowToFolderIndex } from './rail-rows'
 import { useDragReorder } from './useDragReorder'
@@ -906,6 +907,9 @@ export function WorkspaceRail({
         {t('rail.heading')}
       </h2>
 
+      {/* 收掉所有已完成的交接 session（`handoff-completion`）—— 只在有已完成者時出現，先開確認對話框。 */}
+      <CloseCompletedEntry />
+
       {/*
         **置頂段位於捲動容器之外**（不是 `position: sticky`）。等價於 sticky 的視覺效果，但
         遮擋問題**從結構上消失** —— 捲動容器的視口從這一段的下緣才開始，容器內的元素不可能被它
@@ -1025,5 +1029,23 @@ export function WorkspaceRail({
         {t('rail.addFolder')}
       </button>
     </aside>
+  )
+}
+
+/** rail 上「收掉已完成的交接 session」的全域入口。**沒有已完成者時不佔位。** */
+function CloseCompletedEntry(): React.JSX.Element | null {
+  const { t } = useTranslation()
+  const sessions = useSessions()
+  const lifecycle = useLifecycle()
+  const completed = useCompletedAmong()(sessions.all())
+  if (completed.length === 0) return null
+  return (
+    <button
+      type="button"
+      onClick={() => lifecycle.confirmClose(completed.map((session) => session.id))}
+      className="mx-3 mb-2 shrink-0 cursor-pointer truncate rounded border border-hairline px-2 py-1 text-left text-2xs text-ink-faint hover:text-accent"
+    >
+      {t('handoffLifecycle.closeCompletedAll', { count: completed.length })}
+    </button>
   )
 }

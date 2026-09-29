@@ -54,6 +54,39 @@ describe('relationsOf', () => {
     assert.deepEqual(relationsOf(C1, world([orphan], [C1]))?.parent, { closed: true })
   })
 
+  it('子 session 的標籤是交接的標題，不是 pty 宣告的固定名字（handoff-brief）', () => {
+    const withBrief = session(C1, 'fb', {
+      title: '✳ beta-2222',
+      lineage: {
+        parentId: P,
+        origin: { kind: 'folder', folderId: 'fa', folderName: 'alpha' },
+        brief: { title: 'Fix login', receivedAt: 0 },
+      },
+    })
+    const r = relationsOf(P, world([session(P, 'fa'), withBrief], [P, C1]))
+    assert.equal(r?.children[0]?.title, 'Fix login')
+  })
+
+  it('子／兄弟附帶生命週期：已完成者附摘要、未完成者只有狀態、休眠者為 idle；無路徑欄位（handoff-completion）', () => {
+    const lifecycle = new Map([
+      [C1, { state: 'done' as const, summary: 'fixed login' }],
+      [C2, { state: 'idle' as const }],
+    ])
+    const r = relationsOf(P, world([session(P, 'fa'), child(C1, 'fb'), child(C2, 'fb')], [P, C1], { lifecycle }))
+    assert.deepEqual(
+      r?.children.map((c) => ({ state: c.state, summary: c.summary, running: c.running })),
+      [
+        { state: 'done', summary: 'fixed login', running: true },
+        { state: 'idle', summary: undefined, running: false },
+      ],
+    )
+    const text = JSON.stringify(r)
+    assert.ok(!text.includes('/') && !text.includes(C1), text)
+    // 兄弟也看得到彼此的狀態。
+    const sib = relationsOf(C2, world([session(P, 'fa'), child(C1, 'fb'), child(C2, 'fb')], [P, C1], { lifecycle }))
+    assert.equal(sib?.siblings[0]?.state, 'done')
+  })
+
   it('休眠的母 session 存在但 running 為假', () => {
     const r = relationsOf(C1, world([session(P, 'fa'), child(C1, 'fb')], [C1]))
     assert.equal((r?.parent as { running: boolean }).running, false)

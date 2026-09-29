@@ -18,6 +18,7 @@ import type {
 /** 等待選擇時「正在被問什麼」。**沒有選項** —— 作答一律回終端 view。 */
 type PendingRequest = DrainResult['pending']
 import type { RestoredSession } from '../main/ipc/terminal'
+import type { HandoffBriefView, LifecycleView } from '../main/ipc/handoff'
 import type { DirEntry, FileContent } from '../main/fs-service'
 import type { SlackState, SlackTokenKind } from '../main/slack-state'
 import type { ProjectedPreferences } from '../main/preferences-store'
@@ -428,6 +429,29 @@ const workspaceApi = {
    * 論證）：工作目錄以不可逆識別碼表示，而驗證在主行程的**寫入入口** —— preload 與 renderer
    * 同屬一個行程樹，在這裡檢查等同沒有檢查。
    */
+  /**
+   * 交接出來的 session（`handoff-brief` / `handoff-completion`）。**自己一個 namespace** —— 不掛在
+   * terminal 之下：那裡的每一個成員都對應一顆 pty，這裡一個位元組都不寫進 pty。
+   *
+   * `brief` 只收 session 識別碼；主行程只對存在且帶交接單的 session 回應。
+   */
+  handoff: {
+    brief: (sessionId: string): Promise<HandoffBriefView | null> =>
+      ipcRenderer.invoke('workspace:handoff:brief', sessionId),
+    /** 所有交接 session 的生命週期（`handoff-completion`）。唯讀 —— 權威在主行程。 */
+    lifecycle: (): Promise<LifecycleView[]> => ipcRenderer.invoke('workspace:handoff:lifecycle'),
+    onLifecycle: (listener: (views: LifecycleView[]) => void): (() => void) => {
+      const handler = (_event: IpcRendererEvent, views: LifecycleView[]): void => listener(views)
+      ipcRenderer.on('workspace:handoff:lifecycleChanged', handler)
+      return () => ipcRenderer.removeListener('workspace:handoff:lifecycleChanged', handler)
+    },
+    /** 觸發了完成通知：帶使用者去這個 session 的交接單。只收一個 session 識別碼。 */
+    onReveal: (listener: (sessionId: string) => void): (() => void) => {
+      const handler = (_event: IpcRendererEvent, sessionId: string): void => listener(sessionId)
+      ipcRenderer.on('workspace:handoff:reveal', handler)
+      return () => ipcRenderer.removeListener('workspace:handoff:reveal', handler)
+    },
+  },
   panel: {
     /**
      * 全部座標。`coordinates` 的鍵為 folder 識別碼；全域項目的座標在 `global`，**與它並列**

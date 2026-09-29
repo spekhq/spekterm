@@ -12,10 +12,26 @@ export type HandoffSourceOrigin =
   | { kind: 'global' }
   | { kind: 'unknown' }
 
+/**
+ * 交接單中**留在 session 清單裡**的那一小部分（`handoff-brief`）。
+ *
+ * **本文不在這裡** —— 它另存為 `<id>.handoff.json`：`sessions.json` 每次整份同步重寫，一份本文
+ * 最多兩萬字元，放進來會讓那個小檔隨交接數線性長大（畫面快照當初被搬出去是同一個理由）。
+ * 標題留在這裡是因為每一個分頁與 rail 列的標籤都要它。
+ */
+export interface HandoffBrief {
+  /** 交接的標題，攝入時正規化過的那一份。**可能為空** —— 標籤的取用順序會跳過空白的它。 */
+  title: string
+  /** 交接到達（被攝入）的時刻，epoch ms。 */
+  receivedAt: number
+}
+
 /** session 的來源：母 session 的識別碼，與交接被攝入當下的快照。 */
 export interface SessionLineage {
   /** 母 session 的 spekterm 識別碼（UUID）。**不是**對話識別碼 —— 後者在自癒時會換號。 */
   parentId: string
   origin: HandoffSourceOrigin
   parentTitle?: string
+  /** 只有 agent 發起的交接（非第三方本文）才有。 */
+  brief?: HandoffBrief
 }

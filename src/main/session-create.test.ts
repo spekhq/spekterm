@@ -23,7 +23,7 @@ beforeEach(() => {
   dir = fs.mkdtempSync(path.join(tmpdir(), 'session-create-'))
   sessions = new SessionStore(path.join(dir, 'sessions.json'), path.join(dir, 'sessions'))
   sessions.load()
-  configureTicketLineage((claim) => (claim.id === 'h1' ? LINEAGE : undefined))
+  configureTicketLineage((claim) => (claim.id === 'h1' ? { lineage: LINEAGE } : undefined))
 })
 
 afterEach(() => {

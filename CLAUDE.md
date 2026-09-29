@@ -55,15 +55,22 @@ OpenSpec 結構的側欄，讓使用者不必另外開 IDE 就能一邊駕駛 ag
   spekterm 經 `SessionStart` hook 的 `additionalContext` 告訴 agent 自己的存在與可交接的對象，
   agent 寫一份 JSON 到**它自己的**投遞落點，spekterm 由**目錄名**推出來源、以 folder 清單
   **查表**解析目標，然後**到達即建立 session**（不經接受閘 —— 那道閘的前提是「本文為第三方
-  逐字撰寫」，而這裡的本文是使用者自己 session 的 agent 寫的）。**prompt 仍然填好而不送出。**
-  **它不是安全邊界**：agent 有 shell，落點的位置它算得出來，因此交接次數的上限是**全域**的。
+  逐字撰寫」，而這裡的本文是使用者自己 session 的 agent 寫的）。**第一則 prompt 於 agent 就緒時
+  代為送出**（`handoff-session-lifecycle`）—— 送出字元偶爾不生效（實測 1/13），退路是呈現「待送出」、
+  **不補送**。**它不是安全邊界**：agent 有 shell，落點的位置它算得出來；交接次數**沒有上限**（使用者裁決）。
+  **交接 session 有生命週期**：分頁以交接標題命名、隨時打得開交接單（本文另存 `<id>.handoff.json`，
+  不進 `sessions.json`）；子 agent 做完寫一份完成報告（同一個落點，`kind: "report"`），狀態
+  （進行中／等你／已完成）呈現於母子兩端與關係檔；**完成的那一刻發一則通知**，觸發它打開那份交接單；
+  已完成的由使用者收掉，系統不殺 pty。**送出字元與文字分開寫、隔 500ms** —— 一次寫入時長 prompt 被 agent
+  當成貼上、`\r` 被併進去而沒有送出（13.1，dogfood 踩到）。
+  **落定依「採納報告之後的輪詢值」，不依狀態的轉變**（第十四節）。
   **交接出來的 session 記得它的母 session**（`handoff-lineage`）：同 repo 在 rail 上縮排、跨 repo
   以「← 來源」「→ N」標示往返，母 session 關閉後呈現快照；關係由主行程在 **spawn 之前**寫入，
   renderer 只能轉交一張主行程簽發的單次憑證。**每個 claude session 以固定名字啟動**
   （`--name`，`<rail 項目>-<短碼>`，跨重啟／續接／自癒不變）—— 那是 Claude Code 本機訊息功能的
   地址；agent 從關係檔（隨時更新）查得到母、子、兄弟的名字，**訊息本身由 Claude Code 傳遞**。
   **代價：指定名字會把 agent 的終端標題固定成那個名字**（使用者以重新命名取回任務名稱）。
-  完整的實測見 `docs/lessons/handoff.md`（第十一、十二節）。
+  完整的實測見 `docs/lessons/handoff.md`（第十一至十四節）。
 - **鍵盤** —— 見下文「快捷鍵」。
 
 **Linux 打包已可用**（`npm run dist:linux` → AppImage，`npm run install:desktop` 裝進應用程式

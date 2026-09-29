@@ -126,10 +126,39 @@ export function reduceForNotification(value: string): string {
 export type NotifyItem =
   | { kind: 'arrival'; record: IntakeRecord }
   | { kind: 'failure'; failure: IntakeFailure }
+  /**
+   * 一份完成報告被採納了（`handoff-completion`）。它不是一則 intake —— 主鍵以
+   * `COMPLETION_ADAPTER` ＋ session 識別碼表示，觸發時據此把使用者帶去那個 session 的交接單。
+   */
+  | { kind: 'completion'; sessionId: string; title: string; summary: string }
+
+/** 完成通知在主鍵上用的 adapter 名 —— **不是任何 intake 的 adapter**，觸發時據此分流。 */
+export const COMPLETION_ADAPTER = 'handoff-completion'
 
 export function buildPayload(items: readonly NotifyItem[]): NotifyPayload {
   const failures = items.filter((item) => item.kind === 'failure')
   const batch = items.filter((item) => item.kind === 'arrival').map((item) => item.record)
+  const completions = items.flatMap((item) => (item.kind === 'completion' ? [item] : []))
+
+  /**
+   * **完成通知**（`handoff-completion`）。只有它一則時才說出是哪件事與結果；與其他項目落在同一個窗裡
+   * 就走合併的那一則（打開收件匣）—— 一則講不清楚好幾件事。
+   *
+   * 交接標題與摘要都經縮減：摘要是 agent 寫的，而 agent 可能被它讀過的東西塑形。
+   */
+  if (completions.length === 1 && items.length === 1) {
+    const title = reduceForNotification(completions[0].title)
+    const summary = reduceForNotification(completions[0].summary)
+    return {
+      title: t('handoffLifecycle.notify.title'),
+      body: title
+        ? t('handoffLifecycle.notify.single', { title, summary })
+        : t('handoffLifecycle.notify.singleUntitled', { summary }),
+    }
+  }
+  if (completions.length > 0) {
+    return { title: t('intake.notify.titleMerged', { total: items.length }), body: t('intake.notify.merged') }
+  }
 
   /**
    * **失敗的內文只由系統文案與拒絕的類別構成。**
@@ -232,6 +261,14 @@ export class IntakeNotifier {
     this.#push({ kind: 'failure', failure })
   }
 
+  /**
+   * 一份完成報告被採納了（`handoff-completion`）。**與到達、失敗共用同一個窗與同一組上界** ——
+   * 兩條通道各自有界等於兩倍。呼叫端保證同一份報告只呼叫一次（綁定於採納，不綁定於狀態）。
+   */
+  completed(sessionId: string, title: string, summary: string): void {
+    this.#push({ kind: 'completion', sessionId, title, summary })
+  }
+
   #push(item: NotifyItem): void {
     this.#batch.push(item)
     if (this.#cancel !== null) return
@@ -270,7 +307,11 @@ export class IntakeNotifier {
     const keys = hasFailure
       ? []
       : batch.flatMap((item) =>
-          item.kind === 'arrival' ? [{ adapter: item.record.adapter, id: item.record.id }] : [],
+          item.kind === 'arrival'
+            ? [{ adapter: item.record.adapter, id: item.record.id }]
+            : item.kind === 'completion'
+              ? [{ adapter: COMPLETION_ADAPTER, id: item.sessionId }]
+              : [],
         )
     this.#backend.present(buildPayload(batch), keys)
   }

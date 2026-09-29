@@ -2,9 +2,10 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import test from 'node:test'
+import test, { describe } from 'node:test'
 
-import { HANDOFF_ADAPTER } from './handoff-delivery'
+import type { ReportDecision } from './handoff-completion'
+import { HANDOFF_ADAPTER, MAX_REPORT_LENGTH } from './handoff-delivery'
 import { isPermanentRejection } from './intake-rejection'
 import { configureHandoff, outboxDir, prepareOutbox, resetHandoffState } from './handoff-outbox'
 import { ENDED_SOURCE_ID, GLOBAL_SOURCE_ID, HandoffService } from './handoff-service'
@@ -25,7 +26,8 @@ function harness(options: {
   candidates?: { id: string; name: string; path: string }[]
   eventsEnabled?: boolean
   enabled?: boolean
-  max?: number
+  /** 完成報告的採納（`handoff-completion`）。每一次呼叫都記下來。 */
+  report?: (sessionId: string, summary: string, identity: string) => ReportDecision
 } = {}): Harness {
   const base = fs.mkdtempSync(path.join(os.tmpdir(), 'handoff-service-'))
   resetHandoffState()
@@ -42,7 +44,7 @@ function harness(options: {
     agentEventsEnabled: () => options.eventsEnabled !== false,
     enabled: () => options.enabled !== false,
     requestAutoAccept: (_adapter, id, folderId) => autoAccepted.push({ id, folderId }),
-    throttle: { max: options.max ?? 8, windowMs: 60_000, now: () => 0 },
+    ...(options.report ? { acceptReport: options.report } : {}),
   })
   return {
     service,
@@ -186,29 +188,14 @@ test('事件回報關閉時不建立 session，且可見地說明', async () => 
   assert.equal(h.autoAccepted.length, 0)
 })
 
-test('超過上限者仍進收件匣，但不自動接受（降級為待處理，非拒絕）', async () => {
-  const h = harness({ sources, max: 1 })
-  for (const body of ['one', 'two']) {
+test('沒有上限：同一個來源連續交接，每一則都到達即建立 session（handoff-session-lifecycle）', async () => {
+  const h = harness({ sources })
+  const bodies = Array.from({ length: 12 }, (_, i) => `body-${i}`)
+  for (const body of bodies) {
     const file = h.file('s1', `${body}.json`, { ...good, body })
     await h.handoff.deliverFile(fs.readFileSync(file, 'utf8'), file)
   }
-
-  assert.equal(h.store.list().length, 2)
-  assert.equal(h.autoAccepted.length, 1)
-  assert.equal(h.store.list().filter((r) => r.state === 'pending').length, 2)
-})
-
-test('換一個來源落點不會重置上限', async () => {
-  const h = harness({
-    sources: { s1: { folderId: 'f1', label: 'alpha' }, s2: { folderId: 'f3', label: 'gamma' } },
-    max: 1,
-  })
-  const first = h.file('s1', 'a.json', { ...good, body: 'one' })
-  await h.handoff.deliverFile(fs.readFileSync(first, 'utf8'), first)
-  const second = h.file('s2', 'b.json', { ...good, body: 'two' })
-  await h.handoff.deliverFile(fs.readFileSync(second, 'utf8'), second)
-
-  assert.equal(h.autoAccepted.length, 1)
+  assert.equal(h.autoAccepted.length, bodies.length)
 })
 
 test('不在 <root>/<sessionId>/ 正下方的檔案不是交接', async () => {
@@ -406,4 +393,95 @@ test('來源：超長且含控制字元的標題被正規化截斷，交接照�
   const title = h.store.list()[0]?.content?.verified.source?.title ?? ''
   assert.ok(!title.includes('\u202e'))
   assert.ok([...title].length <= 200)
+})
+
+// ── 完成報告（handoff-session-lifecycle） ─────────────────────────────────────
+
+describe('完成報告經同一個落點送達，以種類欄位區分', () => {
+  const seen: { sessionId: string; summary: string }[] = []
+  const accepting = (decision: ReportDecision) => (sessionId: string, summary: string) => {
+    seen.push({ sessionId, summary })
+    return decision
+  }
+
+  test('被採納的報告不進收件匣、不留痕跡，且被消費', async () => {
+    seen.length = 0
+    const h = harness({ sources, report: accepting('accepted') })
+    const file = h.file('s1', 'r.json', { kind: 'report', summary: 'Done: fixed login' })
+    const outcome = await h.handoff.deliverFile(fs.readFileSync(file, 'utf8'), file)
+    assert.equal(outcome.ok, true)
+    assert.equal(outcome.consume, true)
+    assert.deepEqual(seen, [{ sessionId: 's1', summary: 'Done: fixed login' }])
+    assert.equal(h.store.list().length, 0)
+    assert.deepEqual(h.service.notices(), [])
+    assert.equal(h.autoAccepted.length, 0)
+  })
+
+  test('摘要經攝入正規化（零寬與雙向控制字元被移除）', async () => {
+    seen.length = 0
+    const h = harness({ sources, report: accepting('accepted') })
+    const file = h.file('s1', 'r.json', { kind: 'report', summary: 'ok\u200b\u202e done' })
+    await h.handoff.deliverFile(fs.readFileSync(file, 'utf8'), file)
+    assert.equal(seen[0]?.summary, 'ok done')
+  })
+
+  test('不認得的種類被拒絕且可見', async () => {
+    const h = harness({ sources, report: accepting('accepted') })
+    const file = h.file('s1', 'x.json', { kind: 'status', summary: 'x' })
+    const outcome = await h.handoff.deliverFile(fs.readFileSync(file, 'utf8'), file)
+    assert.equal(outcome.ok, false)
+    assert.equal(h.service.notices()[0]?.code, 'FIELD_TYPE')
+  })
+
+  test('摘要過長被拒絕而非截斷', async () => {
+    // **對照組**：把超長改成截斷後採納 → 採納的呼叫會出現，這條必須變紅。
+    seen.length = 0
+    const h = harness({ sources, report: accepting('accepted') })
+    const file = h.file('s1', 'r.json', { kind: 'report', summary: 'x'.repeat(MAX_REPORT_LENGTH + 1) })
+    await h.handoff.deliverFile(fs.readFileSync(file, 'utf8'), file)
+    assert.equal(seen.length, 0)
+    assert.equal(h.service.notices()[0]?.code, 'TOO_LONG')
+  })
+
+  test('空白摘要被拒絕且可見', async () => {
+    seen.length = 0
+    const h = harness({ sources, report: accepting('accepted') })
+    const file = h.file('s1', 'r.json', { kind: 'report', summary: '  \u200b ' })
+    await h.handoff.deliverFile(fs.readFileSync(file, 'utf8'), file)
+    assert.equal(seen.length, 0)
+    assert.equal(h.service.notices()[0]?.code, 'FIELD_TYPE')
+  })
+
+  test('非由交接建立的 session 的報告被拒絕且可見', async () => {
+    const h = harness({ sources, report: accepting('not-handoff') })
+    const file = h.file('s1', 'r.json', { kind: 'report', summary: 'done' })
+    const outcome = await h.handoff.deliverFile(fs.readFileSync(file, 'utf8'), file)
+    assert.equal(outcome.ok, false)
+    assert.equal(h.service.notices()[0]?.code, 'REPORT_NOT_HANDOFF')
+  })
+
+  test('已不存在的 session 的報告被靜默丟棄（消費，但沒有痕跡）', async () => {
+    const h = harness({ sources, report: accepting('gone') })
+    const file = h.file('s1', 'r.json', { kind: 'report', summary: 'done' })
+    const outcome = await h.handoff.deliverFile(fs.readFileSync(file, 'utf8'), file)
+    assert.equal(outcome.consume, true)
+    assert.deepEqual(h.service.notices(), [])
+  })
+
+  test('同一份投遞檔讀兩次，給出的身分相同（讓採納端只採納一次）', async () => {
+    const identities: string[] = []
+    const h = harness({
+      sources,
+      report: (_s, _m, identity) => {
+        identities.push(identity)
+        return 'accepted'
+      },
+    })
+    const file = h.file('s1', 'r.json', { kind: 'report', summary: 'done' })
+    const contents = fs.readFileSync(file, 'utf8')
+    await h.handoff.deliverFile(contents, file)
+    await h.handoff.deliverFile(contents, file)
+    assert.equal(identities.length, 2)
+    assert.equal(identities[0], identities[1])
+  })
 })

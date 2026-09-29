@@ -3,6 +3,7 @@ import path from 'node:path'
 
 import { MAX_FIELD_LENGTH, MAX_FIRST_PARTY_BODY_LENGTH } from './intake-schema'
 import { MAX_DELIVERY_BYTES } from './intake-source'
+import { MAX_REPORT_LENGTH } from './handoff-delivery'
 import type { WorkspaceFolder } from './workspace-store'
 
 /**
@@ -52,6 +53,13 @@ export interface IntroInput {
   name?: string
   /** 這個 session 的關係檔。沒有時不提關係那一段。 */
   relations?: string
+  /**
+   * 這個 session **由交接建立**（不論母 session 此刻在不在）⇒ 告知它如何回報完成（`handoff-completion`）。
+   *
+   * **每一個寫出點都要帶上它** —— spawn 時與 folder 清單變動時的重寫。後者漏掉的話，下一次續接、
+   * 壓縮、清除之後子 agent 就不知道要回報，而那個 session 永遠停在「等你」。
+   */
+  reportable?: boolean
 }
 
 /**
@@ -60,7 +68,7 @@ export interface IntroInput {
  * **目標可以是名稱或絕對路徑，而這件事一定要講** —— 顯示名稱取自路徑的最後一段，同名是真實
  * 可達的，而歧義對 agent 是一條死路：它收不到任何回饋，不會自己想到換一種寫法。
  */
-export function introText({ folders, outbox, name, relations }: IntroInput): string {
+export function introText({ folders, outbox, name, relations, reportable }: IntroInput): string {
   /**
    * **數字由實際生效的常數推導，不寫死。**
    *
@@ -103,15 +111,39 @@ export function introText({ folders, outbox, name, relations }: IntroInput): str
       : ['  (none)']),
     '',
     'When a handoff is accepted, spekterm opens a new agent session in the target repo with the',
-    'body prepared and the first prompt typed in but NOT submitted. The user sends it.',
+    'body prepared, and sends its first prompt as soon as that agent is ready. It starts working',
+    'without waiting for the user.',
     '',
     'A handoff can be rejected: an unknown target, a body over the limit, a file over the limit.',
     'When that happens the user sees it in their inbox, but YOU are not told - there is no reply channel.',
     'A rejected handoff looks exactly like a successful one from where you stand.',
     'Say that you wrote the handoff, not that it was delivered.',
     ...peerLines(name, relations),
+    ...(reportable ? reportLines() : []),
   ]
   return lines.join('\n')
+}
+
+/**
+ * 子 session 的完成回報（`handoff-completion`）。**只對由交接建立的 session 說。**
+ *
+ * 上限由常數推導（`scripts/handoff-intro-source.test.mjs` 擋字面值）—— 投遞者沒有回饋管道，
+ * 一個未被告知的約束就是一條死路。
+ */
+function reportLines(): string[] {
+  return [
+    '',
+    'This session was opened by a handoff. Each time you finish something your parent session or the',
+    'user asked of you, report it:',
+    '  1. Write a JSON file into your outbox above, with the same atomic-write rules:',
+    '       {"kind": "report", "summary": "<what you did and how it turned out>"}',
+    `     summary: at most ${MAX_REPORT_LENGTH} characters, and not empty. A longer or empty summary is`,
+    '     rejected, not shortened. Put details in a file in this repo and point to it from the summary.',
+    '  2. Then read your relations file. If your parent has "running": true, send it the same summary',
+    '     with SendMessage. If it is not running, or you have no parent any more, do not; spekterm',
+    '     keeps your report and your parent can read it from its relations file.',
+    'A report tells the user this piece of work is done. Report again after each later request you finish.',
+  ]
 }
 
 /**
@@ -120,9 +152,9 @@ export function introText({ folders, outbox, name, relations }: IntroInput): str
  * **它只指向關係檔，不列出關係** —— 這段文字只在 `SessionStart` 進入脈絡，而子 session 是在那
  * 之後才長出來的。列在這裡的關係對母 session 永遠是過期的。
  *
- * **「使用者送出第一則 prompt 之前不要傳訊息」這句是承重的**：收到訊息的 agent 會立刻開始工作
- * （實測），而收件匣判斷「使用者已送出預填的 prompt」的唯一線索就是 agent 開始工作 —— 一則
- * 過早的訊息會讓那則交接被當成已送出，而預填的文字還在輸入處（`docs/lessons/handoff.md`）。
+ * 此前這裡有一句「使用者送出第一則 prompt 之前不要傳訊息給剛交接出去的 session」—— 那時第一則
+ * prompt 由使用者送出，而一則過早的訊息會讓那則交接被當成已送出。自 `handoff-session-lifecycle`
+ * 起第一則 prompt 被代為送出，那句話的前提不在了。
  */
 function peerLines(name: string | undefined, relations: string | undefined): string[] {
   if (!name && !relations) return []
@@ -141,7 +173,8 @@ function peerLines(name: string | undefined, relations: string | undefined): str
           'addressed by the name in that file. spekterm does not carry the message.',
           'A session with "running": false has no process and cannot receive messages; spekterm will not',
           'start it for you. A message can also go unanswered - if you need a reply, ask for one.',
-          'Do not message a session you just handed work to until the user has sent its first prompt.',
+          'Each child and sibling in that file also has a "state" (working, waiting, done, or idle) and,',
+          'once it has reported finishing its work, a "summary".',
         ]
       : []),
   ]

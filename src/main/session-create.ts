@@ -30,7 +30,11 @@ export async function createSession<R extends { sessionId: string; conversationI
 }): Promise<R & { lineage?: SessionLineage }> {
   const { sessions, folderId, target } = input
   const sessionId = randomUUID()
-  const lineage = lineageFromTicket(input.ticket, folderId, target)
+  const resolution = lineageFromTicket(input.ticket, folderId, target)
+  const lineage = resolution?.lineage
+  // **交接單在 spawn 之前寫出**（`handoff-brief`）—— 與來源、名字同一個理由：它屬於這個 session
+  // 誕生的那一刻，而不是 renderer 送來持久化的那一刻。
+  if (resolution?.briefBody !== undefined) sessions.writeHandoffBrief(sessionId, { body: resolution.briefBody })
   // **同步地**決定並登記 —— 兩個並行的 create 不會在 await 之間拿到同一個名字。
   const peerName = target === 'claude' ? decidePeerName(input.railLabel, sessionId, sessions.peerNames()) : undefined
   sessions.addProvisional({ id: sessionId, folderId, spawnTarget: target, lineage, peerName })

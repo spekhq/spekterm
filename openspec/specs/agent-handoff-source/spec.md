@@ -347,38 +347,6 @@ routing 自行選擇 folder —— 一道為「投遞者不得選擇他落在哪
 - **WHEN** 一份交接投遞的本文超過第三方撰寫的本文所適用的上限，但未超過它自己適用的上限
 - **THEN** 該份投遞正常被處理，且建立對應的 session
 
-### Requirement: 交接於到達時直接建立 session，不經使用者接受
-
-一則通過驗證且解析出目標的交接 SHALL 於**到達時**直接建立 session，SHALL NOT 停留於待處理
-狀態等待使用者接受。
-
-該 session SHALL 經**與使用者手動接受時相同的路徑**建立，於是 context 檔的產生、prompt 的預填、
-session 清單與持久化一律相同。該則交接 SHALL 記為已接受並記錄它建立的 session 識別碼。
-
-**第一則 prompt 仍然預先填入而不送出** —— 那不是同意步驟，它保證的是「不會有 agent 在使用者
-沒看著的時候自己跑起來」。
-
-**系統 SHALL NOT 把焦點切換到新建立的 session。** 使用者在來源 session 交辦之後，那邊的 agent
-通常仍在收尾；未經他的動作而改變焦點是在打斷他。
-
-#### Scenario: 交接到達即建立 session
-
-- **WHEN** 一則合法的交接投遞於某個 session 的落點，目標為 folder B
-- **THEN** folder B 中出現一個新的 agent session，而使用者未執行任何接受動作
-- **AND** 該則交接於收件匣中的狀態為已接受
-
-#### Scenario: prompt 填入而不送出
-
-- **WHEN** 承上
-- **THEN** 該新 session 的輸入處含有第一則 prompt，且該 prompt 尚未被送出
-
-#### Scenario: 焦點不被切走
-
-- **GIVEN** 使用者的焦點位於來源 session
-- **WHEN** 一則交接到達並建立了新的 session
-- **THEN** 焦點仍位於來源 session
-- **AND** rail 上選中的項目未改變
-
 ### Requirement: 預填不可能發生時不建立 session
 
 事件回報未啟用時，一則到達的交接 SHALL **不建立 session**，SHALL 改為可見地說明預填不會發生
@@ -415,7 +383,7 @@ SHALL 於收件匣中留下一則可見的項目，且該項目 SHALL 在應用�
 **「預填等不到就緒」也不在本條之內，且它根本不是一次拒絕。** 那則交接已經建立了 session，
 它回到**待處理**而非被拒絕（見下方 scenario）—— 使用者可以再次處理它，因此它既不是永久性的，
 也不需要一則跨重啟的痕跡。再次處理時使用者若改選了 folder，session 建立於改選的 folder、
-原 session 不被關閉（見 `agent-intake`「第一則 prompt 預先填入而不送出，且不早於 agent 就緒」）。
+原 session 不被關閉（見 `agent-intake`「第一則 prompt 不早於 agent 就緒寫入，第三方本文不代為送出」）。
 
 **這一條在本能力比在其他 producer 更重**：接受那個環節已經沒有人在看，少了它，一次失敗的交接
 與「什麼都沒發生」在畫面上完全相同 —— 而使用者會以為工作已經交出去了。這是既有「被拒絕的投遞
@@ -469,30 +437,6 @@ SHALL NOT 發出作業系統通知」的例外，其界線見 `agent-intake`。
 - **THEN** 系統可見地說明，且該則交接成為待處理，使用者可再次處理它
 - **AND** 使用者未改選 folder 而再次處理它時，不建立第二個 session
 
-### Requirement: 直接建立 session 的交接其總數有上限，且上限為全域
-
-系統 SHALL 對「**到達時直接建立 session**」的交接在一段時間內的次數設上限。達到上限之後，
-其後的交接 SHALL 成為**待處理**項目（由使用者接受），SHALL NOT 被拒絕或丟棄。
-
-**該上限 SHALL 為全域，SHALL NOT 以來源 session 為單位計數。** 以來源計數在**本能力的威脅
-模型下沒有效力**：一個失控的 agent 可以輪流寫進不同 session 的落點（落點的位置算得出來，
-見第二條 requirement），於是每一個計數器都不會累積，而它要擋的正是這個情境。
-
-自動建立 session 之後，一個失控的 agent 可以在每個 repo 開出 session；而**拒絕會銷毀一件真實的
-工作交辦** —— 使用者確實可能在短時間內連續交接數件事。因此降級的方向是「退回需要接受」。
-
-#### Scenario: 超過上限者成為待處理
-
-- **WHEN** 時間窗內直接建立 session 的交接次數超過上限
-- **THEN** 其後的交接出現於收件匣且狀態為待處理
-- **AND** 未因它建立任何 session
-- **AND** 使用者接受它之後，session 正常建立
-
-#### Scenario: 換一個來源落點不會重置上限
-
-- **WHEN** 達到上限之後，其後的交接投遞於**另一個** session 的落點
-- **THEN** 該則交接仍為待處理，未因它建立任何 session
-
 ### Requirement: 由交接建立的 session，其通知聚焦該 session 而非開啟收件匣
 
 一則已直接建立 session 的交接，其通知被觸發時，系統 SHALL 把主視窗帶到前景並**聚焦該交接所
@@ -539,10 +483,13 @@ SHALL NOT 改為打開收件匣。
 ### Requirement: agent 得不到投遞結果的回饋，此缺口須被記載而非被宣稱不存在
 
 本能力 SHALL NOT 宣稱 agent 能得知其投遞的結果。投遞經檔案落點單向進行，**沒有回傳通道**：
-目標查無、格式不合、被上限降級，agent 一律不知道，而**系統 SHALL NOT 為此往來源 session 的
+目標查無、格式不合，agent 一律不知道，而**系統 SHALL NOT 為此往來源 session 的
 終端寫入任何內容**（那會弄亂使用者正在看的畫面，且它抵達的是 agent 的輸入而非它的認知）。
 
-失敗對**使用者**是可見的（見上），對 agent 不可見。本條存在的理由是讓下一個讀規格的人不必
+失敗對**使用者**是可見的（見上），對 agent 不可見。**完成報告（`handoff-completion`）不是這個缺口的解法**：它是子 session 對自己工作狀態的宣告，
+不是投遞成敗的回程 —— 一則被拒絕的交接不會有任何子 session 替它回報。
+
+本條存在的理由是讓下一個讀規格的人不必
 重新推導一次「為什麼 agent 講完『我已經交接出去了』之後那件事其實沒有發生」。
 
 #### Scenario: 投遞失敗時來源 session 的終端未被寫入
@@ -555,3 +502,39 @@ SHALL NOT 改為打開收件匣。
 - **WHEN** 某個 session 的落點中出現一個以點開頭、且以採納的副檔名結尾的檔案
 - **THEN** 收件匣中不出現對應的交接
 - **AND** 該檔案仍原封留在落點中（producer 還要把它改名）
+
+### Requirement: 交接於到達時直接建立 session 並送出第一則 prompt，不經使用者接受
+
+一則通過驗證且解析出目標的交接 SHALL 於**到達時**直接建立 session，SHALL NOT 停留於待處理
+狀態等待使用者接受。
+
+該 session SHALL 經**與使用者手動接受時相同的路徑**建立，於是 context 檔的產生、prompt 的寫入時機、
+session 清單與持久化一律相同。該則交接 SHALL 記為已接受並記錄它建立的 session 識別碼。
+
+**第一則 prompt SHALL 被填入並送出**，不等使用者（`agent-intake` 的「第一則 prompt 不早於 agent
+就緒寫入，第三方本文不代為送出」）。交接的本文是使用者自己的 session 中的 agent 撰寫、由他當下的
+交辦觸發 —— 「填好而不送出」在這裡沒有擋下任何他沒同意過的事，只讓每一則交接多一趟切換。
+**「不會有 agent 在使用者沒看著的時候自己跑起來」不再是本能力的保證**；使用者看得到它的方式是
+rail、通知與交接單（`handoff-brief`）。
+
+**系統 SHALL NOT 把焦點切換到新建立的 session。** 使用者在來源 session 交辦之後，那邊的 agent
+通常仍在收尾；未經他的動作而改變焦點是在打斷他。
+
+#### Scenario: 交接到達即建立 session
+
+- **WHEN** 一則合法的交接投遞於某個 session 的落點，目標為 folder B
+- **THEN** folder B 中出現一個新的 agent session，而使用者未執行任何接受動作
+- **AND** 該則交接於收件匣中的狀態為已接受
+
+#### Scenario: prompt 填入並送出
+
+- **WHEN** 承上，該新 session 的等待狀態首次成為就緒
+- **THEN** 送往該 session 的內容含第一則 prompt，其後以另一次寫入、隔開一段間隔送出字元
+- **AND** 使用者未於該 session 執行任何動作
+
+#### Scenario: 焦點不被切走
+
+- **GIVEN** 使用者的焦點位於來源 session
+- **WHEN** 一則交接到達並建立了新的 session
+- **THEN** 焦點仍位於來源 session
+- **AND** rail 上選中的項目未改變

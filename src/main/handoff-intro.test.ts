@@ -7,6 +7,7 @@ import test from 'node:test'
 import { introText, writeIntroFile } from './handoff-intro'
 import { MAX_FIELD_LENGTH, MAX_FIRST_PARTY_BODY_LENGTH } from './intake-schema'
 import { MAX_DELIVERY_BYTES } from './intake-source'
+import { MAX_REPORT_LENGTH } from './handoff-delivery'
 
 const folders = [
   { name: 'spekterm', path: '/home/u/git/spekterm' },
@@ -132,10 +133,29 @@ test('告知的內容給出「內容太長時怎麼辦」的做法', () => {
     assert.match(text, /"running": false/)
     assert.match(text, /will not\s+start it/)
   })
-  test('名字與關係：要求在使用者送出第一則 prompt 之前不傳訊息給剛交接出去的 session', () => {
-    assert.match(text, /until the user has sent its first prompt/)
-  })
   test('名字與關係：沒有名字與關係檔時不出現那一段', () => {
     assert.ok(!introText({ folders: [], outbox: '/o' }).includes('SendMessage'))
   })
 }
+
+test('告訴 agent 第一則 prompt 會被代為送出，且不再要求等使用者送出（handoff-session-lifecycle）', () => {
+  // **對照組**：把舊句子放回 → 前兩條必須變紅。
+  const text = introText({ folders, outbox: '/x', name: 'n', relations: '/r.json' })
+  assert.ok(!text.includes('NOT submitted'), text)
+  assert.ok(!text.includes('until the user has sent its first prompt'), text)
+  assert.match(text, /sends its first prompt as soon as that agent is ready/)
+})
+
+test('完成報告的說明：上限由常數推導、要求不得為空、只對由交接建立的 session 說（handoff-completion）', () => {
+  const child = introText({ folders, outbox: '/x', name: 'n', relations: '/r.json', reportable: true })
+  assert.ok(child.includes(`at most ${MAX_REPORT_LENGTH} characters`), child)
+  assert.ok(child.includes('not empty'))
+  assert.ok(child.includes('SendMessage'))
+  assert.ok(!introText({ folders, outbox: '/x', name: 'n', relations: '/r.json' }).includes('"kind": "report"'))
+})
+
+test('告訴母 session 關係檔裡看得到子 session 的狀態與摘要', () => {
+  const text = introText({ folders, outbox: '/x', name: 'n', relations: '/r.json' })
+  assert.match(text, /"state"/)
+  assert.match(text, /"summary"/)
+})

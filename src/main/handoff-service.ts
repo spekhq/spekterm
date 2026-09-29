@@ -1,6 +1,15 @@
-import { buildDelivery, HANDOFF_ADAPTER, parseHandoffPayload } from './handoff-delivery'
+import fs from 'node:fs'
+
+import {
+  buildDelivery,
+  HANDOFF_ADAPTER,
+  MAX_REPORT_LENGTH,
+  outboxKindOf,
+  parseHandoffPayload,
+  parseReport,
+} from './handoff-delivery'
+import { reportIdentity, type ReportDecision } from './handoff-completion'
 import { clearOutbox, outboxRoot, sourceSessionOf } from './handoff-outbox'
-import { HandoffThrottle, type ThrottleOptions } from './handoff-throttle'
 import { resolveTarget, type TargetCandidate } from './handoff-target'
 import type { DeliverOutcome, IntakeService } from './intake-service'
 import { sourceTitle, type HandoffSource as LineageSource } from './intake-schema'
@@ -70,7 +79,11 @@ export interface HandoffServiceDeps {
    * 建立的 session 會在下一次 replace 時被抹掉，**而 pty 還活著**。
    */
   requestAutoAccept: (adapter: string, id: string, folderId: string) => void
-  throttle?: ThrottleOptions
+  /**
+   * 採納一份完成報告（`handoff-completion`）。未提供 ⇒ 報告一律被當成不認得的種類拒絕。
+   * `identity` 讓同一份投遞檔被讀兩次時只採納一次。
+   */
+  acceptReport?: (sessionId: string, summary: string, identity: string) => ReportDecision
 }
 
 /**
@@ -82,12 +95,10 @@ export interface HandoffServiceDeps {
  */
 export class HandoffService {
   readonly #deps: HandoffServiceDeps
-  readonly #throttle: HandoffThrottle
   #source: IntakeSource | null = null
 
   constructor(deps: HandoffServiceDeps) {
     this.#deps = deps
-    this.#throttle = new HandoffThrottle(deps.throttle)
   }
 
   async start(): Promise<void> {
@@ -138,6 +149,12 @@ export class HandoffService {
     const sessionId = sourceSessionOf(file)
     // 不在 `<root>/<sessionId>/` 正下方 ⇒ 不是一份交接。消費掉它，否則它每次掃描都再走一趟。
     if (!sessionId) return { ok: false, code: 'MALFORMED', consume: true, notify: false }
+
+    // **同一個落點，兩種投遞**：沒有種類欄位的是交接（既有格式不變），`kind: "report"` 是完成報告。
+    const kind = outboxKindOf(contents)
+    if (kind === 'malformed') return { ok: false, code: 'MALFORMED', consume: false, notify: false }
+    if (kind === 'unknown') return service.reject('FIELD_TYPE', sessionId, 'kind', { adapter: HANDOFF_ADAPTER })
+    if (kind === 'report') return this.#deliverReport(sessionId, contents, file)
 
     const payload = parseHandoffPayload(contents)
     if (!payload.ok) {
@@ -203,12 +220,39 @@ export class HandoffService {
     const outcome = await service.deliver(delivery, HANDOFF_ADAPTER, provenance, failure)
     if (!outcome.ok || !outcome.record) return { ...outcome, failure }
 
-    // **上限在最後才問** —— 一則會被拒絕的交接不該吃掉一個名額。
-    // 超過時**不**自動接受：它留在收件匣成為待處理，使用者接受它即可（降級而非拒絕）。
-    if (this.#throttle.take()) {
-      this.#deps.requestAutoAccept(HANDOFF_ADAPTER, outcome.record.id, target.folderId)
-    }
+    // **沒有上限**（`handoff-session-lifecycle`，使用者裁決）：每一則合法的交接都到達即建立
+    // session 並送出。此前這裡有一個全域的滾動窗口，超過者退回待處理。
+    this.#deps.requestAutoAccept(HANDOFF_ADAPTER, outcome.record.id, target.folderId)
     return outcome
+  }
+
+  /**
+   * 完成報告（`handoff-completion`）。**不進收件匣** —— 它不是一件工作交辦，是既有 session 的狀態變化。
+   *
+   * 拒絕走與交接失敗相同的可見路徑（通知 ＋ 收件匣中的痕跡）；落點所屬的 session 已不存在時**靜默丟棄**
+   * —— 例如關閉時 `endSession` 對落點的最後一次掃描，那不是投遞者的錯。
+   */
+  #deliverReport(sessionId: string, contents: string, file: string): DeliverOutcome {
+    const { service } = this.#deps
+    const accept = this.#deps.acceptReport
+    if (!accept) return service.reject('FIELD_TYPE', sessionId, 'kind', { adapter: HANDOFF_ADAPTER })
+
+    const report = parseReport(contents)
+    if (!report.ok) {
+      return report.reason === 'TOO_LONG'
+        ? service.reject('TOO_LONG', sessionId, `summary ${report.length} > ${MAX_REPORT_LENGTH}`, { adapter: HANDOFF_ADAPTER })
+        : service.reject('FIELD_TYPE', sessionId, 'summary', { adapter: HANDOFF_ADAPTER })
+    }
+
+    let mtimeMs: number | undefined
+    try {
+      mtimeMs = fs.statSync(file).mtimeMs
+    } catch {
+      // 已經被另一次讀取消費掉了 —— 身分退回只用路徑與內容。
+    }
+    const decision = accept(sessionId, report.summary, reportIdentity(file, mtimeMs, contents))
+    if (decision === 'not-handoff') return service.reject('REPORT_NOT_HANDOFF', sessionId, undefined, { adapter: HANDOFF_ADAPTER })
+    return { ok: true, consume: true, notify: false }
   }
 }
 

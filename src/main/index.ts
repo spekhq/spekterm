@@ -13,6 +13,7 @@ import { registerIntakeHandlers } from './ipc/intake'
 import { registerInsightsHandlers, spawnReportDelegate, spawnScanWorker } from './ipc/insights'
 import { registerOpenSpecHandlers } from './ipc/openspec'
 import { registerPanelHandlers } from './ipc/panel'
+import { broadcastLifecycle, registerHandoffHandlers, revealHandoffBrief } from './ipc/handoff'
 import { registerSettingsHandlers } from './ipc/settings'
 import { registerSlackHandlers } from './ipc/slack'
 import { registerShellHandlers } from './ipc/shell'
@@ -25,7 +26,7 @@ import { configureAgentInjection } from './agent-injection'
 import { configureAgentStatus } from './agent-status'
 import { contextRoot } from './intake-context'
 import { ensureDeliveryRoot } from './intake-archive'
-import { IntakeNotifier } from './intake-notify'
+import { COMPLETION_ADAPTER, IntakeNotifier } from './intake-notify'
 import { electronNotifyBackend } from './intake-notify-electron'
 import { createStubBackend, stubNotifyRoot } from './intake-notify-stub'
 import { IntakeService } from './intake-service'
@@ -34,7 +35,10 @@ import { configureHandoff, liveSessions } from './handoff-outbox'
 import { refreshIntros } from './handoff-injection'
 import { refreshRelations } from './handoff-relations'
 import { HandoffService, registerHandoffService } from './handoff-service'
-import { configureTicketLineage } from './handoff-ticket'
+import { HandoffCompletion } from './handoff-completion'
+import { subscribeWait } from './agent-wait'
+import { configureTicketLineage, ticketResolutionFor } from './handoff-ticket'
+import { preferredTitle } from '../shared/lineage/label'
 import { RoutingStore, routingFile } from './intake-routing'
 import { IntakeStore } from './intake-store'
 import { PanelStore } from './panel-store'
@@ -293,12 +297,7 @@ void app.whenReady().then(async () => {
   })
   // 單次憑證 → 那一則交接記下的來源（`handoff-lineage` design D2）。**只讀 record 自己的欄位** ——
   // 來源是攝入當下由落點推出的，不是建立 session 時才算。
-  configureTicketLineage(({ adapter, id }) => {
-    const source = intakeStore.get(adapter, id)?.content?.verified.source
-    return source
-      ? { parentId: source.sessionId, origin: source.origin, ...(source.title ? { parentTitle: source.title } : {}) }
-      : undefined
-  })
+  configureTicketLineage(({ adapter, id }) => ticketResolutionFor(intakeStore.get(adapter, id)))
 
   // Slack adapter 的兩份落盤 —— **刻意分成兩份檔案**。連線設定本來就要投影給 renderer
   // （介面要顯示連到哪個工作區、是否已設定、端點是不是預設值），而憑證絕不可以；
@@ -358,6 +357,7 @@ void app.whenReady().then(async () => {
     requestRound: () => void slackRuntime.runRound(),
   })
   registerPanelHandlers(panelStore)
+  registerHandoffHandlers(sessionStore)
   /**
    * 通知 —— 決策層在 `intake-notify.ts`，碰作業系統的只有 `intake-notify-electron.ts`。
    *
@@ -417,6 +417,12 @@ void app.whenReady().then(async () => {
    */
   notifyBackend.onActivate((keys) => {
     bringToFront()
+    // **完成通知**（`handoff-completion`）：帶使用者去那個子 session 的交接單。它不是 intake，
+    // 不查收件匣；session 已不存在時 renderer 那一側是無操作。
+    if (keys.length === 1 && keys[0].adapter === COMPLETION_ADAPTER) {
+      revealHandoffBrief(keys[0].id)
+      return
+    }
     const single = keys.length === 1 ? intakeService.store.get(keys[0].adapter, keys[0].id) : undefined
     const sessionId = single?.state === 'accepted' ? single.sessionId : undefined
     // **「那個 session 還在不在」由 renderer 判定，不在這裡判。**
@@ -476,6 +482,18 @@ void app.whenReady().then(async () => {
   configureHandoff(app.getPath('userData'))
   const nameOf = (sessionId: string): string | undefined =>
     sessionStore.view().find((entry) => entry.session.id === sessionId)?.session.peerName
+  /**
+   * 完成報告與生命週期（`handoff-completion`）。**只保存、不傳遞** —— 結果由子 agent 自己以訊息送給
+   * 母 session。狀態改變時重算關係檔並推給 renderer（`onChange` 在下面接上，它要 `refreshAllRelations`）。
+   */
+  let onCompletionChange: ((sessionId: string) => void) | null = null
+  const completion = new HandoffCompletion({
+    sessions: sessionStore,
+    subscribe: subscribeWait,
+    onChange: (sessionId) => onCompletionChange?.(sessionId),
+    // 完成的那一刻告訴使用者（`handoff-completion`）—— 與收件匣的通知共用同一個窗與上界。
+    onReported: (sessionId, title, summary) => notifier.completed(sessionId, title, summary),
+  })
   const handoffService = new HandoffService({
     service: intakeService,
     sourceOf: (sessionId) => {
@@ -485,7 +503,8 @@ void app.whenReady().then(async () => {
       const session = sessionStore.view().find((entry) => entry.session.id === sessionId)?.session
       if (!session) return null
       const folder = session.folderId === null ? null : store.list().find((f) => f.id === session.folderId)
-      const title = session.customTitle ?? session.title
+      // 與分頁、關係檔同一個取用順序（`preferredTitle`）—— 子 session 再交接時，「← 來源」說的是交接標題。
+      const title = preferredTitle(session)
       return {
         folderId: session.folderId,
         label: session.folderId === null ? 'Global' : (folder?.name ?? session.folderId),
@@ -498,6 +517,7 @@ void app.whenReady().then(async () => {
     // 未設定＝啟用（與另外兩個開關同一條規則）。
     enabled: () => preferencesStore.get().agentHandoff !== false,
     requestAutoAccept: (adapter, id, folderId) => requestAutoAccept?.(adapter, id, folderId),
+    acceptReport: (sessionId, summary, identity) => completion.acceptReport(sessionId, summary, identity),
   })
   registerHandoffService(handoffService)
   void handoffService.start().catch((error) => {
@@ -512,7 +532,10 @@ void app.whenReady().then(async () => {
    * 得到一次它看不到的拒絕）。
    */
   store.subscribe(() => {
-    refreshIntros(liveSessions(), store.list(), nameOf)
+    // 由交接建立的 session 要保有完成回報那一段 —— 查含暫定紀錄的視圖（剛建好的子 session 還只在那裡）。
+    refreshIntros(liveSessions(), store.list(), nameOf, (sessionId) =>
+      sessionStore.view().some((entry) => entry.session.id === sessionId && entry.session.lineage !== undefined),
+    )
   })
 
   /**
@@ -528,6 +551,24 @@ void app.whenReady().then(async () => {
   sessionStore.subscribe(refreshAllRelations)
   onPtyChange(refreshAllRelations)
   store.subscribe(refreshAllRelations)
+
+  /**
+   * 生命週期的訂閱**跟著 pty 走**：pty 在就追蹤，不在就退掉（`clearWait` 會連計時器一起清）。
+   * 以 pty 集合的變動為觸發點，與關係檔同一個訊號 —— 喚醒與新建都會經過它。
+   */
+  const trackCompletion = (): void => {
+    const running = new Set(runningAgents())
+    for (const { session } of sessionStore.view()) {
+      if (running.has(session.id)) completion.track(session.id)
+      else completion.untrack(session.id)
+    }
+  }
+  onPtyChange(trackCompletion)
+  // 生命週期的呈現狀態是關係的一部分（`session-lineage`）；也要推給畫面（`handoff-completion`）。
+  onCompletionChange = () => {
+    refreshAllRelations()
+    broadcastLifecycle()
+  }
 
   /**
    * 啟動後跑一輪 Slack 的回補。

@@ -609,7 +609,8 @@
       "CAPACITY": "收件匣已滿",
       "TARGET_NOT_FOUND": "指名了一個不在這個工作區裡的 repo",
       "TARGET_AMBIGUOUS": "指名的 repo 名稱不是唯一的",
-      "PREFILL_UNAVAILABLE": "無法開啟 —— agent 的事件回報已關閉"
+      "PREFILL_UNAVAILABLE": "無法開啟 —— agent 的事件回報已關閉",
+      "REPORT_NOT_HANDOFF": "由一個不是交接建立的 session 回報了完成"
     },
     "rules": {
       "label": "Routing 規則",
@@ -697,5 +698,35 @@
     "fromClosed": "來自 {{item}}（已關閉）",
     "fromUnknown": "來自一個已關閉的 session",
     "children_other": "已交接 {{count}} 個 session"
+  },
+  "handoffBrief": {
+    "open": "開啟交接單",
+    "dialog": "交接單：{{title}}",
+    "untitled": "（未命名的交接）",
+    "receivedAt": "{{time}} 抵達",
+    "bodyLabel": "交接內容",
+    "loading": "載入中…",
+    "bodyUnavailable": "讀不到交接內容。",
+    "resultLabel": "最新結果",
+    "reportedAt": "{{time}} 回報",
+    "noResult": "尚未回報結果。",
+    "close": "關閉"
+  },
+  "handoffLifecycle": {
+    "working": "進行中",
+    "waiting": "等你",
+    "done": "已完成",
+    "allDone_other": "從這裡交接出去的 {{count}} 個 session 都已完成",
+    "closeCompletedChildren_other": "收掉 {{count}} 個已完成的 session",
+    "closeCompletedAll_other": "收掉 {{count}} 個已完成的交接",
+    "closeDialog_other": "收掉 {{count}} 個已完成的交接 session？",
+    "closeHint": "收掉會結束每個 session 的終端。先看過下面各自的結果。",
+    "closeList": "要收掉的 session",
+    "closeConfirm_other": "收掉 {{count}} 個",
+    "notify": {
+      "title": "交接已完成",
+      "single": "{{title}}：{{summary}}",
+      "singleUntitled": "{{summary}}"
+    }
   }
 }

@@ -1,6 +1,7 @@
 import { useCallback, useRef, useState } from 'react'
 import { ContextMenu, type MenuItem } from '../files/dialogs'
 import { LineageMarkers } from './lineage'
+import { useHandoffBrief } from './HandoffBrief'
 import type { SpawnTarget } from '../types'
 import { SessionNameDialog } from './SessionNameDialog'
 import { StatusDot, sessionLabel, sessionTitle, statusTitle } from './session-badge'
@@ -49,6 +50,7 @@ export function SessionTabs({
 
   const spawn = useSpawnMenu(onCreate)
   const [menu, setMenu] = useState<{ x: number; y: number; session: SessionState } | null>(null)
+  const briefs = useHandoffBrief()
   const [renaming, setRenaming] = useState<SessionState | null>(null)
   const tabRefs = useRef(new Map<number, HTMLDivElement>())
 
@@ -83,6 +85,18 @@ export function SessionTabs({
 
   const items: MenuItem[] = menu
     ? [
+        // 交接單（`handoff-brief`）只在由交接建立的 session 上出現。
+        ...(menu.session.lineage?.brief
+          ? [
+              {
+                label: t('handoffBrief.open'),
+                onSelect: () => {
+                  briefs.open(menu.session.id)
+                  setMenu(null)
+                },
+              },
+            ]
+          : []),
         {
           label: t('sessions.rename'),
           onSelect: () => {
