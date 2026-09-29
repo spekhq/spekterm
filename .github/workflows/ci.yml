@@ -36,3 +36,9 @@ jobs:
       - run: npm run typecheck
       - run: npm run lint
       - run: npm test
+      # Typecheck does not prove the renderer bundles: monaco-editor 0.57 changed its package
+      # `exports`, every `monaco-editor/esm/...` import stopped resolving, and typecheck, lint, and
+      # unit tests all stayed green (PR #59). Building catches that; measure:bundle then fails if a
+      # language-service worker slips into the bundle.
+      - run: npm run build
+      - run: npm run measure:bundle

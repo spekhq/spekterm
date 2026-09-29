@@ -126,8 +126,10 @@ agree on the approach (and, if appropriate, an OpenSpec change) before you inves
    npm test
    npm run typecheck
    npm run lint
+   npm run build
+   npm run measure:bundle
    ```
-   CI runs the same three checks on every push and pull request. It does not run the probes — if you
+   CI runs the same checks on every push and pull request. It does not run the probes — if you
    changed behavior covered by a probe, run that probe yourself (`npm run probe:<name>`).
 4. **Fill out the pull request template** — it prompts for the affected area, a summary, and a short
    checklist.
