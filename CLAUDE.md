@@ -400,9 +400,9 @@ addon-unicode-graphemes、i18next、electron-builder（Phase 6）。
 ## Conventions
 
 - **English is the single source of truth for everything committed to the repo** (same rule as `spek`,
-  adopted when the repo went public): code, comments, `openspec/` artifacts, `docs/`, and community
-  files. The maintainer may think and draft in Traditional Chinese, but what gets committed is
-  English. **Existing Chinese comments and docs stay as they are** — no wholesale back-translation — but
+  adopted when the repo went public): code, comments, `openspec/` artifacts, `docs/`, community
+  files, and commit messages. The maintainer may think and draft in Traditional Chinese, but what gets committed is
+  English. **Existing Chinese comments, docs, and commit messages stay as they are** — no wholesale back-translation or history rewrite — but
   anything new is English, including new sections added to this file. Exceptions: the README is
   bilingual (`README.md` + `README.zh-TW.md`, kept in sync); the UI's `zh-TW` dictionary; and
   conversation with the user, which stays in Traditional Chinese.

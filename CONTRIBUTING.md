@@ -106,8 +106,8 @@ agree on the approach (and, if appropriate, an OpenSpec change) before you inves
 
 ## Coding conventions
 
-- **English is the language of the repository.** Code, comments, `openspec/` artifacts, `docs/`, and
-  community files are written in English. Much of the existing documentation and many comments are in
+- **English is the language of the repository.** Code, comments, `openspec/` artifacts, `docs/`,
+  community files, and commit messages are written in English. Much of the existing documentation and many comments are in
   Traditional Chinese — no need to translate those wholesale, but **write new ones in English**. The
   README is the one bilingual exception (`README.md` + `README.zh-TW.md`).
 - **User-visible text always comes from the dictionaries** in `src/shared/i18n/` (`en.json` and
