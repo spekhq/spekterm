@@ -232,8 +232,9 @@ describe('pty 拿到的環境', { skip: skipReason }, () => {
     service = new TerminalService(lookup([{ id: 'f1', path: home, status: 'ok' }]), sink())
     const { sessionId } = await service.create('f1', 'shell')
 
-    // Typing before zsh's line editor is up loses keystrokes (seen on CI: `echo` arrived as
-    // `cho`). zle turns on bracketed paste each time it starts reading a line — wait for that.
+    // Typing before zsh's line editor is up hands the keystrokes to whatever reads first — on CI
+    // that was compinit's "insecure directories [y/n]?" prompt, which ate the `e` of `echo`. zle
+    // turns on bracketed paste each time it starts reading a line, so wait for that.
     await waitFor(() => chunks.join('').includes('\x1b[?2004h'), 'zsh ready')
     service.write(sessionId, `echo SHELL_SEES_RC=$${RC_SENTINEL}\r`)
     await waitFor(() => /SHELL_SEES_RC=from-zshrc/.test(chunks.join('')), 'shell 輸出')

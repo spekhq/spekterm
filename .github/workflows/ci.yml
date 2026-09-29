@@ -22,7 +22,11 @@ jobs:
     steps:
       # The user-env tests spawn a real interactive zsh and fail on purpose when it is missing
       # (otherwise the rest of those files would be skipped and look like a pass).
-      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends zsh
+      # Ubuntu's global zshrc runs compinit, and the runner image ships group-writable function
+      # directories — so every interactive zsh stops at "Ignore insecure directories [y/n]?".
+      - run: |
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends zsh
+          zsh -c 'autoload -U compinit; compaudit' | xargs -r sudo chmod g-w,o-w
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
