@@ -127,7 +127,8 @@ agree on the approach (and, if appropriate, an OpenSpec change) before you inves
    npm run typecheck
    npm run lint
    ```
-   If you changed behavior covered by a probe, run that probe too (`npm run probe:<name>`).
+   CI runs the same three checks on every push and pull request. It does not run the probes — if you
+   changed behavior covered by a probe, run that probe yourself (`npm run probe:<name>`).
 4. **Fill out the pull request template** — it prompts for the affected area, a summary, and a short
    checklist.
 5. Open the PR against `spekhq/spekterm:master` and link any related issue (`Fixes #123`).

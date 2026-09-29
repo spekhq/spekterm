@@ -10,7 +10,13 @@ release (or on `master`) before reporting.
 
 **Please do not report security vulnerabilities through public GitHub issues or pull requests.**
 
-Instead, report privately by **email to cpckewang@gmail.com**.
+Instead, report privately through either channel:
+
+- **GitHub private vulnerability reporting** (preferred): open the repository's
+  [Security tab](https://github.com/spekhq/spekterm/security) and click **Report a vulnerability**.
+  The report stays private between you and the maintainers, and we can collaborate on a fix and an
+  advisory there.
+- **Email** to cpckewang@gmail.com.
 
 Please include as much of the following as you can:
 

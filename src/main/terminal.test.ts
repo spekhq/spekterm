@@ -722,7 +722,9 @@ describe('固定名字的交付（agent-peer-name）', () => {
     service = new TerminalService(lookup([{ id: 'f1', path: repo, status: 'ok' }]), sink())
     const { sessionId } = await service.create('f1', 'shell', { peerName: 'alpha-1111' })
     service.write(sessionId, 'echo "NAME=[$SPEKTERM_PEER_NAME]"\n')
-    await waitFor(() => output().includes('NAME=['), { label: 'shell 回應' })
+    // The pty echoes the typed command back, and that echo already contains `NAME=[` — so wait
+    // for the expanded form (anything but `$` after the bracket), not for the echo.
+    await waitFor(() => /NAME=\[[^$]/.test(output()), { label: 'shell 回應' })
     assert.ok(output().includes('NAME=[]'), output())
   })
 
