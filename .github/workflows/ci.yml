@@ -20,6 +20,9 @@ jobs:
       # here — they need a virtual display and about twenty minutes (see CONTRIBUTING.md).
       ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
     steps:
+      # The user-env tests spawn a real interactive zsh and fail on purpose when it is missing
+      # (otherwise the rest of those files would be skipped and look like a pass).
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends zsh
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
