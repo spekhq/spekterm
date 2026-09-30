@@ -13,7 +13,7 @@ import { clearOutbox, outboxRoot, sourceSessionOf } from './handoff-outbox'
 import { resolveTarget, type TargetCandidate } from './handoff-target'
 import type { DeliverOutcome, IntakeService } from './intake-service'
 import { sourceTitle, type HandoffSource as LineageSource } from './intake-schema'
-import { IntakeSource } from './intake-source'
+import { IntakeSource, type IntakeSourceOptions } from './intake-source'
 import { isUuid } from './session-store'
 
 /** 來源 session 的座標。`folderId` 為 `null` ＝ 全域 session。 */
@@ -84,6 +84,12 @@ export interface HandoffServiceDeps {
    * `identity` 讓同一份投遞檔被讀兩次時只採納一次。
    */
   acceptReport?: (sessionId: string, summary: string, identity: string) => ReportDecision
+  /**
+   * **Tests only**, passed through to the outboxes' `IntakeSource`: a watcher that reports nothing,
+   * and an observer of the periodic re-read. **The interval is deliberately not passed through** —
+   * the tests exercise the default production uses.
+   */
+  sourceTesting?: Pick<IntakeSourceOptions, 'watch' | 'onRescan'>
 }
 
 /**
@@ -118,6 +124,7 @@ export class HandoffService {
        * 相同 —— 而使用者會以為工作已經交出去了。
        */
       notifyFailures: true,
+      ...this.#deps.sourceTesting,
     })
     await this.#source.start()
   }

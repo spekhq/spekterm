@@ -361,3 +361,37 @@ dogfood 看到的是改版前接受的那幾則一直不消失：它們的 sessi
   晚了的話，一則在啟動瞬間到達即接受的交接會被一起了結。
 - **連帶：探針不能再把已接受的項目種進落盤檔來測已開好那一段**（它們一啟動就被了結）。
   `runOpenedLifecycle` 因此改成在同一次執行中接受產生，並以同一個 profile 重開一次驗結尾。
+
+## The drop point has three readers, and the third must not repeat what the first two showed
+
+A drop point is read by the startup scan, by the watcher's `add` / `change` events, and — since
+`intake-periodic-rescan` — by a re-read every 30 s that does not depend on the watcher at all (the
+watcher once missed an outbox silently; see `docs/lessons/handoff.md` §15).
+
+**Re-reading is not free for every file left in the drop point.** A file left behind after a
+*visible* outcome would repeat it on every tick: a full-inbox (`CAPACITY`) trace would count again
+("repeated 120 times" in an hour), and a file the app decided to consume but could not remove would
+repeat its whole outcome — on the handoff path, an OS notification. So `IntakeSource` records, per
+path, the `(mtimeMs, size)` a file had **when it was read** (the `stat` `readBounded` already takes;
+a second `stat` afterwards could record a version that was never handled), and the periodic re-read
+skips a recorded file while it is unchanged. Recorded:
+
+- a visible outcome that left the file (today only `CAPACITY`);
+- a `deliver` that **threw**. An in-process retry is not safe: the store changes memory before it
+  saves, and report adoption records the delivery before its effects, so a retry can meet its own
+  half-applied first attempt and be taken for a same-content duplicate — consumed silently, never
+  arriving. Before the re-read existed, the retry happened at the next start, with clean memory; the
+  record keeps it that way;
+- a removal that failed (the `rm` is caught now; before, it rejected `start()`).
+
+**Not recorded**: files left with nothing visible (unparseable). Reading them again is free, and it is
+what lets a half-written file be picked up once complete.
+
+**The one exception**: a `CAPACITY` file is handed over again once `IntakeService.hasRoom()` — the
+spec always promised that retry, and until the re-read nothing in production delivered it (the unit
+test that "carried" it called `scan()` by hand).
+
+Only the periodic re-read consults the record; the startup scan, `endSession`'s scan and watcher
+events handle whatever they see. And `scan()` now **waits** for a file already being handled instead
+of skipping it: `endSession` scans and then deletes the outbox, and skipping a file the re-read was
+in the middle of would delete it under the re-read.

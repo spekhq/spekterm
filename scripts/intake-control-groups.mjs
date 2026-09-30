@@ -277,8 +277,8 @@ export const MUTATIONS = [
     name: 'oversize-not-reported',
     file: 'src/main/intake-source.ts',
     section: 'runHandoffFailure',
-    from: `        this.#reportIfPermanent(\n          this.#service.rejectOversize(path.basename(file), { adapter: this.#adapter }),\n        )`,
-    to: `        this.#service.rejectOversize(path.basename(file), { adapter: this.#adapter })`,
+    from: `      this.#reportIfPermanent(\n        this.#service.rejectOversize(path.basename(file), { adapter: this.#adapter }),\n      )`,
+    to: `      this.#service.rejectOversize(path.basename(file), { adapter: this.#adapter })`,
     expectRed: 'TOO_LARGE：共用攝入路徑上的永久性失敗同樣發出通知',
     why: '**把通知接回 adapter 的 `deliver`。** 超過檔案大小上限的投遞在 `readBounded` 就被擋下\n'
       + '> 並消費掉，它**永遠不會走到** `deliver` —— 於是 `TOO_LARGE` 結構上通知不出來，\n'

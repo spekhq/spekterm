@@ -445,3 +445,38 @@ session 送來持久化早 ~500ms —— `pruneScrollback` 的「已知 session�
 產生、使用者沒在等的結果，要有一個主動告知的時刻**（design D9：完成通知，綁定於採納）。探針的驗法：先把
 焦點放在**別的** folder，再觸發通知，斷言選中的項目換了、交接單打開了且含那份結果。
 
+
+## 15. The outbox watcher missed a directory, and nothing ever read it again (`intake-periodic-rescan`)
+
+In dogfood a handoff written to a session's outbox never arrived (issue #48). The file was valid,
+parsed, and named a target in the session's own list — it was simply never read. The inotify watch
+list showed that session's outbox was the only one not being watched; a restart picked the handoff
+up at once, through the startup scan. Three product-logic hypotheses (chokidar missing a new
+subdirectory, a window before `ready`, `prepareOutbox` dropping the watch) were each disproved with
+a minimal reproduction. The likeliest trigger was a polluted dev environment (stdout cut by an early
+`head`, every later `console.*` failing with `EPIPE`), but that is not the point.
+
+**The point is that the drop points had only two readers — the startup scan and the watcher.** Once
+the watcher missed a directory, every delivery into it disappeared until a restart, and neither side
+was told: the agent said it had handed off (it had), the inbox stayed empty. The Slack source learned
+the same thing earlier ("backfill is the backbone, real-time the accelerator").
+
+What was done, and why each choice:
+
+- **A periodic re-read, not a watcher fix.** The cause was never found, and the next miss may have a
+  different one (exhausted watch descriptors, a network filesystem). The re-read makes the question
+  non-load-bearing.
+- **Every 30 s, not every five minutes like Slack.** Slack's interval is set by API quota; a local
+  re-read is a few `readdir` calls on directories that are normally empty. The spec bounds it at one
+  minute.
+- **It starts before the watcher is `ready`**, and survives a failing startup scan — a watcher that
+  never becomes ready is one of the failures it is for.
+- **Not "scan once after preparing an outbox".** That was the first idea in the issue. The outbox is
+  prepared at spawn, before the agent exists; a scan then always finds nothing.
+- **No probe carries the missed-watch case.** Making the real app's watcher miss needs a test-only
+  switch in product code or root. The unit tests replace only the watcher (a factory that reports
+  `ready` and nothing else) and go through the real `HandoffService.start()` with the default
+  interval.
+- **The clock helper needs a budget.** `rescanOnce` first ticked the mocked clock "until a re-read
+  started"; the control group with a five-minute default stayed green, because it simply ticked five
+  times. It now advances at most one minute of mocked time per call.

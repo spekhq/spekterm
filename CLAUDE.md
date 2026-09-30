@@ -64,6 +64,9 @@ OpenSpec 結構的側欄，讓使用者不必另外開 IDE 就能一邊駕駛 ag
   已完成的由使用者收掉，系統不殺 pty。**送出字元與文字分開寫、隔 500ms** —— 一次寫入時長 prompt 被 agent
   當成貼上、`\r` 被併進去而沒有送出（13.1，dogfood 踩到）。
   **落定依「採納報告之後的輪詢值」，不依狀態的轉變**（第十四節）。
+  **The drop points are read at startup, on watcher events, and every 30 seconds** — the watcher once
+  missed an outbox silently and its handoffs vanished until a restart (`intake-periodic-rescan`, §15).
+  The re-read skips a file whose re-read would repeat a visible outcome (`docs/lessons/intake.md`).
   **交接出來的 session 記得它的母 session**（`handoff-lineage`）：同 repo 在 rail 上縮排、跨 repo
   以「← 來源」「→ N」標示往返，母 session 關閉後呈現快照；關係由主行程在 **spawn 之前**寫入，
   renderer 只能轉交一張主行程簽發的單次憑證。**每個 claude session 以固定名字啟動**

@@ -5,7 +5,15 @@ import path from 'node:path'
 import { after, describe, it } from 'node:test'
 
 import { IntakeService, type DeliverOutcome, type IntakeFailure } from './intake-service'
-import { IntakeSource, MAX_DELIVERY_BYTES } from './intake-source'
+import { IntakeSource, MAX_DELIVERY_BYTES, type IntakeSourceOptions, type WatcherFactory } from './intake-source'
+import {
+  DETECTION_BOUND_MS,
+  neverReadyWatcher,
+  rescanLog,
+  rescanOnce,
+  silentWatcher,
+  type RescanLog,
+} from './intake-source.testkit'
 import { IntakeStore } from './intake-store'
 
 const bases: string[] = []
@@ -562,5 +570,178 @@ describe('永久性失敗的回報', () => {
     await source.start()
 
     assert.deepEqual(seen, [], '「被拒絕的投遞不發通知」對共用落點仍然成立')
+  })
+})
+
+// ── The periodic re-read (intake-periodic-rescan) ───────────────────────────────
+//
+// Every test here replaces the watcher with one that reports nothing — with a working watcher, an
+// implementation without any recovery path passes. Mocked `setInterval` is enabled **before**
+// `start()` (an interval created earlier is a real timer), the interval is the default, and the
+// clock is advanced by the spec's one-minute bound. Assertions that something did not happen are
+// made only after the re-read has finished (`rescanOnce`).
+
+async function startWith(
+  h: Harness,
+  watch: WatcherFactory,
+  log: RescanLog,
+  extra: Partial<IntakeSourceOptions> = {},
+): Promise<IntakeSource> {
+  const source = new IntakeSource({
+    root: h.inbox,
+    adapter: 'file',
+    service: h.service,
+    watch,
+    onRescan: log.onRescan,
+    ...extra,
+  })
+  sources.push(source)
+  await source.start()
+  return source
+}
+
+describe('the periodic re-read', () => {
+  it('A delivery the watcher never reported is processed without a restart', async (t) => {
+    t.mock.timers.enable({ apis: ['setInterval'] })
+    const h = harness()
+    const log = rescanLog()
+    await startWith(h, silentWatcher, log)
+    drop(h.inbox, 'late.json', payload({ id: 'late' }))
+
+    await rescanOnce(t, log)
+
+    assert.equal(h.store.get('file', 'late')?.state, 'pending')
+  })
+
+  it('The re-read runs even if the watcher never becomes ready', async (t) => {
+    t.mock.timers.enable({ apis: ['setInterval'] })
+    const h = harness()
+    const log = rescanLog()
+    const source = new IntakeSource({
+      root: h.inbox,
+      adapter: 'file',
+      service: h.service,
+      watch: neverReadyWatcher,
+      onRescan: log.onRescan,
+    })
+    sources.push(source)
+    // Not awaited: with a watcher that never becomes ready, `start()` never resolves.
+    void source.start()
+    drop(h.inbox, 'late.json', payload({ id: 'late' }))
+
+    await rescanOnce(t, log)
+
+    assert.equal(h.store.get('file', 'late')?.state, 'pending')
+  })
+
+  it('A delivery stuck on a full inbox is not counted again', async (t) => {
+    t.mock.timers.enable({ apis: ['setInterval'] })
+    const h = harness(1)
+    assert.equal((await h.service.deliver(payload({ id: 'first' }), 'file')).ok, true)
+    // Before `start()`: the startup scan handles it once and records the `CAPACITY` rejection.
+    drop(h.inbox, 'second.json', payload({ id: 'second' }))
+    const log = rescanLog()
+    await startWith(h, silentWatcher, log)
+    const traceCount = (): number =>
+      h.service.notices().filter((n) => n.code === 'CAPACITY').reduce((sum, n) => sum + n.count, 0)
+    assert.equal(traceCount(), 1)
+
+    for (let i = 0; i < 3; i += 1) await rescanOnce(t, log)
+
+    assert.equal(traceCount(), 1, 'the re-read must not count the same rejection again')
+    assert.deepEqual(fs.readdirSync(h.inbox), ['second.json'])
+  })
+
+  it('A delivery stuck on a full inbox enters it once there is room', async (t) => {
+    t.mock.timers.enable({ apis: ['setInterval'] })
+    const h = harness(1)
+    assert.equal((await h.service.deliver(payload({ id: 'first' }), 'file')).ok, true)
+    drop(h.inbox, 'second.json', payload({ id: 'second' }))
+    const log = rescanLog()
+    await startWith(h, silentWatcher, log)
+    await rescanOnce(t, log)
+    assert.equal(h.store.get('file', 'second'), undefined, 'still held back while the inbox is full')
+
+    h.store.setState('file', 'first', 'accepted')
+    await rescanOnce(t, log)
+
+    assert.equal(h.store.get('file', 'second')?.state, 'pending')
+  })
+
+  it('A half-written delivery completed later is picked up', async (t) => {
+    t.mock.timers.enable({ apis: ['setInterval'] })
+    const h = harness()
+    const log = rescanLog()
+    await startWith(h, silentWatcher, log)
+    fs.mkdirSync(h.inbox, { recursive: true })
+    const file = path.join(h.inbox, 'partial.json')
+    fs.writeFileSync(file, '{"id":')
+    await rescanOnce(t, log)
+    assert.equal(h.store.get('file', 'partial'), undefined)
+    assert.ok(fs.existsSync(file), 'an unparseable file is left for its writer to finish')
+
+    fs.writeFileSync(file, payload({ id: 'partial' }))
+    await rescanOnce(t, log)
+
+    assert.equal(h.store.get('file', 'partial')?.state, 'pending')
+  })
+
+  it('rejects an interval that is not finite or exceeds the one-minute bound', () => {
+    const h = harness()
+    for (const rescanIntervalMs of [0, -1, Infinity, Number.NaN, 60_001]) {
+      assert.throws(
+        () => new IntakeSource({ root: h.inbox, adapter: 'file', service: h.service, rescanIntervalMs }),
+        RangeError,
+        String(rescanIntervalMs),
+      )
+    }
+  })
+
+  it('no re-read runs after dispose()', async (t) => {
+    t.mock.timers.enable({ apis: ['setInterval'] })
+    const h = harness()
+    const log = rescanLog()
+    const source = await startWith(h, silentWatcher, log)
+    await rescanOnce(t, log)
+    const started = log.starts
+
+    await source.dispose()
+    t.mock.timers.tick(DETECTION_BOUND_MS)
+
+    // Synchronous on purpose: the interval callback runs inside `tick()`.
+    assert.equal(log.starts, started)
+  })
+
+  it('scan() waits for a file the re-read is handling instead of skipping it', async (t) => {
+    t.mock.timers.enable({ apis: ['setInterval'] })
+    const h = harness()
+    const log = rescanLog()
+    let openGate: () => void = () => {}
+    const gate = new Promise<void>((resolve) => {
+      openGate = resolve
+    })
+    let delivered = 0
+    const source = await startWith(h, silentWatcher, log, {
+      deliver: async () => {
+        delivered += 1
+        await gate
+        return { ok: true, consume: true, notify: false }
+      },
+    })
+    const file = drop(h.inbox, 'slow.json', payload({ id: 'slow' }))
+
+    t.mock.timers.tick(DETECTION_BOUND_MS)
+    await waitFor('the re-read is handling the file', () => delivered === 1)
+    let scanned = false
+    const scanning = source.scan().then(() => {
+      scanned = true
+    })
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    assert.equal(scanned, false, 'scan() returned while the file was still being handled')
+
+    openGate()
+    await scanning
+    assert.equal(delivered, 1, 'the file is handled once')
+    assert.equal(fs.existsSync(file), false)
   })
 })

@@ -2,15 +2,16 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import test, { describe } from 'node:test'
+import test, { after, describe } from 'node:test'
 
 import type { ReportDecision } from './handoff-completion'
 import { HANDOFF_ADAPTER, MAX_REPORT_LENGTH } from './handoff-delivery'
 import { isPermanentRejection } from './intake-rejection'
 import { configureHandoff, outboxDir, prepareOutbox, resetHandoffState } from './handoff-outbox'
-import { ENDED_SOURCE_ID, GLOBAL_SOURCE_ID, HandoffService } from './handoff-service'
+import { ENDED_SOURCE_ID, GLOBAL_SOURCE_ID, HandoffService, type HandoffServiceDeps } from './handoff-service'
 import { MAX_BODY_LENGTH, MAX_FIRST_PARTY_BODY_LENGTH } from './intake-schema'
 import { IntakeService } from './intake-service'
+import { rescanLog, rescanOnce, silentWatcher } from './intake-source.testkit'
 import { IntakeStore } from './intake-store'
 
 interface Harness {
@@ -28,6 +29,7 @@ function harness(options: {
   enabled?: boolean
   /** 完成報告的採納（`handoff-completion`）。每一次呼叫都記下來。 */
   report?: (sessionId: string, summary: string, identity: string) => ReportDecision
+  sourceTesting?: HandoffServiceDeps['sourceTesting']
 } = {}): Harness {
   const base = fs.mkdtempSync(path.join(os.tmpdir(), 'handoff-service-'))
   resetHandoffState()
@@ -45,6 +47,7 @@ function harness(options: {
     enabled: () => options.enabled !== false,
     requestAutoAccept: (_adapter, id, folderId) => autoAccepted.push({ id, folderId }),
     ...(options.report ? { acceptReport: options.report } : {}),
+    ...(options.sourceTesting ? { sourceTesting: options.sourceTesting } : {}),
   })
   return {
     service,
@@ -483,5 +486,77 @@ describe('完成報告經同一個落點送達，以種類欄位區分', () => {
     await h.handoff.deliverFile(contents, file)
     assert.equal(identities.length, 2)
     assert.equal(identities[0], identities[1])
+  })
+})
+
+// ── The periodic re-read of the outboxes (intake-periodic-rescan) ────────────────
+//
+// Through `HandoffService.start()` — the real wiring — with only the watcher replaced by one that
+// reports nothing, and the default interval (it is deliberately not passed through). Auto-accept
+// being requested for the target folder is what creates the session, as in the tests above.
+
+describe('the periodic re-read of the outboxes', () => {
+  const services: HandoffService[] = []
+  const unlocked: string[] = []
+  after(async () => {
+    for (const dir of unlocked) fs.chmodSync(dir, 0o755)
+    for (const service of services) await service.dispose()
+  })
+
+  function writeHandoff(sessionId: string, name: string, payload: unknown): string {
+    const target = path.join(outboxDir(sessionId), name)
+    fs.writeFileSync(target, JSON.stringify(payload))
+    return target
+  }
+
+  test('A handoff the watcher never reported creates its session', async (t) => {
+    t.mock.timers.enable({ apis: ['setInterval'] })
+    const log = rescanLog()
+    const h = harness({ sources, sourceTesting: { watch: silentWatcher, onRescan: log.onRescan } })
+    services.push(h.handoff)
+    await h.handoff.start()
+    // A session created after the application started: its outbox appears after `start()`.
+    prepareOutbox('s1')
+    writeHandoff('s1', 'a.json', good)
+
+    await rescanOnce(t, log)
+
+    assert.deepEqual(h.autoAccepted.map((a) => a.folderId), ['f2'])
+  })
+
+  test("A restored session's handoff the watcher never reported creates its session", async (t) => {
+    t.mock.timers.enable({ apis: ['setInterval'] })
+    const log = rescanLog()
+    const h = harness({ sources, sourceTesting: { watch: silentWatcher, onRescan: log.onRescan } })
+    services.push(h.handoff)
+    // A restored session: its outbox already exists when the application starts.
+    prepareOutbox('s1')
+    await h.handoff.start()
+    writeHandoff('s1', 'a.json', good)
+
+    await rescanOnce(t, log)
+
+    assert.deepEqual(h.autoAccepted.map((a) => a.folderId), ['f2'])
+  })
+
+  test('A rejected handoff that cannot be removed is notified once', async (t) => {
+    t.mock.timers.enable({ apis: ['setInterval'] })
+    const log = rescanLog()
+    const h = harness({ sources, sourceTesting: { watch: silentWatcher, onRescan: log.onRescan } })
+    services.push(h.handoff)
+    const failures: unknown[] = []
+    h.service.onFailure((failure) => failures.push(failure))
+    prepareOutbox('s1')
+    writeHandoff('s1', 'a.json', { ...good, target: 'nowhere' })
+    // The file cannot be removed: its directory is read-only. (A root user would bypass this.)
+    fs.chmodSync(outboxDir('s1'), 0o555)
+    unlocked.push(outboxDir('s1'))
+
+    await h.handoff.start()
+    for (let i = 0; i < 3; i += 1) await rescanOnce(t, log)
+
+    assert.equal(failures.length, 1, 'one notification-bearing failure report')
+    const traces = h.service.notices().reduce((sum, n) => sum + n.count, 0)
+    assert.equal(traces, 1, 'one rejection trace occurrence')
   })
 })

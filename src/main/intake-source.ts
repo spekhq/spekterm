@@ -2,7 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import type { FSWatcher } from 'chokidar'
 
-import { createWatcher } from './watcher'
+import { createWatcher, type CreateWatcherOptions } from './watcher'
 import { isPermanentRejection } from './intake-rejection'
 import type { DeliverOutcome, IntakeService } from './intake-service'
 
@@ -29,6 +29,28 @@ import type { DeliverOutcome, IntakeService } from './intake-service'
  *
  * 這與 `branch-service` / `openspec-service` 是同一個模式：**初始狀態自己求，watcher 只接後續**。
  *
+ * ## The third entry point: the periodic re-read
+ *
+ * **The watcher is an accelerator, not the guarantee.** In dogfood it silently missed one session's
+ * outbox; every handoff into it vanished until a restart, and nothing reported an error (issue #48).
+ * The cause was never found, and a watcher can miss a directory for reasons we cannot list in
+ * advance. So the drop point is also re-read every `RESCAN_INTERVAL_MS`.
+ *
+ * - **It starts before `ready`**, and keeps running if the startup scan throws. A watcher that never
+ *   becomes ready is one of the failures it exists for. Overlap with the startup scan and the
+ *   watcher is absorbed the same way the startup scan / watcher overlap already is.
+ * - **It skips a file whose re-read would repeat something**, while the file is unchanged since it
+ *   was handled (`#handled`): a visible rejection that left it behind (the inbox is full — its trace
+ *   would count again every tick), a delivery that threw (an in-process retry can meet its own
+ *   half-applied first attempt and be taken for a duplicate), a removal that failed (its whole
+ *   outcome, OS notification included, would repeat). **Except** a full-inbox file once the inbox
+ *   has room: that retry is what the spec promises. Files left with nothing visible (unparseable,
+ *   capability off) are not recorded — reading them again is free.
+ * - **Only the re-read consults the record.** The startup scan, `endSession`'s scan, and watcher
+ *   events handle whatever they see, as before.
+ * - **Not "scan once after preparing an outbox"** (the first idea in issue #48): the outbox is
+ *   prepared at spawn, before the agent has written anything, so that scan always finds nothing.
+ *
  * ## 監看必須同時收 `add` 與 `change`
  *
  * 「寫到一半的項目不被消費，補完之後仍被採納」是一條 requirement，而補寫發生在**同一個路徑**
@@ -52,15 +74,33 @@ export const MAX_DELIVERY_BYTES = 512 * 1024
 /** 啟動掃描的批次大小。每批之間讓出 event loop。 */
 const SCAN_BATCH = 20
 
+/** How often the drop point is re-read. See the header, "The third entry point". */
+export const RESCAN_INTERVAL_MS = 30_000
+/** The spec's bound: a delivery is processed within one minute of being written. */
+const MAX_RESCAN_INTERVAL_MS = 60_000
+
+export type WatcherFactory = (options: CreateWatcherOptions) => FSWatcher
+
 export function inboxRoot(userDataPath: string): string {
   return path.join(userDataPath, 'intake-inbox')
 }
 
+/** The `(mtimeMs, size)` a file had when it was read — what the re-read record compares. */
+interface FileState {
+  mtimeMs: number
+  size: number
+}
+
 /**
  * 讀一份投遞。**大小檢查兩次**：`stat` 在前（省掉整份讀取），讀回的長度在後（擋邊讀邊長）。
- * 超限回 `null`，呼叫端據此消費掉它。
+ * 超限回 `tooLarge`，呼叫端據此消費掉它。
+ *
+ * It returns the `stat` it took. The re-read record must hold the state of the version that was
+ * **handled** — a second `stat` afterwards could see a newer version that never was.
  */
-async function readBounded(file: string): Promise<{ contents: string } | { tooLarge: true } | null> {
+async function readBounded(
+  file: string,
+): Promise<{ contents: string; state: FileState } | { tooLarge: true; state: FileState } | null> {
   let stats: fs.Stats
   try {
     stats = await fs.promises.stat(file)
@@ -68,7 +108,8 @@ async function readBounded(file: string): Promise<{ contents: string } | { tooLa
     return null
   }
   if (!stats.isFile()) return null
-  if (stats.size > MAX_DELIVERY_BYTES) return { tooLarge: true }
+  const state = { mtimeMs: stats.mtimeMs, size: stats.size }
+  if (stats.size > MAX_DELIVERY_BYTES) return { tooLarge: true, state }
 
   let contents: string
   try {
@@ -76,8 +117,8 @@ async function readBounded(file: string): Promise<{ contents: string } | { tooLa
   } catch {
     return null
   }
-  if (Buffer.byteLength(contents, 'utf8') > MAX_DELIVERY_BYTES) return { tooLarge: true }
-  return { contents }
+  if (Buffer.byteLength(contents, 'utf8') > MAX_DELIVERY_BYTES) return { tooLarge: true, state }
+  return { contents, state }
 }
 
 export interface IntakeSourceOptions {
@@ -115,6 +156,15 @@ export interface IntakeSourceOptions {
    * —— 把接線放在 adapter 的 `deliver` 裡，`TOO_LARGE` 就結構上通知不出來。
    */
   notifyFailures?: boolean
+  /** **Tests only.** Replaces the watcher, to reproduce one that reports nothing. */
+  watch?: WatcherFactory
+  /** **Tests only.** Told when each periodic re-read starts and ends. */
+  onRescan?: (phase: 'start' | 'end') => void
+  /**
+   * The re-read interval. Exists so its validation can be tested; callers use the default.
+   * Must be finite and within `(0, 60 000]` — Node runs `0` and `Infinity` every millisecond.
+   */
+  rescanIntervalMs?: number
 }
 
 export class IntakeSource {
@@ -126,7 +176,22 @@ export class IntakeSource {
   readonly #depth: number
   readonly #deliver: (contents: string, file: string) => Promise<DeliverOutcome>
   readonly #notifyFailures: boolean
-  #inflight = new Set<string>()
+  readonly #watch: WatcherFactory
+  readonly #onRescan?: (phase: 'start' | 'end') => void
+  readonly #rescanIntervalMs: number
+  /**
+   * Files being handled right now, and the handling. `scan()` awaits an entry instead of skipping
+   * it: `endSession` scans and then deletes the outbox, and a file the re-read is in the middle of
+   * would otherwise be deleted under it.
+   */
+  #inflight = new Map<string, Promise<void>>()
+  /**
+   * Files still on disk whose re-read would repeat something, with the state they were handled at.
+   * Only the periodic re-read consults it — see the header, "The third entry point".
+   */
+  #handled = new Map<string, FileState & { capacity: boolean }>()
+  #timer: NodeJS.Timeout | null = null
+  #rescanning = false
 
   constructor({
     root,
@@ -136,7 +201,13 @@ export class IntakeSource {
     depth = 0,
     deliver,
     notifyFailures = false,
+    watch = createWatcher,
+    onRescan,
+    rescanIntervalMs = RESCAN_INTERVAL_MS,
   }: IntakeSourceOptions) {
+    if (!Number.isFinite(rescanIntervalMs) || rescanIntervalMs <= 0 || rescanIntervalMs > MAX_RESCAN_INTERVAL_MS) {
+      throw new RangeError(`rescan interval must be within (0, ${MAX_RESCAN_INTERVAL_MS}] ms: ${rescanIntervalMs}`)
+    }
     this.#root = root
     this.#adapter = adapter
     this.#service = service
@@ -144,6 +215,9 @@ export class IntakeSource {
     this.#depth = depth
     this.#deliver = deliver ?? ((contents) => this.#service.deliver(contents, this.#adapter))
     this.#notifyFailures = notifyFailures
+    this.#watch = watch
+    this.#onRescan = onRescan
+    this.#rescanIntervalMs = rescanIntervalMs
   }
 
   /**
@@ -164,11 +238,15 @@ export class IntakeSource {
     })
   }
 
-  /** mkdir → 建立監看 → 掃描既有內容。**順序是承重的，見檔頭。** */
+  /**
+   * mkdir → 建立監看 → **start the periodic re-read** → 等監看就緒 → 掃描既有內容。
+   * **順序是承重的，見檔頭。** The re-read starts before `ready` on purpose: a watcher that never
+   * becomes ready, or a startup scan that throws, must not leave the drop point unread.
+   */
   async start(): Promise<void> {
     await fs.promises.mkdir(this.#root, { recursive: true })
 
-    this.#watcher = createWatcher({
+    this.#watcher = this.#watch({
       target: this.#root,
       label: this.#root,
       // 一對一監看：**不傳 `pollingRoot`**（那是給服務多目標的 watcher 的例外）。
@@ -179,6 +257,9 @@ export class IntakeSource {
     this.#watcher.on('add', (file) => void this.#handle(file))
     this.#watcher.on('change', (file) => void this.#handle(file))
 
+    this.#timer = setInterval(() => this.#tick(), this.#rescanIntervalMs)
+    this.#timer.unref()
+
     // 見檔頭：`ready` 之前抵達的檔案會被 `ignoreInitial` 吞掉，而它們也還沒被掃描看到。
     await new Promise<void>((resolve) => {
       this.#watcher?.once('ready', () => resolve())
@@ -187,7 +268,7 @@ export class IntakeSource {
     await this.scan()
   }
 
-  /** 掃描落點既有的內容。**分批，每批之間讓出 event loop。** */
+  /** 掃描落點既有的內容。**分批，每批之間讓出 event loop。** Does not consult the re-read record. */
   async scan(): Promise<void> {
     const files = await this.#collect(this.#root, this.#depth)
     for (let i = 0; i < files.length; i += SCAN_BATCH) {
@@ -197,25 +278,80 @@ export class IntakeSource {
     }
   }
 
+  /** One interval tick. Skipped while the previous re-read is still running; never throws. */
+  #tick(): void {
+    if (this.#rescanning) return
+    this.#rescanning = true
+    this.#onRescan?.('start')
+    void this.#rescan()
+      .catch((error: unknown) => console.error(`[intake] re-read failed ${this.#root}: ${String(error)}`))
+      .finally(() => {
+        this.#rescanning = false
+        this.#onRescan?.('end')
+      })
+  }
+
+  /**
+   * The periodic re-read: every file, except one recorded in `#handled` and unchanged since — unless
+   * it was held back by a full inbox that now has room. A file already being handled is left to its
+   * handler.
+   */
+  async #rescan(): Promise<void> {
+    const readDirs = new Set<string>()
+    const files = await this.#collect(this.#root, this.#depth, readDirs)
+
+    // Forget files that are gone — but only under directories that were actually read: a failed
+    // `readdir` (EMFILE) returns nothing, and that is not "everything was removed".
+    const present = new Set(files)
+    for (const recorded of this.#handled.keys()) {
+      if (readDirs.has(path.dirname(recorded)) && !present.has(recorded)) this.#handled.delete(recorded)
+    }
+
+    for (let i = 0; i < files.length; i += SCAN_BATCH) {
+      for (const file of files.slice(i, i + SCAN_BATCH)) {
+        if (this.#inflight.has(file)) continue
+        if (await this.#unchangedSinceHandled(file)) continue
+        await this.#handle(file)
+      }
+      await new Promise((resolve) => setImmediate(resolve))
+    }
+  }
+
+  async #unchangedSinceHandled(file: string): Promise<boolean> {
+    const recorded = this.#handled.get(file)
+    if (!recorded) return false
+    if (recorded.capacity && this.#service.hasRoom()) return false
+    let stats: fs.Stats
+    try {
+      stats = await fs.promises.stat(file)
+    } catch {
+      return false
+    }
+    return stats.mtimeMs === recorded.mtimeMs && stats.size === recorded.size
+  }
+
   /**
    * 收集落點中的候選檔案，最多下探 `depth` 層。
    *
    * **只在 `dirent.isDirectory()` 為真時下鑽** —— 不跟隨 symlink 目錄，與 `listFiles` 的手寫
    * 遞迴同一條理由（`fs.readdirSync` 與 `fs/promises.readdir` 對 `{ recursive: true }` 的行為
    * 不一致，而那個差異未見於文件）。
+   *
+   * `readDirs`, when given, collects the directories whose `readdir` succeeded.
    */
-  async #collect(dir: string, depth: number): Promise<string[]> {
+  async #collect(dir: string, depth: number, readDirs?: Set<string>): Promise<string[]> {
     let entries: fs.Dirent[]
     try {
       entries = await fs.promises.readdir(dir, { withFileTypes: true })
     } catch {
       return []
     }
+    readDirs?.add(dir)
     const files: string[] = []
     for (const entry of entries) {
       const full = path.join(dir, entry.name)
       if (entry.isDirectory()) {
-        if (depth > 0) files.push(...(await this.#collect(full, depth - 1)))
+        if (depth > 0) files.push(...(await this.#collect(full, depth - 1, readDirs)))
         continue
       }
       if (entry.isFile()) files.push(full)
@@ -224,12 +360,34 @@ export class IntakeSource {
   }
 
   async dispose(): Promise<void> {
+    if (this.#timer) clearInterval(this.#timer)
+    this.#timer = null
     await this.#watcher?.close()
     this.#watcher = null
   }
 
-  async #handle(file: string): Promise<void> {
-    if (!file.endsWith(ACCEPTED_EXTENSION)) return
+  /** Record a file whose re-read would repeat something, at the state it was handled. */
+  #remember(file: string, state: FileState, capacity: boolean): void {
+    this.#handled.set(file, { ...state, capacity })
+  }
+
+  /**
+   * Remove a consumed file. **A failure is logged, not thrown**, and the file recorded: otherwise
+   * every re-read repeats its whole outcome (on the handoff path, an OS notification), and before
+   * this the error escaped `start()`.
+   */
+  async #remove(file: string, state: FileState): Promise<void> {
+    try {
+      await fs.promises.rm(file, { force: true })
+      this.#handled.delete(file)
+    } catch (error) {
+      console.error(`[intake] could not remove ${file}: ${String(error)}`)
+      this.#remember(file, state, false)
+    }
+  }
+
+  #handle(file: string): Promise<void> {
+    if (!file.endsWith(ACCEPTED_EXTENSION)) return Promise.resolve()
     /**
      * **以點開頭的一律跳過** —— 那是「還沒寫完」的慣例。
      *
@@ -241,37 +399,49 @@ export class IntakeSource {
      * **這道守衛不倚賴 producer 照著做。** 指示仍然會說「暫存檔名不要以 `.json` 結尾」，但
      * 一個依賴對方守規矩的協定不是協定 —— 尤其對方是一個 agent。
      */
-    if (path.basename(file).startsWith('.')) return
-    if (this.#inflight.has(file)) return
-    this.#inflight.add(file)
-    try {
-      const read = await readBounded(file)
-      if (read === null) return
-      if ('tooLarge' in read) {
-        // 永久性拒絕：大小不會自己變小。拒絕的**呈現**仍經 service，於是它與其餘拒絕
-        // 共用同一份合併與上限（「面向使用者的拒絕與警示 SHALL 有界」）。
-        this.#reportIfPermanent(
-          this.#service.rejectOversize(path.basename(file), { adapter: this.#adapter }),
-        )
-        await fs.promises.rm(file, { force: true })
-        this.#onProcessed?.(file, true)
-        return
-      }
-      // **失敗必須說話。** 少了這個 catch，一個投遞失敗會變成未捕捉的 rejection：
-      // 投遞檔留在落點、收件匣空著、而畫面上與 log 裡都沒有任何線索
-      //（dogfood 第一次投遞就踩到 —— 保存處的目錄尚未建立）。
-      let outcome
-      try {
-        outcome = await this.#deliver(read.contents, file)
-      } catch (error) {
-        console.error(`[intake] delivery failed ${file}: ${String(error)}`)
-        return
-      }
-      this.#reportIfPermanent(outcome)
-      if (outcome.consume) await fs.promises.rm(file, { force: true })
-      this.#onProcessed?.(file, outcome.consume)
-    } finally {
-      this.#inflight.delete(file)
+    if (path.basename(file).startsWith('.')) return Promise.resolve()
+    const running = this.#inflight.get(file)
+    if (running) return running
+    const handling = this.#process(file).finally(() => this.#inflight.delete(file))
+    this.#inflight.set(file, handling)
+    return handling
+  }
+
+  async #process(file: string): Promise<void> {
+    const read = await readBounded(file)
+    if (read === null) return
+    if ('tooLarge' in read) {
+      // 永久性拒絕：大小不會自己變小。拒絕的**呈現**仍經 service，於是它與其餘拒絕
+      // 共用同一份合併與上限（「面向使用者的拒絕與警示 SHALL 有界」）。
+      this.#reportIfPermanent(
+        this.#service.rejectOversize(path.basename(file), { adapter: this.#adapter }),
+      )
+      await this.#remove(file, read.state)
+      this.#onProcessed?.(file, true)
+      return
     }
+    // **失敗必須說話。** 少了這個 catch，一個投遞失敗會變成未捕捉的 rejection：
+    // 投遞檔留在落點、收件匣空著、而畫面上與 log 裡都沒有任何線索
+    //（dogfood 第一次投遞就踩到 —— 保存處的目錄尚未建立）。
+    let outcome
+    try {
+      outcome = await this.#deliver(read.contents, file)
+    } catch (error) {
+      console.error(`[intake] delivery failed ${file}: ${String(error)}`)
+      // Recorded, so the re-read does not retry it in this process: the store changes memory
+      // before it saves, so a retry could meet its own half-applied first attempt and be taken
+      // for a same-content duplicate — consumed silently. It is retried at the next start (as
+      // before) or when the file changes.
+      this.#remember(file, read.state, false)
+      return
+    }
+    this.#reportIfPermanent(outcome)
+    if (outcome.consume) await this.#remove(file, read.state)
+    // Left behind **and visible** (today: the inbox is full) ⇒ recorded, so the re-read does not
+    // count its trace again. Left behind with nothing visible (unparseable, capability off) ⇒ not
+    // recorded: reading it again is free, and it must be picked up as soon as it becomes valid.
+    else if (outcome.notify) this.#remember(file, read.state, outcome.code === 'CAPACITY')
+    else this.#handled.delete(file)
+    this.#onProcessed?.(file, outcome.consume)
   }
 }

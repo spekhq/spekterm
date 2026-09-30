@@ -49,6 +49,7 @@ const COVERED_CHANGES = [
   'handoff-session-lifecycle',
   'open-source-mit',
   'quick-open-nested-worktree-entry',
+  'intake-periodic-rescan',
 ]
 
 /** change 的所在 —— 封存後它會搬到 `archive/` 之下，兩處都找。 */
@@ -184,7 +185,9 @@ export const TABLE = [
     '**只有「拒絕」那半有載體**（node:test 驗回傳的原因）。「在畫面上說明」需要把上限注入到 probe 的 fixture，本輪未做 —— 老實記為半覆蓋'],
   ['永久性拒絕不在其後的啟動重複呈現', '永久性拒絕被消費，其後的啟動不再重複處理', true, '把永久性拒絕也留在落點',
     '「被消費」驗得到；「其後的啟動不重複呈現」需要跨重啟的 probe 段落，本輪未做'],
-  ['暫時性拒絕於上限解除後被重新處理', '暫時性拒絕原封留在落點，並於上限解除後被重新處理', false, '把暫時性拒絕也消費掉', ''],
+  ['暫時性拒絕於上限解除後被重新處理', 'A delivery stuck on a full inbox enters it once there is room', false,
+    'skip recorded full-inbox files even when there is room',
+    'Carrier changed by intake-periodic-rescan. **Until then this row was a false green**: its carrier (暫時性拒絕原封留在落點，並於上限解除後被重新處理) calls `scan()` by hand, while production only re-read the drop point at the next start'],
   ['多份無法採納的項目以彙整呈現', '同一主鍵的重複拒絕合併為一則並累加次數', true, '改成每次都 push 一則新的',
     '合併驗得到；「一個計數與一個入口」的呈現未進 probe'],
 
@@ -1369,6 +1372,26 @@ export const TABLE = [
     'A folder whose only content is a nested working tree lists nothing from inside it', false,
     'judge "git printed nothing" on the filtered list instead of the raw output',
     '**Ran** (tasks 2.4): that mutation turns only this row red. Its own fixture — the shared one always seeds files, so the raw output is never empty there. ' + "The scenario is phrased at the Ctrl+P entry; its carrier is the `listFiles` unit test. The UI half is `probe:openspec` (runQuickOpenScope), which goes through git enumeration with a nested worktree but cannot see this defect: it inherits the maintainer's global excludes and its query does not match the worktree path"],
+  // ── intake-periodic-rescan (agent-intake / agent-handoff-source) ───────────
+  ['A delivery the watcher never reported is processed without a restart', 'A delivery the watcher never reported is processed without a restart', false,
+    'never start the interval; or make the default 300 s', '**Ran** (tasks 3.6). ' + "No probe carrier: making the real app's watcher miss a directory needs a test-only switch in product code or root (design D5); the watcher is replaced, everything else is the real IntakeSource" + '. ' + 'The shared inbox built in index.ts gets the re-read because it is the IntakeSource default, not by wiring (design D1)'],
+  ['The re-read runs even if the watcher never becomes ready', 'The re-read runs even if the watcher never becomes ready', false,
+    'start the interval after awaiting ready', '**Ran** (tasks 3.6). ' + "No probe carrier: making the real app's watcher miss a directory needs a test-only switch in product code or root (design D5); the watcher is replaced, everything else is the real IntakeSource"],
+  ['A delivery stuck on a full inbox is not counted again', 'A delivery stuck on a full inbox is not counted again', false,
+    'drop the record check from the re-read', '**Ran** (tasks 3.6). ' + "No probe carrier: making the real app's watcher miss a directory needs a test-only switch in product code or root (design D5); the watcher is replaced, everything else is the real IntakeSource"],
+  ['A delivery stuck on a full inbox enters it once there is room', 'A delivery stuck on a full inbox enters it once there is room', false,
+    'skip recorded full-inbox files even when there is room', '**Ran** (tasks 3.6). ' + "No probe carrier: making the real app's watcher miss a directory needs a test-only switch in product code or root (design D5); the watcher is replaced, everything else is the real IntakeSource"],
+  ['A half-written delivery completed later is picked up', 'A half-written delivery completed later is picked up', false,
+    'never start the interval', '**Ran** (tasks 3.6). ' + "No probe carrier: making the real app's watcher miss a directory needs a test-only switch in product code or root (design D5); the watcher is replaced, everything else is the real IntakeSource"],
+  ['A handoff the watcher never reported creates its session', 'A handoff the watcher never reported creates its session', false,
+    'never start the interval; or make the default 300 s',
+    '**Ran** (tasks 3.6). Through HandoffService.start() — the real wiring — with the default interval. Auto-accept requested stands for the session being created, as in the other handoff tests. ' + "No probe carrier: making the real app's watcher miss a directory needs a test-only switch in product code or root (design D5); the watcher is replaced, everything else is the real IntakeSource"],
+  ["A restored session's handoff the watcher never reported creates its session", "A restored session's handoff the watcher never reported creates its session", false,
+    'never start the interval',
+    '**Ran** (tasks 3.6). The outbox exists before start(); with the previous test it tells apart "re-read only directories present at start" from "only directories created later". ' + "No probe carrier: making the real app's watcher miss a directory needs a test-only switch in product code or root (design D5); the watcher is replaced, everything else is the real IntakeSource"],
+  ['A rejected handoff that cannot be removed is notified once', 'A rejected handoff that cannot be removed is notified once', false,
+    'drop the record check from the re-read',
+    '**Ran** (tasks 3.6). The file is made unremovable with a read-only directory — a root user would bypass that and the test would not discriminate. Before this change start() rejected with EACCES here'],
 ]
 
 /**

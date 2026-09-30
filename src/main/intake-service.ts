@@ -229,6 +229,11 @@ export class IntakeService {
    *
    * 呈現（`#notices`）已經在拒絕發生的當下記過一筆；這裡只負責「讓使用者現在就知道」。
    */
+  /** Whether one more delivery would fit under the pending limit (the `CAPACITY` rejection). */
+  hasRoom(): boolean {
+    return this.#store.pendingCount() < this.#maxPending
+  }
+
   reportFailure(failure: IntakeFailure): void {
     for (const listener of this.#failures) listener(failure)
   }
