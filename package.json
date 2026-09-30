@@ -101,7 +101,7 @@
     "eslint": "^10.6.0",
     "eslint-plugin-react-hooks": "^7.1.1",
     "globals": "^17.7.0",
-    "monaco-editor": "0.55.1",
+    "monaco-editor": "0.57.0",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
     "react-i18next": "^17.0.9",

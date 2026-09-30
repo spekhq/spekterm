@@ -1,5 +1,5 @@
 import type { Environment } from 'monaco-editor'
-import EditorWorker from 'monaco-editor/esm/vs/editor/editor.worker?worker'
+import EditorWorker from 'monaco-editor/editor/editor.worker?worker'
 
 /**
  * Monaco 透過全域 MonacoEnvironment.getWorker 取得 worker 實例。

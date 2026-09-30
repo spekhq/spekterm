@@ -1,8 +1,12 @@
 import { useEffect, useRef } from 'react'
-// 只取 API 與編輯器功能。語言的 tokenizer 由 `./languages` 一次引入；
-// `editor.all.js` 不必顯式 import —— basic-languages 的 `_.contribution.js` 已把整套
-// editor contribution 拉進來（實測：加與不加，建置產物只差 15 bytes）。
-import * as monaco from 'monaco-editor/esm/vs/editor/editor.api'
+// The API and the editor features, then the tokenizers (`./languages`). Since monaco-editor 0.56
+// these are separate, supported entry points (`editor`, `features/register.all`,
+// `languages/definitions/register.all`). **The features import is load-bearing**: before 0.56 a
+// language contribution pulled in every editor feature as a side effect, so there was no explicit
+// import; the new language definitions do not, and without this line find, folding, links and the
+// clipboard actions disappear with no error.
+import * as monaco from 'monaco-editor/editor'
+import 'monaco-editor/features/register.all'
 import './languages'
 import './monaco-workers'
 

@@ -1,96 +1,15 @@
 /**
  * Monaco 的語法高亮（monarch tokenizer）來源。
  *
- * 每個 `<lang>.contribution` 只呼叫 `registerLanguage({ loader: () => import("./<lang>.js") })`
- * —— grammar 本身是動態 import，打包器會為每種語言產出獨立的延遲載入 chunk，只在真的開了
- * 該語言的檔案時才載入。因此「支援 81 種語言」與「支援 2 種」在初始載入上幾乎沒有差別，
- * 沒有理由手動挑語言。
+ * Each language definition only calls `registerLanguage({ loader: () => import("./<lang>.js") })` —
+ * the grammar itself is a dynamic import, so the bundler emits one lazily loaded chunk per language,
+ * loaded only when a file in that language is opened. Registering all of them costs almost nothing
+ * at startup, so there is no reason to pick languages by hand; `register.all` is the supported entry
+ * point for that (monaco-editor ≥ 0.56).
  *
- * **不要**在此加入 `monaco-editor/esm/vs/language/*`（TypeScript／JSON／CSS／HTML 的語言服務）。
- * 那些是 worker 驅動的語意分析，唯讀檢視用不到 —— 使用者在這裡修不了任何診斷 ——
- * 而 `ts.worker` 單獨就佔 12.65 MB，比其餘所有產物加起來還大。
- *
- * 本檔由 basic-languages 的目錄清單產生；升級 monaco 後若新增語言，重新產生即可。
+ * **Do not** import `monaco-editor/languages/features/*` here (the TypeScript / JSON / CSS / HTML
+ * language services). Those are worker-driven semantic analysis a read-mostly viewer does not need —
+ * the user cannot fix a diagnostic here — and `ts.worker` alone is about 12.65 MB, more than every
+ * other asset combined. `npm run measure:bundle` fails if one appears.
  */
-
-import "monaco-editor/esm/vs/basic-languages/abap/abap.contribution"
-import "monaco-editor/esm/vs/basic-languages/apex/apex.contribution"
-import "monaco-editor/esm/vs/basic-languages/azcli/azcli.contribution"
-import "monaco-editor/esm/vs/basic-languages/bat/bat.contribution"
-import "monaco-editor/esm/vs/basic-languages/bicep/bicep.contribution"
-import "monaco-editor/esm/vs/basic-languages/cameligo/cameligo.contribution"
-import "monaco-editor/esm/vs/basic-languages/clojure/clojure.contribution"
-import "monaco-editor/esm/vs/basic-languages/coffee/coffee.contribution"
-import "monaco-editor/esm/vs/basic-languages/cpp/cpp.contribution"
-import "monaco-editor/esm/vs/basic-languages/csharp/csharp.contribution"
-import "monaco-editor/esm/vs/basic-languages/csp/csp.contribution"
-import "monaco-editor/esm/vs/basic-languages/css/css.contribution"
-import "monaco-editor/esm/vs/basic-languages/cypher/cypher.contribution"
-import "monaco-editor/esm/vs/basic-languages/dart/dart.contribution"
-import "monaco-editor/esm/vs/basic-languages/dockerfile/dockerfile.contribution"
-import "monaco-editor/esm/vs/basic-languages/ecl/ecl.contribution"
-import "monaco-editor/esm/vs/basic-languages/elixir/elixir.contribution"
-import "monaco-editor/esm/vs/basic-languages/flow9/flow9.contribution"
-import "monaco-editor/esm/vs/basic-languages/freemarker2/freemarker2.contribution"
-import "monaco-editor/esm/vs/basic-languages/fsharp/fsharp.contribution"
-import "monaco-editor/esm/vs/basic-languages/go/go.contribution"
-import "monaco-editor/esm/vs/basic-languages/graphql/graphql.contribution"
-import "monaco-editor/esm/vs/basic-languages/handlebars/handlebars.contribution"
-import "monaco-editor/esm/vs/basic-languages/hcl/hcl.contribution"
-import "monaco-editor/esm/vs/basic-languages/html/html.contribution"
-import "monaco-editor/esm/vs/basic-languages/ini/ini.contribution"
-import "monaco-editor/esm/vs/basic-languages/java/java.contribution"
-import "monaco-editor/esm/vs/basic-languages/javascript/javascript.contribution"
-import "monaco-editor/esm/vs/basic-languages/julia/julia.contribution"
-import "monaco-editor/esm/vs/basic-languages/kotlin/kotlin.contribution"
-import "monaco-editor/esm/vs/basic-languages/less/less.contribution"
-import "monaco-editor/esm/vs/basic-languages/lexon/lexon.contribution"
-import "monaco-editor/esm/vs/basic-languages/liquid/liquid.contribution"
-import "monaco-editor/esm/vs/basic-languages/lua/lua.contribution"
-import "monaco-editor/esm/vs/basic-languages/m3/m3.contribution"
-import "monaco-editor/esm/vs/basic-languages/markdown/markdown.contribution"
-import "monaco-editor/esm/vs/basic-languages/mdx/mdx.contribution"
-import "monaco-editor/esm/vs/basic-languages/mips/mips.contribution"
-import "monaco-editor/esm/vs/basic-languages/msdax/msdax.contribution"
-import "monaco-editor/esm/vs/basic-languages/mysql/mysql.contribution"
-import "monaco-editor/esm/vs/basic-languages/objective-c/objective-c.contribution"
-import "monaco-editor/esm/vs/basic-languages/pascal/pascal.contribution"
-import "monaco-editor/esm/vs/basic-languages/pascaligo/pascaligo.contribution"
-import "monaco-editor/esm/vs/basic-languages/perl/perl.contribution"
-import "monaco-editor/esm/vs/basic-languages/pgsql/pgsql.contribution"
-import "monaco-editor/esm/vs/basic-languages/php/php.contribution"
-import "monaco-editor/esm/vs/basic-languages/pla/pla.contribution"
-import "monaco-editor/esm/vs/basic-languages/postiats/postiats.contribution"
-import "monaco-editor/esm/vs/basic-languages/powerquery/powerquery.contribution"
-import "monaco-editor/esm/vs/basic-languages/powershell/powershell.contribution"
-import "monaco-editor/esm/vs/basic-languages/protobuf/protobuf.contribution"
-import "monaco-editor/esm/vs/basic-languages/pug/pug.contribution"
-import "monaco-editor/esm/vs/basic-languages/python/python.contribution"
-import "monaco-editor/esm/vs/basic-languages/qsharp/qsharp.contribution"
-import "monaco-editor/esm/vs/basic-languages/r/r.contribution"
-import "monaco-editor/esm/vs/basic-languages/razor/razor.contribution"
-import "monaco-editor/esm/vs/basic-languages/redis/redis.contribution"
-import "monaco-editor/esm/vs/basic-languages/redshift/redshift.contribution"
-import "monaco-editor/esm/vs/basic-languages/restructuredtext/restructuredtext.contribution"
-import "monaco-editor/esm/vs/basic-languages/ruby/ruby.contribution"
-import "monaco-editor/esm/vs/basic-languages/rust/rust.contribution"
-import "monaco-editor/esm/vs/basic-languages/sb/sb.contribution"
-import "monaco-editor/esm/vs/basic-languages/scala/scala.contribution"
-import "monaco-editor/esm/vs/basic-languages/scheme/scheme.contribution"
-import "monaco-editor/esm/vs/basic-languages/scss/scss.contribution"
-import "monaco-editor/esm/vs/basic-languages/shell/shell.contribution"
-import "monaco-editor/esm/vs/basic-languages/solidity/solidity.contribution"
-import "monaco-editor/esm/vs/basic-languages/sophia/sophia.contribution"
-import "monaco-editor/esm/vs/basic-languages/sparql/sparql.contribution"
-import "monaco-editor/esm/vs/basic-languages/sql/sql.contribution"
-import "monaco-editor/esm/vs/basic-languages/st/st.contribution"
-import "monaco-editor/esm/vs/basic-languages/swift/swift.contribution"
-import "monaco-editor/esm/vs/basic-languages/systemverilog/systemverilog.contribution"
-import "monaco-editor/esm/vs/basic-languages/tcl/tcl.contribution"
-import "monaco-editor/esm/vs/basic-languages/twig/twig.contribution"
-import "monaco-editor/esm/vs/basic-languages/typescript/typescript.contribution"
-import "monaco-editor/esm/vs/basic-languages/typespec/typespec.contribution"
-import "monaco-editor/esm/vs/basic-languages/vb/vb.contribution"
-import "monaco-editor/esm/vs/basic-languages/wgsl/wgsl.contribution"
-import "monaco-editor/esm/vs/basic-languages/xml/xml.contribution"
-import "monaco-editor/esm/vs/basic-languages/yaml/yaml.contribution"
+import 'monaco-editor/languages/definitions/register.all'

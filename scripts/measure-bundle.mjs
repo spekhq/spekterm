@@ -18,16 +18,20 @@ import { readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 
 const ASSETS_DIR = join(process.cwd(), 'out', 'renderer', 'assets')
-const BASIC_LANGUAGES_DIR = join(
+// Since monaco-editor 0.56 the per-language definitions live here (they were `basic-languages`).
+// If this directory disappears in a later version, `languageNames` is empty, every language chunk
+// falls into "other", and the "at least two language chunks" check below fails — loudly.
+const LANGUAGE_DEFINITIONS_DIR = join(
   process.cwd(),
   'node_modules',
   'monaco-editor',
   'esm',
   'vs',
-  'basic-languages',
+  'languages',
+  'definitions',
 )
 
-/** 唯讀檢視不需要語意分析。這些 worker 若出現在產物裡，就是有人加回了 `language/*`。 */
+/** 唯讀檢視不需要語意分析。這些 worker 若出現在產物裡，就是有人加回了 `languages/features/*`。 */
 const LANGUAGE_SERVICE_WORKERS = ['ts.worker', 'json.worker', 'css.worker', 'html.worker']
 
 const mb = (bytes) => `${(bytes / 1_048_576).toFixed(2)} MB`
@@ -39,7 +43,7 @@ execFileSync('electron-vite', ['build'], { stdio: 'ignore', env: process.env })
 
 /** monaco 的語言 chunk 以語言目錄名為前綴（例如 `freemarker2-BJvIwTvt.js`）。 */
 const languageNames = new Set(
-  readdirSync(BASIC_LANGUAGES_DIR, { withFileTypes: true })
+  readdirSync(LANGUAGE_DEFINITIONS_DIR, { withFileTypes: true })
     .filter((entry) => entry.isDirectory())
     .map((entry) => entry.name),
 )
@@ -114,7 +118,7 @@ const offenders = files.filter((file) =>
 if (offenders.length > 0) {
   failures.push(
     `建置產物中出現語言服務 worker（唯讀檢視不該引入它們）：${offenders.map((f) => f.name).join(', ')}\n` +
-      '    檢查 src/renderer/src/editor/ 是否 import 了 monaco-editor/esm/vs/language/*',
+      '    檢查 src/renderer/src/editor/ 是否 import 了 monaco-editor/languages/features/*',
   )
 }
 

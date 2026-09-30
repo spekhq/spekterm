@@ -342,8 +342,14 @@ addon-unicode-graphemes、i18next、electron-builder（Phase 6）。
   `language/*` 語言服務**（`ts.worker` 單獨就佔 12.65 MB；含語言服務 21.51 MB、不含 8.81 MB）。
   深度改檔走 agent 或使用者自己的 IDE（PRD §6.2）。退守 CodeMirror 6 的成本侷限於
   `src/renderer/src/editor` 這個 wrapper 模組。
-  - 只要引用任何一種 `basic-languages/*` contribution，整套 editor contribution 就已被拉進來 ——
-    `import 'monaco-editor/esm/vs/editor/editor.all.js'` 加與不加只差 **15 bytes**。
+  - **Since monaco-editor 0.56 the entry points are `monaco-editor/editor`,
+    `features/register.all`, and `languages/definitions/register.all`** (the old `esm/vs/...` paths
+    no longer resolve through the package `exports`). Two silent traps from that upgrade: a language
+    definition no longer pulls in the editor features, so `features/register.all` must be imported
+    explicitly (without it find, folding, links and clipboard actions vanish with no error); and the
+    lazy-grammar rule in `electron.vite.config.ts` matches the new directory, or every grammar lands
+    in the initial `monaco` chunk — `measure:bundle`'s "several language chunks" check is what caught
+    it. Typecheck, lint and unit tests were green on the broken upgrade; CI now builds and measures.
 - **編輯器關閉 Monaco 的 native EditContext（`editContext: false`）**，改用經典的隱形 textarea。
   理由是**可驗收性**：native EditContext 的 `ime-text-area` **恆為 `readonly`**，與編輯器唯不唯讀
   無關 —— Phase 2 曾以它斷言唯讀，那對可編輯的編輯器**一樣會通過**。關掉之後 `readonly` 正確反映
