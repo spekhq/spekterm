@@ -593,6 +593,16 @@ workspace 之外的位置。邊界檢查一律在**主行程**執行；preload �
   `-c core.quotePath=false` 只解決前者）。
 - **`git ls-files` 在被 `.gitignore` 涵蓋的目錄裡 exit 0 且無輸出** —— 在 exit code 上與「成功」無法
   區分。使用者既然正在那裡工作，把它呈現為空是錯的，因此「成功但為空」也退回保守列舉。
+- **git reports entries that are not files, in shapes that differ by source.** A nested worktree or
+  repo comes from `--others` with a trailing `/`; a submodule (gitlink) and a symlink come from
+  `--cached` as bare paths; a conflicted file comes once per stage. Hence tracked entries go through
+  `--stage` and a mode **allow-list**, and "git printed nothing" is judged on the raw output — a list
+  that only became empty after filtering must not reach the conservative walk, which descends into
+  nested working trees. **And a machine can hide the worktree shape entirely**: the default excludes
+  file `$XDG_CONFIG_HOME/git/ignore` (fallback `~/.config/git/ignore`) — the maintainer's ignores
+  `.claude/worktrees/`. `GIT_CONFIG_GLOBAL=/dev/null` alone does not turn it off; point
+  `XDG_CONFIG_HOME` at an existing empty directory (an empty string falls back to `~/.config`).
+  `fs-service.test.ts` does both for the whole file (issue #55: green locally, red on CI).
 
 **模糊比對的兩條**：貪婪掃描會把查詢的開頭浪費在目錄名上（`score` 對 `src/score.ts` —— `s` 與 `c`
 被 `src` 吃掉，分數低到排在一個人工的 `s-c-o-r-e.ts` 之後）。修法是**先只在檔名上比對**，命中就加一

@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { afterEach, beforeEach, describe, it } from 'node:test'
+import { after, afterEach, before, beforeEach, describe, it } from 'node:test'
 import { enumerateFiles } from './file-enumeration'
 import { FsBoundaryError } from './fs-boundary'
 import {
@@ -38,6 +38,33 @@ function okFolder(): FolderLookup {
 function shapeOf(entries: { name: string; kind: string; mtimeMs: number }[]): unknown[] {
   return entries.map(({ name, kind }) => ({ name, kind }))
 }
+
+// Every git-backed listing in this file must not see the user's git configuration. A default
+// excludes file (`$XDG_CONFIG_HOME/git/ignore`, falling back to `~/.config/git/ignore`) that
+// ignores `.claude/worktrees/`, `built/` or `out/` turns the exclusion tests green on that machine
+// and red on CI. `GIT_CONFIG_GLOBAL=/dev/null` alone does not disable it (measured): only pointing
+// `XDG_CONFIG_HOME` at an existing empty directory does — an empty string falls back to `~/.config`.
+// `enumerateFiles` spawns git with `{ ...process.env }`, so setting it here reaches git.
+const ISOLATED_GIT_ENV = ['XDG_CONFIG_HOME', 'GIT_CONFIG_GLOBAL', 'GIT_CONFIG_NOSYSTEM'] as const
+const savedGitEnv = new Map<string, string | undefined>()
+let isolatedConfigHome: string
+
+before(() => {
+  isolatedConfigHome = fs.mkdtempSync(path.join(tmpdir(), 'spek-fsservice-xdg-'))
+  for (const name of ISOLATED_GIT_ENV) savedGitEnv.set(name, process.env[name])
+  process.env.XDG_CONFIG_HOME = isolatedConfigHome
+  process.env.GIT_CONFIG_GLOBAL = '/dev/null'
+  process.env.GIT_CONFIG_NOSYSTEM = '1'
+})
+
+after(() => {
+  for (const name of ISOLATED_GIT_ENV) {
+    const value = savedGitEnv.get(name)
+    if (value === undefined) delete process.env[name]
+    else process.env[name] = value
+  }
+  fs.rmSync(isolatedConfigHome, { recursive: true, force: true })
+})
 
 beforeEach(() => {
   base = fs.realpathSync(fs.mkdtempSync(path.join(tmpdir(), 'spek-fsservice-')))
@@ -543,6 +570,12 @@ function git(cwd: string, args: string[]): void {
   })
 }
 
+/** Every entry `listFiles` returned must be a regular file (symlinks are followed). */
+function assertOnlyRegularFiles(files: string[]): void {
+  const notFiles = files.filter((f) => !fs.statSync(path.join(repo, f)).isFile())
+  assert.deepEqual(notFiles, [], `not regular files: ${JSON.stringify(notFiles)}`)
+}
+
 describe('listFiles 的座標系與種類', () => {
   it('回傳 folder-relative 路徑，且可直接餵給 readFile', async () => {
     const files = await listFiles(okFolder(), 'f1', 'sub')
@@ -638,23 +671,103 @@ describe('listFiles 與非 ASCII 檔名', () => {
 })
 
 describe('listFiles 的排除規則', () => {
-  // Known failure without a global ignore covering `.claude/worktrees/` (the case on CI): git
-  // reports the nested working tree itself as `wt/`. Tracked in issue #55 — drop `todo` when fixed.
-  it('排除位於自身之內的其他 git 工作目錄', { todo: 'issue #55' }, async () => {
+  // Each test asserts three things: every listed entry is a regular file, the specific path is
+  // absent, and a tracked main-directory file is present. **Not "no entry ends with `/`"**:
+  // `listFiles` passes entries through `path.join` + `path.relative`, which strip the slash, so
+  // that assertion stays green while `nested/` is listed as `nested`.
+  it('A nested working tree or nested repository itself is not listed', async () => {
     git(repo, ['init', '-q', '-b', 'main'])
     git(repo, ['add', '-A'])
     git(repo, ['commit', '-qm', 'init'])
-    // 使用者的標準工作流：worktree 開在 repo 內部。
+    // The user's standard workflow: the worktree lives inside the repo.
     git(repo, ['worktree', 'add', '-q', '-b', 'feat', '.claude/worktrees/wt'])
+    fs.mkdirSync(path.join(repo, 'nested'))
+    git(path.join(repo, 'nested'), ['init', '-q', '-b', 'main'])
+    fs.writeFileSync(path.join(repo, 'nested', 'n.txt'), 'x')
 
     const files = await listFiles(okFolder(), 'f1', '.')
 
-    assert.ok(
-      !files.some((f) => f.startsWith('.claude/worktrees/')),
-      JSON.stringify(files.filter((f) => f.startsWith('.claude'))),
-    )
-    // 而主工作目錄那一份仍在 —— 否則「排除」可能只是整個列舉壞了。
+    assertOnlyRegularFiles(files)
+    assert.ok(!files.includes('.claude/worktrees/wt'), JSON.stringify(files))
+    assert.ok(!files.some((f) => f.startsWith('.claude/worktrees/')), JSON.stringify(files))
+    assert.ok(!files.includes('nested'), JSON.stringify(files))
     assert.ok(files.includes('a-file.txt'), JSON.stringify(files))
+  })
+
+  it('A submodule itself is not listed', async () => {
+    const upstream = path.join(base, 'upstream')
+    fs.mkdirSync(upstream)
+    fs.writeFileSync(path.join(upstream, 'inside.txt'), 'x')
+    git(upstream, ['init', '-q', '-b', 'main'])
+    git(upstream, ['add', '-A'])
+    git(upstream, ['commit', '-qm', 'init'])
+    git(repo, ['init', '-q', '-b', 'main'])
+    git(repo, ['add', '-A'])
+    git(repo, ['commit', '-qm', 'init'])
+    git(repo, ['-c', 'protocol.file.allow=always', 'submodule', 'add', '-q', upstream, 'sm'])
+    git(repo, ['commit', '-qm', 'add submodule'])
+
+    const files = await listFiles(okFolder(), 'f1', '.')
+
+    assertOnlyRegularFiles(files)
+    assert.ok(!files.includes('sm'), JSON.stringify(files))
+    assert.ok(!files.some((f) => f.startsWith('sm/')), JSON.stringify(files))
+    assert.ok(files.includes('a-file.txt'), JSON.stringify(files))
+  })
+
+  it('A tracked symlink to a directory is not listed', async () => {
+    // `a-link` (seeded by `beforeEach`) points at `a-file.txt`; `sub-link` points at `sub/`.
+    fs.symlinkSync(path.join(repo, 'sub'), path.join(repo, 'sub-link'))
+    git(repo, ['init', '-q', '-b', 'main'])
+    git(repo, ['add', '-A'])
+    git(repo, ['commit', '-qm', 'init'])
+
+    const files = await listFiles(okFolder(), 'f1', '.')
+
+    assertOnlyRegularFiles(files)
+    assert.ok(!files.includes('sub-link'), JSON.stringify(files))
+    assert.ok(files.includes('a-link'), JSON.stringify(files))
+    assert.ok(files.includes('a-file.txt'), JSON.stringify(files))
+  })
+
+  it('A file in a merge conflict appears once', async () => {
+    fs.writeFileSync(path.join(repo, 'c.txt'), 'base\n')
+    git(repo, ['init', '-q', '-b', 'main'])
+    git(repo, ['add', '-A'])
+    git(repo, ['commit', '-qm', 'init'])
+    git(repo, ['checkout', '-q', '-b', 'other'])
+    fs.writeFileSync(path.join(repo, 'c.txt'), 'other\n')
+    git(repo, ['commit', '-qam', 'other'])
+    git(repo, ['checkout', '-q', 'main'])
+    fs.writeFileSync(path.join(repo, 'c.txt'), 'main\n')
+    git(repo, ['commit', '-qam', 'main'])
+    // The merge is expected to stop on the conflict (non-zero exit).
+    assert.throws(() => git(repo, ['merge', '-q', 'other']))
+
+    const files = await listFiles(okFolder(), 'f1', '.')
+
+    assert.equal(files.filter((f) => f === 'c.txt').length, 1, JSON.stringify(files))
+    assert.ok(files.includes('a-file.txt'), JSON.stringify(files))
+  })
+
+  it('A folder whose only content is a nested working tree lists nothing from inside it', async () => {
+    // Its own directory: the shared `beforeEach` fixture always seeds files, so git's raw output
+    // would never be empty there. The worktree is checked out from a branch that **has** a file —
+    // one checked out from the empty commit would hold only its `.git` file, which the fallback
+    // walk skips, and the mutation (checking emptiness after filtering) would stay green.
+    const lone = path.join(base, 'lone')
+    fs.mkdirSync(lone)
+    git(lone, ['init', '-q', '-b', 'main'])
+    git(lone, ['commit', '-q', '--allow-empty', '-m', 'empty'])
+    git(lone, ['worktree', 'add', '-q', '-b', 'feat', '.claude/worktrees/wt'])
+    const worktree = path.join(lone, '.claude', 'worktrees', 'wt')
+    fs.writeFileSync(path.join(worktree, 'w.txt'), 'x')
+    git(worktree, ['add', '-A'])
+    git(worktree, ['commit', '-qm', 'feat'])
+
+    const files = await listFiles(lookup([{ id: 'f2', path: lone, status: 'ok' }]), 'f2', '.')
+
+    assert.deepEqual(files, [])
   })
 
   it('排除版控忽略的內容', async () => {

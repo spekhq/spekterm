@@ -998,6 +998,21 @@ agent 目標走 `$SHELL -l -c claude` —— **login shell 會重設 PATH**，`~
 漏掉它的徵狀是「替身完全沒被執行」，而畫面上一切正常 —— **紅的是產品那邊的斷言**。
 （`probe-terminal` 早就記著這件事，`probe-agent-view` 照樣重踩一次。）
 
+## git fixtures inherit the machine's git configuration
+
+Probes that build git fixtures spawn git with the developer's environment, so they read the
+developer's **default excludes file** (`$XDG_CONFIG_HOME/git/ignore`, falling back to
+`~/.config/git/ignore`). The maintainer's ignores `.claude/worktrees/` — which is exactly where
+`probe:openspec`'s `repo-worktree` fixture puts its nested worktree. On that machine git never
+reports the worktree entry, so a defect in how that entry is handled is invisible to the probe that
+runs there (issue #55: quick open listed the worktree as a file; green locally, red on CI).
+
+A git-shaped defect therefore needs a carrier that sets the configuration itself. The unit tests in
+`src/main/fs-service.test.ts` do: `XDG_CONFIG_HOME` pointed at an existing empty directory,
+`GIT_CONFIG_GLOBAL=/dev/null`, `GIT_CONFIG_NOSYSTEM=1`. **`GIT_CONFIG_GLOBAL=/dev/null` alone is
+not enough** — it does not disable the default excludes file (measured). The probes were not changed;
+their coverage-table rows say they cannot see this class of defect.
+
 
 ## 「一次性讀取」不是斷言，是競態
 

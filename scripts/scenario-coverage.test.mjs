@@ -48,6 +48,7 @@ const COVERED_CHANGES = [
   'handoff-lineage',
   'handoff-session-lifecycle',
   'open-source-mit',
+  'quick-open-nested-worktree-entry',
 ]
 
 /** change 的所在 —— 封存後它會搬到 `archive/` 之下，兩處都找。 */
@@ -1348,6 +1349,26 @@ export const TABLE = [
     '**載體在 repo 外**（`~/spekterm-oss/scan.sh`）：它必須寫出原名，放進 repo 就違反「內部識別字詞不出現」。'
     + '公開前執行一次 —— 改寫前各類皆非零（基準，證明掃描有效）、改寫後與本機換成新歷史後皆為零（tasks 1.1、1.2、1.5）。'
     + '公開之後歷史只會由符合前兩列的 commit 延伸'],
+  // ── quick-open-nested-worktree-entry (quick-open) ─────────────────────────
+  ['巢狀工作目錄的檔案不重複出現', '主工作目錄為根時，清單不含任何位於巢狀 worktree 之下的檔案', false,
+    'list with the conservative walk instead of git',
+    'Restated unchanged. Also: 主工作目錄的 spec 檔案恰好出現一次 (same section). It checks files under the worktree, not the worktree entry itself — that is the next rows'],
+  ['版控忽略的內容不出現', '排除版控忽略的內容', false, 'drop `--exclude-standard` from the untracked call',
+    'Restated unchanged. Its test file now isolates git from the user configuration, so a global excludes file containing `built/` can no longer make it green'],
+  ['目錄不出現在結果中', '遞迴涵蓋各層，且清單不含目錄', true, null,
+    '**Green regardless of the git path**: it asserts `sub` / `sub/deep` are absent, and git never emits plain directories; `probe-files` (清單只含檔案，不含目錄) uses a non-git fixture, so the conservative walk. The git path is carried by the four scenarios below, each of which asserts every entry is a regular file'],
+  ['A nested working tree or nested repository itself is not listed', 'A nested working tree or nested repository itself is not listed', false,
+    'drop the trailing-slash filter on the untracked call', '**Ran** (tasks 2.4). ' + "The scenario is phrased at the Ctrl+P entry; its carrier is the `listFiles` unit test. The UI half is `probe:openspec` (runQuickOpenScope), which goes through git enumeration with a nested worktree but cannot see this defect: it inherits the maintainer's global excludes and its query does not match the worktree path"],
+  ['A submodule itself is not listed', 'A submodule itself is not listed', false,
+    'replace the mode allow-list with "keep every tracked entry"', '**Ran** (tasks 2.4). ' + "The scenario is phrased at the Ctrl+P entry; its carrier is the `listFiles` unit test. The UI half is `probe:openspec` (runQuickOpenScope), which goes through git enumeration with a nested worktree but cannot see this defect: it inherits the maintainer's global excludes and its query does not match the worktree path"],
+  ['A tracked symlink to a directory is not listed', 'A tracked symlink to a directory is not listed', false,
+    'replace the mode allow-list with "keep every tracked entry"', '**Ran** (tasks 2.4). ' + "The scenario is phrased at the Ctrl+P entry; its carrier is the `listFiles` unit test. The UI half is `probe:openspec` (runQuickOpenScope), which goes through git enumeration with a nested worktree but cannot see this defect: it inherits the maintainer's global excludes and its query does not match the worktree path"],
+  ['A file in a merge conflict appears once', 'A file in a merge conflict appears once', false,
+    'collect entries in an array instead of a Set', '**Ran** (tasks 2.4). ' + "The scenario is phrased at the Ctrl+P entry; its carrier is the `listFiles` unit test. The UI half is `probe:openspec` (runQuickOpenScope), which goes through git enumeration with a nested worktree but cannot see this defect: it inherits the maintainer's global excludes and its query does not match the worktree path"],
+  ['A folder whose only content is a nested working tree lists nothing from inside it',
+    'A folder whose only content is a nested working tree lists nothing from inside it', false,
+    'judge "git printed nothing" on the filtered list instead of the raw output',
+    '**Ran** (tasks 2.4): that mutation turns only this row red. Its own fixture — the shared one always seeds files, so the raw output is never empty there. ' + "The scenario is phrased at the Ctrl+P entry; its carrier is the `listFiles` unit test. The UI half is `probe:openspec` (runQuickOpenScope), which goes through git enumeration with a nested worktree but cannot see this defect: it inherits the maintainer's global excludes and its query does not match the worktree path"],
 ]
 
 /**

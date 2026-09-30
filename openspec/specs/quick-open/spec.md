@@ -17,6 +17,7 @@ agent 是這個應用程式的主場。這是刻意的行為，不是未完成�
 `keyboard-navigation` 的導航／排序都不同的快捷鍵。
 
 ## Requirements
+
 ### Requirement: 側欄持有焦點時提供以鍵盤開啟檔案的入口
 
 當 side panel 之內的任一元素持有焦點時，系統 SHALL 於使用者按下 `Ctrl+P` 時開啟一個檔案的快速
@@ -111,6 +112,44 @@ worktree 是**另一個**工作目錄，由工作目錄選擇器切換。
 
 - **WHEN** 使用者查詢的片段與某個目錄的名稱相符
 - **THEN** 該目錄不出現在結果中
+
+#### Scenario: A nested working tree or nested repository itself is not listed
+
+- **WHEN** a repo contains, inside itself, a git worktree and a separate git repository, neither of
+  which is ignored by any ignore rule — including the user's global ignore rules
+- **AND** the user opens the quick-open entry with the side-panel source set to the repo's **main**
+  working directory
+- **THEN** neither the worktree nor the nested repository appears as an entry in the results
+- **AND** a file tracked in the main working directory still appears
+
+#### Scenario: A submodule itself is not listed
+
+- **WHEN** a repo contains a submodule
+- **AND** the user opens the quick-open entry with the side-panel source set to that repo
+- **THEN** neither the submodule nor any file inside it appears in the results
+- **AND** a file tracked in the repo still appears
+
+#### Scenario: A tracked symlink to a directory is not listed
+
+- **WHEN** a repo tracks a symbolic link that points to a directory, and also tracks a symbolic link
+  that points to a file inside the repo
+- **AND** the user opens the quick-open entry with the side-panel source set to that repo
+- **THEN** the link to the directory does not appear in the results
+- **AND** the link to the file does appear
+
+#### Scenario: A file in a merge conflict appears once
+
+- **WHEN** a repo has a file in an unresolved merge conflict
+- **AND** the user opens the quick-open entry with the side-panel source set to that repo
+- **THEN** that file appears exactly once in the results
+
+#### Scenario: A folder whose only content is a nested working tree lists nothing from inside it
+
+- **WHEN** a repo has no files of its own, and holds inside itself a git worktree whose checkout
+  contains files, not ignored by any ignore rule
+- **AND** the user opens the quick-open entry with the side-panel source set to the repo's main
+  working directory
+- **THEN** the results contain no file from under that worktree
 
 ### Requirement: 以子序列比對即時篩選，並依相關性排序
 
