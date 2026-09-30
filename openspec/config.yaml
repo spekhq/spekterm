@@ -4,7 +4,7 @@ context: |
   Project: spekterm — agent 開發工作台（Electron 桌面 app，MIT 開源）
   Purpose: 把多個「一個 repo／資料夾各自一個 claude session」的 terminal 包在一個殼裡，
            並加上一塊懂 OpenSpec 結構的側欄
-  Tech stack: Electron 43.1.0（釘死）, electron-vite, electron-builder（Linux AppImage）, TypeScript,
+  Tech stack: Electron 43.5.0（釘死）, electron-vite, electron-builder（Linux AppImage）, TypeScript,
            React 19, Tailwind CSS v4, react-resizable-panels, chokidar 5（經 src/main/watcher.ts）,
            node-pty 1.2.0-beta.14（釘死）, @spekjs/core 與 @spekjs/ui（npm 公開套件）,
            monaco-editor（只含語法高亮，不含任何 language/* 語言服務 worker）,

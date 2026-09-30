@@ -325,7 +325,7 @@ core 發佈為 **`@spekjs/core`**（本 repo 宣告 `^1.13.0`），UI 套件為 
 
 ## Tech Stack
 
-Electron 43.1.0（釘死）+ electron-vite、TypeScript、React 19 + Tailwind CSS v4、
+Electron 43.5.0（釘死）+ electron-vite、TypeScript、React 19 + Tailwind CSS v4、
 node-pty 1.2.0-beta.14（釘死）、Monaco Editor、chokidar 5、react-markdown + remark-gfm、
 @xterm/xterm 6 + addon-fit / addon-web-links / addon-webgl / addon-serialize /
 addon-unicode-graphemes、i18next、electron-builder（Phase 6）。
