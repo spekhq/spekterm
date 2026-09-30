@@ -198,8 +198,8 @@ npm run probe:intake    # agent-intake / intake-routing（收件匣的兩條入�
                         #   **唯一跨行程的那條斷言住在這裡**：畫面上那一列的 textContent 與
                         #   磁碟上 context 檔界線之內的內容必須逐字元相同 —— 主行程裡的單元
                         #   測試看不見呈現那一端，於是「正規化被搬到呈現層」對它是透明的。
-                        #   **交接的四段也在這裡**（`runHandoff` / `runHandoffRestored` /
-                        #   `runHandoffFailure` / `runHandoffDisabled`）—— 它是收件匣的第二個
+                        #   **交接的三段也在這裡**（`runHandoff` / `runHandoffRestored` /
+                        #   `runHandoffFailure`）—— 它是收件匣的第二個
                         #   producer，共用同一套替身與落點佈置。**`runHandoffRestored` 種
                         #   `sessions.json` ＋ 既有的落點目錄**：落點被重新準備之後還收不收得到，
                         #   只有「session 被還原」這個形狀驗得出來（新建落點是唯一沒壞的那一種）。

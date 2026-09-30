@@ -219,7 +219,8 @@ rail 項目** —— 同一個 rail 項目中的樹狀呈現（見 `workspace-la
 系統 SHALL NOT 在提供給 agent 的關係中放入任何路徑欄位或 spekterm 的 session 識別碼 —— agent 需要的
 只有名字。
 
-關係的提供隨交接偏好啟用與關閉：交接關閉時 SHALL NOT 提供，已提供者 SHALL 被移除。
+Relations SHALL always be provided to running claude sessions: handoff has no switch (removed
+2026-09-30), so there is no state in which they are withdrawn.
 
 **本能力不經手訊息本身。** 母子之間的訊息由 agent CLI 自身的訊息功能傳遞；本能力交付的是
 「對方是誰、叫什麼名字、此刻收不收得到」。**休眠的 session 沒有行程，收不到訊息** —— 關係中
@@ -266,11 +267,6 @@ SHALL 標明它不在執行中，本能力 SHALL NOT 為此喚醒它。
 
 - **WHEN** 檢視提供給 agent 的關係內容，其中各對象所屬的 folder 皆位於 workspace 之內
 - **THEN** 其中沒有任何表示路徑或 spekterm session 識別碼的欄位
-
-#### Scenario: 交接關閉時不提供關係
-
-- **WHEN** 使用者把交接偏好關閉
-- **THEN** 任何 session 都查詢不到關係
 
 #### Scenario: 母 session 查得到子 session 的狀態與結果
 

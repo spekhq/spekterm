@@ -65,6 +65,18 @@ describe('parsePreferences：結構嚴格', () => {
   })
 })
 
+describe('the removed handoff switch', () => {
+  // `agentHandoff` existed until 2026-09-30 and was never shown in the UI. A file written by an
+  // earlier version may still hold it; the field table drops fields it does not know.
+  it('A preferences file with the removed switch still loads', () => {
+    const raw = JSON.stringify({ version: 1, terminal: { fontSize: 15, agentHandoff: false } })
+
+    const parsed = parsePreferences(raw)
+    assert.ok(parsed, 'the file must not be rejected because of the old field')
+    assert.deepEqual(parsed.terminal, { fontSize: 15 })
+  })
+})
+
 describe('parsePreferences：值寬容（清理／夾制而非棄檔）', () => {
   it('fontSize 超出範圍被夾制，而非使整檔無效', () => {
     assert.equal(

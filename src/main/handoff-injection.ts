@@ -7,7 +7,8 @@ import type { WorkspaceFolder } from './workspace-store'
 export type FolderList = readonly Pick<WorkspaceFolder, 'name' | 'path'>[]
 
 /**
- * 交接的注入貢獻。回傳 `null` ＝ 不參與（偏好關閉、或落點建不起來）。
+ * 交接的注入貢獻。回傳 `null` ＝ 不參與（落點建不起來）。 There is no switch: handoff is a core
+ * capability.
  *
  * **它與事件橋接同時貢獻 `SessionStart`，而那是刻意的** —— 實測（2026-09-17、CLI 2.1.274）
  * 同一個事件上的多條命令都會被執行，且每一條的 stdout 都進入脈絡。合成器負責把兩者串接
@@ -20,7 +21,6 @@ export type FolderList = readonly Pick<WorkspaceFolder, 'name' | 'path'>[]
  */
 export function prepareHandoffInjection(
   sessionId: string,
-  enabled: boolean,
   folders: FolderList,
   peer: {
     /** 它的固定名字（`agent-peer-name`）。 */
@@ -31,7 +31,6 @@ export function prepareHandoffInjection(
     reportable?: boolean
   } = {},
 ): InjectionContribution | null {
-  if (!enabled) return null
   const outbox = prepareOutbox(sessionId)
   if (!outbox) return null
 

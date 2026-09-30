@@ -169,10 +169,9 @@ export function writeRelationsFor(sessionId: string, world: RelationsWorld): str
  * 之後都呼叫它。它重算**所有**執行中的 claude session、只寫內容有變的檔，並刪掉不再執行者的檔。
  *
  * 逐一列舉觸發點再各自更新受影響的那幾個檔 —— 設計第一版就是那樣，而漏掉任何一個都是靜默的。
- * `enabled` 為假（交接關閉）時刪除全部。
  */
-export function refreshRelations(world: RelationsWorld & { agents: readonly string[]; enabled: boolean }): void {
-  const keep = new Set(world.enabled ? world.agents : [])
+export function refreshRelations(world: RelationsWorld & { agents: readonly string[] }): void {
+  const keep = new Set(world.agents)
   for (const sessionId of keep) writeRelationsFor(sessionId, world)
 
   const dir = relationsDir()

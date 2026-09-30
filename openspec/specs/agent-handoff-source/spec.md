@@ -461,24 +461,30 @@ SHALL NOT 改為打開收件匣。
 - **THEN** 不建立任何 session
 - **AND** 收件匣未被開啟
 
-### Requirement: 本能力可關閉，且與其他經同一接縫注入的功能彼此獨立
+### Requirement: Handoff is always available, and independent of the other features injected through the same seam
 
-系統 SHALL 提供一個開關控制本能力，**預設啟用**。關閉時 SHALL 不注入自我介紹、不建立投遞落點，
-且既有投遞落點中的內容 SHALL NOT 被處理。
+This capability SHALL NOT be switchable: it is a core capability of the application and is always
+active — its introduction is injected, its outboxes are prepared, and deliveries in them are
+processed. (Until 2026-09-30 a switch existed as a preference field that no settings screen showed;
+it was removed because users could not reach it and handoff is not meant to be turned off.)
 
-關閉本能力 SHALL NOT 使其他經同一注入接縫的功能失效；關閉那些功能亦 SHALL NOT 使本能力失效
-（事件回報關閉時本能力的行為見「預填不可能發生時不建立 session」—— 那是**可見的拒絕**，
-不是靜默失效）。
+Turning off another feature injected through the same seam SHALL NOT disable this capability. With
+the event bridge turned off, handoffs are still read, and each takes the **visible** rejection
+described in "預填不可能發生時不建立 session" — a visible rejection, not a silent failure.
 
-#### Scenario: 關閉本能力後投遞不被處理
+A preferences file written by an earlier version that still contains the removed switch SHALL load
+normally, and the switch's value SHALL have no effect.
 
-- **WHEN** 本能力為關閉，一份合法的交接被放進某個既有的落點
-- **THEN** 收件匣中不出現對應的交接，且不建立任何 session
+#### Scenario: A handoff is processed with the event bridge turned off
 
-#### Scenario: 關閉本能力不影響事件回報
+- **WHEN** the event bridge is turned off, and an agent session writes a valid handoff to its outbox
+- **THEN** the handoff is read and rejected visibly because the prefill cannot happen, rather than
+  being ignored
 
-- **WHEN** 本能力為關閉、事件橋接為啟用，使用者建立一個 agent session
-- **THEN** 該 session 的事件照常被寫出
+#### Scenario: A preferences file with the removed switch still loads
+
+- **WHEN** the preferences file contains the removed handoff switch set to off
+- **THEN** the application loads its other preferences, and handoffs are still processed
 
 ### Requirement: agent 得不到投遞結果的回饋，此缺口須被記載而非被宣稱不存在
 

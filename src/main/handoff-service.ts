@@ -65,14 +65,6 @@ export interface HandoffServiceDeps {
   candidates: () => TargetCandidate[]
   agentEventsEnabled: () => boolean
   /**
-   * 本能力是否啟用。**在每一次投遞的當下求值**，不是建構時。
-   *
-   * **它要同時擋住兩件事**：注入（由 `prepareHandoffInjection` 負責）與**既有落點中的內容**。
-   * 只擋注入的話，關掉偏好之後，上一輪留下的落點照樣會被監看與處理 —— 使用者關掉了一個能力，
-   * 而它還在開 session。
-   */
-  enabled: () => boolean
-  /**
    * 到達即接受：請 renderer 在該 folder 建立 session。
    *
    * **建立不由主行程做** —— session 清單的權威在 renderer（見 `ipc/intake` 檔頭），主行程自行
@@ -148,10 +140,6 @@ export class HandoffService {
   /** 一份投遞檔 → 一次 `deliver()`。 */
   async deliverFile(contents: string, file: string): Promise<DeliverOutcome> {
     const { service } = this.#deps
-
-    // 關閉時**連既有落點的內容都不處理**（見 `enabled` 的註解）。不消費 —— 使用者可能只是
-    // 暫時關掉它，那些投遞在重新啟用之後應該還在。
-    if (!this.#deps.enabled()) return { ok: false, code: 'MALFORMED', consume: false, notify: false }
 
     const sessionId = sourceSessionOf(file)
     // 不在 `<root>/<sessionId>/` 正下方 ⇒ 不是一份交接。消費掉它，否則它每次掃描都再走一趟。

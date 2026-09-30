@@ -46,7 +46,6 @@ function harness(): Harness {
     sourceOf: (sessionId) => ({ folderId: 'f1', label: `session ${sessionId}` }),
     candidates: () => [{ id: 'f2', name: 'beta', path: '/repos/beta' }],
     agentEventsEnabled: () => true,
-    enabled: () => true,
     requestAutoAccept: (_adapter, id, folderId) => accepted.push({ id, folderId }),
   })
   services.push(handoff)

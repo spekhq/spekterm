@@ -26,7 +26,6 @@ function harness(options: {
   sources?: Record<string, { folderId: string | null; label: string; title?: string }>
   candidates?: { id: string; name: string; path: string }[]
   eventsEnabled?: boolean
-  enabled?: boolean
   /** 完成報告的採納（`handoff-completion`）。每一次呼叫都記下來。 */
   report?: (sessionId: string, summary: string, identity: string) => ReportDecision
   sourceTesting?: HandoffServiceDeps['sourceTesting']
@@ -44,7 +43,6 @@ function harness(options: {
     sourceOf: (sessionId) => options.sources?.[sessionId] ?? null,
     candidates: () => options.candidates ?? [{ id: 'f2', name: 'beta', path: '/repos/beta' }],
     agentEventsEnabled: () => options.eventsEnabled !== false,
-    enabled: () => options.enabled !== false,
     requestAutoAccept: (_adapter, id, folderId) => autoAccepted.push({ id, folderId }),
     ...(options.report ? { acceptReport: options.report } : {}),
     ...(options.sourceTesting ? { sourceTesting: options.sourceTesting } : {}),
@@ -260,7 +258,6 @@ test('交接受待處理總量上限約束 —— 豁免它等於推開一道保
     sourceOf: () => ({ folderId: 'f1', label: 'alpha' }),
     candidates: () => [{ id: 'f2', name: 'beta', path: '/repos/beta' }],
     agentEventsEnabled: () => true,
-    enabled: () => true,
     requestAutoAccept: (_a, id) => accepted.push(id),
   })
   prepareOutbox('s1')
@@ -279,18 +276,6 @@ test('交接受待處理總量上限約束 —— 豁免它等於推開一道保
   // **暫時性拒絕 ⇒ 不消費** —— 投遞檔留在落點等上限解除（既有行為）。
   assert.equal(outcome.consume, false)
   assert.equal(accepted.length, 1)
-})
-
-test('偏好關閉時，既有落點中的內容也不被處理', async () => {
-  const h = harness({ sources, enabled: false })
-  const file = h.file('s1', 'a.json', good)
-  const outcome = await h.handoff.deliverFile(fs.readFileSync(file, 'utf8'), file)
-
-  assert.equal(outcome.ok, false)
-  assert.equal(h.store.list().length, 0)
-  assert.equal(h.autoAccepted.length, 0)
-  // **不消費** —— 使用者可能只是暫時關掉它。
-  assert.equal(outcome.consume, false)
 })
 
 /**

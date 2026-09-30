@@ -514,8 +514,6 @@ void app.whenReady().then(async () => {
     // **與自我介紹的清單同源** —— 分成兩份的話，agent 手上的選項與接收端認得的選項會分岔。
     candidates: () => store.list().map((folder) => ({ id: folder.id, name: folder.name, path: folder.path })),
     agentEventsEnabled: () => preferencesStore.get().agentEvents !== false,
-    // 未設定＝啟用（與另外兩個開關同一條規則）。
-    enabled: () => preferencesStore.get().agentHandoff !== false,
     requestAutoAccept: (adapter, id, folderId) => requestAutoAccept?.(adapter, id, folderId),
     acceptReport: (sessionId, summary, identity) => completion.acceptReport(sessionId, summary, identity),
   })
@@ -546,7 +544,6 @@ void app.whenReady().then(async () => {
     refreshRelations({
       ...currentRelationsWorld(store, sessionStore),
       agents: runningAgents(),
-      enabled: preferencesStore.get().agentHandoff !== false,
     })
   sessionStore.subscribe(refreshAllRelations)
   onPtyChange(refreshAllRelations)

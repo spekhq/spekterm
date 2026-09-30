@@ -553,11 +553,14 @@ export const TABLE = [
     + '本輪未做。結構上由 renderer 那道「找不到就什麼都不做」保證，而那一行有註解釘住它為什麼在 renderer 而不在主行程'],
 
   // ── agent-initiated-handoff：開關 ────────────────────────────────────────
-  ['關閉本能力後投遞不被處理', '關閉時既有落點中的內容不被處理，且不被消費', false,
-    '關閉時只擋注入，不擋既有落點的內容',
-    '**只擋注入是不夠的** —— 上一輪留下的落點照樣會被監看與處理，使用者關掉了一個能力而它還在開 session'],
-  ['關閉本能力不影響事件回報', '關閉交接不影響事件回報（預填照常）', false,
-    '把交接的開關也拿來閘事件橋接', ''],
+  // The switch was removed on 2026-09-30 (handoff is core; the switch was never in the UI). Both
+  // scenarios now exist only in this archived change; the main spec replaced the requirement with
+  // "Handoff is always available…", carried by `事件回報關閉時不建立 session，且可見地說明` and
+  // `A preferences file with the removed switch still loads`.
+  ['關閉本能力後投遞不被處理', null, true, null,
+    'Requirement removed from the main spec with the switch; its carriers (unit test and probe:intake runHandoffDisabled) were removed too'],
+  ['關閉本能力不影響事件回報', null, true, null,
+    'Requirement removed from the main spec with the switch — there is no handoff switch left to be independent of; the other direction (events off, handoff still runs visibly) is carried by 事件回報關閉時不建立 session，且可見地說明'],
 
   // ── agent-initiated-handoff：沒有回傳通道 ────────────────────────────────
   ['投遞失敗時來源 session 的終端未被寫入', null, true, null,
@@ -606,8 +609,10 @@ export const TABLE = [
   // ── claude-status-bridge 的 delta ───────────────────────────────────────
   ['兩個功能同時啟用時皆生效', '與事件橋接合成之後，SessionStart 上兩條命令都在', false,
     '合成改回逐鍵覆蓋', ''],
-  ['關閉其中一個不影響另一個', '關閉時完全不參與 —— 不建立落點也不注入', false,
-    '把三個開關捆成一個', ''],
+  ['關閉其中一個不影響另一個', null, true, null,
+    '**No carrier.** Until 2026-09-30 this row named the handoff injection test "關閉時完全不參與 —— 不建立落點也不注入" — '
+    + 'which never exercised the pair this scenario is about (status bridge off, event bridge on). That test went with the '
+    + 'handoff switch; a carrier for the status/event pair was not found and is not added here'],
   ['其中一個因故不注入時另一個仍注入', '全部不參與時不注入', true, '任一貢獻者回 null 時整份不注入',
     '**那條測的是「全部不參與」而不是「其一不參與」** —— 後者由 `composeInjection` 的 filter 保證，'
     + '而既有的 `claude-status-bridge` 載體涵蓋狀態列與事件橋接那一對'],
@@ -1114,7 +1119,8 @@ export const TABLE = [
   ['母 session 不存在之後兄弟仍互相查得到', '母 session 關閉之後兄弟仍互列', false, 'siblings-need-parent', 'probe 另有一條「兄弟仍互列」'],
   ['休眠的母 session 標明不在執行中', '休眠的母 session 存在但 running 為假', false, 'running 恆真', 'probe 另有「休眠的兄弟存在但不在執行中」'],
   ['關係中沒有路徑欄位', '輸出沒有路徑欄位，也沒有 spekterm 的識別碼', false, '輸出 cwd 或識別碼', ''],
-  ['交接關閉時不提供關係', '不再執行的 session 其檔被刪除；關閉交接時全部刪除', false, 'enabled 被忽略', ''],
+  ['交接關閉時不提供關係', null, true, null,
+    'Requirement text and scenario removed from the main spec with the handoff switch (2026-09-30): relations are always provided'],
   ['切換語言後標示文案隨之改變', null, true, null,
     '**無載體**：沒有切換語言的 probe 步驟。字典完整性（兩種語言都有這幾個 key、複數類別齊全）由 `dictionary-completeness` 守'],
   ['來源為全域 session 的快照以當下的語言呈現', null, true, null,

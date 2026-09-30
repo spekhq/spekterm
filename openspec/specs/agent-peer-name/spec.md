@@ -55,10 +55,11 @@ shell 目標的 session SHALL NOT 被指定名字。
 - **WHEN** 使用者於名為 `---` 的 folder 建立一個 claude session
 - **THEN** 該 session 的名字以 `session-` 開頭
 
-#### Scenario: 交接關閉時仍指定名字
+#### Scenario: The name is given even when no feature is injected
 
-- **WHEN** 交接偏好為關閉，使用者建立一個 claude session
-- **THEN** 該 session 的 agent 仍以其固定名字啟動
+- **WHEN** no injected feature contributes to a claude session (for example its handoff outbox
+  cannot be prepared and the other bridges are off), and the user creates that session
+- **THEN** the session's agent still starts with its fixed name
 
 #### Scenario: 重新啟動之後名字不變
 

@@ -181,9 +181,11 @@ function serviceFor(
   () => preferences.get().agentEvents !== false,
   agentSettingsFile,
   // 交接的注入貢獻。**排在事件橋接之後**（見 `terminal.ts` 的註冊順序註解）。
-  // 未設定＝啟用，與另外兩個同一條規則，且三者的啟用狀態彼此獨立。
+  // Always on: handoff is a core capability and has no switch. It stays independent of the two
+  // switches above — with events off it still runs, and each handoff takes the visible
+  // "prefill impossible" rejection.
   (sessionId) =>
-    prepareHandoffInjection(sessionId, preferences.get().agentHandoff !== false, store.list(), {
+    prepareHandoffInjection(sessionId, store.list(), {
       name: sessions.view().find((entry) => entry.session.id === sessionId)?.session.peerName,
       world: currentRelationsWorld(store, sessions),
       // 由交接建立 ⇒ 自我介紹帶上完成回報那一段（`handoff-completion`）。來源在 spawn 之前就已寫進暫定紀錄。

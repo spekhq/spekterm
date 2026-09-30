@@ -134,21 +134,19 @@ describe('refreshRelations', () => {
 
   it('新的子 session 一出現（尚未被持久化），母 session 的檔就含它', () => {
     const w = world([session(P, 'fa')], [P])
-    refreshRelations({ ...w, agents: [P], enabled: true })
+    refreshRelations({ ...w, agents: [P] })
     assert.deepEqual(JSON.parse(fs.readFileSync(relationsFile(P), 'utf8')).children, [])
 
     const grown = { ...w, view: [...w.view, { session: child(C1, 'fb'), provisional: true }], running: new Set([P, C1]) }
-    refreshRelations({ ...grown, agents: [P, C1], enabled: true })
+    refreshRelations({ ...grown, agents: [P, C1] })
     assert.equal(JSON.parse(fs.readFileSync(relationsFile(P), 'utf8')).children[0].name, 'n-2222')
   })
 
-  it('不再執行的 session 其檔被刪除；關閉交接時全部刪除', () => {
+  it('不再執行的 session 其檔被刪除', () => {
     const w = world([session(P, 'fa'), child(C1, 'fb')], [P, C1])
-    refreshRelations({ ...w, agents: [P, C1], enabled: true })
-    refreshRelations({ ...w, running: new Set([P]), agents: [P], enabled: true })
+    refreshRelations({ ...w, agents: [P, C1] })
+    refreshRelations({ ...w, running: new Set([P]), agents: [P] })
     assert.ok(fs.existsSync(relationsFile(P)))
     assert.ok(!fs.existsSync(relationsFile(C1)))
-    refreshRelations({ ...w, agents: [P], enabled: false })
-    assert.ok(!fs.existsSync(relationsFile(P)))
   })
 })

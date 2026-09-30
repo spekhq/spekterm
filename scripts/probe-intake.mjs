@@ -2454,75 +2454,6 @@ async function runHandoffFailure(_mode, _modeConfig, context) {
   )
 }
 
-/** 偏好關閉時：不注入、不建立落點、**既有落點中的內容也不被處理**。 */
-async function runHandoffDisabled(_mode, _modeConfig, context) {
-  const { profile, folders } = seedProfile()
-  seedRouting(profile, { fallbackFolderId: folders[0].id })
-  seedPreferences(profile, { agentHandoff: false })
-  const configDir = mkTemp('spekterm-intake-config-')
-  const marker = `spek-intake-${process.pid}-${Date.now()}`
-  const stub = makeStubAgent(mkTemp, configDir)
-
-  // 上一輪留下的落點 —— 關閉之後它的內容也不該被處理。
-  const leftover = join(outboxRootOf(profile), 'left-over-session')
-  mkdirSync(leftover, { recursive: true })
-  writeFileSync(
-    join(leftover, 'x.json'),
-    JSON.stringify({ target: basename(folders[1].path), title: 'DISABLED-HANDOFF', body: 'x' }),
-  )
-
-  drop(profile, 'source', intake({ id: 'src-3', title: 'SOURCE-TITLE' }))
-  const app = await freshApp(context, { profile, configDir, stub, marker })
-  await openInbox(app)
-  await pollFor({
-    read: () => app.client.evaluate(acceptExpression('SOURCE-TITLE')),
-    settled: Boolean,
-    timeoutMs: 20_000,
-    label: '來源 session 已建立（事件回報未受影響）',
-  })
-
-  /**
-   * **先分開「session 沒建起來」與「預填沒發生」。**
-   *
-   * 少了這個前置，下一條的失敗訊息兩種成因長得一模一樣，而它們的處置相反
-   * （這一段第一版就是這樣紅的，花了兩輪才知道是哪一半）。
-   */
-  await pollFor({
-    read: () => ptySessionPids(marker).length,
-    settled: (count) => count >= 1,
-    timeoutMs: 30_000,
-    label: '前置：來源 session 的 pty 已建立',
-  }).catch(() => 0)
-  check(results, '前置：來源 session 的 pty 已建立', ptySessionPids(marker).length >= 1, `pty=${ptySessionPids(marker).length}`)
-
-  // 事件回報仍然運作 —— 關掉交接 SHALL NOT 使另一個功能失效。
-  await pollFor({
-    read: () => stub.bytes(),
-    settled: (bytes) => bytes.includes('.md'),
-    // **窗口放寬到 40s**：第一版是 25s，而它在載入較重的那一輪耗盡了 —— 同一條斷言
-    // 時綠時紅，看起來像產品壞了。預填要等 agent 啟動並 fire `SessionStart`。
-    timeoutMs: 40_000,
-    label: '關閉交接之後預填仍然運作（啟用狀態彼此獨立）',
-  }).catch(() => '')
-  check(results, '關閉交接不影響事件回報（預填照常）', stub.bytes().includes('.md'), stub.bytes().slice(0, 60))
-
-  check(
-    results,
-    '關閉時不為新 session 建立投遞落點',
-    !existsSync(join(outboxRootOf(profile), basename(leftover))) || readdirSync(outboxRootOf(profile)).length === 1,
-    JSON.stringify(existsSync(outboxRootOf(profile)) ? readdirSync(outboxRootOf(profile)) : []),
-  )
-  check(
-    results,
-    '關閉時既有落點中的內容不被處理，且不被消費',
-    existsSync(join(leftover, 'x.json')),
-    '投遞檔仍在',
-  )
-  const text = await app.client.evaluate(`document.body.textContent ?? ''`)
-  check(results, '關閉時那一則交接不出現在收件匣', !text.includes('DISABLED-HANDOFF'))
-}
-
-
 /**
  * ui-localization：**寫給 agent 執行的指令不隨 UI 語言改變，即使它出現在畫面上。**
  *
@@ -3956,7 +3887,6 @@ const SECTIONS = [
   { name: 'runCompletion', run: runCompletion },
   { name: 'runHandoffRestored', run: runHandoffRestored },
   { name: 'runHandoffFailure', run: runHandoffFailure },
-  { name: 'runHandoffDisabled', run: runHandoffDisabled },
   { name: 'runChooseFolder', run: runChooseFolder },
   { name: 'runOpenedLifecycle', run: runOpenedLifecycle },
   { name: 'runLineage', run: runLineage },

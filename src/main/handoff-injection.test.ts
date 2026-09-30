@@ -24,9 +24,9 @@ function introContext(sessionId: string): string {
   return raw.hookSpecificOutput.additionalContext as string
 }
 
-test('啟用時建立投遞落點、寫出自我介紹、並以環境變數告知兩者的位置', () => {
+test('建立投遞落點、寫出自我介紹、並以環境變數告知兩者的位置', () => {
   setup()
-  const part = prepareHandoffInjection('s1', true, folders)
+  const part = prepareHandoffInjection('s1', folders)
   assert.ok(part)
   assert.equal(fs.existsSync(outboxDir('s1')), true)
   assert.equal(part.env.SPEKTERM_HANDOFF_DIR, outboxDir('s1'))
@@ -34,22 +34,16 @@ test('啟用時建立投遞落點、寫出自我介紹、並以環境變數告�
   assert.ok(introContext('s1').includes(outboxDir('s1')))
 })
 
-test('關閉時完全不參與 —— 不建立落點也不注入', () => {
-  setup()
-  assert.equal(prepareHandoffInjection('s1', false, folders), null)
-  assert.equal(fs.existsSync(outboxDir('s1')), false)
-})
-
 test('hooks 走獨立欄位，不進 settings', () => {
   setup()
-  const part = prepareHandoffInjection('s1', true, folders)!
+  const part = prepareHandoffInjection('s1', folders)!
   assert.equal('hooks' in part.settings, false)
   assert.deepEqual(Object.keys(part.hooks ?? {}), ['SessionStart'])
 })
 
 test('自我介紹不落在投遞落點之內 —— 落在裡面會被當成一份投遞讀走', () => {
   setup()
-  prepareHandoffInjection('s1', true, folders)
+  prepareHandoffInjection('s1', folders)
   assert.equal(path.relative(outboxDir('s1'), introFile('s1')).startsWith('..'), true)
   assert.deepEqual(fs.readdirSync(outboxDir('s1')), [])
 })
@@ -59,7 +53,7 @@ test('與事件橋接合成之後，SessionStart 上兩條命令都在', () => {
   const file = path.join(base, 'settings.json')
   const injection = composeInjection(file, [
     prepareEventInjection('s1', true),
-    prepareHandoffInjection('s1', true, folders),
+    prepareHandoffInjection('s1', folders),
   ])
   assert.ok(injection)
   const written = JSON.parse(fs.readFileSync(file, 'utf8'))
@@ -73,7 +67,7 @@ test('與事件橋接合成之後，SessionStart 上兩條命令都在', () => {
 
 test('清單變動時重寫活著的 session 的自我介紹', () => {
   setup()
-  prepareHandoffInjection('s1', true, folders)
+  prepareHandoffInjection('s1', folders)
   assert.equal(introContext('s1').includes('beta'), false)
 
   refreshIntros(['s1'], [...folders, { name: 'beta', path: '/repos/beta' }], () => undefined)
@@ -90,17 +84,17 @@ test('上一輪未被消費的投遞不會在重建時被清掉', () => {
   //
   // 落點不被刪除同時是「重新準備之後仍被偵測」的前提，見 `handoff-outbox.test.ts`。
   setup()
-  prepareHandoffInjection('s1', true, folders)
+  prepareHandoffInjection('s1', folders)
   fs.writeFileSync(path.join(outboxDir('s1'), 'leftover.json'), '{}')
 
-  prepareHandoffInjection('s1', true, folders)
+  prepareHandoffInjection('s1', folders)
 
   assert.deepEqual(fs.readdirSync(outboxDir('s1')), ['leftover.json'])
 })
 
 test('folder 清單變動後重寫的自我介紹仍含名字與關係檔位置', () => {
   setup()
-  prepareHandoffInjection('s1', true, folders, { name: 'alpha-1111' })
+  prepareHandoffInjection('s1', folders, { name: 'alpha-1111' })
   assert.ok(introContext('s1').includes('alpha-1111'))
 
   refreshIntros(['s1'], [...folders, { name: 'beta', path: '/repos/beta' }], (id) => (id === 's1' ? 'alpha-1111' : undefined))
@@ -111,15 +105,15 @@ test('folder 清單變動後重寫的自我介紹仍含名字與關係檔位置'
 
 test('由交接建立的 session，spawn 時的自我介紹含完成報告的說明；其他 session 沒有（handoff-completion）', () => {
   setup()
-  prepareHandoffInjection('s1', true, folders, { name: 'alpha-1111', reportable: true })
-  prepareHandoffInjection('s2', true, folders, { name: 'alpha-2222' })
+  prepareHandoffInjection('s1', folders, { name: 'alpha-1111', reportable: true })
+  prepareHandoffInjection('s2', folders, { name: 'alpha-2222' })
   assert.ok(introContext('s1').includes('"kind": "report"'))
   assert.ok(!introContext('s2').includes('"kind": "report"'))
 })
 
 test('folder 清單變動後重寫的自我介紹仍含完成報告的說明', () => {
   setup()
-  prepareHandoffInjection('s1', true, folders, { name: 'alpha-1111', reportable: true })
+  prepareHandoffInjection('s1', folders, { name: 'alpha-1111', reportable: true })
   refreshIntros(
     ['s1'],
     [...folders, { name: 'beta', path: '/repos/beta' }],
@@ -132,6 +126,6 @@ test('folder 清單變動後重寫的自我介紹仍含完成報告的說明', (
 
 test('注入的環境變數含關係檔位置', () => {
   setup()
-  const contribution = prepareHandoffInjection('s1', true, folders, { name: 'alpha-1111' })
+  const contribution = prepareHandoffInjection('s1', folders, { name: 'alpha-1111' })
   assert.ok(contribution?.env?.SPEKTERM_HANDOFF_RELATIONS?.endsWith(path.join('relations', 's1.json')))
 })
