@@ -429,7 +429,7 @@ addon-unicode-graphemes、i18next、electron-builder（Phase 6）。
 
 | | |
 |---|---|
-| `Ctrl+Tab` / `Ctrl+Shift+Tab` | 當前 **rail 項目**內的下／上一個 session（**分頁位置序**，可循環） |
+| `Ctrl+Tab` / `Ctrl+Shift+Tab` | 當前 **rail 項目**內的下／上一個 session（**分頁位置序**，可循環）。**Focus inside the side panel's change view: next / previous artifact instead** — `KeyboardNavigation` hands the key to the view (`tab-cycle-scope.ts`), so the dialog/menu rule stays in one place |
 | `Ctrl+↓` / `Ctrl+↑` | rail 上的下／上一個**項目**（可循環，**涵蓋全域項目**；尚未選中時選第一個） |
 | `Ctrl+T` | 開啟建立 session 的入口（spawn 選單，可全鍵盤操作） |
 | `Ctrl+Shift+W` | 關閉當前 focused 的 session |

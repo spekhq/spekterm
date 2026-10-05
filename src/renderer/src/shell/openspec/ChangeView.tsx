@@ -1,8 +1,9 @@
 import { sortArtifacts } from '@spekjs/core/artifact-order'
-import { useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { MarkdownView } from '../files/MarkdownView'
-import type { ChangeArtifactView, DeltaSpecView, ParsedTasks } from '../types'
+import { registerTabCycleScope } from '../tab-cycle-scope'
+import type { ChangeArtifactView, ChangeDetailView, DeltaSpecView, ParsedTasks } from '../types'
 import type { ContinuationBlock } from './continuation'
 import { useChange } from './data'
 import { parseDelta } from './delta'
@@ -63,13 +64,53 @@ export function ChangeView({
   onOpenSessionHere,
   onOpenFile,
 }: ChangeViewProps): React.JSX.Element {
-  const { t } = useTranslation()
-
   const { data, loading, error } = useChange(folderId, slug)
   const [activeId, setActiveId] = useState<string | null>(null)
 
   if (error) return <ErrorNote message={error} />
   if (loading || !data) return <Loading />
+
+  return (
+    <LoadedChange
+      data={data}
+      activeId={activeId}
+      onChooseArtifact={setActiveId}
+      continuationBlock={continuationBlock}
+      sessionWorktreeKey={sessionWorktreeKey}
+      onContinue={onContinue}
+      onOpenSessionHere={onOpenSessionHere}
+      onOpenFile={onOpenFile}
+    />
+  )
+}
+
+interface LoadedChangeProps extends Omit<ChangeViewProps, 'folderId' | 'slug'> {
+  data: ChangeDetailView
+  activeId: string | null
+  onChooseArtifact: (id: string) => void
+}
+
+/**
+ * The change view once its data is there.
+ *
+ * **A component of its own so that its hooks sit below the loading / error returns** — the
+ * keyboard wiring needs the artifact list and the panel element, which exist only here.
+ */
+function LoadedChange({
+  data,
+  activeId,
+  onChooseArtifact,
+  continuationBlock,
+  sessionWorktreeKey,
+  onContinue,
+  onOpenSessionHere,
+  onOpenFile,
+}: LoadedChangeProps): React.JSX.Element {
+  const { t } = useTranslation()
+  const idPrefix = useId()
+  const rootRef = useRef<HTMLDivElement>(null)
+  const panelRef = useRef<HTMLDivElement>(null)
+  const tabRefs = useRef(new Map<string, HTMLButtonElement>())
 
   /*
     排序**整條委由 core**（`sortArtifacts` 的 `schema` 模式），本 repo 不自寫規則：
@@ -80,6 +121,57 @@ export function ChangeView({
   */
   const artifacts = sortArtifacts(data.artifacts, 'schema', data.schemaOrder)
 
+  // 預設停在 tasks —— 駕駛 agent 時要盯的是它。沒有 tasks 就退回第一個 artifact。
+  const fallbackId = artifacts.find((a) => a.kind === 'tasks')?.id ?? artifacts[0]?.id
+  const active = artifacts.find((a) => a.id === activeId) ?? artifacts.find((a) => a.id === fallbackId)
+
+  /*
+    **Choosing an artifact focuses its content and starts it at the top** (`openspec-panel`).
+
+    Done right here in the handler, not in an effect: the panel element survives the switch, and
+    nothing that runs on render can then move focus or scroll when the same change is merely
+    refreshed (an agent editing tasks.md re-renders this view constantly). Setting `scrollTop`
+    before React commits the new content is fine — the new content renders from that offset.
+    Choosing the artifact already shown only focuses it, so a click on the current tab does not
+    throw the reader back to the top.
+  */
+  const choose = (id: string, currentId: string | undefined): void => {
+    const panel = panelRef.current
+    if (id !== currentId) {
+      onChooseArtifact(id)
+      if (panel) panel.scrollTop = 0
+    }
+    panel?.focus({ preventScroll: true })
+  }
+
+  // The latest artifact order and selection, for the `Ctrl+Tab` handler registered once below.
+  const latest = useRef({ ids: [] as string[], activeId: undefined as string | undefined, choose })
+  useEffect(() => {
+    latest.current = { ids: artifacts.map((a) => a.id), activeId: active?.id, choose }
+  })
+
+  /*
+    **`Ctrl+Tab` / `Ctrl+Shift+Tab` cycle the artifacts while focus is in this view.**
+    `KeyboardNavigation` owns the key and hands it over (see `tab-cycle-scope.ts`), so the
+    dialog/menu rule is not repeated here. The chosen tab is scrolled into view in the tab strip:
+    the panel takes focus with `preventScroll`, so nothing else would bring an off-screen tab in.
+  */
+  useEffect(() => {
+    const element = rootRef.current
+    if (!element) return
+    return registerTabCycleScope({
+      element,
+      cycle: (delta) => {
+        const { ids, activeId: currentId, choose: chooseLatest } = latest.current
+        if (ids.length === 0) return
+        const index = currentId === undefined ? 0 : ids.indexOf(currentId)
+        const next = ids[(index + delta + ids.length) % ids.length]
+        chooseLatest(next, currentId)
+        tabRefs.current.get(next)?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+      },
+    })
+  }, [])
+
   // 順序來自敘事順序而非該 change 的 schema 時，要說出來（判斷與理由在 `schema-order.ts`）。
   const fallback = fallbackReason(data.status, data.schemaOrder)
 
@@ -87,14 +179,13 @@ export function ChangeView({
     return <p className="px-4 py-3 text-sm text-ink-faint">{t('openspec.noArtifacts')}</p>
   }
 
-  // 預設停在 tasks —— 駕駛 agent 時要盯的是它。沒有 tasks 就退回第一個 artifact。
-  const fallbackId = artifacts.find((a) => a.kind === 'tasks')?.id ?? artifacts[0].id
-  const active = artifacts.find((a) => a.id === activeId) ?? artifacts.find((a) => a.id === fallbackId)
-
   const tasks = artifacts.find((a) => a.kind === 'tasks')?.tasks
+  const tabId = (index: number): string => `${idPrefix}-tab-${index}`
+  const panelId = `${idPrefix}-panel`
+  const activeIndex = artifacts.findIndex((a) => a.id === active?.id)
 
   return (
-    <div className="flex h-full flex-col">
+    <div ref={rootRef} className="flex h-full flex-col">
       <div className="shrink-0 px-4 pt-4">
         <div className="flex items-center gap-2">
           <h2
@@ -124,15 +215,21 @@ export function ChangeView({
         role="tablist"
         className="mt-3 flex shrink-0 overflow-x-auto border-b border-hairline px-2"
       >
-        {artifacts.map((artifact) => {
+        {artifacts.map((artifact, index) => {
           const selected = artifact.id === active?.id
           return (
             <button
               key={artifact.id}
+              ref={(el) => {
+                if (el) tabRefs.current.set(artifact.id, el)
+                else tabRefs.current.delete(artifact.id)
+              }}
+              id={tabId(index)}
               type="button"
               role="tab"
               aria-selected={selected}
-              onClick={() => setActiveId(artifact.id)}
+              aria-controls={panelId}
+              onClick={() => choose(artifact.id, active?.id)}
               className={`-mb-px shrink-0 border-b-2 px-3 py-[6px] text-xs transition-colors ${
                 selected
                   ? 'border-accent font-bold text-accent'
@@ -147,7 +244,19 @@ export function ChangeView({
 
       {fallback !== null && <FallbackNote reason={fallback} />}
 
-      <div className="min-h-0 flex-1 overflow-auto px-4 py-3">
+      {/*
+        **Focusable, so the keyboard can scroll it** (`openspec-panel`). Without a tab index a click
+        on the text focuses the side-panel section around it, and the browser only scrolls the
+        focused element's own scroll containers — this one is inside it, not around it.
+      */}
+      <div
+        ref={panelRef}
+        id={panelId}
+        role="tabpanel"
+        tabIndex={0}
+        aria-labelledby={activeIndex === -1 ? undefined : tabId(activeIndex)}
+        className="min-h-0 flex-1 overflow-auto px-4 py-3 outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-accent/50"
+      >
         {active && <ArtifactContent artifact={active} onOpenFile={onOpenFile} />}
       </div>
 

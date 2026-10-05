@@ -19,7 +19,9 @@ session 的順序。
 **排序快捷鍵有一條導航快捷鍵沒有的例外**：`Shift+arrow` 就是文字選取鍵，因此它在**可編輯文字**
 持有焦點時完全讓路（而導航快捷鍵在編輯器裡仍然生效）。兩者的差別必須在各自的 requirement 裡寫明，
 否則規格自相矛盾。
+
 ## Requirements
+
 ### Requirement: 以鍵盤在當前 repo 的 session 之間切換
 
 系統 SHALL 提供快捷鍵，於**當前選中的 rail 項目內**將 focused session 切換至下一個或上一個：
@@ -37,6 +39,12 @@ session 分屬不同的分頁列，切換 SHALL NOT 跨越項目。
 
 當前項目沒有 session、只有一個 session、或沒有選中任何 rail 項目時，這兩個快捷鍵 SHALL 為無操作，
 且 SHALL NOT 產生錯誤。
+
+**Focus inside the OpenSpec change view is an exception** (see `openspec-panel`, "`Ctrl+Tab`
+switches artifacts while focus is in the change view"): there these two shortcuts switch the change's
+artifacts and SHALL NOT switch the focused session. The exception is decided by where focus is, the
+same model as `Ctrl+P` — with focus in the terminal, the editor, or anywhere else, they switch
+sessions as above.
 
 #### Scenario: 切換至下一個 session
 
@@ -67,6 +75,12 @@ session 分屬不同的分頁列，切換 SHALL NOT 跨越項目。
 
 - **WHEN** 當前項目只有一個 session，使用者按下 `Ctrl+Tab`
 - **THEN** focused session 不變，且應用程式不產生錯誤
+
+#### Scenario: Ctrl+Tab in the change view does not switch sessions
+
+- **WHEN** the current item has several sessions, focus is inside the OpenSpec change view, and the
+  user presses `Ctrl+Tab`
+- **THEN** the focused session does not change
 
 ### Requirement: 以鍵盤在 repo 之間切換
 
@@ -195,6 +209,10 @@ side panel 的檔案快速開啟入口（見 `quick-open`）是**第三組**快�
 窮舉表 —— 進而把「終端裡仍然生效」誤推到第三組身上。**新增任何一組快捷鍵時，都必須回到此處寫明
 它落在哪一邊。**
 
+**`Ctrl+Tab` / `Ctrl+Shift+Tab` with focus inside the OpenSpec change view** switch the change's
+artifacts instead of sessions (see `openspec-panel`). That exception is decided by focus and does
+not touch this requirement: with focus in the terminal they switch sessions and do not reach the pty.
+
 #### Scenario: 終端持有焦點時切換 session
 
 - **WHEN** 使用者的焦點在終端中，按下 `Ctrl+Tab`
@@ -222,6 +240,11 @@ side panel 的檔案快速開啟入口（見 `quick-open`）是**第三組**快�
 刻意的要求，後者是其作用域的推論），而排序讓路。**新增任何一組快捷鍵時，都必須回到此處寫明它
 落在哪一邊。**
 
+**The OpenSpec change view is a fourth case, and the editor is not in it.** With focus inside the
+change view, `Ctrl+Tab` / `Ctrl+Shift+Tab` switch the change's artifacts (see `openspec-panel`); the
+editor belongs to the Files identity, so with focus in the editor they keep switching sessions as
+above.
+
 #### Scenario: 編輯器持有焦點時切換 session
 
 - **WHEN** 使用者的焦點在 side panel 的編輯器中，按下 `Ctrl+Tab`
@@ -231,6 +254,7 @@ side panel 的檔案快速開啟入口（見 `quick-open`）是**第三組**快�
 
 - **WHEN** 使用者的焦點在 side panel 的編輯器中，按下 `Shift+→`
 - **THEN** 編輯器選取了一個字元，且未觸發任何排序
+
 ### Requirement: 對話框或選單開啟時導航快捷鍵不生效
 
 本能力的快捷鍵（**導航與排序**）SHALL NOT 於任一對話框或選單開啟期間生效。對話框（session 命名、檔案操作的命名與刪除確認、Graph／Timeline 的全視窗 overlay、未存變更的提示）與選單（spawn 選單、右鍵選單）正在等待使用者的裁決 —— 否則使用者會在回答問題的同時把畫面切走或把清單重排，而選單的方向鍵導覽也會被搶走。

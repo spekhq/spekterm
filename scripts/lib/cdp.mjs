@@ -466,7 +466,26 @@ export async function dragMouse(client, from, to, steps = 8) {
   })
 }
 
-const KEY_CODES = { ArrowLeft: 37, ArrowRight: 39, ArrowUp: 38, ArrowDown: 40, Enter: 13 }
+/**
+ * Scrolling keys need their virtual key code too: native scrolling of a focused scroll container is
+ * the browser's default action, and without a code it does not happen — the probe would then see
+ * "the panel did not scroll" for a reason that has nothing to do with the product.
+ */
+const KEY_CODES = {
+  ArrowLeft: 37,
+  ArrowRight: 39,
+  ArrowUp: 38,
+  ArrowDown: 40,
+  Enter: 13,
+  PageUp: 33,
+  PageDown: 34,
+  End: 35,
+  Home: 36,
+  ' ': 32,
+}
+
+/** `code` differs from `key` only for Space, whose `key` is the character itself. */
+const KEY_CODE_NAMES = { ' ': 'Space' }
 
 /**
  * 會產生文字的鍵要帶 `text` —— **瀏覽器「以 Enter 觸發 `<button>`」的原生行為靠的是真正的
@@ -474,7 +493,7 @@ const KEY_CODES = { ArrowLeft: 37, ArrowRight: 39, ArrowUp: 38, ArrowDown: 40, E
  * 'Enter'`（於是自訂處理器正常），但**沒有自訂處理器、倚賴原生行為的 `<button>` 不會被觸發**
  * —— 症狀是「按了 Enter，選單關了，什麼都沒發生」，而焦點斷言全綠。實測踩過。
  */
-const KEY_TEXT = { Enter: '\r' }
+const KEY_TEXT = { Enter: '\r', ' ': ' ' }
 
 /** 對目前取得焦點的元素送出一次按鍵。 */
 export async function pressKey(client, key) {
@@ -484,7 +503,7 @@ export async function pressKey(client, key) {
     await client.send('Input.dispatchKeyEvent', {
       type,
       key,
-      code: key,
+      code: KEY_CODE_NAMES[key] ?? key,
       windowsVirtualKeyCode,
       nativeVirtualKeyCode: windowsVirtualKeyCode,
       ...(text !== undefined && type === 'keyDown' ? { text } : {}),

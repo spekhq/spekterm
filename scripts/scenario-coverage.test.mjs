@@ -50,6 +50,7 @@ const COVERED_CHANGES = [
   'open-source-mit',
   'quick-open-nested-worktree-entry',
   'intake-periodic-rescan',
+  'change-view-keyboard',
 ]
 
 /** change 的所在 —— 封存後它會搬到 `archive/` 之下，兩處都找。 */
@@ -98,6 +99,43 @@ export function scenariosOf(root) {
  * 一條沒有載體的 requirement 必須被看見，而不是被塞進一個看起來有人管的格子。
  */
 export const TABLE = [
+  // ── change-view-keyboard: openspec-panel (new) ──────────────────────────────
+  ['Clicking the content lets the keyboard scroll it', '[change-view-keyboard] click in the content, then PageDown scrolls it', false,
+    'drop tabIndex from the tab panel', 'precondition asserts focus was off the content before the click; End → bottom is a second assertion'],
+  ['Choosing an artifact lets the keyboard scroll it right away', '[change-view-keyboard] ArrowDown after choosing an artifact scrolls it', false,
+    'do not focus the panel in the tab click handler', 'clicked with a real mouse event: a synthetic .click() never moves focus'],
+  ['A newly chosen artifact starts at the top', '[change-view-keyboard] a newly chosen artifact starts at the top', false,
+    'drop the scrollTop reset', 'the previous artifact sits at its bottom and the new one is asserted to overflow, so clamping cannot produce 0'],
+  ['An update to the change does not move the reader', '[change-view-keyboard] a refresh keeps the scroll position and focus', true,
+    'reset scroll and focus the panel on every render',
+    'green if nothing is implemented (nothing moves); its power is the mutation, and the progress-count precondition proves the refresh happened'],
+  ['Ctrl+Tab selects the next artifact', '[change-view-keyboard] Ctrl+Tab selects the next artifact and focuses its content', false,
+    'drop the Ctrl+Tab routing in KeyboardNavigation', ''],
+  ['Ctrl+Shift+Tab wraps to the last artifact', '[change-view-keyboard] Ctrl+Shift+Tab from the first artifact selects the last', false,
+    'clamp instead of wrapping', 'the tab-visibility half is its own assertion (mutation: drop the tab scrollIntoView)'],
+  ['An open overlay blocks artifact switching', '[change-view-keyboard] Ctrl+Tab does nothing while an overlay is open', true,
+    'route Ctrl+Tab to the change view before the dialog/menu check',
+    'green if nothing is implemented; its power is the mutation. The overlay does not take focus, and the precondition asserts focus is in the change view'],
+
+  // ── change-view-keyboard: keyboard-navigation (MODIFIED, copied scenarios) ──
+  ['Ctrl+Tab in the change view does not switch sessions', '[change-view-keyboard] Ctrl+Tab in the change view does not switch sessions', true,
+    'drop the Ctrl+Tab routing in KeyboardNavigation (sessions switch)', 'green if nothing is implemented at all; the routing mutation turns it red'],
+  ['切換至下一個 session', 'Ctrl+Tab 切至下一個 session', false, 'cycle sessions in most-recently-used order', ''],
+  ['切換至上一個 session', 'Ctrl+Shift+Tab 切至上一個 session', false, 'ignore Shift in the session cycle', ''],
+  ['於全域項目內切換 session', '於全域項目內以 Ctrl+Tab 切換 session', false, 'scope the cycle to folders only', ''],
+  ['於末端循環', '於首端往回會循環到最後一個', false, 'clamp instead of wrapping',
+    'the carrier asserts the wrap backwards (first → last); the forward wrap has no assertion of its own'],
+  ['順序依分頁位置，不依使用順序', 'Ctrl+Tab 依分頁位置序，而非最近使用順序', false, 'cycle sessions in most-recently-used order', ''],
+  ['只有一個 session 時為無操作', 'repo 只有一個 session 時，Ctrl+Tab 為無操作', true, 'throw when the list has one entry',
+    'a no-op assertion is green if the key is not wired at all; the next-session assertion above is the positive control'],
+  ['終端持有焦點時切換 session', null, true, null,
+    'no carrier: probe-keyboard sends Ctrl+Tab with the terminal focused in its pty-leak section but asserts only that nothing leaked, not that the session switched; the next-session assertion clicks a tab first'],
+  ['終端持有焦點時調整順序', '終端持有焦點時，Shift+↓ 仍移動 repo', false, 'yield reorder keys when focus is in a textarea (xterm included)', ''],
+  ['被攔截的按鍵不寫入 pty', '：被攔下的按鍵沒有流進 pty', false, 'stop calling stopPropagation in KeyboardNavigation',
+    'a positive control (unmodified ArrowUp reaches the pty) and a non-empty read guard it against the blind-channel false green'],
+  ['編輯器持有焦點時切換 session', '編輯器持有焦點時，Ctrl+Tab 仍切換 session', false, 'register the listener in the bubble phase', ''],
+  ['編輯器持有焦點時排序快捷鍵讓路', '編輯器持有焦點時，Shift+→ 不排序', false, 'drop the editable-text yield', ''],
+
   // ── intake-badge-and-notify：使用者可見文案（ui-localization 的第五類）──────
   ['介面文字為英文', '產品原始碼的字串字面值不得含 CJK（註解不受限）', true, null,
     '**行為面對任何實作恆綠**（一個不小心寫成中文的介面要靠人看）。真載體是那道 CJK 守衛，而它守的是原始碼不是畫面'],

@@ -31,7 +31,7 @@ import {
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
-import { check, connectToApp, pollFor, pollUntil, retryAction } from './lib/cdp.mjs'
+import { check, connectToApp, pollFor, pollUntil, pressKey, retryAction } from './lib/cdp.mjs'
 import { menuEvidence } from './lib/menu-evidence.mjs'
 import { copy, prefixOf, suffixOf } from './lib/copy.mjs'
 import { awaitMounted, describeMounted } from './lib/mounted.mjs'
@@ -144,6 +144,18 @@ const TASKS = `## 1. 後端
 - [ ] 2.1 加按鈕
 `
 
+/**
+ * The proposal of `add-oauth` is long on purpose: `runChangeViewKeyboard` needs an artifact that
+ * overflows the content area by far more than one keyboard page, so "scrolled", "at the bottom" and
+ * "back at the top" are three different numbers. No other assertion reads this proposal's text.
+ */
+const OAUTH_PROPOSAL = `# 加入 OAuth
+
+## Why
+
+${Array.from({ length: 60 }, (_, i) => `Paragraph ${i + 1} of the reason this change exists.`).join('\n\n')}
+`
+
 const TASKS_DONE = TASKS.replace('- [ ] 1.2', '- [x] 1.2')
 /** 全部勾完 —— reload 之後再改一次，證明新 renderer 的訂閱是活的。 */
 const TASKS_ALL_DONE = TASKS_DONE.replace('- [ ] 2.1', '- [x] 2.1')
@@ -172,7 +184,7 @@ function makeFixture() {
   writeFile(join(many, 'openspec/specs/auth/spec.md'), SPEC('auth'))
   writeFile(join(many, 'openspec/specs/billing/spec.md'), SPEC('billing'))
   changeMeta(join(many, 'openspec/changes/add-oauth'), '2026-05-01')
-  writeFile(join(many, 'openspec/changes/add-oauth/proposal.md'), '# 加入 OAuth\n\n## Why\n\n因為需要。\n')
+  writeFile(join(many, 'openspec/changes/add-oauth/proposal.md'), OAUTH_PROPOSAL)
   writeFile(join(many, 'openspec/changes/add-oauth/tasks.md'), TASKS)
   writeFile(join(many, 'openspec/changes/add-oauth/specs/auth/spec.md'), DELTA)
   /*
@@ -2079,7 +2091,7 @@ async function runPanelBasics(label, { port, rendererUrl }) {
   // **回傳的不只 app**：後段還用到前置區建立的 fixture 路徑（`single`、`worktree`）。
   // 少了它們就是 `ReferenceError` —— eslint 的 no-undef 在切分當下就抓到了這一點，
   // 而靜態掃描只看 `try` 內文的話會漏掉整個前置區。
-  return { app, single, worktree }
+  return { app, single, worktree, many }
 }
 
 async function runBrowseAndOverlays(label, config, { app }) {
@@ -3906,6 +3918,257 @@ async function runQuickOpenSection(label, config, { app }) {
   await runQuickOpenScope(app)
 }
 
+// ── change view: keyboard scrolling and Ctrl+Tab between artifacts ─────────
+
+/**
+ * The element that scrolls the active artifact: the first scrollable sibling after the artifact tab
+ * strip. Located by structure, not by `role="tabpanel"` — the role is not what the requirement asks
+ * for, and a lookup by it would make every assertion of the section fail the same way on an
+ * implementation that lacks the role, hiding which behavior is actually missing.
+ */
+const ARTIFACT_SCROLLER = `(() => {
+  const strip = document.querySelector('section[aria-label="${copy('openspec.label')}"] [role="tablist"][aria-label="${copy('openspec.changeArtifact')}"]')
+  let el = strip?.nextElementSibling ?? null
+  while (el && !['auto', 'scroll'].includes(getComputedStyle(el).overflowY)) el = el.nextElementSibling
+  return el
+})()`
+
+/** The change view's tab panel: its scroll state, which artifact it shows, and where focus is. */
+const CHANGE_PANEL = `(() => {
+  const view = document.querySelector('section[aria-label="${copy('openspec.label')}"]')
+  const panel = ${ARTIFACT_SCROLLER}
+  if (!view || !panel) return null
+  const tabs = [...view.querySelectorAll('[role="tablist"][aria-label="${copy('openspec.changeArtifact')}"] button[role="tab"]')]
+  const active = document.activeElement
+  return {
+    selected: tabs.find((t) => t.getAttribute('aria-selected') === 'true')?.innerText.trim() ?? null,
+    labels: tabs.map((t) => t.innerText.trim()),
+    scrollTop: Math.round(panel.scrollTop),
+    max: Math.round(panel.scrollHeight - panel.clientHeight),
+    focusOnPanel: active === panel,
+    focusInView: Boolean(active && view.contains(active)),
+    focusTag: active ? active.tagName + (active.getAttribute('role') ? '[' + active.getAttribute('role') + ']' : '') : null,
+  }
+})()`
+
+const CHANGE_PANEL_RECT = `(() => {
+  const panel = ${ARTIFACT_SCROLLER}
+  if (!panel) return null
+  const r = panel.getBoundingClientRect()
+  return { x: r.x, y: r.y, width: r.width, height: r.height }
+})()`
+
+const ARTIFACT_TAB_RECT = (label) => `(() => {
+  const tab = [...document.querySelectorAll('[role="tablist"][aria-label="${copy('openspec.changeArtifact')}"] button[role="tab"]')]
+    .find((t) => t.innerText.trim() === ${JSON.stringify(label)})
+  if (!tab) return null
+  const r = tab.getBoundingClientRect()
+  return { x: r.x, y: r.y, width: r.width, height: r.height }
+})()`
+
+/** The artifact tab strip: does it overflow, and is the selected tab inside its visible bounds? */
+const ARTIFACT_STRIP = `(() => {
+  const strip = document.querySelector('[role="tablist"][aria-label="${copy('openspec.changeArtifact')}"]')
+  if (!strip) return null
+  const tab = strip.querySelector('button[aria-selected="true"]')
+  const s = strip.getBoundingClientRect()
+  const t = tab?.getBoundingClientRect()
+  return {
+    overflows: strip.scrollWidth > strip.clientWidth,
+    selected: tab?.innerText.trim() ?? null,
+    scrollLeft: Math.round(strip.scrollLeft),
+    selectedVisible: Boolean(t && t.left >= s.left - 1 && t.right <= s.right + 1),
+  }
+})()`
+
+const RESET_ARTIFACT_STRIP = `(() => {
+  const strip = document.querySelector('[role="tablist"][aria-label="${copy('openspec.changeArtifact')}"]')
+  if (!strip) return false
+  strip.scrollLeft = 0
+  return strip.scrollLeft === 0
+})()`
+
+/** Puts focus on the change view's tab panel — a precondition, not the behavior under test. */
+const FOCUS_CHANGE_PANEL = `(() => {
+  const panel = ${ARTIFACT_SCROLLER}
+  if (!panel) return false
+  panel.focus({ preventScroll: true })
+  return document.activeElement === panel
+})()`
+
+/**
+ * `Ctrl+Tab` / `Ctrl+Shift+Tab` — **`rawKeyDown`**, like every modified key in this file that
+ * produces no text.
+ */
+async function pressCtrlTab(client, { shift = false } = {}) {
+  const key = {
+    key: 'Tab',
+    code: 'Tab',
+    windowsVirtualKeyCode: 9,
+    nativeVirtualKeyCode: 9,
+    modifiers: shift ? 2 | 8 : 2,
+  }
+  await client.send('Input.dispatchKeyEvent', { type: 'rawKeyDown', ...key })
+  await client.send('Input.dispatchKeyEvent', { type: 'keyUp', ...key })
+}
+
+const FOCUSED_SESSION = `(${SESSION_TABS}).find((t) => t.selected)?.label ?? null`
+
+/**
+ * `change-view-keyboard`: the artifact content scrolls from the keyboard, choosing an artifact
+ * focuses it and starts it at the top, a refresh does not move the reader, and `Ctrl+Tab` cycles
+ * artifacts while focus is in the change view — without switching sessions, and not while an
+ * overlay is open.
+ *
+ * **Real mouse and real keys throughout.** A synthetic `.click()` does not move focus, and focus is
+ * the whole subject here. Scrolling is the browser's default action, so the keys carry their virtual
+ * key codes (`pressKey` in `lib/cdp.mjs`).
+ *
+ * **Overflow comes from the viewport and the `add-oauth` proposal, not from `TASKS`** — the tasks
+ * fixture is pinned by earlier assertions (sections, progress counts).
+ */
+async function runChangeViewKeyboard(label, config, { app, many }) {
+  console.log('\nchange view: keyboard scrolling and Ctrl+Tab between artifacts')
+  const client = app.client
+  // A missing target is a red assertion, not a TypeError that ends the section.
+  const clickOn = async (name, expression) => {
+    const rect = await stableRect(client, expression)
+    check(results, `[change-view-keyboard] click target found: ${name}`, rect !== null)
+    if (rect) await realClick(client, rect)
+  }
+
+  // ── State: repo-many selected, OpenSpec identity, add-oauth anchored, two sessions ──
+  const picked = await pollUntil(client, SELECT_FOLDER('repo-many'), (ok) => ok === true, 8000)
+  check(results, '[change-view-keyboard] repo-many selected', picked === true)
+  if ((await client.evaluate(IDENTITY)) !== 'openspec') await client.evaluate(CLICK_IDENTITY('◈'))
+  const sourceLabel = await pollUntil(client, PANEL_SOURCE_LABEL, (v) => String(v).includes('repo-many'), 8000)
+  check(results, '[change-view-keyboard] the side panel reads repo-many', String(sourceLabel).includes('repo-many'),
+    String(sourceLabel))
+  const existing = (await client.evaluate(SESSION_TABS)).length
+  for (let n = existing; n < 2; n++) await createSession(client)
+  const sessions = await pollUntil(client, SESSION_TABS, (list) => list.length >= 2, 15_000)
+  check(results, '[change-view-keyboard] repo-many has at least two sessions', sessions.length >= 2,
+    JSON.stringify(sessions))
+  const anchored = await anchorChange(client, 'add-oauth')
+  check(results, '[change-view-keyboard] add-oauth anchored', anchored === 'add-oauth', String(anchored))
+
+  await client.send('Emulation.setDeviceMetricsOverride', { width: 1000, height: 420, deviceScaleFactor: 0, mobile: false })
+  await sleep(600)
+
+  try {
+    const initial = await pollUntil(client, CHANGE_PANEL, (v) => v !== null && v.labels.length >= 4, 8000)
+    const labels = initial?.labels ?? []
+    check(results, '[change-view-keyboard] add-oauth shows at least four artifact tabs', labels.length >= 4,
+      labels.join(', '))
+    const proposalLabel = labels.find((l) => l.toLowerCase() === 'proposal')
+    const specsLabel = labels.find((l) => l !== proposalLabel && l.toLowerCase() !== 'tasks' && !l.includes('.'))
+
+    // ── Choosing an artifact lets the keyboard scroll it right away ──
+    await clickOn('proposal tab', ARTIFACT_TAB_RECT(proposalLabel))
+    const chosen = await pollUntil(client, CHANGE_PANEL, (v) => v?.selected === proposalLabel, 5000)
+    check(results, '[change-view-keyboard] precondition: the proposal overflows by more than three pages',
+      chosen?.max > 3 * 420, JSON.stringify(chosen))
+    check(results, '[change-view-keyboard] clicking a tab puts focus on its content',
+      chosen?.focusOnPanel === true, JSON.stringify(chosen))
+    await pressKey(client, 'ArrowDown')
+    const arrowed = await pollUntil(client, CHANGE_PANEL, (v) => v?.scrollTop > 0, 3000)
+    check(results, '[change-view-keyboard] ArrowDown after choosing an artifact scrolls it',
+      arrowed?.scrollTop > 0, JSON.stringify(arrowed))
+
+    // ── Clicking the content lets the keyboard scroll it ──
+    const unfocused = await pollUntil(client, FOCUS_SIDE_PANEL, (v) => v === true, 3000)
+    const before = await client.evaluate(CHANGE_PANEL)
+    check(results, '[change-view-keyboard] precondition: focus is off the content before the click',
+      unfocused === true && before?.focusOnPanel === false, JSON.stringify(before))
+    await clickOn('artifact content', CHANGE_PANEL_RECT)
+    await pressKey(client, 'PageDown')
+    const paged = await pollUntil(client, CHANGE_PANEL, (v) => v?.scrollTop > (before?.scrollTop ?? 0), 3000)
+    check(results, '[change-view-keyboard] click in the content, then PageDown scrolls it',
+      paged?.scrollTop > (before?.scrollTop ?? 0), `${before?.scrollTop} → ${JSON.stringify(paged)}`)
+    await pressKey(client, 'End')
+    const bottom = await pollUntil(client, CHANGE_PANEL, (v) => v !== null && v.scrollTop >= v.max - 1, 3000)
+    check(results, '[change-view-keyboard] End scrolls the content to the bottom',
+      bottom !== null && bottom.scrollTop >= bottom.max - 1, JSON.stringify(bottom))
+
+    // ── A newly chosen artifact starts at the top ──
+    await clickOn('second artifact tab', ARTIFACT_TAB_RECT(specsLabel))
+    const switched = await pollUntil(client, CHANGE_PANEL, (v) => v?.selected === specsLabel, 5000)
+    check(results, '[change-view-keyboard] precondition: the second artifact overflows too',
+      switched?.max > 0, JSON.stringify(switched))
+    check(results, '[change-view-keyboard] a newly chosen artifact starts at the top',
+      switched?.selected === specsLabel && switched?.scrollTop === 0, `${JSON.stringify(bottom)} → ${JSON.stringify(switched)}`)
+
+    // ── An update to the change does not move the reader ──
+    await pressKey(client, 'ArrowDown')
+    const reading = await pollUntil(client, CHANGE_PANEL, (v) => v?.scrollTop > 0, 3000)
+    const tasksPath = join(many, 'openspec/changes/add-oauth/tasks.md')
+    const original = readFileSync(tasksPath, 'utf8')
+    const progressBefore = await client.evaluate(PROGRESS)
+    writeFileSync(tasksPath, original.replace('- [ ]', '- [x]'))
+    const progressAfter = await pollUntil(client, PROGRESS, (v) => v !== null && v.now !== progressBefore?.now, 10_000)
+    check(results, '[change-view-keyboard] precondition: the view refreshed with the new task progress',
+      progressAfter !== null && progressAfter.now !== progressBefore?.now,
+      `${JSON.stringify(progressBefore)} → ${JSON.stringify(progressAfter)}`)
+    const afterRefresh = await client.evaluate(CHANGE_PANEL)
+    check(results, '[change-view-keyboard] a refresh keeps the scroll position and focus',
+      reading?.scrollTop > 0 && afterRefresh?.scrollTop === reading?.scrollTop && afterRefresh?.focusOnPanel === true,
+      `${JSON.stringify(reading)} → ${JSON.stringify(afterRefresh)}`)
+    writeFileSync(tasksPath, original)
+    await pollUntil(client, PROGRESS, (v) => v?.now === progressBefore?.now, 10_000)
+
+    // ── Ctrl+Tab selects the next artifact; it does not switch sessions ──
+    const sessionBefore = await client.evaluate(FOCUSED_SESSION)
+    const from = await client.evaluate(CHANGE_PANEL)
+    const expectedNext = labels[(labels.indexOf(from?.selected) + 1) % labels.length]
+    await pressCtrlTab(client)
+    const next = await pollUntil(client, CHANGE_PANEL, (v) => v?.selected === expectedNext, 3000)
+    check(results, '[change-view-keyboard] Ctrl+Tab selects the next artifact and focuses its content',
+      next?.selected === expectedNext && next?.focusOnPanel === true,
+      `${from?.selected} → ${JSON.stringify(next)}, expected ${expectedNext}`)
+    const sessionAfter = await client.evaluate(FOCUSED_SESSION)
+    check(results, '[change-view-keyboard] Ctrl+Tab in the change view does not switch sessions',
+      sessionBefore !== null && sessionAfter === sessionBefore, `${sessionBefore} → ${sessionAfter}`)
+
+    // ── Ctrl+Shift+Tab wraps to the last artifact, and its tab is scrolled into view ──
+    await clickOn('first artifact tab', ARTIFACT_TAB_RECT(labels[0]))
+    await pollUntil(client, CHANGE_PANEL, (v) => v?.selected === labels[0], 3000)
+    await client.evaluate(RESET_ARTIFACT_STRIP)
+    const strip = await client.evaluate(ARTIFACT_STRIP)
+    check(results, '[change-view-keyboard] precondition: the tab strip cannot show every tab',
+      strip?.overflows === true, JSON.stringify(strip))
+    await pressCtrlTab(client, { shift: true })
+    const last = labels[labels.length - 1]
+    const wrapped = await pollUntil(client, CHANGE_PANEL, (v) => v?.selected === last, 3000)
+    check(results, '[change-view-keyboard] Ctrl+Shift+Tab from the first artifact selects the last',
+      wrapped?.selected === last, `${labels[0]} → ${wrapped?.selected}, expected ${last}`)
+    // **The selected tab must be the last one** — otherwise "visible" holds for a selection that
+    // never moved (measured: green on the code before this change, where Ctrl+Tab did nothing here).
+    const stripAfter = await pollUntil(client, ARTIFACT_STRIP, (v) => v?.selected === last && v?.selectedVisible === true, 3000)
+    check(results, '[change-view-keyboard] the tab chosen with the keyboard is visible in the tab strip',
+      stripAfter?.selected === last && stripAfter?.selectedVisible === true, JSON.stringify(stripAfter))
+
+    // ── An open overlay blocks artifact switching ──
+    check(results, '[change-view-keyboard] open the Graph overlay', (await client.evaluate(CLICK_OPEN_VIZ('Graph'))) === true)
+    const overlay = await pollUntil(client, OVERLAY, (v) => v !== null, 5000)
+    const focused = await client.evaluate(FOCUS_CHANGE_PANEL)
+    const blockedFrom = await client.evaluate(CHANGE_PANEL)
+    check(results, '[change-view-keyboard] precondition: overlay open and focus in the change view',
+      overlay !== null && focused === true && blockedFrom?.focusInView === true,
+      `${JSON.stringify(overlay)} ${JSON.stringify(blockedFrom)}`)
+    await pressCtrlTab(client)
+    await sleep(400)
+    const blocked = await client.evaluate(CHANGE_PANEL)
+    check(results, '[change-view-keyboard] Ctrl+Tab does nothing while an overlay is open',
+      blocked?.selected === blockedFrom?.selected && (await client.evaluate(OVERLAY)) !== null,
+      `${blockedFrom?.selected} → ${blocked?.selected}`)
+    await client.evaluate(CLICK_VIZ_CLOSE)
+    await pollUntil(client, OVERLAY, (v) => v === null, 5000)
+  } finally {
+    await client.send('Emulation.clearDeviceMetricsOverride', {})
+    await sleep(300)
+  }
+}
+
 /**
  * **依賴鏈是線性的** —— **後五段**共用 `runPanelBasics` 建立的那一個 app 與它累積下來的狀態
  * （選中的 folder、開著的 artifact 分頁、側欄座標）。這與 `probe:terminal`／`probe:keyboard`
@@ -3933,6 +4196,7 @@ const SECTIONS = [
   { name: 'runAnchoringAndCoordinate', run: runAnchoringAndCoordinate, deps: ['runBrowseAndOverlays'], onTimeout: killStrays },
   { name: 'runWorktreeAggregation', run: runWorktreeAggregation, deps: ['runAnchoringAndCoordinate'], onTimeout: killStrays },
   { name: 'runQuickOpenSection', run: runQuickOpenSection, deps: ['runWorktreeAggregation'], onTimeout: killStrays },
+  { name: 'runChangeViewKeyboard', run: runChangeViewKeyboard, deps: ['runQuickOpenSection'], onTimeout: killStrays },
 ]
 
 const outcome = await runSections({

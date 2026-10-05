@@ -2,6 +2,7 @@ import { useEffect } from 'react'
 import { t } from '@shared/i18n'
 import { useSessions } from './terminal/sessions'
 import { dividerRowOf, folderIndexToRow, placeFromRow } from './rail-rows'
+import { tabCycleScopeFor } from './tab-cycle-scope'
 import { type RailSelection, type WorkspaceFolder, selectedFolderId } from './types'
 
 interface KeyboardNavigationProps {
@@ -48,7 +49,7 @@ function editableTextHasFocus(): boolean {
  *
  * | | |
  * |---|---|
- * | `Ctrl+Tab` / `Ctrl+Shift+Tab` | 當前 repo 內的下一個／上一個 session（**分頁位置序**，可循環） |
+ * | `Ctrl+Tab` / `Ctrl+Shift+Tab` | 當前 repo 內的下一個／上一個 session（**分頁位置序**，可循環）；focus in the OpenSpec change view cycles its artifacts instead |
  * | `Ctrl+↓` / `Ctrl+↑` | rail 上的下一個／上一個 repo（可循環） |
  * | `Ctrl+T` | 開啟建立 session 的入口（spawn 選單） |
  * | `Ctrl+Shift+W` | 關閉當前 focused 的 session |
@@ -236,6 +237,16 @@ export function KeyboardNavigation({
       }
 
       if (isTab) {
+        // Focus inside the OpenSpec change view: the key cycles its artifacts instead of the
+        // sessions. Handed over here, after the dialog/menu check and after the key was consumed,
+        // so that rule and `preventDefault` stay in one place (`change-view-keyboard` design D3).
+        // `event.target`, not `document.activeElement`: the target is where the key was dispatched.
+        const scope = tabCycleScopeFor(event.target)
+        if (scope) {
+          scope.cycle(event.shiftKey ? -1 : 1)
+          return
+        }
+
         // 作用域為**當前選中的 rail 項目**（涵蓋全域項目）—— 切換不跨越項目。
         if (!selection) return
         const list = sessions.forFolder(itemKey)

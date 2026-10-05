@@ -98,7 +98,7 @@ run `npm run uninstall:desktop`.
 
 | Shortcut | Action |
 | --- | --- |
-| `Ctrl+Tab` / `Ctrl+Shift+Tab` | Next / previous session in the current rail item |
+| `Ctrl+Tab` / `Ctrl+Shift+Tab` | Next / previous session in the current rail item; with focus in the side panel's change view, next / previous artifact |
 | `Ctrl+↓` / `Ctrl+↑` | Next / previous rail item |
 | `Ctrl+T` | Open the new-session menu |
 | `Ctrl+Shift+W` | Close the focused session |

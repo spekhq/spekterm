@@ -1080,3 +1080,20 @@ their coverage-table rows say they cannot see this class of defect.
   - Electron 的行程把自己設成不可 dump，`/proc/<pid>/environ` 與 `exe` 都讀不到（權限錯誤，不是空值）。
   - 掛載表的來源只記檔名 `Spekterm.AppImage`，與使用者那份同名。
   - **能用的是「啟動後比啟動前多出來的那一個掛載點」**，且要求恰好一個 —— 多於一個就紅，不猜。
+
+## The red run must fail on behavior, not on the markup the change adds
+
+`change-view-keyboard` ran its new probe section against the code before the change, as every
+change here does. The first version located the artifact content by `role="tabpanel"` — markup the
+change itself was adding. On the old code the lookup returned `null`, the section stopped at its
+first step, and the "red run" said nothing about which behavior was missing. **A red run that fails
+on a selector proves only that the selector is new.** The probe now finds the scroller by structure
+(the first scrollable sibling after the tab strip), which both versions have; the old code then
+failed eight assertions, each on the behavior it names.
+
+The same run exposed a false green of the "no-op" family (see the section on relative judgments):
+"the tab chosen with the keyboard is visible in the tab strip" passed on the old code because
+`Ctrl+Tab` never moved the selection, and the tab that was already selected was, of course,
+visible. The assertion now also requires that the selected tab is the one the key should have
+reached. **Any "X is visible / in place after the action" assertion must also assert that the action
+happened.**

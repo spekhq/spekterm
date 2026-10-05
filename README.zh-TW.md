@@ -87,7 +87,7 @@ npm run install:desktop                          # → ~/.local/bin ＋ 應用�
 
 | 快捷鍵 | 動作 |
 | --- | --- |
-| `Ctrl+Tab` / `Ctrl+Shift+Tab` | 當前 rail 項目內的下／上一個 session |
+| `Ctrl+Tab` / `Ctrl+Shift+Tab` | 當前 rail 項目內的下／上一個 session；焦點在側欄的 change 檢視時，切換下／上一個 artifact |
 | `Ctrl+↓` / `Ctrl+↑` | rail 上的下／上一個項目 |
 | `Ctrl+T` | 開啟建立 session 的選單 |
 | `Ctrl+Shift+W` | 關閉當前的 session |
