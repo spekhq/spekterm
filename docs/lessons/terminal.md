@@ -481,3 +481,68 @@ xterm 內建的寬度表是 **Unicode 6**，而 agent 依現代 wcwidth 排版 �
 複驗 `terminal-sessions` 的既有覆蓋時查到的：`probe-terminal.mjs` 全檔 `blink` 出現 **0 次**，
 那五條的唯一載體是 `xterm-blink-release.test.mjs` 的**原始碼代理判準**，而該 spec 自己已寫明
 它「擋得住依賴被退回，擋不住行為本身」。**這是既有缺口，記在這裡以免下一個人以為它有覆蓋。**
+
+---
+
+## Hibernation (`session-hibernation`)
+
+A running session can go back to dormant, by hand or after an idle threshold. Three things the change
+learned that are not visible from the code:
+
+### Hibernation is a per-session `dispose`, not a `kill`
+
+`kill()` is the "session ends" path: its exit reason (`killed`) makes the IPC layer drop the session from
+`sessions.json`, and it ends the handoff drop point and clears agent status and events. Hibernation
+must do none of that — the session has to come back exactly as a restored one does. It has its own exit
+reason (`hibernated`) that, unlike `disposed`, **is** forwarded to the renderer (which keeps the session
+and shows it dormant). Routing hibernation through `kill()` with a flag is the shape where the next edit
+to `kill()` silently applies to it.
+
+The reverse also needed fixing: `kill()` returns early for a session without a pty, so closing a
+**dormant** session never ended its drop point. Restored sessions always leaked this way; hibernation made
+it routine. `kill()` now reports whether it had a pty and the IPC handler does the cleanup otherwise.
+
+### "Hibernated ≡ restored" needs three things restore never needed
+
+The view is remounted on hibernation (a generation in its React key), so it takes the restore path. That
+only works if:
+
+- the snapshot taken at hibernation goes into the renderer's replay map — **the startup restore was its
+  only writer**, so a session created in this run remounted blank, and a restored one replayed its startup
+  history instead of the hibernation screen;
+- output from the dying pty is dropped (marked per pty, so the pty a later wake creates is unaffected) —
+  otherwise it lands in the dormant view ahead of the resumed conversation;
+- the renderer's `waking` set forgets the session — it never removed a successful wake, which was correct
+  only while a session could not become dormant twice in one run.
+
+### Is a shell idle? Children, and the binary, not the foreground group
+
+Measured with an interactive `zsh -i` in a pty:
+
+| shell state | `tpgid` (stat field 8) | children of the shell |
+|---|---|---|
+| at the prompt | = shell pid | none |
+| `sleep 30` in the foreground | = the job's pgid | `sleep`, plus a transient `preexec` hook process |
+| `sleep 30 &` | = shell pid | `sleep` |
+
+`tpgid` misses background jobs; every job, foreground or background, is a child, so the test is
+"no children" (`/proc/<pid>/task/<pid>/children`). Transient hook children only fail one tick. After
+`exec vim` the pid is the editor — foreground and childless — so the process must still be the shell it
+was spawned as. Compare **file identity** (`dev`, `ino` of `realpath($SHELL)` at spawn vs
+`stat('/proc/<pid>/exe')`), not the link's text: an upgraded shell binary makes the link read
+`… (deleted)`, while `stat` still reaches the old inode. And not by reading `/proc/<pid>/exe` at spawn —
+node-pty returns the pid right after `fork`, when it may still be Electron.
+
+### pty input is not activity
+
+The idle clock counts display changes, shell output and agent wait-state changes — not the pty input
+stream. xterm sends its own replies (focus reports, answers to terminal queries) through the same path, so
+a session that queries its terminal would never become idle. User input can only reach a displayed session
+anyway, and the displayed session is exempt.
+
+### The wait state must be current for sessions nobody watches
+
+It is only evaluated while something subscribes. Without the tracker's always-on subscription, a session
+watched until it was waiting, then left and given work, reads a stale `ready` and is hibernated mid-work.
+Consequence: events are now always drained, so a transcript relocation could be consumed with no view
+open — `agent-wait` keeps the last reported `transcriptPath` and the conversation view starts from it.

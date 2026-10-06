@@ -4,6 +4,7 @@ import { TranscriptFollower, type FollowUpdate } from '../transcript-follow-serv
 import { transcriptPathFor } from '../transcript-follow'
 import { encodeInput, type WaitState } from '../agent-events'
 import {
+  lastTranscriptPathOf,
   pendingRequestOf,
   subscribeWait,
   waitStateOf,
@@ -125,8 +126,10 @@ function start(contents: WebContents, sessionId: string): void {
   followers.set(contents.id, entry)
   // 沿用這個 session 既有的狀態（切走再切回不該退回未知）。
   contents.send(CONVERSATION_CHANNELS.wait, sessionId, waitStateOf(sessionId), pendingRequestOf(sessionId))
-  // 算出來的位置是初始值；事件帶來的 `transcript_path` 一旦到達即取代它。
-  follower.relocate(transcriptPathFor(source.cwd, source.conversationId))
+    // 算出來的位置是初始值；事件帶來的 `transcript_path` 一旦到達即取代它。
+  // An event may already have relocated it while no view was open: the wait state is drained for
+  // every running claude session (`session-hibernation`), so start from the last reported location.
+  follower.relocate(lastTranscriptPathOf(sessionId) ?? transcriptPathFor(source.cwd, source.conversationId))
 }
 
 /** renderer 消失時的清理。與 watcher／pty 的擁有者記帳同構。 */

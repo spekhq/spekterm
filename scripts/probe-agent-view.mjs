@@ -28,15 +28,16 @@ import {
   chmodSync,
   existsSync,
   mkdirSync,
-  mkdtempSync,
+    mkdtempSync,
   readFileSync,
+  readdirSync,
   realpathSync,
   rmSync,
   writeFileSync,
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { check, connectToApp, pollFor } from './lib/cdp.mjs'
+import { check, connectToApp, pollFor, pressKey } from './lib/cdp.mjs'
 import { copy, label } from './lib/copy.mjs'
 import { makeStubAgent } from './lib/stub-agent.mjs'
 import { awaitMounted } from './lib/mounted.mjs'
@@ -163,6 +164,25 @@ const TOGGLE_VIEW = `(() => {
 // ── 段落 ────────────────────────────────────────────────────────────────────
 
 const COMPOSER = `document.querySelector('${label('conversation.composer')}')`
+
+/** A visible Wake button inside the terminal stage (session-hibernation). */
+const WAKE_IN_STAGE = `[...(document.querySelector('[aria-label="${copy('stage.terminal')}"]')?.querySelectorAll('button') ?? [])].some((b) => b.textContent === ${JSON.stringify(copy('sessions.wake'))} && b.getBoundingClientRect().width > 0)`
+
+/** Whether focus sits on a Wake button. */
+const CONVERSATION_WAKE_FOCUSED = `(document.activeElement?.tagName === 'BUTTON' && document.activeElement.textContent === ${JSON.stringify(copy('sessions.wake'))})`
+
+/** Whether any process of the stub agent for this conversation is still running. */
+function agentAlive(conversationId) {
+  for (const entry of readdirSync('/proc')) {
+    if (!/^\d+$/.test(entry) || Number(entry) === process.pid) continue
+    try {
+      if (readFileSync(`/proc/${entry}/cmdline`, 'utf8').includes(conversationId)) return true
+    } catch {
+      // the process ended while being read
+    }
+  }
+  return false
+}
 const SEND = `document.querySelector('${label('conversation.send')}')`
 
 /** 預設是終端 view；切到對話 view 後內容抵達，且送得出去。 */
@@ -386,8 +406,23 @@ async function runRebuiltWidth(_mode, _config, context) {
     read: () => app.client.evaluate(selectRepoExpression(context.repoName)),
     settled: (ok) => ok === true,
     timeoutMs: 15_000,
-    label: '重建後選中 repo',
+        label: '重建後選中 repo',
   })
+  // Displaying a dormant session no longer starts it (session-persistence): the conversation view
+  // offers Wake, with focus on it, and Enter wakes the session — no click.
+  const wakeFocused = await pollFor({
+    read: () => app.client.evaluate(CONVERSATION_WAKE_FOCUSED),
+    settled: (focused) => focused === true,
+    timeoutMs: 15_000,
+    label: 'the dormant conversation view focuses its Wake button',
+  })
+  check(
+    results,
+    'a dormant session in the conversation view offers Wake, with focus on it',
+    wakeFocused === true,
+    `activeElement=${JSON.stringify(await app.client.evaluate('document.activeElement?.outerHTML?.slice(0, 120) ?? null'))}`,
+  )
+  await pressKey(app.client, 'Enter')
   const state = await pollFor({
     read: () => app.client.evaluate(VIEW_STATE),
     settled: (view) => view.hasComposer,
@@ -783,11 +818,17 @@ async function runDormantConversation(_mode, _config, context) {
     timeoutMs: 25_000,
     label: '休眠 session 於對話 view 呈現休眠狀態',
   })
-  check(
+    check(
     results,
     '休眠的 session 於對話 view 呈現休眠，而非一份空的對話',
     state.text.includes(copy('conversation.dormant').slice(0, 20)),
     `畫面＝${JSON.stringify(state.text.slice(0, 80))}`,
+  )
+  check(
+    results,
+    'the dormant conversation view offers the wake action',
+    Boolean(await app.client.evaluate(WAKE_IN_STAGE)),
+    `stage text=${JSON.stringify(state.text.slice(0, 120))}`,
   )
 }
 
@@ -1293,6 +1334,103 @@ async function runBusyIndicator(_mode, _config, context) {
   )
 }
 
+/**
+ * Automatic hibernation of agent sessions (session-hibernation design D4), threshold seeded as
+ * seconds. Which sessions an agent's state keeps running depends on that state being current for
+ * sessions nobody watches — the always-on subscription. Two sessions carry it: one never watched (it
+ * reads `unknown` without the subscription, so it is never hibernated) and one watched until it was
+ * waiting, then left and given work (it reads a stale `ready` without the subscription, so it is
+ * hibernated mid-work).
+ */
+async function runAutoHibernateAgent(_mode, _config, context) {
+  if (context.app) await context.app.close()
+  const THRESHOLD_S = 5
+  const repo = mkTemp('spekterm-agentview-repoH-')
+  const configDir = mkTemp('spekterm-agentview-configH-')
+  const stub = makeStubAgent(mkTemp, configDir)
+  const profile = seedProfile(repo)
+  writeFileSync(
+    join(profile, 'preferences.json'),
+    JSON.stringify({ version: 1, terminal: { autoHibernateSeconds: THRESHOLD_S }, ui: { language: 'en' } }),
+  )
+  const app = await launch({ profile, configDir, stub, port: PORT })
+  context.app = app
+  const repoName = repo.split('/').pop()
+
+  /** Create an agent session and return its conversation id (the stub logs each start). */
+  const create = async () => {
+    const before = stub.peerNames().length
+    await createAgentSession(app, repoName)
+    const names = await pollFor({
+      read: () => stub.peerNames(),
+      settled: (list) => list.length > before,
+      timeoutMs: 20_000,
+      label: 'the new agent starts',
+    })
+    return names.at(-1).conversation
+  }
+
+  // A: idle, never shown in the conversation view.
+  const idle = await create()
+  // B: shown in the conversation view until it reports waiting.
+  const watched = await create()
+  await app.client.evaluate(TOGGLE_VIEW)
+  await pollFor({
+    read: () => app.client.evaluate(VIEW_STATE),
+    settled: (state) => state.text.includes(`STUB-HELLO-${watched}`),
+    timeoutMs: 20_000,
+    label: 'B is watched and its content arrived',
+  })
+  await new Promise((resolve) => setTimeout(resolve, 1000))
+  // D: leaves B; B is then given work that never ends while nobody watches it.
+  const choosing = await create()
+  stub.command(watched, 'fire PreToolUse')
+  // E: leaves D; D then waits on a permission choice.
+  await create()
+  stub.command(choosing, 'fire PermissionRequest')
+
+  const idleGone = await pollFor({
+    read: () => agentAlive(idle),
+    settled: (alive) => alive === false,
+    timeoutMs: (THRESHOLD_S + 12) * 1000,
+    interval: 250,
+    label: 'the idle, never-watched agent is hibernated',
+  })
+  check(results, 'an idle agent that was never watched is hibernated after the threshold', idleGone === false, `alive=${idleGone}`)
+
+  await new Promise((resolve) => setTimeout(resolve, (THRESHOLD_S + 3) * 1000))
+  const kept = { working: agentAlive(watched), choosing: agentAlive(choosing) }
+  check(results, 'an agent that started working while unwatched stays running (no stale ready)', kept.working, JSON.stringify(kept))
+  check(results, 'an agent waiting on a permission choice stays running', kept.choosing, JSON.stringify(kept))
+
+  // F: the conversation relocates while nobody watches it; opening its view follows the new file.
+  const relocating = await create()
+  await create()
+  stub.command(
+    relocating,
+    [
+      'tp="$dir/relocated-$sid.jsonl"',
+      `printf '%s\n' '{"type":"assistant","uuid":"ru1","timestamp":"2026-09-06T00:00:02.000Z","message":{"role":"assistant","content":[{"type":"text","text":"RELOCATED-UNWATCHED"}]}}' >> "$tp"`,
+      'fire SessionEnd',
+      'fire SessionStart',
+    ].join('\n'),
+  )
+  await new Promise((resolve) => setTimeout(resolve, 1500))
+  await app.client.evaluate(focusTabExpression(4))
+  const relocated = await pollFor({
+    read: () => app.client.evaluate(VIEW_STATE),
+    settled: (state) => state.text.includes('RELOCATED-UNWATCHED'),
+    timeoutMs: 10_000,
+    label: 'the view follows a relocation that happened while unwatched',
+  })
+  check(
+    results,
+    'opening the conversation view follows a relocation reported while nobody watched',
+    relocated.text.includes('RELOCATED-UNWATCHED'),
+    `view text=${JSON.stringify(relocated.text.slice(0, 160))}`,
+  )
+}
+
 const SECTIONS = [
   { name: 'runViewAndSend', run: runViewAndSend },
   { name: 'runRebuiltWidth', run: runRebuiltWidth, requires: ['runViewAndSend'] },
@@ -1304,7 +1442,8 @@ const SECTIONS = [
   { name: 'runIncompleteContent', run: runIncompleteContent },
   { name: 'runCoveredReleasesQuota', run: runCoveredReleasesQuota },
   { name: 'runRelocateByEvent', run: runRelocateByEvent },
-  { name: 'runBusyIndicator', run: runBusyIndicator },
+    { name: 'runBusyIndicator', run: runBusyIndicator },
+  { name: 'runAutoHibernateAgent', run: runAutoHibernateAgent },
 ]
 
 const outcome = await runSections({

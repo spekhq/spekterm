@@ -210,6 +210,13 @@ const TABS = `[...document.querySelectorAll('[aria-label="${copy('sessions.tabs'
   selected: tab.getAttribute('aria-selected') === 'true',
 }))`
 
+/** The focused session's status tooltip (it names the dormant and exited states). */
+const FOCUSED_STATUS = `(() => {
+  const tab = [...document.querySelectorAll('[aria-label="${copy('sessions.tabs')}"] [role="tab"]')]
+    .find((t) => t.getAttribute('aria-selected') === 'true')
+  return tab ? (tab.getAttribute('title') ?? '') : null
+})()`
+
 const FOCUSED_TAB = `(() => {
   const tab = [...document.querySelectorAll('[aria-label="${copy('sessions.tabs')}"] [role="tab"]')]
     .find((t) => t.getAttribute('aria-selected') === 'true')
@@ -494,7 +501,8 @@ const KEYS = {
   ArrowLeft: { key: 'ArrowLeft', code: 'ArrowLeft', vk: 37 },
   ArrowRight: { key: 'ArrowRight', code: 'ArrowRight', vk: 39 },
   t: { key: 't', code: 'KeyT', vk: 84 },
-  w: { key: 'w', code: 'KeyW', vk: 87 },
+    w: { key: 'w', code: 'KeyW', vk: 87 },
+  h: { key: 'H', code: 'KeyH', vk: 72 },
   p: { key: 'p', code: 'KeyP', vk: 80 },
   Enter: { key: 'Enter', code: 'Enter', vk: 13 },
   Escape: { key: 'Escape', code: 'Escape', vk: 27 },
@@ -1137,8 +1145,14 @@ async function runMode(label, { port, rendererUrl }) {
       duringNameDialog === focusedBeforeDialog &&
         repoDuringDialog?.includes('repo-a') &&
         dialogStillOpen === true,
-      `focused=${duringNameDialog} repo=${repoDuringDialog} 對話框=${dialogStillOpen}`,
+            `focused=${duringNameDialog} repo=${repoDuringDialog} 對話框=${dialogStillOpen}`,
     )
+    // Ctrl+Shift+H shares the dialog rule (session-hibernation); its positive control is checkHibernateShortcut.
+    await pressKey(app.client, 'h', ['ctrl', 'shift'])
+    await sleep(400)
+    const statusDuringNameDialog = await app.client.evaluate(FOCUSED_STATUS)
+    check(results, `${label}：Ctrl+Shift+H does nothing while the session-rename dialog is open`, !statusDuringNameDialog?.includes(copy('sessions.statusDormant')), `status=${JSON.stringify(statusDuringNameDialog)}`)
+
 
     // 關掉它（Esc）
     await app.client.send('Input.dispatchKeyEvent', {
@@ -1187,8 +1201,13 @@ async function runMode(label, { port, rendererUrl }) {
       results,
       `${label}：files 的對話框開啟時，導航快捷鍵不生效`,
       duringFilesDialog === focusedBeforeFilesDialog,
-      `之前=${focusedBeforeFilesDialog} 之後=${duringFilesDialog}`,
+            `之前=${focusedBeforeFilesDialog} 之後=${duringFilesDialog}`,
     )
+    await pressKey(app.client, 'h', ['ctrl', 'shift'])
+    await sleep(400)
+    const statusDuringFilesDialog = await app.client.evaluate(FOCUSED_STATUS)
+    check(results, `${label}：Ctrl+Shift+H does nothing while a Files dialog is open`, !statusDuringFilesDialog?.includes(copy('sessions.statusDormant')), `status=${JSON.stringify(statusDuringFilesDialog)}`)
+
 
     await app.client.send('Input.dispatchKeyEvent', {
       type: 'keyDown',
@@ -1239,8 +1258,13 @@ async function runMode(label, { port, rendererUrl }) {
       results,
       `${label}：終端字型設定對話框開啟時，導航快捷鍵不生效`,
       duringSettings === focusedBeforeSettings && repoDuringSettings === repoBeforeSettings,
-      `focused=${duringSettings} repo=${repoDuringSettings}`,
+            `focused=${duringSettings} repo=${repoDuringSettings}`,
     )
+    await pressKey(app.client, 'h', ['ctrl', 'shift'])
+    await sleep(400)
+    const statusDuringSettings = await app.client.evaluate(FOCUSED_STATUS)
+    check(results, `${label}：Ctrl+Shift+H does nothing while the Settings dialog is open`, !statusDuringSettings?.includes(copy('sessions.statusDormant')), `status=${JSON.stringify(statusDuringSettings)}`)
+
 
     await pressKey(app.client, 'Escape')
     await pollUntil(app.client, DIALOG_OPEN, (value) => value === false, 4000)
@@ -1378,6 +1402,117 @@ async function runMode(label, { port, rendererUrl }) {
  * 這條需要一個**只有一個 folder** 的 workspace，因此得另外起一個 app 實例 —— 它守的是
  * `cycle()` 在單元素清單上的邊界（`(0 + 1) % 1 === 0`，繞回自己）。
  */
+/**
+ * `Ctrl+Shift+H` hibernates the focused session of the selected rail item (session-hibernation):
+ * from the terminal (the key never reaches it), on the global item, with focus in the editor; a
+ * no-op without a selection, without a session, and on a dormant or an exited one.
+ */
+async function checkHibernateShortcut(label, { port, rendererUrl }) {
+  const repos = makeFixture()
+  const profile = seedProfile(repos)
+  const app = await launch({ port, profileDir: profile, rendererUrl })
+  const dormantText = copy('sessions.statusDormant')
+
+  try {
+    // No selection (cold start): a no-op, and no error.
+    await pressKey(app.client, 'h', ['ctrl', 'shift'])
+    const mountedCold = await app.client.evaluate(MOUNTED)
+    check(results, `${label}：Ctrl+Shift+H with no item selected is a no-op`, mountedCold?.ok === true && (await app.client.evaluate(TABS)).length === 0, describeMounted(mountedCold))
+
+    await pollUntil(app.client, SELECT_FOLDER('repo-a'), (value) => value === true, 10_000)
+    await sleep(300)
+    await createSession(app.client)
+    await pollUntil(app.client, TABS, (list) => list.length === 1, 8000)
+    await realClick(app.client, await pollUntil(app.client, TERMINAL_RECT, (v) => v !== null, 6000))
+    await sleep(400)
+    // A listener on the terminal's own input element: an intercepted key never reaches it.
+    const armed = await app.client.evaluate(`(() => {
+      const target = document.activeElement
+      if (!target || target.tagName !== 'TEXTAREA') return false
+      window.__hibernateKeyReached = false
+      target.addEventListener('keydown', (event) => { if (event.key.toLowerCase() === 'h') window.__hibernateKeyReached = true })
+      return true
+    })()`)
+    check(results, `${label}：precondition: the terminal has focus`, armed === true, `activeElement is a textarea=${armed}`)
+
+    await pressKey(app.client, 'h', ['ctrl', 'shift'])
+    const hibernated = await pollUntil(app.client, FOCUSED_STATUS, (status) => Boolean(status?.includes(dormantText)), 6000)
+    const reached = await app.client.evaluate('window.__hibernateKeyReached')
+    check(
+      results,
+      `${label}：Ctrl+Shift+H from the terminal hibernates the focused session, and the key does not reach the terminal`,
+      Boolean(hibernated?.includes(dormantText)) && reached === false,
+      `status=${JSON.stringify(hibernated)} key reached the terminal=${reached}`,
+    )
+
+    // On a dormant session: a no-op (still dormant, nothing else changed).
+    const tabsBeforeAgain = await app.client.evaluate(TABS)
+    await pressKey(app.client, 'h', ['ctrl', 'shift'])
+    await sleep(400)
+    check(
+      results,
+      `${label}：Ctrl+Shift+H on a dormant session is a no-op`,
+      Boolean((await app.client.evaluate(FOCUSED_STATUS))?.includes(dormantText)) &&
+        JSON.stringify(await app.client.evaluate(TABS)) === JSON.stringify(tabsBeforeAgain),
+      `status=${JSON.stringify(await app.client.evaluate(FOCUSED_STATUS))}`,
+    )
+
+    // On an exited session: a no-op (still exited).
+    await createSession(app.client)
+    await pollUntil(app.client, TABS, (list) => list.length === 2, 8000)
+    await realClick(app.client, await pollUntil(app.client, TERMINAL_RECT, (v) => v !== null, 6000))
+    await sleep(400)
+    await typeLine(app.client, 'exit')
+    const exitedText = copy('sessions.statusExited')
+    await pollUntil(app.client, FOCUSED_STATUS, (status) => Boolean(status?.includes(exitedText)), 8000)
+    await pressKey(app.client, 'h', ['ctrl', 'shift'])
+    await sleep(400)
+    const afterExited = await app.client.evaluate(FOCUSED_STATUS)
+    check(results, `${label}：Ctrl+Shift+H on an exited session is a no-op`, Boolean(afterExited?.includes(exitedText)), `status=${JSON.stringify(afterExited)}`)
+
+    // An item without sessions: a no-op, and no error.
+    await pollUntil(app.client, SELECT_FOLDER('repo-b'), (value) => value === true, 6000)
+    await sleep(300)
+    await pressKey(app.client, 'h', ['ctrl', 'shift'])
+    const mountedEmpty = await app.client.evaluate(MOUNTED)
+    check(results, `${label}：Ctrl+Shift+H on an item without sessions is a no-op`, mountedEmpty?.ok === true && (await app.client.evaluate(TABS)).length === 0, describeMounted(mountedEmpty))
+
+    // The global item.
+    await pollUntil(app.client, SELECT_FOLDER('repo-a'), (value) => value === true, 6000)
+    await sleep(300)
+    await pressKey(app.client, 'ArrowUp', ['ctrl'])
+    await pollUntil(app.client, SELECTED_ITEM, (value) => value === copy('rail.globalName'), 4000)
+    await openSpawnMenu(app.client, copy('sessions.spawnShell'), {
+      entry: GLOBAL_NEW_SESSION_RECT,
+      entryWindowMs: 10_000,
+      itemWindowMs: 3000,
+      budgetMs: 13_000,
+      name: 'the global item new-session entry',
+    })
+    await pollUntil(app.client, TABS, (list) => list.length === 1, 8000)
+    await sleep(500)
+    await pressKey(app.client, 'h', ['ctrl', 'shift'])
+    const globalStatus = await pollUntil(app.client, FOCUSED_STATUS, (status) => Boolean(status?.includes(dormantText)), 6000)
+    check(results, `${label}：Ctrl+Shift+H hibernates the focused global session`, Boolean(globalStatus?.includes(dormantText)), `status=${JSON.stringify(globalStatus)}`)
+
+    // With focus in the side panel's editor.
+    await pollUntil(app.client, SELECT_FOLDER('repo-a'), (value) => value === true, 6000)
+    await sleep(300)
+    await createSession(app.client)
+    await pollUntil(app.client, TABS, (list) => list.length === 3, 8000)
+    await sleep(500)
+    check(results, `${label}：switch to the Files identity`, (await app.client.evaluate(IDENTITY_FILES)) === true)
+    await pollUntil(app.client, OPEN_FILE('notes.txt'), (value) => value === true, 8000)
+    const editorFocused = await pollUntil(app.client, EDITOR_TEXTAREA_FOCUSED, (value) => value === true, 10_000)
+    check(results, `${label}：precondition: the editor has focus`, editorFocused === true)
+    await pressKey(app.client, 'h', ['ctrl', 'shift'])
+    const editorStatus = await pollUntil(app.client, FOCUSED_STATUS, (status) => Boolean(status?.includes(dormantText)), 6000)
+    check(results, `${label}：Ctrl+Shift+H takes effect with focus in the editor`, Boolean(editorStatus?.includes(dormantText)), `status=${JSON.stringify(editorStatus)}`)
+  } finally {
+    await app.destroy()
+  }
+}
+
 async function checkSingleFolder(label, { port, rendererUrl }) {
   const [only] = makeFixture()
   const profile = seedProfile([only])
@@ -2831,7 +2966,8 @@ const SECTIONS = [
   { name: 'checkSingleFolder', run: checkSingleFolder, onTimeout: killStrays },
   { name: 'checkReordering', run: checkReordering, onTimeout: killStrays },
   { name: 'checkEmptyWorkspace', run: checkEmptyWorkspace, onTimeout: killStrays },
-  { name: 'checkScrollAnchoring', run: checkScrollAnchoring, onTimeout: killStrays },
+    { name: 'checkScrollAnchoring', run: checkScrollAnchoring, onTimeout: killStrays },
+  { name: 'checkHibernateShortcut', run: checkHibernateShortcut, onTimeout: killStrays },
 ]
 
 const outcome = await runSections({

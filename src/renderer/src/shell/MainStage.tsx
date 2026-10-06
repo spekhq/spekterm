@@ -164,21 +164,22 @@ export function MainStage({ selection, folders }: MainStageProps): React.JSX.Ele
     [expandSidePanel],
   )
 
-  /**
-   * **休眠的 session 於首次被顯示時才 spawn**（design D11）。
+    /**
+   * The displayed session — its rail item is selected and it is that item's focused session (the
+   * `active` test below).
    *
-   * 「被顯示」＝所屬 folder 被選中 **且** 它是該 folder 的 focused session —— 也就是下面那個
-   * `active` 的判準。於是「重開 app 只起一個 claude」不是一條特例規則，而是這條規則的自然結果：
-   * 啟動當下恰好只有一個 session 被顯示。
+   * **Displaying a dormant session no longer starts it** (`session-persistence`): the dormant screen
+   * offers Wake. Before `session-hibernation` an effect here woke whatever became displayed, so any
+   * `Ctrl+Tab` pass over a hibernated session started its process again.
    *
-   * 休眠與否在這裡判斷（`displayed` 是這一次渲染的狀態），不在 `wake` 裡從 ref 判斷 —— 那個 ref
-   * 由 provider 的一個 effect 更新，而 effect 由內而外執行，這裡會早於它。
+   * The main process is told which session is displayed: automatic hibernation never takes it.
    */
-  const displayed = focusedId ? folderSessions.find((s) => s.id === focusedId) : undefined
-  const wake = sessions.wake
+    const displayed = focusedId ? folderSessions.find((s) => s.id === focusedId) : undefined
+  // The same test as a terminal's `active` below: without a selected item nothing is on screen.
+  const displayedId = selection !== null ? (displayed?.id ?? null) : null
   useEffect(() => {
-    if (displayed?.status === 'dormant' && !displayed.wakeError) wake(displayed.id)
-  }, [displayed?.id, displayed?.status, displayed?.wakeError, wake])
+    window.workspace.terminal.displayed(displayedId)
+  }, [displayedId])
 
   // 側欄「本 change」的候選集合：以 **panelFolder**（側欄來源）為準。解析規則本身在
   // `resolveAnchoredChange`（狀態列共用同一份）。
@@ -471,8 +472,10 @@ export function MainStage({ selection, folders }: MainStageProps): React.JSX.Ele
             {[...sessions.all()]
               .sort((a, b) => a.id.localeCompare(b.id))
               .map((session) => (
-                <TerminalView
-                  key={session.id}
+                                <TerminalView
+                  // The generation is part of the key: a hibernated session's view remounts and so
+                  // takes the restore path (`session-hibernation` design D1).
+                  key={`${session.id}:${session.generation ?? 0}`}
                   sessionId={session.id}
                   spawnTarget={session.spawnTarget}
                   status={session.status}

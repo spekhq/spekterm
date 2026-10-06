@@ -47,7 +47,17 @@ export interface TerminalPreferences {
    * 住在這裡，先例在。**不要順手把這個區塊改名**：`parsePreferences` 在 `version` 不符時
    * 隔離整檔，一次版本遞增等於每個使用者的字型設定歸零。
    */
-  agentView?: 'terminal' | 'conversation'
+    agentView?: 'terminal' | 'conversation'
+  /**
+   * How long a running session may sit idle before it is hibernated (`session-hibernation`), in
+   * seconds. **Unset = 24 hours; `0` = off.**
+   *
+   * Off is `0`, not `null`: this store's setters already use `null` to mean "reset to default", and
+   * turning the feature off must persist as off — a missing value means the default, which is on.
+   * Any non-negative whole number is accepted, not only the values Settings offers, so a probe can
+   * seed a threshold of seconds without a test branch in product code.
+   */
+  autoHibernateSeconds?: number
 }
 
 /**
@@ -140,6 +150,11 @@ function sanitizeBoolean(value: unknown): boolean | undefined {
   return typeof value === 'boolean' ? value : undefined
 }
 
+/** Auto-hibernation threshold: a non-negative whole number of seconds, anything else is unset. */
+function sanitizeHibernateSeconds(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : undefined
+}
+
 /**
  * 語言的清理器：**白名單查表**，不在受支援清單中即視為未設定。
  *
@@ -208,7 +223,8 @@ const PREFERENCE_FIELDS = {
   gpuAcceleration: { sanitize: sanitizeBoolean, group: 'other', toRenderer: true },
   agentStatus: { sanitize: sanitizeBoolean, group: 'other', toRenderer: true },
   agentEvents: { sanitize: sanitizeBoolean, group: 'other', toRenderer: false },
-  agentView: { sanitize: sanitizeAgentView, group: 'other', toRenderer: true },
+    agentView: { sanitize: sanitizeAgentView, group: 'other', toRenderer: true },
+  autoHibernateSeconds: { sanitize: sanitizeHibernateSeconds, group: 'other', toRenderer: true },
 } satisfies {
   [K in keyof Required<TerminalPreferences>]: TerminalFieldSpec<Required<TerminalPreferences>[K]>
 }
@@ -540,6 +556,21 @@ export class PreferencesStore {
     const sanitized = view === null ? undefined : sanitizeAgentView(view)
     if (sanitized === undefined) delete next.agentView
     else next.agentView = sanitized
+
+    this.preferences = next
+    this.save()
+    return this.get()
+  }
+
+    /**
+   * Automatic hibernation threshold in seconds; `0` = off. `null` or an invalid value = reset to the
+   * default (24 hours).
+   */
+  setAutoHibernate(seconds: number | null): TerminalPreferences {
+    const next: TerminalPreferences = { ...this.preferences }
+    const sanitized = seconds === null ? undefined : sanitizeHibernateSeconds(seconds)
+    if (sanitized === undefined) delete next.autoHibernateSeconds
+    else next.autoHibernateSeconds = sanitized
 
     this.preferences = next
     this.save()

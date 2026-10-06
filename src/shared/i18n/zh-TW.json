@@ -253,7 +253,7 @@
     "tabs": "Session 分頁",
     "exitedBadge": "已結束",
     "statusRunning": "執行中",
-    "statusDormant": "休眠中 · 顯示時才喚醒",
+    "statusDormant": "休眠中 · 按「喚醒」恢復",
     "statusExited": "已結束",
     "statusExitedWithCode": "已結束（代碼 {{code}}）",
     "spawnClaude": "執行 claude",
@@ -264,9 +264,11 @@
     "copy": "複製",
     "paste": "貼上",
     "wakeFailed": "無法還原這個 session：{{message}}",
-    "dormantShell": "休眠中 · 將在它最後的工作目錄重開一個 shell（先前的行程已經不在了）",
-    "dormantClaude": "休眠中 · 正在還原對話…",
-    "replaySeparator": "以上為先前的內容 · spekterm 已重新啟動"
+    "wake": "喚醒",
+    "hibernate": "休眠",
+    "dormantShell": "休眠中 · 喚醒時會在它最後的工作目錄重開一個 shell。未匯出的變數、未存下的指令歷史與執行中的工作都沒有保留。",
+    "dormantClaude": "休眠中 · 喚醒後會接回對話",
+    "replaySeparator": "以上為先前的內容"
   },
   "settings": {
     "title": "設定",
@@ -291,7 +293,13 @@
     "aboutDirty": "有未提交的變更",
     "aboutDevelopment": "開發版建置",
     "language": "語言",
-    "languageHint": "立即生效。spekterm 寫給 agent 讀的文字維持英文。"
+        "languageHint": "立即生效。spekterm 寫給 agent 讀的文字維持英文。",
+    "autoHibernate": "讓閒置的 session 休眠",
+    "autoHibernateHint": "閒置超過這段時間的 session 會結束它的行程，但仍留在 workspace 裡，之後可以喚醒。畫面上正在顯示的 session、正在工作的 agent、正在跑工作的 shell 都不會被休眠。",
+    "autoHibernateOff": "關閉",
+    "autoHibernateHours_other": "{{count}} 小時後",
+    "autoHibernateDays_other": "{{count}} 天後",
+    "autoHibernateSeconds_other": "{{count}} 秒後"
   },
   "statusBar": {
     "label": "狀態列",
@@ -560,7 +568,7 @@
     "toolFailed": "結果（失敗）",
     "attaching": "正在追上進度…",
     "empty": "尚未有任何訊息",
-    "dormant": "Session 正在休眠。切到終端 view 可以喚醒它。",
+    "dormant": "Session 正在休眠。喚醒後會接回對話。",
     "unavailable": "無法取得對話",
     "unavailableHint": "切到終端 view 看看正在發生什麼事。",
     "earlierNotLoaded": "更早的訊息尚未載入。",

@@ -125,7 +125,10 @@ const PROBE_EXPRESSION = `(async () => {
     // watchStatus／onStatus 於 panel-drive-and-shell-affordances 引入（claude-status-bridge
     // 規格）：狀態列所需、且只有主行程取得到的事實（pty 的 cwd、git 工作區、agent 回報的用量）。
     // watchStatus 只收一個 sessionId（null ＝停止輪詢），沒有路徑詞彙。
-    // （這段註解在**模板字串之內** —— 不要在這裡用反引號，它會把整個模板提前結束。）
+        // （這段註解在**模板字串之內** —— 不要在這裡用反引號，它會把整個模板提前結束。）
+    // hibernate／displayed／onHibernateRequest come with session-hibernation: hibernate takes a
+    // sessionId and an optional single-use token the main process issued; displayed takes a sessionId
+    // or null; the request carries a sessionId and a token. No path vocabulary, as above.
     surplusTerminalKeys: Object.keys(api?.terminal ?? {}).filter(
       (key) =>
         ![
@@ -139,8 +142,11 @@ const PROBE_EXPRESSION = `(async () => {
           'snapshot',
           'onData',
           'onExit',
-          'watchStatus',
+                    'watchStatus',
           'onStatus',
+          'hibernate',
+          'displayed',
+          'onHibernateRequest',
         ].includes(key),
     ),
     // **這道守衛看不到簽名改變，而那個缺口補不起來（實測）。**
@@ -164,6 +170,8 @@ const PROBE_EXPRESSION = `(async () => {
     // 與 GPU 加速同型的布林偏好，值同樣由主行程的 store 承接，介面上沒有路徑詞彙。
     // setLanguage 於 ui-language-switch 引入（ui-localization 規格）：值由主行程的 store 以
     // **白名單查表**接受（不在受支援清單中即視為未設定），介面上同樣沒有路徑詞彙。
+        // setAutoHibernate (session-hibernation, terminal-preferences): a number of seconds, sanitized by
+    // the store (non-negative whole numbers only); no path vocabulary.
     surplusSettingsKeys: Object.keys(api?.settings ?? {}).filter(
       (key) =>
         ![
@@ -172,7 +180,8 @@ const PROBE_EXPRESSION = `(async () => {
           'setGpuAcceleration',
           'setAgentStatus',
           'setAgentView',
-          'setLanguage',
+                    'setLanguage',
+          'setAutoHibernate',
           'listMonospaceFonts',
         ].includes(key),
     ),

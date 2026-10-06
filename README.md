@@ -29,8 +29,12 @@ agent writes to disk.
 - Real terminals (`node-pty` + xterm.js with WebGL), several sessions per repository, git worktrees
   included.
 - Sessions survive a restart: `claude` sessions resume their conversation, shells respawn in their last
-  working directory with the previous screen replayed. Sessions you don't look at stay dormant until
-  you do.
+  working directory with the previous screen replayed. Restored sessions stay dormant — no process —
+  until you press Wake.
+- Sessions you keep for occasional use can be hibernated: their process ends and they wait, dormant,
+  in the workspace. You can do it by hand (`Ctrl+Shift+H` or the tab menu), and idle sessions are
+  hibernated automatically after 24 hours (configurable in Settings; never the one on screen, a working
+  agent or a shell running a job).
 - Agent sessions can switch between the terminal and a conversation view. The view is built from the
   agent's own transcript and hooks — never by scraping the screen.
 
@@ -102,6 +106,7 @@ run `npm run uninstall:desktop`.
 | `Ctrl+↓` / `Ctrl+↑` | Next / previous rail item |
 | `Ctrl+T` | Open the new-session menu |
 | `Ctrl+Shift+W` | Close the focused session |
+| `Ctrl+Shift+H` | Hibernate the focused session |
 | `Shift+↓` / `Shift+↑` | Move the selected repository up / down the rail |
 | `Shift+→` / `Shift+←` | Move the focused session along the tab bar |
 | `Ctrl+P` | Quick open (when the side panel has focus) |

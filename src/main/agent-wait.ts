@@ -54,6 +54,20 @@ interface SessionEntry {
 const waitStates = new Map<string, WaitState>()
 const pendingRequests = new Map<string, { tool: string; arg: string | null } | null>()
 const entries = new Map<string, SessionEntry>()
+/**
+ * The last transcript location an event reported, per session.
+ *
+ * Events are read-and-delete, and since `session-hibernation` every running claude session is
+ * drained whether or not its conversation view is open. A relocation (after `/clear` or a resume)
+ * would otherwise be consumed with no one to follow it, and a view opened later would follow the
+ * computed path — the old file — forever.
+ */
+const transcriptPaths = new Map<string, string>()
+
+/** The last transcript location an event reported for this session, if any. */
+export function lastTranscriptPathOf(sessionId: string): string | null {
+  return transcriptPaths.get(sessionId) ?? null
+}
 
 export function waitStateOf(sessionId: string): WaitState {
   return waitStates.get(sessionId) ?? 'unknown'
@@ -65,8 +79,9 @@ export function pendingRequestOf(sessionId: string): { tool: string; arg: string
 
 /** 讓測試與其他消費者共用同一個折疊結果。 */
 export function foldDrain(sessionId: string, result: DrainResult): WaitSnapshot {
-  waitStates.set(sessionId, result.state)
+    waitStates.set(sessionId, result.state)
   pendingRequests.set(sessionId, result.pending)
+  if (result.transcriptPath) transcriptPaths.set(sessionId, result.transcriptPath)
   return {
     state: result.state,
     pending: result.pending,
@@ -120,8 +135,9 @@ export function clearWait(sessionId: string): void {
     clearInterval(entry.timer)
     entries.delete(sessionId)
   }
-  waitStates.delete(sessionId)
+    waitStates.delete(sessionId)
   pendingRequests.delete(sessionId)
+  transcriptPaths.delete(sessionId)
 }
 
 /** 測試用：目前有幾個 session 正在被輪詢。 */

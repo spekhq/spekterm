@@ -18,6 +18,7 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
+  readlinkSync,
   rmSync,
   writeFileSync,
 } from 'node:fs'
@@ -187,7 +188,7 @@ function conversationOf(argv) {
   return match ? { mode: match[1], id: match[2] } : null
 }
 
-function makeStubClaude({ resumeFails = false, honorSettings = false, logInput = false } = {}) {
+function makeStubClaude({ resumeFails = false, honorSettings = false, logInput = false, screenMarker = false } = {}) {
   const home = mkTemp('spekterm-terminal-stubhome-')
   const bin = join(home, '.local', 'bin')
   mkdirSync(bin, { recursive: true })
@@ -230,7 +231,11 @@ function makeStubClaude({ resumeFails = false, honorSettings = false, logInput =
     '#!/bin/sh',
     `: > "${receipt}"`,
     `echo "$@" >> "${callLog}"`,
-    honorSettings ? honor : '',
+        honorSettings ? honor : '',
+    // `screenMarker`: print `STUB-SCREEN-<conversation id>` on every start, `--resume` included — as
+    // the real CLI redraws its conversation on resume. Without it, "the conversation is shown once
+    // after waking" cannot tell a correct view (remounted, empty) from one that kept the old screen.
+    screenMarker ? `echo "STUB-SCREEN-$(echo "$@" | grep -o '[0-9a-f-]\\{36\\}' | head -1)"` : '',
     // **旗標要掃過整個 `"$@"`，不能看 `$1`。** 這裡一度寫成 `[ "$1" = "--resume" ]`，而
     // `claude-status-bridge` 起，命令前面多了一段 `--settings <路徑>` —— `$1` 從此恆為
     // `--settings`，**這支 stub 於是完全不再模擬續接失敗**：自癒沒有被觸發，第三次呼叫不存在，
@@ -823,8 +828,10 @@ async function setGpuViaSettings(client, enabled) {
   // 勾選框走**真點擊** —— React 的 onChange 對 checkbox 是掛在 click 上的。先讀出當前狀態，
   // 只有需要改變時才點（點兩次等於沒點）。
   const box = await client.evaluate(`(() => {
-    const cb = document.querySelector('[role="dialog"] input[aria-label="${copy('settings.gpuAcceleration')}"]')
+        const cb = document.querySelector('[role="dialog"] input[aria-label="${copy('settings.gpuAcceleration')}"]')
     if (!cb) return null
+    // The Settings card scrolls when taller than the window: measure the box where it can be clicked.
+    cb.scrollIntoView({ block: 'nearest' })
     const r = cb.getBoundingClientRect()
     return { checked: cb.checked, x: r.x, y: r.y, width: r.width, height: r.height }
   })()`)
@@ -833,8 +840,9 @@ async function setGpuViaSettings(client, enabled) {
 
   const saveAt = await client.evaluate(`(() => {
     const b = [...document.querySelectorAll('[role="dialog"] button')]
-      .find((x) => x.innerText.includes(${JSON.stringify(copy('settings.save'))}))
+            .find((x) => x.innerText.includes(${JSON.stringify(copy('settings.save'))}))
     if (!b) return null
+    b.scrollIntoView({ block: 'nearest' })
     const r = b.getBoundingClientRect()
     return { x: r.x, y: r.y, width: r.width, height: r.height }
   })()`)
@@ -918,6 +926,45 @@ async function pressEnter(client) {
     nativeVirtualKeyCode: 13,
   }
   await client.send('Input.dispatchKeyEvent', { type: 'keyDown', ...key, text: '\r' })
+  await client.send('Input.dispatchKeyEvent', { type: 'keyUp', ...key })
+}
+
+/**
+ * The displayed dormant session's Wake button (session-hibernation). Displaying a dormant session no
+ * longer starts it, so every section that used to rely on "select it and it wakes" goes through this.
+ * Located by its dictionary text inside the terminal stage and required to have a box (hidden
+ * sessions' views are mounted too).
+ */
+const WAKE_RECT = `(() => {
+  const stage = document.querySelector('section[aria-label="${copy('stage.terminal')}"]')
+  const button = [...(stage?.querySelectorAll('button') ?? [])].find(
+    (candidate) => candidate.textContent === ${JSON.stringify(copy('sessions.wake'))} && candidate.getBoundingClientRect().width > 0,
+  )
+  if (!button) return null
+  const r = button.getBoundingClientRect()
+  return { x: r.x, y: r.y, width: r.width, height: r.height }
+})()`
+
+/** Whether the focused element is a Wake button. */
+const WAKE_FOCUSED = `document.activeElement?.tagName === 'BUTTON' && document.activeElement.textContent === ${JSON.stringify(copy('sessions.wake'))}`
+
+/** Click the displayed dormant session's Wake button (waits for it to appear). */
+async function clickWake(client) {
+  const rect = await pollUntil(client, WAKE_RECT, (value) => value !== null, 8000)
+  if (!rect) throw new Error('no Wake button on the displayed session')
+  await realClick(client, rect)
+}
+
+/** `Ctrl+Tab` / `Ctrl+Shift+Tab` — the next / previous session of the selected rail item. */
+async function pressCtrlTab(client, shift = false) {
+  const key = {
+    key: 'Tab',
+    code: 'Tab',
+    windowsVirtualKeyCode: 9,
+    nativeVirtualKeyCode: 9,
+    modifiers: shift ? 10 : 2,
+  }
+  await client.send('Input.dispatchKeyEvent', { type: 'rawKeyDown', ...key })
   await client.send('Input.dispatchKeyEvent', { type: 'keyUp', ...key })
 }
 
@@ -3027,18 +3074,42 @@ async function runRestore(label, { port, rendererUrl }) {
       `tooltip=${JSON.stringify(dormantTab?.title)} 狀態燈=${dormantTab?.dot}（danger=${danger}）`,
     )
 
-    // **只有一個 session 有 pty** —— 其餘休眠。開 app 不該同時啟動 N 個 claude。
+        // **No session has a pty** (session-hibernation): selecting the item displays its focused session
+    // dormant. The wait gives a wake-on-display implementation time to show itself.
     await sleep(2000)
     const awake = ptySessionPids(marker)
     check(
       results,
-      `${label}：重新開啟只喚醒被顯示的那一個 session（其餘休眠，沒有 pty）`,
-      awake.length === 1,
-      `已喚醒 ${awake.length} 個（重建了 ${labelsAfter.length} 個）cmdlines=${JSON.stringify(ptyCmdlines(marker))}`,
+      `${label}：opening the application starts no session (selecting the item does not wake its focused session)`,
+      awake.length === 0,
+      `pty count=${awake.length} (rebuilt ${labelsAfter.length}) cmdlines=${JSON.stringify(ptyCmdlines(marker))}`,
     )
 
-    // 被喚醒的是 claude —— 它續接**同一個**對話（--resume，沿用原 id）。
-    const resumeCalls = stub.calls()
+    // The Wake button starts it — and only it.
+    await clickWake(app.client)
+    const wokenByButton = await pollFor({
+      read: () => ptySessionPids(marker),
+      settled: (pids) => pids.length === 1,
+      timeoutMs: 10_000,
+      interval: 150,
+      label: 'the Wake button starts the displayed session',
+    })
+    check(
+      results,
+      `${label}：the Wake button starts the displayed dormant session`,
+      wokenByButton.length === 1,
+      `pty count=${wokenByButton.length}`,
+    )
+
+        // 被喚醒的是 claude —— 它續接**同一個**對話（--resume，沿用原 id）。
+    // The stub logs its start a moment after its pid appears: wait for the second call.
+    const resumeCalls = await pollFor({
+      read: () => stub.calls(),
+      settled: (calls) => calls.length >= 2,
+      timeoutMs: 10_000,
+      interval: 150,
+      label: 'the woken claude logs its start',
+    })
     check(
       results,
       `${label}：重建的 claude session 續接同一個對話（--resume 同一個 id）`,
@@ -3093,39 +3164,66 @@ async function runRestore(label, { port, rendererUrl }) {
       這裡在點擊之前先量一次 pty 數：只有被顯示的那一個該有 pty。緊接其後的等待是
       `pids.length === 2`，若它們早就都醒了，那個等待會**立刻收斂** —— 於是連下一條也一起假綠。
     */
-    // **先等被顯示的那一個醒來，再問「還有沒有別的也醒了」。** 喚醒是非同步的：量得太早會
-    // 讀到 0，而 0 與「一個都沒醒」在數值上相同 —— 那樣這條斷言會在產品正確時變紅。
-    await pollFor({
-      read: () => ptySessionPids(marker),
-      settled: (pids) => pids.length >= 1,
-      timeoutMs: 10_000,
-      label: '被顯示的那一個 session 醒來',
-    })
-    // 沉澱一下，讓「其他 session 也被喚醒」的實作有機會露出來 —— 少了這段等待，
-    // 一個「全部喚醒」的實作可能只是還沒完成第二個，於是照樣量到 1。
-    await sleep(800)
+        // The wait gives a wake-on-display (or wake-everything) implementation time to show itself.
+    await sleep(2000)
     const dormantPids = ptySessionPids(marker)
     check(
       results,
-      `${label}：再次重啟後只有被顯示的那一個醒來，其餘仍為休眠`,
-      dormantPids.length === 1,
-      `pty 數=${dormantPids.length}（分頁 ${labelsAgain.length} 個，只有被顯示的那一個該有）`,
+      `${label}：after another restart no session has started`,
+      dormantPids.length === 0,
+      `pty count=${dormantPids.length} (tabs ${labelsAgain.length})`,
     )
 
-    // ── 切到 shell session：它才被喚醒（首次被顯示時 spawn）
-    await realClick(app.client, await app.client.evaluate(TAB_RECT(1)))
+    // ── Ctrl+Tab onto the dormant shell: it is displayed, and still has no pty.
+    // By keyboard on purpose: the focus rule is what lets Enter wake it without a click.
+    await pressCtrlTab(app.client)
+    const wakeFocused = await pollUntil(app.client, WAKE_FOCUSED, (value) => value === true, 8000)
+    await sleep(800)
+        const afterSwitch = ptySessionPids(marker)
+    // The switch must have happened, or "no pty" says nothing: the shell's tab is the selected one.
+    const switchedTabs = await app.client.evaluate(TABS)
+    check(
+      results,
+      `${label}：displaying a dormant session by keyboard does not start it`,
+      afterSwitch.length === 0 && switchedTabs[1]?.selected === true,
+      `pty count=${afterSwitch.length} selected=${JSON.stringify(switchedTabs.map((tab) => tab.selected))}`,
+    )
+    check(
+      results,
+      `${label}：the Wake button of a dormant session switched to by keyboard has focus`,
+      wakeFocused === true,
+      `activeElement=${JSON.stringify(await app.client.evaluate('document.activeElement?.outerHTML?.slice(0, 120)'))}`,
+    )
+
+        // Enter wakes it — no click in between.
+    await pressEnter(app.client)
+    // The pty exists before the renderer hears the wake succeeded; typing in between reaches nothing
+    // (there is no terminal to focus yet). Wait for the tab to show it running.
+    await awaitRunning(app.client, 1)
     const woken = await pollFor({
       read: () => ptySessionPids(marker),
-      settled: (pids) => pids.length === 2,
+      settled: (pids) => pids.length === 1,
       timeoutMs: 10_000,
       interval: 150,
-      label: '等休眠的 session 被顯示後啟動 pty',
+      label: 'Enter wakes the displayed dormant session',
     })
     check(
       results,
-      `${label}：顯示一個休眠的 session 使其啟動 pty`,
-      woken.length === 2,
-      `已喚醒 ${woken.length} 個 session`,
+      `${label}：Enter wakes the displayed dormant session`,
+      woken.length === 1,
+      `pty count=${woken.length}`,
+    )
+
+    // Typing reaches it with no click either: focus moved from the Wake button to the terminal.
+    // The file is written only if the command ran, and its content is where the shell started.
+    const rebornCwdFile = join(out, 'reborn-cwd.txt')
+    await typeLine(app.client, `pwd > ${rebornCwdFile}`)
+    const cwdText = await waitForFile(rebornCwdFile, (value) => value.trim().startsWith('/'), 10_000)
+    check(
+      results,
+      `${label}：typing after a keyboard wake reaches the session`,
+      cwdText.trim().startsWith('/'),
+      `file content=${JSON.stringify(cwdText.trim())}`,
     )
 
     // 上次的畫面被重播，且與 live 明確區分。
@@ -3159,11 +3257,8 @@ async function runRestore(label, { port, rendererUrl }) {
       `分隔線數量=${separators}（每重開一次就多一條，表示休眠中的終端把自己的重播內容寫回了快照）`,
     )
 
-    // shell 於**最後已知的工作目錄**重生（不是 folder 根目錄）。
+        // shell 於**最後已知的工作目錄**重生（不是 folder 根目錄）。
     await realClick(app.client, await app.client.evaluate(TERMINAL_RECT))
-    const rebornCwdFile = join(out, 'reborn-cwd.txt')
-    await typeLine(app.client, `pwd > ${rebornCwdFile}`)
-    const cwdText = await waitForFile(rebornCwdFile, (value) => value.trim().startsWith('/'), 10_000)
     check(
       results,
       `${label}：重建的 shell session 於最後已知的工作目錄重生`,
@@ -3316,10 +3411,12 @@ async function runHealAndCrash(label, { port, rendererUrl }) {
     await app.quitGracefully()
     await waitPtysGone(marker)
 
-    // ── 重新開啟：--resume 會失敗（沒有對話可續）→ 必須自癒成一個全新的對話
+        // ── 重新開啟：--resume 會失敗（沒有對話可續）→ 必須自癒成一個全新的對話
     app = await launch({ port, profileDir: profile, rendererUrl, marker, stub })
     await pollUntil(app.client, SELECT_FOLDER('repo-a'), (value) => value === true, 10_000)
     await pollUntil(app.client, TAB_LABELS, (value) => value.length === 1, 10_000)
+    await clickWake(app.client)
+
 
     const healed = await pollFor({
       read: () => stub.calls(),
@@ -3394,8 +3491,9 @@ async function runHealAndCrash(label, { port, rendererUrl }) {
     persisted.sessions[0].claudeSessionId = `x; touch ${pwned}`
     writeFileSync(join(profile, 'sessions.json'), JSON.stringify(persisted))
 
-    app = await launch({ port, profileDir: profile, rendererUrl, marker, stub })
+        app = await launch({ port, profileDir: profile, rendererUrl, marker, stub })
     await pollUntil(app.client, SELECT_FOLDER('repo-a'), (value) => value === true, 10_000)
+    await clickWake(app.client)
     await waitForPtyCount(marker, 1)
     await sleep(800)
 
@@ -3500,7 +3598,8 @@ async function runAltScreen(label, { port, rendererUrl }) {
     // ── 重開：新的 shell 必須是可用的
     app = await launch({ port, profileDir: profile, rendererUrl, marker, stub })
     await pollUntil(app.client, SELECT_FOLDER('repo-a'), (value) => value === true, 10_000)
-    await pollUntil(app.client, TABS, (value) => value.length === 1, 10_000)
+        await pollUntil(app.client, TABS, (value) => value.length === 1, 10_000)
+    await clickWake(app.client)
     await waitForPtyCount(marker, 1)
     await realClick(app.client, await app.client.evaluate(TERMINAL_RECT))
 
@@ -3582,7 +3681,8 @@ async function runDormantHint(label, { port, rendererUrl }) {
     await pollUntil(app.client, SELECT_FOLDER('repo-a'), (value) => value === true, 10_000)
     await pollUntil(app.client, TABS, (value) => value.length === 1, 10_000)
 
-    // 顯示它 → 嘗試喚醒 → folder 路徑失效 → 停在休眠態並說明原因。
+        // 顯示它 → 按「喚醒」 → folder 路徑失效 → 停在休眠態並說明原因。
+    await clickWake(app.client)
     const hint = await pollUntil(
       app.client,
       `(() => {
@@ -3594,9 +3694,12 @@ async function runDormantHint(label, { port, rendererUrl }) {
           Math.round(box.left + box.width / 2),
           Math.round(box.top + box.height / 2),
         )
-        return top ? { text: top.innerText ?? '', className: String(top.className ?? '') } : null
+                // The failure card holds a Wake button (the retry), which sits at the center: read the card.
+        const card = top?.closest('.z-10') ?? top
+        return top ? { text: card.innerText ?? '', className: String(top.className ?? '') } : null
       })()`,
-      (value) => Boolean(value?.text),
+            // Wait for the failure itself: right after Wake the card still shows the dormant state.
+      (value) => Boolean(value?.text?.includes(prefixOf('sessions.wakeFailed'))),
       12_000,
     ).catch(() => null)
 
@@ -4032,10 +4135,16 @@ async function runGlobalSession(label, { port, rendererUrl }) {
 
     await realClick(app.client, await app.client.evaluate(GLOBAL_ROW_RECT))
     const rebuilt = await pollUntil(app.client, TAB_LABELS, (v) => v.length === 1, 8000)
-    check(results, `${label}：關掉 app 再開，全域 session 原樣重建於全域項目之下`,
+        check(results, `${label}：關掉 app 再開，全域 session 原樣重建於全域項目之下`,
       Array.isArray(rebuilt) && rebuilt.length === 1, JSON.stringify(rebuilt))
 
-    // 顯示它 ⇒ 喚醒 ⇒ pty 誕生於**最後已知的**目錄，不是家目錄。
+    // Selecting the global item displays its session dormant — it does not start it.
+    await sleep(1500)
+    check(results, `${label}：selecting the global item does not start its sessions`,
+      ptyPids(marker).length === 0, `pty count = ${ptyPids(marker).length}`)
+
+    // Wake ⇒ the pty is born in the **last known** directory, not the home directory.
+    await clickWake(app.client)
     await waitForPtyCount(marker, 1, 15_000)
     await realClick(app.client, await app.client.evaluate(TERMINAL_RECT))
     const afterFile = join(stub.home, 'global-after-restart.txt')
@@ -4229,6 +4338,428 @@ async function runUnicodeWidth(label, { port, rendererUrl }) {
   }
 }
 
+/** Hibernate the session of tab `index` through its context menu (session-hibernation). */
+async function hibernateTab(client, index) {
+  await openTabMenu(client, index)
+    const item = await client.evaluate(MENU_ITEM_RECT(copy('sessions.hibernate')))
+  if (!item) {
+    const items = await client.evaluate(`[...(document.querySelector('[role="menu"]')?.querySelectorAll('button') ?? [])].map((b) => b.innerText)`)
+    throw new Error(`tab ${index} offers no Hibernate item (menu=${JSON.stringify(items)} tabs=${JSON.stringify(await client.evaluate(TAB_STATUS))})`)
+  }
+  await realClick(client, item)
+}
+
+/** Whether tab `index`'s context menu offers Hibernate. Closes the menu again. */
+async function tabOffersHibernate(client, index) {
+  await openTabMenu(client, index)
+    const item = await client.evaluate(MENU_ITEM_RECT(copy('sessions.hibernate')))
+  // Dismissed by a press outside it (the menu closes on any mousedown elsewhere); the press lands on
+  // the same tab, which is already the selected one.
+  await realClick(client, await client.evaluate(TAB_RECT(index)))
+  await pollUntil(client, `document.querySelector('[role="menu"]') === null`, (value) => value === true, 4000)
+  return item !== null
+}
+
+/** Wait until tab `index` no longer shows the dormant state (the renderer has the woken session as running). */
+async function awaitRunning(client, index) {
+  await pollUntil(
+    client,
+    TAB_STATUS,
+    (value) => value[index] !== undefined && !value[index].title.includes(copy('sessions.statusDormant')),
+    10_000,
+  )
+}
+
+/** The pid of the only session leader carrying `marker` that is not in `known`. */
+async function newSessionPid(marker, known) {
+  const pids = await pollFor({
+    read: () => ptySessionPids(marker).filter((pid) => !known.includes(pid)),
+    settled: (value) => value.length === 1,
+    timeoutMs: 10_000,
+    interval: 150,
+    label: 'the new session pty',
+  })
+  return pids[0]
+}
+
+const alive = (pid) => existsSync(`/proc/${pid}`)
+
+/**
+ * Manual hibernation (session-hibernation): what it ends, what it keeps, and that waking takes the
+ * restore path — for a session created in this run (whose replay the startup restore never filled)
+ * and for a restored one.
+ */
+async function runHibernate(label, { port, rendererUrl }) {
+  console.log(`\n── ${label}（manual hibernation）──`)
+
+  const marker = `spek-hibernate-${process.pid}-${Date.now()}`
+  const { repo, out } = makeFixture()
+  const sub = join(repo, 'packages', 'app')
+  mkdirSync(sub, { recursive: true })
+  const profile = seedProfile([['f1', repo]])
+    const stub = makeStubClaude({ screenMarker: true })
+
+  let app = null
+  try {
+    app = await launch({ port, profileDir: profile, rendererUrl, marker, stub })
+    await pollUntil(app.client, SELECT_FOLDER('repo-a'), (value) => value === true, 10_000)
+    await sleep(300)
+
+    // ── A shell created in this run: cd, print a marker, hibernate at once (no snapshot settle).
+    await openSessionViaMenu(app.client, copy('sessions.spawnShell'))
+    await pollUntil(app.client, TABS, (value) => value.length === 1, 8000)
+    const firstPid = await newSessionPid(marker, [])
+    await realClick(app.client, await app.client.evaluate(TERMINAL_RECT))
+    await typeLine(app.client, `cd ${sub}`)
+    await typeLine(app.client, `echo HIB_$((5*5)) | tee ${join(out, 'hib.txt')}`)
+    await waitForFile(join(out, 'hib.txt'), (value) => value.includes('HIB_25'))
+    const labelsBefore = await app.client.evaluate(TAB_LABELS)
+
+    await hibernateTab(app.client, 0)
+    const gone = await pollFor({
+      read: () => alive(firstPid),
+      settled: (value) => value === false,
+      timeoutMs: 10_000,
+      interval: 150,
+      label: 'the hibernated pty ends',
+    })
+    const statusAfter = await pollUntil(
+      app.client,
+      TAB_STATUS,
+      (value) => value[0]?.title?.includes(copy('sessions.statusDormant')),
+      6000,
+    )
+    const labelsAfter = await app.client.evaluate(TAB_LABELS)
+    check(
+      results,
+      `${label}：hibernating a shell ends its process and keeps the tab (same place and label, shown dormant)`,
+      gone === false &&
+        JSON.stringify(labelsAfter) === JSON.stringify(labelsBefore) &&
+        Boolean(statusAfter[0]?.title?.includes(copy('sessions.statusDormant'))),
+      `pid ${firstPid} alive=${gone} labels ${JSON.stringify(labelsBefore)} → ${JSON.stringify(labelsAfter)} tooltip=${JSON.stringify(statusAfter[0]?.title)}`,
+    )
+
+    // The dormant shell states what was not kept.
+    const note = await pollUntil(
+      app.client,
+      `document.querySelector('section[aria-label="${copy('stage.terminal')}"]')?.innerText ?? ''`,
+      (value) => value.includes(copy('sessions.dormantShell')),
+      6000,
+    )
+    check(
+      results,
+      `${label}：a dormant shell states what a shell does not keep`,
+      note.includes(copy('sessions.dormantShell')),
+      `stage text=${JSON.stringify(note.slice(0, 160))}`,
+    )
+
+    // A dormant session offers no Hibernate item.
+    check(results, `${label}：a dormant session's menu offers no Hibernate item`, !(await tabOffersHibernate(app.client, 0)), 'item present')
+
+    // ── Wake: the screen as it was at the moment of hibernation, above the separator; same directory.
+        await clickWake(app.client)
+    const wokenPid = await newSessionPid(marker, [firstPid])
+    await awaitRunning(app.client, 0)
+    const replayed = await pollTerminalText(app.client, (value) => value.includes('HIB_25'), 10_000)
+    const separatorAt = replayed.indexOf(copy('sessions.replaySeparator'))
+    const markerAt = replayed.indexOf('HIB_25')
+    check(
+      results,
+      `${label}：output produced just before hibernation is kept, above the separator (session created in this run)`,
+      markerAt !== -1 && separatorAt !== -1 && markerAt < separatorAt,
+      `marker at ${markerAt}, separator at ${separatorAt}: ${JSON.stringify(replayed.slice(-200))}`,
+    )
+
+    const cwdFile = join(out, 'hib-cwd.txt')
+    await realClick(app.client, await app.client.evaluate(TERMINAL_RECT))
+    await typeLine(app.client, `pwd > ${cwdFile}`)
+    const cwd = await waitForFile(cwdFile, (value) => value.trim().startsWith('/'), 10_000)
+    check(
+      results,
+      `${label}：a woken shell starts where it was`,
+      cwd.trim() === sub && readlinkSync(`/proc/${wokenPid}/cwd`) === sub,
+      `pwd=${JSON.stringify(cwd.trim())} /proc cwd=${alive(wokenPid) ? readlinkSync(`/proc/${wokenPid}/cwd`) : 'gone'} expected ${sub}`,
+    )
+
+    // ── Hibernated and woken repeatedly: each Wake really wakes.
+    const cycles = []
+    let previous = wokenPid
+        for (const round of [1, 2]) {
+      // A Wake that did nothing leaves the tab dormant, with no Hibernate item: record it, do not throw.
+      const statusNow = (await app.client.evaluate(TAB_STATUS))[0]?.title ?? ''
+      if (statusNow.includes(copy('sessions.statusDormant'))) {
+        cycles.push(false)
+        break
+      }
+      await hibernateTab(app.client, 0)
+      await pollFor({ read: () => alive(previous), settled: (value) => value === false, timeoutMs: 10_000, interval: 150, label: `cycle ${round}: pty ends` })
+            await clickWake(app.client)
+      previous = await newSessionPid(marker, []).catch(() => null)
+      await awaitRunning(app.client, 0)
+      cycles.push(previous !== null && alive(previous))
+    }
+    check(
+      results,
+      `${label}：a session can be hibernated and woken repeatedly`,
+      cycles.every(Boolean),
+      `awake after each wake=${JSON.stringify(cycles)}`,
+    )
+
+    // ── The user can hibernate the displayed session while it runs a job.
+    await realClick(app.client, await app.client.evaluate(TERMINAL_RECT))
+    await typeLine(app.client, 'sleep 30')
+    await sleep(500)
+    const busyPid = previous
+    await hibernateTab(app.client, 0)
+    const busyGone = await pollFor({ read: () => alive(busyPid), settled: (value) => value === false, timeoutMs: 10_000, interval: 150, label: 'displayed busy shell hibernates' })
+    check(results, `${label}：the user can hibernate the displayed session while it runs a job`, busyGone === false, `pid ${busyPid} alive=${busyGone}`)
+
+    // ── An exited session offers no Hibernate item.
+    await openSessionViaMenu(app.client, copy('sessions.spawnShell'))
+    await pollUntil(app.client, TABS, (value) => value.length === 2, 8000)
+    await newSessionPid(marker, [])
+    await realClick(app.client, await app.client.evaluate(TERMINAL_RECT))
+    await typeLine(app.client, 'exit')
+    await pollUntil(app.client, TABS, (value) => value[1]?.exited === true, 8000)
+    check(results, `${label}：an exited session's menu offers no Hibernate item`, !(await tabOffersHibernate(app.client, 1)), 'item present')
+
+    // ── A hibernated session survives a restart as dormant.
+    await sleep(800)
+    await app.quitGracefully()
+    await waitPtysGone(marker)
+    app = await launch({ port, profileDir: profile, rendererUrl, marker, stub })
+    await pollUntil(app.client, SELECT_FOLDER('repo-a'), (value) => value === true, 10_000)
+    const restored = await pollUntil(app.client, TAB_LABELS, (value) => value.length === 1, 10_000)
+    await sleep(1500)
+    const restoredStatus = await app.client.evaluate(TAB_STATUS)
+    check(
+      results,
+      `${label}：a hibernated session survives a restart as dormant`,
+      JSON.stringify(restored) === JSON.stringify(labelsBefore) &&
+        ptySessionPids(marker).length === 0 &&
+        Boolean(restoredStatus[0]?.title?.includes(copy('sessions.statusDormant'))),
+      `labels=${JSON.stringify(restored)} ptys=${ptySessionPids(marker).length} tooltip=${JSON.stringify(restoredStatus[0]?.title)}`,
+    )
+
+    // ── A restored session: what replays after its hibernation is the hibernation's screen, not
+    // the startup history (the restore map is filled at startup; hibernation must replace it).
+        await clickWake(app.client)
+    await newSessionPid(marker, [])
+    await awaitRunning(app.client, 0)
+    await realClick(app.client, await app.client.evaluate(TERMINAL_RECT))
+    await typeLine(app.client, `echo AGAIN_$((6*6)) | tee ${join(out, 'again.txt')}`)
+    await waitForFile(join(out, 'again.txt'), (value) => value.includes('AGAIN_36'))
+    const beforeSecond = ptySessionPids(marker)
+    await hibernateTab(app.client, 0)
+    await pollFor({ read: () => beforeSecond.some(alive), settled: (value) => value === false, timeoutMs: 10_000, interval: 150, label: 'restored session hibernates' })
+    await clickWake(app.client)
+    await newSessionPid(marker, [])
+    const again = await pollTerminalText(app.client, (value) => value.includes('AGAIN_36'), 10_000)
+    const lastSeparator = again.lastIndexOf(copy('sessions.replaySeparator'))
+    check(
+      results,
+      `${label}：a restored session replays the screen at its hibernation, not the startup history`,
+      again.lastIndexOf('AGAIN_36') !== -1 && again.lastIndexOf('AGAIN_36') < lastSeparator,
+            `marker at ${again.lastIndexOf('AGAIN_36')}, last separator at ${lastSeparator}: ${JSON.stringify(again.slice(-200))}`,
+    )
+
+        // ── claude: hibernate, wake ⇒ the same conversation, resumed; its screen shown once.
+    const beforeClaude = ptySessionPids(marker)
+    await openSessionViaMenu(app.client, copy('sessions.spawnClaude'))
+    await pollUntil(app.client, TABS, (value) => value.length === 2, 8000)
+    const claudePid = await newSessionPid(marker, beforeClaude)
+    const created = conversationOf(stub.calls().at(-1))
+    const screenMarker = `STUB-SCREEN-${created?.id}`
+    await pollTerminalText(app.client, (value) => value.includes(screenMarker), 10_000)
+    await hibernateTab(app.client, 1)
+    await pollFor({ read: () => alive(claudePid), settled: (value) => value === false, timeoutMs: 10_000, interval: 150, label: 'claude hibernates' })
+    const claudeStage = await pollUntil(
+      app.client,
+      `document.querySelector('section[aria-label="${copy('stage.terminal')}"]')?.innerText ?? ''`,
+      (value) => value.includes(copy('sessions.dormantClaude')),
+      6000,
+    )
+    check(
+      results,
+      `${label}：a dormant claude session carries no shell note`,
+      claudeStage.includes(copy('sessions.dormantClaude')) && !claudeStage.includes(copy('sessions.dormantShell')),
+      `stage text=${JSON.stringify(claudeStage.slice(0, 160))}`,
+    )
+        const callsBefore = stub.calls().length
+    await clickWake(app.client)
+    await awaitRunning(app.client, 1)
+    const afterWake = await pollFor({
+      read: () => stub.calls(),
+      settled: (calls) => calls.length > callsBefore,
+      timeoutMs: 10_000,
+      interval: 150,
+      label: 'the woken claude starts',
+    })
+    const resumed = conversationOf(afterWake.at(-1))
+    check(
+      results,
+      `${label}：a hibernated claude session resumes the same conversation`,
+      resumed?.mode === 'resume' && resumed.id === created?.id,
+      `created=${JSON.stringify(created)} last call=${JSON.stringify(resumed)}`,
+    )
+    const claudeText = await pollTerminalText(app.client, (value) => value.includes(screenMarker), 10_000)
+    const shown = claudeText.split(screenMarker).length - 1
+    check(
+      results,
+      `${label}：a woken claude session does not show its history twice`,
+      shown === 1,
+      `"${screenMarker}" appears ${shown} times: ${JSON.stringify(claudeText.slice(0, 200))}`,
+    )
+  } finally {
+    if (app) await app.destroy()
+    for (const pid of ptyPids(marker)) {
+      try {
+        process.kill(pid, 'SIGKILL')
+      } catch {
+        // 已經走了
+      }
+    }
+  }
+}
+
+/** Seed the automatic-hibernation threshold (seconds) into a profile, with the base language. */
+function seedHibernation(profile, seconds) {
+  writeFileSync(
+    join(profile, 'preferences.json'),
+    JSON.stringify({ version: 1, terminal: { autoHibernateSeconds: seconds }, ui: { language: 'en' } }),
+  )
+}
+
+/**
+ * Automatic hibernation of shells (session-hibernation): an idle undisplayed shell is hibernated
+ * after the threshold; the displayed one, one running a foreground job, one with a background job,
+ * and one that replaced itself are not. The threshold is seeded as seconds (the tick follows it).
+ */
+async function runAutoHibernateShell(label, { port, rendererUrl }) {
+  console.log(`\n── ${label}（automatic hibernation, shells）──`)
+
+  const THRESHOLD_S = 6
+  const marker = `spek-autohib-${process.pid}-${Date.now()}`
+  const { repo } = makeFixture()
+  const profile = seedProfile([['f1', repo]])
+  seedHibernation(profile, THRESHOLD_S)
+  const stub = makeStubClaude()
+
+  let app = null
+  try {
+    app = await launch({ port, profileDir: profile, rendererUrl, marker, stub })
+    await pollUntil(app.client, SELECT_FOLDER('repo-a'), (value) => value === true, 10_000)
+    await sleep(300)
+
+    const pids = []
+    const open = async (count, command) => {
+      await openSessionViaMenu(app.client, copy('sessions.spawnShell'))
+      await pollUntil(app.client, TABS, (value) => value.length === count, 8000)
+      const pid = await newSessionPid(marker, pids)
+      pids.push(pid)
+      if (command) {
+        await realClick(app.client, await app.client.evaluate(TERMINAL_RECT))
+        await typeLine(app.client, command)
+      }
+      return pid
+    }
+    const idlePid = await open(1, null)
+    const foregroundPid = await open(2, 'sleep 600')
+    const backgroundPid = await open(3, 'sleep 600 &')
+    const replacedPid = await open(4, 'exec sleep 600')
+    const displayedPid = await open(5, null)
+
+    const idleGone = await pollFor({
+      read: () => alive(idlePid),
+      settled: (value) => value === false,
+      timeoutMs: (THRESHOLD_S + 10) * 1000,
+      interval: 250,
+      label: 'the idle undisplayed shell is hibernated',
+    })
+    check(results, `${label}：an idle shell that is not displayed is hibernated after the threshold`, idleGone === false, `pid ${idleGone ? 'still alive' : 'gone'}`)
+
+    // Give every other session at least one full threshold plus two ticks past its last activity.
+    await sleep((THRESHOLD_S + 3) * 1000)
+    const kept = {
+      foreground: alive(foregroundPid),
+      background: alive(backgroundPid),
+      replaced: alive(replacedPid),
+      displayed: alive(displayedPid),
+    }
+    check(results, `${label}：a shell running a foreground job stays running`, kept.foreground, JSON.stringify(kept))
+    check(results, `${label}：a shell with a background job stays running`, kept.background, JSON.stringify(kept))
+    check(results, `${label}：a shell replaced by another program stays running`, kept.replaced, JSON.stringify(kept))
+    check(results, `${label}：the displayed session never hibernates automatically`, kept.displayed, JSON.stringify(kept))
+
+    // ── Showing a session restarts the clock. F goes undisplayed at t0; shown and left again shortly
+    // before its deadline; still running past the original deadline, hibernated after the new one.
+    const showPid = await open(6, null)
+    await realClick(app.client, await app.client.evaluate(TAB_RECT(4)))
+    const t0 = Date.now()
+    await sleep((THRESHOLD_S - 2) * 1000)
+    await realClick(app.client, await app.client.evaluate(TAB_RECT(5)))
+    await sleep(500)
+    await realClick(app.client, await app.client.evaluate(TAB_RECT(4)))
+    const t1 = Date.now()
+    await sleep(Math.max(0, t0 + (THRESHOLD_S + 2) * 1000 - Date.now()))
+    const pastOriginal = alive(showPid)
+    const laterGone = await pollFor({
+      read: () => alive(showPid),
+      settled: (value) => value === false,
+      timeoutMs: Math.max(1000, t1 + (THRESHOLD_S + 6) * 1000 - Date.now()),
+      interval: 250,
+      label: 'hibernated after the restarted deadline',
+    })
+    check(
+      results,
+      `${label}：showing a session restarts the clock`,
+      pastOriginal && laterGone === false,
+      `alive past the original deadline=${pastOriginal}, hibernated after the new one=${laterGone === false}`,
+    )
+
+    // ── Turned off in Settings (no restart): an idle undisplayed shell stays running.
+    const settingsAt = await app.client.evaluate(`(() => {
+      const b = document.querySelector('nav[aria-label="${copy('activityBar.label')}"] button[aria-label="${copy('activityBar.settings')}"]')
+      if (!b) return null
+      const r = b.getBoundingClientRect()
+      return { x: r.x, y: r.y, width: r.width, height: r.height }
+    })()`)
+    await realClick(app.client, settingsAt)
+    await pollUntil(app.client, `Boolean(document.querySelector('[role="dialog"][aria-label="${copy('settings.title')}"]'))`, (value) => value === true, 4000)
+    const shownValue = await app.client.evaluate(`document.querySelector('[role="dialog"] select[aria-label="${copy('settings.autoHibernate')}"]')?.selectedOptions[0]?.textContent ?? null`)
+    await app.client.evaluate(`(() => {
+      const select = document.querySelector('[role="dialog"] select[aria-label="${copy('settings.autoHibernate')}"]')
+      select.value = '0'
+      select.dispatchEvent(new Event('change', { bubbles: true }))
+    })()`)
+    const saveAt = await app.client.evaluate(`(() => {
+            const b = [...document.querySelectorAll('[role="dialog"] button')].find((candidate) => candidate.textContent === ${JSON.stringify(copy('settings.save'))})
+      if (!b) return null
+      // The card scrolls when it is taller than the window; measure the button where it can be clicked.
+      b.scrollIntoView({ block: 'nearest' })
+      const r = b.getBoundingClientRect()
+      return { x: r.x, y: r.y, width: r.width, height: r.height }
+    })()`)
+    await realClick(app.client, saveAt)
+    await pollUntil(app.client, `document.querySelector('[role="dialog"]') === null`, (value) => value === true, 4000)
+    check(results, `${label}：Settings shows a stored threshold outside the choices as itself`, shownValue === copy('settings.autoHibernateSeconds_other', { count: THRESHOLD_S }), `shown=${JSON.stringify(shownValue)}`)
+
+    const offPid = await open(7, null)
+    await realClick(app.client, await app.client.evaluate(TAB_RECT(4)))
+    await sleep((THRESHOLD_S + 4) * 1000)
+    check(results, `${label}：turned off in Settings, an idle undisplayed shell stays running (no restart)`, alive(offPid), `pid ${offPid} alive=${alive(offPid)}`)
+  } finally {
+    if (app) await app.destroy()
+    for (const pid of ptyPids(marker)) {
+      try {
+        process.kill(pid, 'SIGKILL')
+      } catch {
+        // 已經走了
+      }
+    }
+  }
+}
+
 /**
  * 十個段落**彼此獨立** —— 每一段各自 `makeFixture()`、`seedProfile()`、`launch()` 與收屍，
  * 沒有任何一段沿用前一段的狀態。因此沒有一項需要宣告 `deps`。
@@ -4266,7 +4797,9 @@ const SECTIONS = [
   { name: 'runRestore', run: runRestore, timeoutMs: LONG, onTimeout: killStrays },
   { name: 'runHealAndCrash', run: runHealAndCrash, timeoutMs: LONG, onTimeout: killStrays },
   { name: 'runAltScreen', run: runAltScreen, onTimeout: killStrays },
-  { name: 'runDormantHint', run: runDormantHint, onTimeout: killStrays },
+    { name: 'runDormantHint', run: runDormantHint, onTimeout: killStrays },
+  { name: 'runHibernate', run: runHibernate, timeoutMs: LONG, onTimeout: killStrays },
+  { name: 'runAutoHibernateShell', run: runAutoHibernateShell, timeoutMs: LONG, onTimeout: killStrays },
   { name: 'runAgentStatus', run: runAgentStatus, onTimeout: killStrays },
   { name: 'runContinuation', run: runContinuation, onTimeout: killStrays },
   { name: 'runWorktree', run: runWorktree, onTimeout: killStrays },

@@ -756,3 +756,79 @@ describe('固定名字的交付（agent-peer-name）', () => {
     )
   })
 })
+
+describe('TerminalService.hibernate (session-hibernation)', () => {
+  /** A service that records which sessions had their handoff drop point ended. */
+  function hibernatable(ended: string[]): TerminalService {
+    return new TerminalService(
+      lookup([{ id: 'f1', path: repo, status: 'ok' }]),
+      sink(),
+      () => false,
+      () => false,
+      () => '',
+      () => null,
+      (sessionId) => ended.push(sessionId),
+    )
+  }
+
+  it('ends the pty with reason hibernated, and leaves the drop point alone', async () => {
+    const ended: string[] = []
+    service = hibernatable(ended)
+    const id = (await service.create('f1', 'shell')).sessionId
+
+    assert.equal(service.hibernate(id), true)
+    assert.equal(service.sessionCount, 0, 'the session no longer holds a pty')
+    await waitFor(() => exits.some((entry) => entry.sessionId === id), { label: 'exit event' })
+    assert.deepEqual(
+      exits.filter((entry) => entry.sessionId === id).map((entry) => entry.reason),
+      ['hibernated'],
+    )
+    // **Control**: `kill()` ends the drop point — hibernation through it would make this red.
+    assert.deepEqual(ended, [], 'hibernation is not closing: the drop point stays')
+  })
+
+  it('drops output from the hibernating pty', async () => {
+    service = hibernatable([])
+    const id = (await service.create('f1', 'shell')).sessionId
+    service.write(id, 'echo READY_$((1+1))\r')
+    await waitFor(() => output().includes('READY_2'), { label: 'shell is up' })
+
+        // A shell that never stops printing: whatever it emits between the request and its death
+    // must not reach the sink.
+    service.write(id, 'while :; do echo TICK_$((2*3)); done\r')
+    await waitFor(() => output().includes('TICK_6'), { label: 'the loop is printing' })
+    const before = chunks.length
+    service.hibernate(id)
+    await waitFor(() => exits.some((entry) => entry.sessionId === id), { label: 'exit event' })
+    await delay(200)
+    const after = chunks.slice(before).map((entry) => entry.chunk).join('')
+    assert.equal(after, '', 'no output after hibernate reaches the sink')
+  })
+
+  it('is a no-op for an unknown session and for one already hibernated', async () => {
+    service = hibernatable([])
+    assert.equal(service.hibernate('nope'), false)
+    const id = (await service.create('f1', 'shell')).sessionId
+    assert.equal(service.hibernate(id), true)
+    assert.equal(service.hibernate(id), false)
+  })
+
+  it('kill() reports whether the session had a pty', async () => {
+    service = hibernatable([])
+    const id = (await service.create('f1', 'shell')).sessionId
+    assert.equal(service.kill(id), true)
+    assert.equal(service.kill(id), false)
+  })
+
+  it('reports an idle shell at its prompt, and a busy one running a job', async () => {
+    service = hibernatable([])
+    const id = (await service.create('f1', 'shell')).sessionId
+    service.write(id, 'echo READY_$((1+1))\r')
+    await waitFor(() => output().includes('READY_2'), { label: 'shell is up' })
+    await waitFor(() => service?.idleFactsOf(id)?.shell === 'idle', { label: 'idle at the prompt' })
+
+        service.write(id, 'sleep 5\r')
+    await waitFor(() => service?.idleFactsOf(id)?.shell === 'busy', { label: 'busy with a foreground job' })
+    assert.equal(service.idleFactsOf('nope'), null)
+  })
+})

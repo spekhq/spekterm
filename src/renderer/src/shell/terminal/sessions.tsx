@@ -7,8 +7,11 @@ import type { FsFailure, SpawnTarget } from '../types'
  * `dormant` = 已從持久化重建、具備完整身分（名字、順序、錨定），但**還沒有 pty**。
  *
  * 重開 app 時若把每個 session 都 spawn 起來，就是同時啟動 N 個 claude —— 而它們本來就是死的
- * （app 關掉時 pty 就沒了），喚醒它們只是讓一堆 claude 閒置著搶 CPU。**懶惰嚴格地更好**：
- * 休眠的 session 於**首次被顯示**時才 spawn，於是開啟 app 恰好只會起一個（design D11）。
+ * （app 關掉時 pty 就沒了），喚醒它們只是讓一堆 claude 閒置著搶 CPU。**懶惰嚴格地更好**。
+ *
+ * Since `session-hibernation` a running session can also go back to `dormant` (by the user's hand or
+ * after a period of idleness), and a dormant session starts **only on an explicit wake** — displaying
+ * it does not. There is one dormant state: a hibernated session is exactly a restored one.
  */
 export type SessionStatus = 'dormant' | 'running' | 'exited'
 
@@ -30,8 +33,14 @@ export interface SessionState {
   spawnTarget: SpawnTarget
   status: SessionStatus
   exitCode?: number
-  /** 喚醒失敗的原因（folder 路徑失效時）。休眠態的呈現會顯示它，而不是靜默地什麼都不發生。 */
+    /** 喚醒失敗的原因（folder 路徑失效時）。休眠態的呈現會顯示它，而不是靜默地什麼都不發生。 */
   wakeError?: string
+  /**
+   * How many times this session has been hibernated in this run. Part of its view's key: a hibernated
+   * session's view remounts, so it takes the same path a restored one does (a shell replays its
+   * snapshot; a claude view starts empty and `--resume` redraws) — `session-hibernation` design D1.
+   */
+  generation?: number
   /** 該 folder 內的建立序號（自 1 起）。pty 未宣告標題時，標籤的退路。 */
   ordinal: number
   /**
@@ -111,16 +120,25 @@ export interface SessionsApi {
       ticket?: string
     },
   ): Promise<CreateOutcome>
-  /**
+    /**
    * 喚醒一個休眠的 session（＝為它 spawn pty）。
    *
-   * 呼叫端是「顯示它的那一刻」（`MainStage`）—— 這條規則只有一個：**休眠的 session 於首次被
-   * 顯示時 spawn**。一個 session 只有在「所屬 folder 被選中 **且** 它是該 folder 的 focused
-   * session」時才會顯示，於是「開啟 app 只起一個」不是另一條特例，是這條規則的自然結果。
+   * **Called only on the user's explicit wake** (the dormant screen's Wake button, or `Enter` on it) —
+   * displaying a dormant session does not start it (`session-persistence`). So nothing calls this on
+   * re-render, and a failed wake can be retried by pressing Wake again.
    *
    * 重複呼叫是安全的（已在喚醒中或已有 pty 者為 no-op）。
    */
   wake(sessionId: string): void
+  /**
+   * Put a running session back to dormant (`session-hibernation`). A shell's screen is serialized
+   * first, so the snapshot is current when its pty dies. The session becomes dormant when the main
+   * process reports the hibernated exit. `token` marks an automatic request (the main process checks
+   * its policy again); without one the request is the user's and always proceeds.
+   */
+  hibernate(sessionId: string, token?: string): void
+  /** Registered by `TerminalView`: serialize this session's screen. Returns an unregister function. */
+  registerSerializer(sessionId: string, serialize: () => string | undefined): () => void
   close(sessionId: string): void
   /**
    * pty 宣告的終端標題。空字串視為未設定。
@@ -273,10 +291,36 @@ export function SessionsProvider({ children }: { children: React.ReactNode }): R
     })
   }, [])
 
-  // pty 自行結束（使用者打了 exit、claude 收工、或命令啟動失敗）。標示為已結束但**不移除**
+    // pty 自行結束（使用者打了 exit、claude 收工、或命令啟動失敗）。標示為已結束但**不移除**
   // —— 使用者要看得到它結束了，也要讀得到最後的輸出（design D9、D15）。
   useEffect(() => {
-    return window.workspace.terminal.onExit((sessionId, exitCode) => {
+    return window.workspace.terminal.onExit((sessionId, exitCode, reason) => {
+      if (reason === 'hibernated') {
+        // **Not an ending** — the session goes back to dormant (`session-hibernation`, design D1).
+        // Output queued from the dying process would land in the dormant view ahead of the resumed
+        // conversation; the snapshot taken at hibernation becomes what the remounted view replays
+        // (the restore map is otherwise only filled at startup); and `waking` forgets the session so
+        // the next Wake actually wakes it.
+        backlog.current.delete(sessionId)
+        waking.current.delete(sessionId)
+        const snapshot = hibernationSnapshots.current.get(sessionId)
+        hibernationSnapshots.current.delete(sessionId)
+        if (snapshot !== undefined) restoredScrollback.current.set(sessionId, snapshot)
+        setSessions((previous) =>
+          previous.map((session) =>
+            session.id === sessionId
+              ? {
+                  ...session,
+                  status: 'dormant',
+                  wakeError: undefined,
+                  exitCode: undefined,
+                  generation: (session.generation ?? 0) + 1,
+                }
+              : session,
+          ),
+        )
+        return
+      }
       setSessions((previous) =>
         previous.map((session) =>
           session.id === sessionId ? { ...session, status: 'exited', exitCode } : session,
@@ -291,8 +335,12 @@ export function SessionsProvider({ children }: { children: React.ReactNode }): R
    */
   const [restored, setRestored] = useState(false)
   const restoredRef = useRef(false)
-  /** 已經送出喚醒請求的 session。避免同一個 session 被 spawn 兩次。 */
+    /** 已經送出喚醒請求的 session。避免同一個 session 被 spawn 兩次。 */
   const waking = useRef(new Set<string>())
+  /** A shell's screen serialized when its hibernation was requested; it becomes the replay once the pty is gone. */
+  const hibernationSnapshots = useRef(new Map<string, string>())
+  /** sessionId → serialize that session's screen. Registered by `TerminalView`. */
+  const serializers = useRef(new Map<string, () => string | undefined>())
   /** 重建的 session 其上次的終端畫面。由 `TerminalView` 在掛載時取走（見 `takeScrollback`）。 */
   const restoredScrollback = useRef(new Map<string, string>())
 
@@ -396,10 +444,12 @@ export function SessionsProvider({ children }: { children: React.ReactNode }): R
     if (waking.current.has(sessionId)) return
     waking.current.add(sessionId)
 
-    const fail = (message: string): void => {
+        const fail = (message: string): void => {
+      // A failed wake leaves the set: waking is only ever the user's explicit action now (nothing
+      // calls it on re-render), so pressing Wake again is the retry.
+      waking.current.delete(sessionId)
       setSessions((previous) =>
         previous.map((session) =>
-          // 失敗（folder 路徑失效）時**留在 waking 集合裡**：不自動重試，否則每次重繪都會再打一次。
           // session 維持休眠，並把原因呈現出來 —— 而不是靜默地什麼都不發生。
           session.id === sessionId ? { ...session, wakeError: message } : session,
         ),
@@ -425,6 +475,39 @@ export function SessionsProvider({ children }: { children: React.ReactNode }): R
       // `waking` 集合裡、`wakeError` 也不會被設定 —— 使用者面對的是一個什麼都不做、也不說
       // 為什麼的分頁。
       .catch((error) => fail(String(error)))
+  }, [])
+
+    const hibernate = useCallback((sessionId: string, token?: string) => {
+    const target = sessionsRef.current.find((session) => session.id === sessionId)
+    if (!target || target.status !== 'running') return
+    if (target.spawnTarget === 'shell') {
+      // The rolling snapshot may be a debounce interval behind; the screen at this moment is what
+      // the user must see after waking. Sent before `hibernate`: messages from one renderer arrive
+      // in order, and the main process also records the shell's last directory from it.
+      const data = serializers.current.get(sessionId)?.()
+      if (data) {
+        window.workspace.terminal.snapshot(sessionId, data)
+        hibernationSnapshots.current.set(sessionId, data)
+      }
+    }
+    void window.workspace.terminal.hibernate(sessionId, token).then((result) => {
+      // Refused (an automatic request the session no longer qualifies for): keep nothing.
+      if (!result.ok) hibernationSnapshots.current.delete(sessionId)
+    })
+  }, [])
+
+  // The main process asks for idle sessions to be hibernated; they go through the same path as the
+  // user's request, carrying the token back.
+  useEffect(
+    () => window.workspace.terminal.onHibernateRequest((sessionId, token) => hibernate(sessionId, token)),
+    [hibernate],
+  )
+
+  const registerSerializer = useCallback((sessionId: string, serialize: () => string | undefined) => {
+    serializers.current.set(sessionId, serialize)
+    return () => {
+      if (serializers.current.get(sessionId) === serialize) serializers.current.delete(sessionId)
+    }
   }, [])
 
   const create = useCallback(
@@ -458,8 +541,9 @@ export function SessionsProvider({ children }: { children: React.ReactNode }): R
     window.workspace.terminal.kill(sessionId)
     sinks.current.delete(sessionId)
     backlog.current.delete(sessionId)
-    waking.current.delete(sessionId)
+        waking.current.delete(sessionId)
     restoredScrollback.current.delete(sessionId)
+    hibernationSnapshots.current.delete(sessionId)
 
     setSessions((previous) => previous.filter((session) => session.id !== sessionId))
     if (!target) return
@@ -608,9 +692,11 @@ export function SessionsProvider({ children }: { children: React.ReactNode }): R
         if (explicit && sessions.some((session) => session.id === explicit)) return explicit
         return sessions.find((session) => session.folderId === folderId)?.id ?? null
       },
-      focus,
+            focus,
       create,
       wake,
+      hibernate,
+      registerSerializer,
       close,
       setTitle,
       rename,
@@ -627,6 +713,8 @@ export function SessionsProvider({ children }: { children: React.ReactNode }): R
       focus,
       create,
       wake,
+      hibernate,
+      registerSerializer,
       close,
       setTitle,
       rename,

@@ -245,6 +245,10 @@ change view, `Ctrl+Tab` / `Ctrl+Shift+Tab` switch the change's artifacts (see `o
 editor belongs to the Files identity, so with focus in the editor they keep switching sessions as
 above.
 
+**`Ctrl+Shift+H` (hibernate the current session) is on the navigation side**: it SHALL take effect with focus
+in the editor. It is a session command, like `Ctrl+Shift+W`, not a text-editing key, so it has none of the
+reordering shortcuts' cost.
+
 #### Scenario: 編輯器持有焦點時切換 session
 
 - **WHEN** 使用者的焦點在 side panel 的編輯器中，按下 `Ctrl+Tab`
@@ -254,6 +258,12 @@ above.
 
 - **WHEN** 使用者的焦點在 side panel 的編輯器中，按下 `Shift+→`
 - **THEN** 編輯器選取了一個字元，且未觸發任何排序
+
+#### Scenario: Ctrl+Shift+H takes effect with focus in the editor
+
+- **WHEN** focus is in the side panel's editor, the focused session is running, and the user presses
+  `Ctrl+Shift+H`
+- **THEN** that session is hibernated
 
 ### Requirement: 對話框或選單開啟時導航快捷鍵不生效
 
@@ -634,3 +644,40 @@ scroll anchoring 會在**視野上方**的內容變動時自動補償捲動位�
 - **WHEN** 分頁列超出其寬度，使用者已手動捲動它使 focused session 的分頁**不完整可見**，此時一個
   session 結束（其狀態呈現確實由運作中轉為已結束），而選取、焦點與順序皆未改變
 - **THEN** 分頁列的捲動位置不變
+
+### Requirement: Hibernate the current session from the keyboard
+
+The system SHALL provide the shortcut `Ctrl+Shift+H` to hibernate the focused session of the selected rail
+item (see `session-hibernation`). **The scope includes the global item** (see `global-session`).
+
+It SHALL be a no-op, and SHALL NOT produce an error, when no rail item is selected, when the item has no
+session, or when the focused session is dormant or exited.
+
+**Why `Ctrl+Shift+H`**: a `Ctrl+Shift+<letter>` chord cannot be encoded in the terminal protocol, so the pty
+loses nothing (the same reasoning as `Ctrl+Shift+W`).
+
+It is intercepted at the window's capture phase like the other shortcuts, and the intercepted key SHALL NOT
+reach the pty. It SHALL NOT take effect while a dialog or menu is open (the existing `[role="dialog"]` /
+`[role="menu"]` rule).
+
+#### Scenario: Ctrl+Shift+H hibernates the current session
+
+- **WHEN** the terminal has focus, the focused session is running, and the user presses `Ctrl+Shift+H`
+- **THEN** that session is hibernated, and the key does not reach the pty
+
+#### Scenario: Hibernating a global session
+
+- **WHEN** the global item is selected, its focused session is running, and the user presses `Ctrl+Shift+H`
+- **THEN** that global session is hibernated
+
+#### Scenario: No-op without a running session
+
+- **WHEN** no rail item is selected, or the item has no session, or its focused session is dormant or
+  exited, and the user presses `Ctrl+Shift+H`
+- **THEN** nothing is hibernated and the application produces no error
+
+#### Scenario: Suppressed while a dialog is open
+
+- **WHEN** a dialog is open — the session-rename dialog, a Files dialog, or the Settings dialog — and the user
+  presses `Ctrl+Shift+H`
+- **THEN** no session is hibernated

@@ -599,3 +599,37 @@ describe('UI 偏好：與終端並列的第二個區塊', () => {
     assert.equal(second.existed(), true, '檔案已存在（即使語言欄位是空的）')
   })
 })
+
+describe('automatic hibernation (session-hibernation)', () => {
+  it('accepts a non-negative whole number of seconds; anything else is unset (the default)', () => {
+    const parse = (value: unknown): number | undefined =>
+      parsePreferences(JSON.stringify({ version: 1, terminal: { autoHibernateSeconds: value } }))?.terminal
+        .autoHibernateSeconds
+    assert.equal(parse(7), 7)
+    assert.equal(parse(0), 0, 'zero is off, not unset')
+    assert.equal(parse(-1), undefined)
+    assert.equal(parse(1.5), undefined)
+    assert.equal(parse('86400'), undefined)
+  })
+
+  it('off persists as off; null resets to the default (unset)', () => {
+    const store = new PreferencesStore(configPath)
+    store.load()
+    store.setAutoHibernate(0)
+    const reloaded = new PreferencesStore(configPath)
+    reloaded.load()
+    assert.equal(reloaded.get().autoHibernateSeconds, 0)
+
+    reloaded.setAutoHibernate(null)
+    assert.equal('autoHibernateSeconds' in reloaded.get(), false)
+  })
+
+  it('a change of font keeps it, and it reaches the renderer', () => {
+    const store = new PreferencesStore(configPath)
+    store.load()
+    store.setAutoHibernate(3600)
+    store.setTerminalFont(null, 14, null)
+    assert.equal(store.get().autoHibernateSeconds, 3600)
+    assert.equal(projectPreferences(store.get(), store.ui()).autoHibernateSeconds, 3600)
+  })
+})

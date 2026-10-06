@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { MarkdownView } from '../files/MarkdownView'
+import { useSessions } from './sessions'
+import { WakeButton } from './TerminalView'
 
 /**
  * agent session 的結構化呈現。
@@ -103,7 +105,22 @@ export function ConversationView({ sessionId, active, dormant }: Props): React.J
   const [unconfirmed, setUnconfirmed] = useState<{ text: string; at: number } | null>(null)
   const [draft, setDraft] = useState('')
   const [blocked, setBlocked] = useState<WaitState | null>(null)
-  const bottomRef = useRef<HTMLDivElement | null>(null)
+    const bottomRef = useRef<HTMLDivElement | null>(null)
+  const { wake } = useSessions()
+  const rootRef = useRef<HTMLDivElement | null>(null)
+  const wakeButtonRef = useRef<HTMLButtonElement | null>(null)
+
+  // The same focus rule as the terminal view (`session-persistence`): a displayed dormant session's
+  // Wake button takes focus, so `Enter` wakes it; once it is running, its composer does.
+  const wasDormant = useRef(dormant)
+  useEffect(() => {
+    const was = wasDormant.current
+    wasDormant.current = dormant
+    if (!active) return
+    if (dormant) wakeButtonRef.current?.focus()
+    else if (was) rootRef.current?.querySelector('textarea')?.focus()
+  }, [active, dormant])
+
 
   useEffect(() => {
     if (!active || dormant) return undefined
@@ -141,8 +158,9 @@ export function ConversationView({ sessionId, active, dormant }: Props): React.J
     // **休眠 SHALL NOT 呈現為一份空的對話** —— 那與「這個 session 真的還沒講話」無法區分，
     // 而兩者的正確處置不同。
     return (
-      <div className="flex h-full items-center justify-center text-sm text-ink-faint">
-        {t('conversation.dormant')}
+            <div className="flex h-full flex-col items-center justify-center gap-2 text-sm text-ink-faint">
+        <span>{t('conversation.dormant')}</span>
+        <WakeButton ref={wakeButtonRef} onWake={() => wake(sessionId)} />
       </div>
     )
   }
@@ -166,7 +184,7 @@ export function ConversationView({ sessionId, active, dormant }: Props): React.J
     一個以「還沒有內容」為條件而藏起輸入入口的實作，恰好把使用者鎖在他唯一能脫離該狀態的動作外。
   */
   return (
-    <div className="flex h-full flex-col overflow-y-auto py-2 text-sm">
+        <div ref={rootRef} className="flex h-full flex-col overflow-y-auto py-2 text-sm">
       {/* 內容不完整時**明示** —— 一份看起來完整、實際少了開頭的對話會誤導判斷。 */}
       {truncated && (
         <div className="mx-3 mb-2 rounded border border-hairline px-3 py-1 text-xs text-ink-faint">

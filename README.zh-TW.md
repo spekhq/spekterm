@@ -26,7 +26,10 @@ spec —— 並且在 agent 寫入磁碟時跟著更新。
 
 - 真正的終端（`node-pty` + xterm.js，WebGL 繪製），每個 repo 可開多個 session，含 git worktree。
 - 重開 app 後 session 還在：`claude` session 續接原本的對話，shell 在最後的工作目錄重生並重播畫面。
-  沒在看的 session 保持休眠，看到時才喚醒。
+    還原的 session 保持休眠（沒有行程），按「喚醒」才啟動。
+- 偶爾才用的 session 可以休眠：結束它的行程，但仍留在 workspace 裡等你喚醒。可以手動（`Ctrl+Shift+H`
+  或分頁選單），閒置的 session 也會在 24 小時後自動休眠（可在 Settings 調整；畫面上的 session、
+  正在工作的 agent、正在跑工作的 shell 都不會被休眠）。
 - agent session 可以在終端與對話 view 之間切換。對話 view 來自 agent 自己的紀錄與 hooks ——
   從不解析終端畫面。
 
@@ -91,6 +94,7 @@ npm run install:desktop                          # → ~/.local/bin ＋ 應用�
 | `Ctrl+↓` / `Ctrl+↑` | rail 上的下／上一個項目 |
 | `Ctrl+T` | 開啟建立 session 的選單 |
 | `Ctrl+Shift+W` | 關閉當前的 session |
+| `Ctrl+Shift+H` | 讓當前的 session 休眠 |
 | `Shift+↓` / `Shift+↑` | 把選中的 repo 在 rail 上移動一格 |
 | `Shift+→` / `Shift+←` | 把當前的 session 在分頁列上移動一格 |
 | `Ctrl+P` | 快速開檔（側欄持有焦點時） |

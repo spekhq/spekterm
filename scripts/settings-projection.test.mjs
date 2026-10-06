@@ -66,8 +66,9 @@ const PROJECTION_RULES = [
       'get',
       'setTerminalFont',
       'setAgentStatus',
-      'setAgentView',
+            'setAgentView',
       'setGpuAcceleration',
+      'setAutoHibernate',
     ],
   },
   {

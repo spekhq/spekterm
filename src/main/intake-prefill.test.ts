@@ -8,6 +8,8 @@ import { configureAgentEvents, prepareEventInjection } from './agent-events'
 import { clearWait } from './agent-wait'
 import {
   cancelPrefill,
+  forgetSubmission,
+  hasUnconfirmedSubmission,
   isSubmitted,
   pendingPrefillCount,
   prefillModeFor,
@@ -285,5 +287,36 @@ describe('送出之後的監看（watchSubmission）', () => {
     assert.deepEqual(calls, ['pending'])
     h.emit('awaiting-choice')
     assert.deepEqual(calls, ['pending', 'sent'])
+  })
+})
+
+describe('unconfirmed submissions (session-hibernation)', () => {
+  it('a filled-in prompt is unconfirmed until the agent starts working', async () => {
+    const base = configure()
+    const sessionId = 'H1'
+    prepareEventInjection(sessionId, true)
+    schedulePrefill(sessionId, 'x', { write: () => undefined, onTimeout: () => assert.fail('no timeout expected') })
+    assert.equal(hasUnconfirmedSubmission(sessionId), false, 'nothing written before ready')
+
+    fire(base, sessionId, { hook_event_name: 'SessionStart' })
+    await waitFor('written once ready', () => hasUnconfirmedSubmission(sessionId))
+
+    // The same watch the IPC layer starts once the text is written.
+    watchSubmission(sessionId, 'fill', { onPending: () => undefined, onSubmitted: () => undefined })
+    fire(base, sessionId, { hook_event_name: 'PreToolUse' })
+    await waitFor('confirmed once the agent works', () => !hasUnconfirmedSubmission(sessionId))
+    clearWait(sessionId)
+  })
+
+  it('the session ending forgets it', async () => {
+    const base = configure()
+    const sessionId = 'H2'
+    prepareEventInjection(sessionId, true)
+    fire(base, sessionId, { hook_event_name: 'SessionStart' })
+    schedulePrefill(sessionId, 'x', { write: () => undefined, onTimeout: () => assert.fail('no timeout expected') })
+    await waitFor('written', () => hasUnconfirmedSubmission(sessionId))
+    forgetSubmission(sessionId)
+    assert.equal(hasUnconfirmedSubmission(sessionId), false)
+    clearWait(sessionId)
   })
 })

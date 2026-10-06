@@ -10,7 +10,8 @@ export const SETTINGS_CHANNELS = {
   setTerminalFont: 'workspace:settings:setTerminalFont',
   setGpuAcceleration: 'workspace:settings:setGpuAcceleration',
   setAgentStatus: 'workspace:settings:setAgentStatus',
-  setAgentView: 'workspace:settings:setAgentView',
+    setAgentView: 'workspace:settings:setAgentView',
+  setAutoHibernate: 'workspace:settings:setAutoHibernate',
   setLanguage: 'workspace:settings:setLanguage',
   listMonospaceFonts: 'workspace:settings:listMonospaceFonts',
 } as const
@@ -122,6 +123,13 @@ export function registerSettingsHandlers(store: PreferencesStore): void {
     SETTINGS_CHANNELS.setGpuAcceleration,
     (_event, enabled: boolean | null): ProjectedPreferences =>
       projectPreferences(store.setGpuAcceleration(typeof enabled === 'boolean' ? enabled : null), store.ui()),
+  )
+
+    // The value's whitelist lives in the store (non-negative whole seconds; anything else resets it).
+  ipcMain.handle(
+    SETTINGS_CHANNELS.setAutoHibernate,
+    (_event, seconds: unknown): ProjectedPreferences =>
+      projectPreferences(store.setAutoHibernate(typeof seconds === 'number' ? seconds : null), store.ui()),
   )
 
   ipcMain.handle(SETTINGS_CHANNELS.listMonospaceFonts, (): Promise<string[]> =>

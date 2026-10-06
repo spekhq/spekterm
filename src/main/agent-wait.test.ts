@@ -5,7 +5,7 @@ import path from 'node:path'
 import { after, describe, it } from 'node:test'
 
 import { configureAgentEvents, prepareEventInjection } from './agent-events'
-import { activeWaitSessions, clearWait, subscribeWait, waitStateOf } from './agent-wait'
+import { activeWaitSessions, clearWait, lastTranscriptPathOf, subscribeWait, waitStateOf } from './agent-wait'
 
 const bases: string[] = []
 after(() => {
@@ -95,5 +95,22 @@ describe('單一 drainer', () => {
     await waitFor('無觀察者仍求得出', () => waitStateOf(sessionId) === 'ready')
     off()
     clearWait(sessionId)
+  })
+})
+
+describe('the last reported transcript location (session-hibernation)', () => {
+  it('is kept per session after the event that carried it was consumed, and cleared with the session', async () => {
+    // Every running claude session is drained whether or not its conversation view is open; a
+    // relocation consumed with no view open must still be found by a view opened later.
+    const base = configure()
+    const sessionId = 'T1'
+    prepareEventInjection(sessionId, true)
+    const off = subscribeWait(sessionId, () => undefined)
+    fire(base, sessionId, { hook_event_name: 'SessionStart', transcript_path: '/x/relocated.jsonl' })
+    await waitFor('relocation recorded', () => lastTranscriptPathOf(sessionId) === '/x/relocated.jsonl')
+    off()
+    assert.equal(lastTranscriptPathOf(sessionId), '/x/relocated.jsonl', 'kept after the subscription ended')
+    clearWait(sessionId)
+    assert.equal(lastTranscriptPathOf(sessionId), null)
   })
 })

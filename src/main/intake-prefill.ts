@@ -107,6 +107,26 @@ export const SUBMIT_KEY_DELAY_MS = 500
  */
 export const SUBMIT_CONFIRM_MS = 10_000
 
+/**
+ * Sessions holding a filled-in prompt whose submission has not been confirmed (`session-hibernation`).
+ *
+ * Set when the text is written — in submit mode too, because the send key sometimes does not take
+ * (see `SUBMIT_CONFIRM_MS`) — and cleared when the agent starts working or the session ends. While a
+ * session is in here it is never hibernated automatically: resuming would discard the unsent text.
+ * `watchSubmission` keeps its own state in a closure and only messages the renderer, so the main
+ * process needs this registry to ask the question at all.
+ */
+const unconfirmed = new Set<string>()
+
+export function hasUnconfirmedSubmission(sessionId: string): boolean {
+  return unconfirmed.has(sessionId)
+}
+
+/** The session ended (its pty is gone, and the prompt with it). */
+export function forgetSubmission(sessionId: string): void {
+  unconfirmed.delete(sessionId)
+}
+
 export interface SubmissionHandlers {
   /** 呈現「待送出」的標示。每次監看至多一次。 */
   onPending(): void
@@ -161,8 +181,9 @@ export function watchSubmission(
     subscription.unsubscribe?.()
   }
   subscription.unsubscribe = deps.subscribe(sessionId, (snapshot) => {
-    if (done || !isSubmitted(snapshot.state)) return
+        if (done || !isSubmitted(snapshot.state)) return
     stop()
+    unconfirmed.delete(sessionId)
     handlers.onSubmitted()
   })
   if (done) subscription.unsubscribe()
@@ -220,7 +241,8 @@ export function schedulePrefill(
 
   const fill = (): void => {
     // **不附送出字元，且換行由編碼器濾掉** —— 單行是編碼器的性質，不是呼叫端的義務。
-    deps.write(sessionId, encodePrefill(prompt))
+        deps.write(sessionId, encodePrefill(prompt))
+    unconfirmed.add(sessionId)
     // 送出字元**分開、稍後**才寫 —— 與文字一起到達會被當成貼上的一部分（見 `SUBMIT_KEY_DELAY_MS`）。
     if (mode === 'submit') setTimeout(() => deps.write(sessionId, SUBMIT_KEY), SUBMIT_KEY_DELAY_MS)
     finish(true)

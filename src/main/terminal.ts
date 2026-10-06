@@ -6,6 +6,7 @@ import { clearAgentStatus, prepareInjection } from './agent-status'
 import { clearAgentEvents, prepareEventInjection } from './agent-events'
 import { type Injection, type InjectionContribution, composeInjection } from './agent-injection'
 import { isWithin } from './fs-boundary'
+import { type FileIdentity, type ShellFacts, fileIdentity, readShellFacts } from './hibernation-policy'
 import { isUuid } from './session-store'
 import { getUserEnv, whenUserEnvReady } from './user-env'
 import type { FolderLookup } from './workspace-store'
@@ -44,10 +45,14 @@ export class TerminalError extends Error {
  * - `disposed` —— **關視窗或 reload 時我們自己殺的。** pty 死是設計（不留孤兒行程），
  *   **session 沒有結束** —— 它正要被持久化下來，等下次開啟時重建。
  *
- * 少了這個區分，關視窗時每個 pty 的 exit 都會被當成「session 結束了」而把它從持久化裡抹掉
+  * 少了這個區分，關視窗時每個 pty 的 exit 都會被當成「session 結束了」而把它從持久化裡抹掉
  * —— 那就是「關掉 app 之後 session 全部不見」本人，只是換了一種寫法。
+ *
+ * - `hibernated` — the session was put back to dormant (`session-hibernation`). Like `disposed`, the
+ *   session does not end and persistence is untouched; unlike it, the renderer must be told, because
+ *   that renderer keeps the session and shows it dormant.
  */
-export type ExitReason = 'self' | 'killed' | 'disposed'
+export type ExitReason = 'self' | 'killed' | 'disposed' | 'hibernated'
 
 export interface TerminalSink {
   data(sessionId: string, chunk: string): void
@@ -278,8 +283,13 @@ interface Session {
   startedAt: number
   /** 自癒已經用掉了 —— 至多一次（否則 `claude` 沒安裝時會無限重試）。 */
   healed: boolean
-  /** claude 目標的固定名字。**自癒要沿用它** —— 那是 pty 誕生時要做的事的又一例。 */
+    /** claude 目標的固定名字。**自癒要沿用它** —— 那是 pty 誕生時要做的事的又一例。 */
   peerName?: string
+  /**
+   * Shell target: the identity of the shell binary it was spawned as (`session-hibernation`). A pty
+   * whose process no longer matches has replaced itself (`exec vim`) and never qualifies as idle.
+   */
+  shellIdentity: FileIdentity | null
 }
 
 /**
@@ -412,8 +422,24 @@ export class TerminalService {
     return [...this.#sessions].filter(([, session]) => session.target === 'claude').map(([id]) => id)
   }
 
-  get sessionCount(): number {
+    get sessionCount(): number {
     return this.#sessions.size
+  }
+
+  /** Sessions that currently hold a pty. */
+  liveSessionIds(): string[] {
+    return [...this.#sessions.keys()]
+  }
+
+  /**
+   * What automatic hibernation needs to know about a live session (`session-hibernation`, design D4).
+   * `null` when the session holds no pty.
+   */
+  idleFactsOf(sessionId: string): { target: SpawnTarget; shell: ShellFacts } | null {
+    const session = this.#sessions.get(sessionId)
+    if (!session) return null
+    if (session.target !== 'shell') return { target: session.target, shell: 'unknown' }
+    return { target: 'shell', shell: readShellFacts(session.pty.pid, session.shellIdentity) }
   }
 
   /**
@@ -583,14 +609,21 @@ export class TerminalService {
       target,
       conversation,
       startedAt: Date.now(),
-      healed,
+            healed,
       peerName: options.peerName,
+      shellIdentity: target === 'shell' ? fileIdentity(resolveShell()) : null,
     })
 
     let exited!: () => void
     lastExit.set(sessionId, new Promise<void>((resolve) => { exited = resolve }))
 
-    pty.onData((chunk) => this.sink.data(sessionId, chunk))
+        pty.onData((chunk) => {
+      // A hibernating pty's last words would land in the dormant view ahead of the resumed
+      // conversation (`session-hibernation`, design D1). Marked per pty, so the pty a later wake
+      // creates under the same session id is unaffected.
+      if (this.#reasons.get(pty) === 'hibernated') return
+      this.sink.data(sessionId, chunk)
+    })
     pty.onExit(({ exitCode }) => {
       exited()
       const session = this.#sessions.get(sessionId)
@@ -714,10 +747,15 @@ export class TerminalService {
     }
   }
 
-  /** 明確關閉一個 session。已結束者（不在 Map）為 no-op。 */
-  kill(sessionId: string): void {
+    /**
+   * 明確關閉一個 session。已結束者（不在 Map）為 no-op。
+   *
+   * Returns whether the session had a pty. A dormant session has none, so nothing here runs for it —
+   * the caller ends its drop point and clears its events itself (`session-hibernation`, design D2).
+   */
+  kill(sessionId: string): boolean {
     const session = this.#sessions.get(sessionId)
-    if (!session) return
+    if (!session) return false
     this.#sessions.delete(sessionId)
     this.#reasons.set(session.pty, 'killed')
     // 不留下一份沒有主人的狀態 —— 否則同一個 id 日後若被重建，會先看到一份過期的資料。
@@ -726,12 +764,34 @@ export class TerminalService {
     // 而 pty 還活著）—— 接上去的話，使用者清一次對話，等待狀態就此永遠停在未知。
     clearAgentEvents(sessionId)
     // 交接的落點同理 —— 但它多一步：清除之前先把裡面既有的項目處理完（見 `endHandoff`）。
-    this.endHandoff(sessionId)
+        this.endHandoff(sessionId)
     try {
       session.pty.kill()
     } catch {
       // 已死的 pty，kill 可能拋錯，無妨。
     }
+    return true
+  }
+
+  /**
+   * Put a running session back to dormant (`session-hibernation`, design D2): **a per-session
+   * `dispose`, not a `kill`**. The pty ends with reason `hibernated`; nothing the session owns on disk
+   * is touched — not its persisted record (a `killed` exit would drop it), not its handoff drop point,
+   * not its agent status or events. The session must come back exactly as a restored one does.
+   *
+   * Returns whether the session had a pty to end.
+   */
+  hibernate(sessionId: string): boolean {
+    const session = this.#sessions.get(sessionId)
+    if (!session) return false
+    this.#sessions.delete(sessionId)
+    this.#reasons.set(session.pty, 'hibernated')
+    try {
+      session.pty.kill()
+    } catch {
+      // An already-dead pty may throw; its exit still reports the reason.
+    }
+    return true
   }
 
   /**

@@ -83,54 +83,6 @@ pty 宣告的標題屬於「必需」而非「衍生」：**休眠的 session �
 - **WHEN** 一個由交接建立的 claude session 存在，關閉並重新開啟應用程式
 - **THEN** 它的來源與固定名字與關閉之前相同
 
-### Requirement: 重建的 session 為休眠態，於首次被顯示時才啟動 pty
-
-重建出來的 session SHALL 處於**休眠**狀態 —— 具備完整身分（名字、順序）但**沒有 pty**。
-休眠的 session SHALL 於**首次被顯示**時才啟動其 pty。
-
-於是開啟應用程式時 SHALL **至多一個** session 被啟動 —— 即被選中之 rail 項目的 focused session；
-SHALL NOT 一次啟動所有 session。**選中的 rail 項目不被持久化，且冷啟動時 SHALL NOT 有任何項目
-被預設選中**（含 `global-session` 的全域項目 —— 它恆常存在，因此「預設選中它」是極其自然的實作，
-而那會使冷啟動立刻喚醒一個 session，本條的保證即失效）。使用者選一個項目之後，該項目的 focused
-session 才醒過來。
-
-休眠狀態 SHALL 被明確地呈現，SHALL NOT 呈現為一個空白的畫面 —— **無論當下是哪一種 view**。
-終端 view 之下是一個空白的終端，對話 view 之下是一份空白的對話，兩者是同一個錯誤的兩種長相：
-**它與「這個 session 真的還沒講話」無法區分**，而兩者的正確處置不同。
-
-未被喚醒的休眠 session SHALL 維持持久化 —— 使用者一路未喚醒它便再次關閉應用程式時，它 SHALL 於
-下次開啟時仍然存在。
-
-#### Scenario: 開啟應用程式至多啟動一個 session
-
-- **WHEN** 使用者關閉應用程式時有多個 session，重新開啟應用程式並選中其中一個 rail 項目
-- **THEN** 只有該項目的 focused session 啟動了 pty，其餘 session 皆為休眠且無 pty
-
-#### Scenario: 冷啟動不因全域項目恆存而喚醒 session
-
-- **WHEN** 使用者關閉應用程式時全域項目有數個 session，重新開啟應用程式但尚未選中任何 rail 項目
-- **THEN** 沒有任何 session 啟動 pty，全域項目的 session 皆為休眠
-
-#### Scenario: 顯示一個休眠的 session 使其啟動
-
-- **WHEN** 使用者切換到一個休眠 session 所在的 rail 項目並使其成為顯示中的 session
-- **THEN** 該 session 啟動其 pty
-
-#### Scenario: 休眠的 session 不呈現為空白終端
-
-- **WHEN** 使用者檢視一個尚未被喚醒的休眠 session
-- **THEN** 該 session 明確地呈現其休眠狀態，而非一個沒有內容的終端
-
-#### Scenario: 休眠的 session 於對話 view 不呈現為空白對話
-
-- **WHEN** 使用者檢視一個尚未被喚醒的休眠 session，且其當前 view 為對話
-- **THEN** 該 session 明確地呈現其休眠狀態，而非一份沒有內容的對話
-
-#### Scenario: 未喚醒的休眠 session 於再次重啟後仍存在
-
-- **WHEN** 使用者重新開啟應用程式、未喚醒某個休眠 session、再次關閉並重新開啟應用程式
-- **THEN** 該 session 仍然存在且仍為休眠
-
 ### Requirement: claude 目標的 session 續接其原本的對話
 
 spawn 目標為 `claude` 的 session SHALL 以一個由應用程式指定、且被持久化的**對話識別碼**啟動。
@@ -218,7 +170,7 @@ spawn 時的預設尺寸直到下一次尺寸變化為止。
 
 #### Scenario: 喚醒後 pty 的尺寸與終端一致
 
-- **WHEN** 使用者顯示一個休眠的 session，使其啟動 pty
+- **WHEN** the user wakes a displayed dormant session, so that it starts its pty
 - **THEN** 該 pty 的欄列數與終端當下的可用尺寸相符，而非 spawn 時的預設尺寸
 
 ### Requirement: 終端畫面以快照還原，且歷史與 live 內容明確區分
@@ -435,3 +387,78 @@ session 被關閉時，它作為**母 session** 的關係 SHALL 保留在其子 
 
 - **WHEN** 持久化檔案中某個 claude session 的固定名字含有字元集之外的字元
 - **THEN** 該 session 被喚醒時，agent 以一個合法的、重新決定的名字啟動，原值不出現在任何參數中
+
+### Requirement: Restored sessions are dormant and start only on an explicit wake
+
+重建出來的 session SHALL 處於**休眠**狀態 —— 具備完整身分（名字、順序）但**沒有 pty**。
+
+**A dormant session SHALL start its pty only when the user explicitly wakes it.** Displaying it — selecting
+its rail item, switching to it with the keyboard, clicking its tab — SHALL NOT start it. This holds for every
+dormant session, whether it was restored or hibernated (see `session-hibernation`).
+
+The dormant screen SHALL offer a wake action in both the terminal view and the conversation view. When a
+dormant session becomes the displayed session and nothing covers it, the wake action SHALL receive focus —
+where a running session's input would — so that pressing `Enter` wakes it, in either view. Once it is running,
+focus SHALL move to its input, so that typing reaches it.
+
+**Opening the application therefore starts no session at all**, and neither does selecting a rail item.
+**選中的 rail 項目不被持久化，且冷啟動時 SHALL NOT 有任何項目被預設選中**（含 `global-session` 的
+全域項目）—— that rule predates explicit wake and still holds; it keeps "what is selected" from depending on
+the previous run.
+
+**Why explicit wake rather than wake-on-display**: a session kept for occasional use would otherwise be started
+by any keyboard pass over it (`Ctrl+Tab`, `Ctrl+↓`), defeating hibernation as a way to save resources.
+
+休眠狀態 SHALL 被明確地呈現，SHALL NOT 呈現為一個空白的畫面 —— **無論當下是哪一種 view**。
+終端 view 之下是一個空白的終端，對話 view 之下是一份空白的對話，兩者是同一個錯誤的兩種長相：
+**它與「這個 session 真的還沒講話」無法區分**，而兩者的正確處置不同。
+
+未被喚醒的休眠 session SHALL 維持持久化 —— 使用者一路未喚醒它便再次關閉應用程式時，它 SHALL 於
+下次開啟時仍然存在。
+
+#### Scenario: Opening the application starts no session
+
+- **WHEN** 使用者關閉應用程式時有多個 session，重新開啟應用程式並選中其中一個 rail 項目
+- **THEN** no session has started a pty; every session is dormant
+
+#### Scenario: 冷啟動不因全域項目恆存而喚醒 session
+
+- **WHEN** 使用者關閉應用程式時全域項目有數個 session，重新開啟應用程式但尚未選中任何 rail 項目
+- **THEN** 沒有任何 session 啟動 pty，全域項目的 session 皆為休眠
+
+#### Scenario: Displaying a dormant session does not start it
+
+- **WHEN** the user switches to a dormant session, by selecting its rail item or by keyboard
+- **THEN** it is displayed as dormant and has no pty
+
+#### Scenario: The wake action starts a dormant session
+
+- **WHEN** the user triggers the wake action of a displayed dormant session
+- **THEN** that session starts its pty
+
+#### Scenario: Enter wakes the displayed dormant session
+
+- **WHEN** a dormant session becomes displayed by keyboard and the user presses `Enter`
+- **THEN** that session starts its pty
+
+#### Scenario: Typing after a keyboard wake reaches the session
+
+- **WHEN** a dormant session becomes displayed by keyboard, the user presses `Enter`, and then types a command
+  and presses `Enter` again
+- **THEN** the command runs in that session
+
+#### Scenario: 休眠的 session 不呈現為空白終端
+
+- **WHEN** 使用者檢視一個尚未被喚醒的休眠 session
+- **THEN** 該 session 明確地呈現其休眠狀態，而非一個沒有內容的終端
+
+#### Scenario: 休眠的 session 於對話 view 不呈現為空白對話
+
+- **WHEN** 使用者檢視一個尚未被喚醒的休眠 session，且其當前 view 為對話
+- **THEN** 該 session 明確地呈現其休眠狀態，而非一份沒有內容的對話
+- **AND** the wake action is offered there as well
+
+#### Scenario: 未喚醒的休眠 session 於再次重啟後仍存在
+
+- **WHEN** 使用者重新開啟應用程式、未喚醒某個休眠 session、再次關閉並重新開啟應用程式
+- **THEN** 該 session 仍然存在且仍為休眠

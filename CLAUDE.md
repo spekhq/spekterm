@@ -27,7 +27,12 @@ OpenSpec 結構的側欄，讓使用者不必另外開 IDE 就能一邊駕駛 ag
 - **殼層** —— 多 folder 工作區（清單持久化、拖曳排序）、活動列 + rail + 三欄版面、狀態列、
   rail 頂端一個不隸屬任何 repo 的**全域 session**。
 - **終端** —— `node-pty` 多 session、xterm + webgl、session 落盤與重建（claude 以 `--resume`
-  續接、shell 於最後 cwd 重生並重播畫面）、休眠喚醒、終端偏好（字型／size／行高／GPU 開關）。
+    續接、shell 於最後 cwd 重生並重播畫面）、休眠喚醒、終端偏好（字型／size／行高／GPU 開關）。
+  **Hibernation** (`session-hibernation`): a running session can go back to dormant — by hand
+  (`Ctrl+Shift+H`, tab or rail menu) or after an idle threshold (default 24 h, Settings) — and
+  **every dormant session starts only on an explicit Wake**, never on display. Hibernation is a
+  per-session `dispose`, not a `kill`: the record, drop point and lineage stay. The shell idle test and
+  why are in `docs/lessons/terminal.md`.
 - **側欄** —— OpenSpec 與 Files 兩個身分、artifact 分頁與兩棵樹、Graph／Timeline overlay、
   worktree 聚合、雙向交叉導覽、`Ctrl+P` 快速開檔、續寫入口（送 `/opsx:continue`）。
   座標（來源 repo／工作目錄／錨定的 change）是 **per-folder** 的，落盤於 `panel.json`。
@@ -433,6 +438,7 @@ addon-unicode-graphemes、i18next、electron-builder（Phase 6）。
 | `Ctrl+↓` / `Ctrl+↑` | rail 上的下／上一個**項目**（可循環，**涵蓋全域項目**；尚未選中時選第一個） |
 | `Ctrl+T` | 開啟建立 session 的入口（spawn 選單，可全鍵盤操作） |
 | `Ctrl+Shift+W` | 關閉當前 focused 的 session |
+| `Ctrl+Shift+H` | Hibernate the focused session (end its process, keep it dormant in the workspace). Effective with focus in the editor; suppressed while a dialog or menu is open |
 | `Shift+↓` / `Shift+↑` | 把**選中的 repo** 在 rail 上移動一格（**不循環**；全域項目上無操作）。**置頂段與其餘之間的分界算一格** —— 跨過它即改變置頂狀態，而該 repo 在畫面上幾乎不動 |
 | `Shift+→` / `Shift+←` | 把 **focused session** 在分頁列上移動一格（**不循環**） |
 | `Ctrl+P` | **側欄持有焦點時**開啟檔案快速搜尋。**終端持有焦點時讓路給 pty** |
@@ -461,7 +467,7 @@ DOM 節點上的 listener** —— `stopPropagation()` 一下，兩者都收不�
 
 - **`Ctrl+Tab` 是白撿的。** 它在標準終端編碼下**送不出去**（`Tab` 就是 `Ctrl+I`＝`0x09`），
   pty 內零損失。GNOME Terminal、iTerm2 敢拿它切分頁正是這個原因。
-- **`Ctrl+Shift+<字母>`（`Ctrl+Shift+W`／`C`／`V`）代價確定為零** —— 在終端協定裡編碼不出來。
+- **`Ctrl+Shift+<字母>`（`Ctrl+Shift+W`／`H`／`C`／`V`）代價確定為零** —— 在終端協定裡編碼不出來。
   **選 Shift 版而非 `Ctrl+W`**：後者在 zsh 是 `backward-kill-word`、bash 是 `unix-word-rubout`。
 - **`Ctrl+↑/↓` 送得出去**（`CSI 1;5A`/`B`），攔截它等於從 pty 裡的程式手上**永久沒收**這顆鍵。
   實測 zsh 與 bash 皆未綁定；**唯一的犧牲者是 tmux**（pane resize、copy-mode 捲動）—— 而這個 app

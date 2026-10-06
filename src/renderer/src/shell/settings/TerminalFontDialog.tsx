@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { SUPPORTED_LANGUAGES, type Language, languageLabel } from '@shared/i18n'
+import { SUPPORTED_LANGUAGES, type Language, languageLabel, t as translate } from '@shared/i18n'
+import { AUTO_HIBERNATE_PRESETS, DEFAULT_AUTO_HIBERNATE_SECONDS } from '@shared/hibernation/settings'
 import { usePreferences } from '../PreferencesProvider'
 import { buildInfo } from '../../build-info'
 
@@ -9,7 +10,11 @@ import { buildInfo } from '../../build-info'
 // viewport，覆蓋整個視窗。（files 的 dialogs 用 `absolute` 是因為它們掛在寬的 FilesPanel 內。）
 const OVERLAY_CLASS =
   'fixed inset-0 z-40 flex items-center justify-center bg-black/50 px-4 text-sm'
-const CARD_CLASS = 'w-full max-w-sm rounded border border-hairline bg-panel p-4 shadow-lg'
+// **Capped to the window and scrollable.** With the automatic-hibernation choice the card outgrew an
+// 800px-tall window: its top and its Save button were both off screen (a probe caught it — its click
+// on Save landed on nothing).
+const CARD_CLASS =
+  'max-h-[calc(100vh-2rem)] w-full max-w-sm overflow-y-auto rounded border border-hairline bg-panel p-4 shadow-lg'
 const INPUT_CLASS =
   'mt-1 rounded border border-hairline bg-stage px-2 py-1 font-mono text-sm text-ink outline-none focus:border-accent'
 const BUTTON_CLASS = 'rounded border border-hairline px-2 py-[3px] text-xs hover:bg-stage'
@@ -32,8 +37,10 @@ export function TerminalFontDialog({ onClose }: { onClose: () => void }): React.
     gpuEnabled,
     updateAgentStatus,
     agentStatusEnabled,
-    language,
+        language,
     updateLanguage,
+    autoHibernateSeconds,
+    updateAutoHibernate,
   } = usePreferences()
   const [family, setFamily] = useState(terminal.fontFamily ?? '')
   const [size, setSize] = useState(terminal.fontSize != null ? String(terminal.fontSize) : '')
@@ -42,7 +49,8 @@ export function TerminalFontDialog({ onClose }: { onClose: () => void }): React.
   )
   // 系統的等寬字型清單，餵給下拉選單（Linux 有；其他平台為空 → 只剩「系統預設」可選）。
   const [gpu, setGpu] = useState(gpuEnabled)
-  const [agentStatus, setAgentStatus] = useState(agentStatusEnabled)
+    const [agentStatus, setAgentStatus] = useState(agentStatusEnabled)
+  const [hibernateAfter, setHibernateAfter] = useState(autoHibernateSeconds)
   const [fonts, setFonts] = useState<string[]>([])
   const familyRef = useRef<HTMLSelectElement>(null)
 
@@ -71,6 +79,8 @@ export function TerminalFontDialog({ onClose }: { onClose: () => void }): React.
       // 並行的話「誰後 resolve，state 就是誰的」，另外兩項會被帶回舊值（磁碟對、畫面錯）。
       .then(() => updateGpuAcceleration(gpu ? null : false))
       .then(() => updateAgentStatus(agentStatus ? null : false))
+      // The default stays unset in the file, like the switches above; anything else is stored.
+      .then(() => updateAutoHibernate(hibernateAfter === DEFAULT_AUTO_HIBERNATE_SECONDS ? null : hibernateAfter))
     onClose()
   }
 
@@ -78,6 +88,7 @@ export function TerminalFontDialog({ onClose }: { onClose: () => void }): React.
     void updateTerminalFont(null, null, null)
       .then(() => updateGpuAcceleration(null))
       .then(() => updateAgentStatus(null))
+      .then(() => updateAutoHibernate(null))
     onClose()
   }
 
@@ -237,6 +248,29 @@ export function TerminalFontDialog({ onClose }: { onClose: () => void }): React.
         </label>
         <p className="mt-1 text-xs text-ink-faint">{t('settings.agentStatusHint')}</p>
 
+                <label className="mt-3 block text-xs text-ink-faint" htmlFor="settings-auto-hibernate">
+          {t('settings.autoHibernate')}
+        </label>
+        {/*
+          A stored value that is not one of the offered choices (a probe seeds seconds) is listed as
+          itself rather than snapped to the nearest choice — otherwise opening and saving Settings would
+          silently change it (`terminal-preferences`).
+        */}
+        <select
+          id="settings-auto-hibernate"
+          value={String(hibernateAfter)}
+          aria-label={t('settings.autoHibernate')}
+          onChange={(event) => setHibernateAfter(Number(event.target.value))}
+          className={`${INPUT_CLASS} block w-full`}
+        >
+          {hibernateChoices(hibernateAfter).map((seconds) => (
+            <option key={seconds} value={String(seconds)}>
+              {hibernateLabel(seconds)}
+            </option>
+          ))}
+        </select>
+        <p className="mt-1 text-xs text-ink-faint">{t('settings.autoHibernateHint')}</p>
+
         <p className="mt-3 block text-xs text-ink-faint">{t('settings.preview')}</p>
         <pre
           aria-label={t('settings.preview')}
@@ -316,4 +350,23 @@ function BuildIdentity(): React.JSX.Element {
       </dl>
     </section>
   )
+}
+
+/** The offered thresholds, plus the current one when it is not among them. */
+function hibernateChoices(current: number): number[] {
+  const presets: number[] = [...AUTO_HIBERNATE_PRESETS]
+  return presets.includes(current) ? presets : [...presets, current].sort((a, b) => a - b)
+}
+
+/**
+ * "Off", or the threshold in whole days (from two days up), hours, or otherwise seconds — so the
+ * offered choices read "24 hours" and "3 days".
+ */
+function hibernateLabel(seconds: number): string {
+  if (seconds === 0) return translate('settings.autoHibernateOff')
+  if (seconds >= 2 * 86_400 && seconds % 86_400 === 0) {
+    return translate('settings.autoHibernateDays', { count: seconds / 86_400 })
+  }
+  if (seconds % 3_600 === 0) return translate('settings.autoHibernateHours', { count: seconds / 3_600 })
+  return translate('settings.autoHibernateSeconds', { count: seconds })
 }

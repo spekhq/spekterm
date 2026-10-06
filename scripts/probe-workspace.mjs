@@ -1746,8 +1746,92 @@ try {
   check(results, '損毀的偏好以預設啟動（空偏好）',
     defaultPrefs && Object.keys(defaultPrefs).length === 0, JSON.stringify(defaultPrefs))
   const keptPrefs = readdirSync(badPrefsProfile).filter((n) => n.includes('preferences.json.corrupt-'))
-  check(results, '損毀的偏好原檔改名保留而非刪除', keptPrefs.length === 1, keptPrefs[0] ?? '(無)')
+    check(results, '損毀的偏好原檔改名保留而非刪除', keptPrefs.length === 1, keptPrefs[0] ?? '(無)')
   await app.close()
+
+  // ── terminal-preferences: automatic hibernation (session-hibernation) ─────
+  //
+  // Through the user's path (the Settings dialog), not the preload method: the renderer's state is
+  // only updated there (`docs/lessons/probes.md`).
+  console.log('\nautomatic hibernation preference')
+  const HIB_SELECT = `document.querySelector('[role="dialog"] select[aria-label="${copy('settings.autoHibernate')}"]')`
+  const HIB_SHOWN = `${HIB_SELECT}?.selectedOptions[0]?.textContent ?? null`
+  const DIALOG_BUTTON = (text) => `(() => {
+        const b = [...document.querySelectorAll('[role="dialog"] button')].find((candidate) => candidate.textContent === ${JSON.stringify(text)})
+    if (!b) return null
+    // The card scrolls when it is taller than the window; measure the button where it can be clicked.
+    b.scrollIntoView({ block: 'nearest' })
+    const r = b.getBoundingClientRect()
+    return { x: r.x + r.width / 2, y: r.y + r.height / 2 }
+  })()`
+  const openHibernateSettings = async () => {
+    const at = await app.client.evaluate(SETTINGS_RECT)
+    if (at) await realPressRelease(app.client, at)
+    await pollUntil(app.client, `Boolean(${HIB_SELECT})`, (value) => value === true, 4000)
+  }
+  const closeDialogWith = async (text) => {
+    await realPressRelease(app.client, await app.client.evaluate(DIALOG_BUTTON(text)))
+    await pollUntil(app.client, `document.querySelector('[role="dialog"]') === null`, (value) => value === true, 4000)
+  }
+  const hours24 = copy('settings.autoHibernateHours_other', { count: 24 })
+
+  const hibProfile = mkTemp('spekterm-hibernate-pref-')
+  app = await launch(hibProfile)
+  await openHibernateSettings()
+  const shownDefault = await app.client.evaluate(HIB_SHOWN)
+  check(results, 'with no stored value Settings shows automatic hibernation after 24 hours', shownDefault === hours24, String(shownDefault))
+  await app.client.evaluate(`(() => {
+    const select = ${HIB_SELECT}
+    select.value = '0'
+        select.dispatchEvent(new Event('change', { bubbles: true }))
+  })()`)
+  const shownAfterChange = await pollUntil(app.client, HIB_SHOWN, (value) => value === copy('settings.autoHibernateOff'), 3000)
+  await closeDialogWith(copy('settings.save'))
+  // Saving is a chain of IPC calls that outlives the dialog: wait for the file before closing the app.
+  const readStoredHibernate = () => {
+    try {
+      return JSON.parse(readFileSync(join(hibProfile, 'preferences.json'), 'utf8')).terminal?.autoHibernateSeconds ?? null
+    } catch {
+      return 'unreadable'
+    }
+  }
+  const storedOff = await pollFor({
+    read: readStoredHibernate,
+    settled: (value) => value === 0,
+    timeoutMs: 6000,
+    label: 'the saved threshold reaches the preferences file',
+  })
+  await app.close()
+  app = await launch(hibProfile)
+  await openHibernateSettings()
+  const shownOff = await app.client.evaluate(HIB_SHOWN)
+  check(
+    results,
+    'turning automatic hibernation off survives a restart (stored as 0, shown as Off)',
+    storedOff === 0 && shownOff === copy('settings.autoHibernateOff'),
+        `stored=${JSON.stringify(storedOff)} shown=${JSON.stringify(shownOff)} (after the change: ${JSON.stringify(shownAfterChange)}; file: ${(() => { try { return readFileSync(join(hibProfile, 'preferences.json'), 'utf8').replace(/\s+/g, ' ') } catch { return 'unreadable' } })()})`,
+  )
+  await closeDialogWith(copy('common.cancel'))
+  await app.close()
+
+  const badHibProfile = mkTemp('spekterm-hibernate-bad-')
+  writeFileSync(
+    join(badHibProfile, 'preferences.json'),
+    JSON.stringify({ version: 1, terminal: { autoHibernateSeconds: -5, fontSize: 15 }, ui: { language: 'en' } }),
+  )
+  app = await launch(badHibProfile)
+  const badPrefs = await app.client.evaluate('window.workspace.settings.get()')
+  await openHibernateSettings()
+  const shownBad = await app.client.evaluate(HIB_SHOWN)
+  check(
+    results,
+    'a negative stored threshold falls back to 24 hours, and the other preferences are unaffected',
+    badPrefs?.autoHibernateSeconds === undefined && badPrefs?.fontSize === 15 && shownBad === hours24,
+    `prefs=${JSON.stringify(badPrefs)} shown=${JSON.stringify(shownBad)}`,
+  )
+  await closeDialogWith(copy('common.cancel'))
+  await app.close()
+
 
   // ── ui-localization：語言 ────────────────────────────────────────────────
   //

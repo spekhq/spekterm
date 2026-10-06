@@ -171,8 +171,10 @@ function peerLines(name: string | undefined, relations: string | undefined): str
           'If this session was opened by a handoff, it has a parent.',
           "To contact one of them, use Claude Code's own session messaging (ListAgents / SendMessage),",
           'addressed by the name in that file. spekterm does not carry the message.',
-          'A session with "running": false has no process and cannot receive messages; spekterm will not',
-          'start it for you. A message can also go unanswered - if you need a reply, ask for one.',
+                    'A session listed with "running": false is hibernated: it still exists, but it has no process and',
+          'cannot receive messages. It comes back when the user wakes it; spekterm will not start it for',
+          'you, and you must not try to wake it yourself. A message can also go unanswered - if you need a',
+          'reply, ask for one.',
           'Each child and sibling in that file also has a "state" (working, waiting, done, or idle) and,',
           'once it has reported finishing its work, a "summary".',
         ]

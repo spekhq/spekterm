@@ -257,7 +257,7 @@
     "tabs": "Session tabs",
     "exitedBadge": "exited",
     "statusRunning": "Running",
-    "statusDormant": "Dormant · resumes when shown",
+    "statusDormant": "Hibernated · press Wake to resume",
     "statusExited": "Exited",
     "statusExitedWithCode": "Exited (code {{code}})",
     "spawnClaude": "Run claude",
@@ -268,9 +268,11 @@
     "copy": "Copy",
     "paste": "Paste",
     "wakeFailed": "Cannot restore this session: {{message}}",
-    "dormantShell": "Dormant · reopening a shell in its last working directory (the previous processes are gone)",
-    "dormantClaude": "Dormant · restoring the conversation…",
-    "replaySeparator": "end of previous content · spekterm restarted"
+    "wake": "Wake",
+    "hibernate": "Hibernate",
+    "dormantShell": "Hibernated · waking opens a new shell in its last working directory. Unexported variables, unsaved command history and running jobs were not kept.",
+    "dormantClaude": "Hibernated · waking resumes the conversation",
+    "replaySeparator": "end of previous content"
   },
   "settings": {
     "title": "Settings",
@@ -295,7 +297,16 @@
     "aboutDirty": "uncommitted changes",
     "aboutDevelopment": "development build",
     "language": "Language",
-    "languageHint": "Applies immediately. Text written by spekterm for the agent stays in English."
+        "languageHint": "Applies immediately. Text written by spekterm for the agent stays in English.",
+    "autoHibernate": "Hibernate idle sessions",
+    "autoHibernateHint": "Ends the process of a session that has been idle this long, keeping it in the workspace to wake later. The session on screen, a working agent and a shell running a job are never hibernated.",
+    "autoHibernateOff": "Off",
+    "autoHibernateHours_one": "After {{count}} hour",
+    "autoHibernateHours_other": "After {{count}} hours",
+    "autoHibernateDays_one": "After {{count}} day",
+    "autoHibernateDays_other": "After {{count}} days",
+    "autoHibernateSeconds_one": "After {{count}} second",
+    "autoHibernateSeconds_other": "After {{count}} seconds"
   },
   "statusBar": {
     "label": "Status bar",
@@ -566,7 +577,7 @@
     "toolFailed": "Result (failed)",
     "attaching": "Catching up…",
     "empty": "No messages yet",
-    "dormant": "Session is asleep. Open the terminal view to wake it.",
+    "dormant": "Session is hibernated. Waking resumes the conversation.",
     "unavailable": "Conversation is unavailable",
     "unavailableHint": "Switch to the terminal view to see what is happening.",
     "earlierNotLoaded": "Earlier messages are not loaded.",

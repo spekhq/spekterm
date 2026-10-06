@@ -1,4 +1,12 @@
 import { type WebContents, ipcMain } from 'electron'
+import { effectiveHibernateSeconds } from '@shared/hibernation/settings'
+import { clearAgentEvents } from '../agent-events'
+import { clearAgentStatus } from '../agent-status'
+import { clearWait, subscribeWait, waitStateOf } from '../agent-wait'
+import { HibernationTracker } from '../hibernation'
+import { tickPeriodMs } from '../hibernation-policy'
+import { forgetSubmission, hasUnconfirmedSubmission } from '../intake-prefill'
+import { broadcastLifecycle } from './handoff'
 import { createSession } from '../session-create'
 import { lifecycleViewOf } from '../handoff-lifecycle-view'
 import type { RelationsWorld } from '../handoff-relations'
@@ -32,9 +40,15 @@ export const TERMINAL_CHANNELS = {
   persist: 'workspace:terminal:persist',
   /** renderer 推送終端畫面快照。 */
   snapshot: 'workspace:terminal:snapshot',
-  /** 主行程 → renderer 的單向推送。與 fs 的 watchEvent 同類。 */
+    /** 主行程 → renderer 的單向推送。與 fs 的 watchEvent 同類。 */
   data: 'workspace:terminal:data',
   exit: 'workspace:terminal:exit',
+  /** renderer → main: put a running session back to dormant (`session-hibernation`). */
+  hibernate: 'workspace:terminal:hibernate',
+  /** renderer → main: the session this renderer displays (`null` = none). Automatic hibernation never takes it. */
+  displayed: 'workspace:terminal:displayed',
+  /** main → renderer: an idle session should be hibernated; the renderer runs its hibernate path with the token. */
+  hibernateRequest: 'workspace:terminal:hibernateRequest',
 } as const
 
 /** 重建一個 session 所需的一切。`scrollback` 只有 shell 目標會有（design D3）。 */
@@ -67,6 +81,16 @@ async function toResult<T>(run: () => T | Promise<T>): Promise<FsResult<T>> {
 
 /** 每個 renderer 一份 pty 集合。key 是 `webContents.id`（與 watcher 的擁有者記帳同構）。 */
 const services = new Map<number, TerminalService>()
+/** The renderer that owns each service — automatic hibernation asks it to run the hibernate path. */
+const owners = new Map<number, WebContents>()
+
+/** Activity, displayed sessions and request tokens for automatic hibernation (`session-hibernation`). */
+const hibernation = new HibernationTracker({
+  now: Date.now,
+  subscribeWait,
+  waitStateOf,
+  hasUnconfirmedSubmission,
+})
 
 /** 所有服務中目前持有 pty 的 claude session —— 關係檔的「是否在執行」。 */
 export function runningAgents(): string[] {
@@ -145,12 +169,30 @@ function serviceFor(
   const existing = services.get(contents.id)
   if (existing) return existing
 
-  const service = new TerminalService(store, {
+    const service = new TerminalService(store, {
     data: (sessionId, chunk) => {
+      hibernation.output(sessionId)
       if (contents.isDestroyed()) return
       contents.send(TERMINAL_CHANNELS.data, sessionId, chunk)
     },
     exit: (sessionId, exitCode, reason) => {
+      hibernation.untrack(sessionId)
+      // The pty held any filled-in prompt; with it gone there is nothing left to confirm.
+      forgetSubmission(sessionId)
+      if (reason === 'hibernated') {
+        // **Before `ptyChanged()`**: the relations refresh it triggers must see the wait state reset.
+        // A hibernated session has no state to show (`lifecycleOf` maps `unknown` to idle), as a
+        // restored one does; keeping the last `ready` would show a hibernated child as "waiting".
+        clearWait(sessionId)
+        ptyChanged()
+        // The renderer's lifecycle marks only update on this broadcast; without it the tab would
+        // keep "waiting for you" although the relations file is right.
+        broadcastLifecycle()
+        // **Not removed from persistence** — hibernation is not an ending (design D2).
+        if (contents.isDestroyed()) return
+        contents.send(TERMINAL_CHANNELS.exit, sessionId, exitCode, reason)
+        return
+      }
       // **在 `disposed` 提早 return 之前** —— renderer 重新載入時所有 pty 都以 `disposed` 結束，
       // 掛在那之後的話，關係檔裡的「是否在執行」永遠不會被刷新。
       ptyChanged()
@@ -165,9 +207,9 @@ function serviceFor(
 
       // 真的結束了（pty 自己死掉、或使用者關掉）—— 立刻把它連同快照從磁碟上抹掉。不能等 renderer
       // 的下一次 persist：若使用者就在此時關掉 app，那筆已死的 session 會被當成休眠的重建回來。
-      sessions.remove(sessionId)
+            sessions.remove(sessionId)
       if (contents.isDestroyed()) return
-      contents.send(TERMINAL_CHANNELS.exit, sessionId, exitCode)
+      contents.send(TERMINAL_CHANNELS.exit, sessionId, exitCode, reason)
     },
     // 對話識別碼是**主行程的知識**（renderer 沒有這個詞彙），因此直接落盤，不經 renderer 轉手。
     conversation: (sessionId, conversationId) => {
@@ -194,9 +236,12 @@ function serviceFor(
   // 交接的落點於 session 結束時收掉 —— **先處理完裡面既有的項目，再清除**（順序住在服務裡）。
   endHandoffSession,
   )
-  services.set(contents.id, service)
+    services.set(contents.id, service)
+  owners.set(contents.id, contents)
 
   contents.once('destroyed', () => {
+    owners.delete(contents.id)
+    hibernation.setDisplayed(contents.id, null)
     sessions.dropProvisional()
     services.delete(contents.id)
     statusServices.get(contents.id)?.dispose()
@@ -209,7 +254,8 @@ function serviceFor(
   // 且新頁面的 xterm 永遠收不到它們的輸出（listener 綁在已消失的舊 renderer 上）。必須在
   // 'did-navigate' 殺光（design D2）。沿用 watcher 的教訓：用 'did-navigate'（已 commit），
   // 不是 'did-start-navigation'（那對被擋下的導航也會觸發）。
-  contents.on('did-navigate', () => {
+    contents.on('did-navigate', () => {
+    hibernation.setDisplayed(contents.id, null)
     // 尚未被 renderer 送來持久化的 session 永遠不會被送來了（新頁面不知道它們）。
     sessions.dropProvisional()
     disposeConversationFor(contents.id)
@@ -307,13 +353,14 @@ export function registerTerminalHandlers(
             sessionId,
             cwd,
             worktreeRoots,
-            peerName,
+                        peerName,
           }),
       })
 
       if (result.conversationId) {
         sessions.update(result.sessionId, { claudeSessionId: result.conversationId })
       }
+      hibernation.track(result.sessionId, target)
       ptyChanged()
       return { sessionId: result.sessionId, ...(result.lineage ? { lineage: result.lineage } : {}) }
     }),
@@ -346,9 +393,10 @@ export function registerTerminalHandlers(
         worktreeRoots,
         peerName: persisted.peerName,
       })
-      if (result.conversationId) {
+            if (result.conversationId) {
         sessions.update(sessionId, { claudeSessionId: result.conversationId })
       }
+      hibernation.track(sessionId, persisted.spawnTarget)
       ptyChanged()
       return { sessionId: result.sessionId }
     }),
@@ -415,8 +463,86 @@ export function registerTerminalHandlers(
     serviceFor(store, sessions, preferences, event.sender).resize(sessionId, cols, rows)
   })
 
-  ipcMain.on(TERMINAL_CHANNELS.kill, (event, sessionId: string) => {
-    serviceFor(store, sessions, preferences, event.sender).kill(sessionId)
+    ipcMain.on(TERMINAL_CHANNELS.kill, (event, sessionId: string) => {
+    const hadPty = serviceFor(store, sessions, preferences, event.sender).kill(sessionId)
+    if (!hadPty && typeof sessionId === 'string') {
+      // A dormant session has no pty, so `kill()` did none of its cleanup. Restored sessions always
+      // leaked their drop point this way; hibernation makes closing a dormant session routine.
+      // Only in this case, so a live session's drop point is not scanned twice.
+      clearAgentStatus(sessionId)
+      clearAgentEvents(sessionId)
+      endHandoffSession(sessionId)
+    }
     sessions.remove(sessionId)
   })
+
+  ipcMain.on(TERMINAL_CHANNELS.displayed, (event, sessionId: unknown) => {
+    // Make sure the service exists, so its cleanup hooks also clear this report.
+    serviceFor(store, sessions, preferences, event.sender)
+    hibernation.setDisplayed(event.sender.id, typeof sessionId === 'string' ? sessionId : null)
+  })
+
+  /**
+   * Hibernate a session. Without a token it is the user's request and always proceeds (the displayed
+   * or a working session included). With one it is an automatic request from `requestIdleHibernation`,
+   * and the policy is checked again here: the session may have been displayed or started working
+   * during the round trip (design D3).
+   */
+  ipcMain.handle(TERMINAL_CHANNELS.hibernate, (event, sessionId: unknown, token: unknown) => {
+    if (typeof sessionId !== 'string') return { ok: false }
+    const service = serviceFor(store, sessions, preferences, event.sender)
+    if (token !== undefined) {
+            if (typeof token !== 'string') return { ok: false }
+      const facts = service.idleFactsOf(sessionId)
+      if (!facts || !hibernation.authorize(sessionId, token, facts.shell, thresholdMs(preferences))) return { ok: false }
+    }
+    return { ok: service.hibernate(sessionId) }
+  })
+
+  scheduleIdleHibernation(preferences)
+}
+
+function thresholdMs(preferences: PreferencesStore): number {
+  return effectiveHibernateSeconds(preferences.get().autoHibernateSeconds) * 1000
+}
+
+/**
+ * One evaluation of the automatic-hibernation policy: ask each renderer to hibernate its eligible
+ * sessions. The renderer runs the same path as a manual hibernation (it must serialize a shell's
+ * screen first) and returns the token, which `hibernate` checks again.
+ */
+function requestIdleHibernation(preferences: PreferencesStore): void {
+  hibernation.newTick()
+  const threshold = thresholdMs(preferences)
+  if (threshold <= 0) return
+  for (const [contentsId, service] of services) {
+    const contents = owners.get(contentsId)
+    if (!contents || contents.isDestroyed()) continue
+    for (const sessionId of service.liveSessionIds()) {
+      const facts = service.idleFactsOf(sessionId)
+      if (!facts || !hibernation.eligible(sessionId, facts.shell, threshold)) continue
+      contents.send(TERMINAL_CHANNELS.hibernateRequest, sessionId, hibernation.issueToken(sessionId))
+    }
+  }
+}
+
+/**
+ * The periodic evaluation. The preference is read on every tick, so a change applies without a
+ * restart; the period follows the threshold (a quarter of it, 1–60 s), so a probe seeding a threshold
+ * of seconds does not wait a minute.
+ */
+function scheduleIdleHibernation(preferences: PreferencesStore): void {
+  const next = (): void => {
+    const timer = setTimeout(() => {
+      try {
+        requestIdleHibernation(preferences)
+      } catch (error) {
+        console.error(`[terminal] automatic hibernation failed: ${String(error)}`)
+      }
+      next()
+    }, tickPeriodMs(effectiveHibernateSeconds(preferences.get().autoHibernateSeconds)))
+    // The app's lifetime is the windows', not this timer's.
+    timer.unref()
+  }
+  next()
 }

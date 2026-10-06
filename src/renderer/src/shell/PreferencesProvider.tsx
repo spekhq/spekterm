@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
 import { DEFAULT_LANGUAGE, i18n, type Language, setLanguage } from '@shared/i18n'
+import { effectiveHibernateSeconds } from '@shared/hibernation/settings'
 import type { TerminalPreferences } from './types'
 
 export interface PreferencesApi {
@@ -58,7 +59,11 @@ export interface PreferencesApi {
    * `?? 'terminal'`。漏掉一處的症狀是「偏好設了對話 view，但某個地方還是終端」，
    * 而那不會有任何型別錯誤。
    */
-  agentView: 'terminal' | 'conversation'
+    agentView: 'terminal' | 'conversation'
+  /** Automatic hibernation threshold in seconds; `0` = off, `null` = back to the default. Callers await it. */
+  updateAutoHibernate: (seconds: number | null) => Promise<void>
+  /** The threshold in effect, in seconds — **unset is 24 hours**, `0` is off (one place decides that). */
+  autoHibernateSeconds: number
 }
 
 const PreferencesContext = createContext<PreferencesApi | null>(null)
@@ -127,6 +132,11 @@ export function PreferencesProvider({ children }: { children: React.ReactNode })
     [],
   )
 
+    const updateAutoHibernate = useCallback(
+    (seconds: number | null) => window.workspace.settings.setAutoHibernate(seconds).then(setTerminal),
+    [],
+  )
+
   const updateLanguage = useCallback(
     (language: Language) =>
       window.workspace.settings
@@ -148,8 +158,10 @@ export function PreferencesProvider({ children }: { children: React.ReactNode })
       updateTerminalFont,
       updateGpuAcceleration,
       updateAgentStatus,
-      updateAgentView,
+            updateAgentView,
       updateLanguage,
+      updateAutoHibernate,
+      autoHibernateSeconds: effectiveHibernateSeconds(terminal.autoHibernateSeconds),
       language: terminal.language ?? DEFAULT_LANGUAGE,
       gpuEnabled: terminal.gpuAcceleration ?? true,
       // 未設定＝啟用（與 GPU 加速同一條規則）。
@@ -162,8 +174,9 @@ export function PreferencesProvider({ children }: { children: React.ReactNode })
       updateTerminalFont,
       updateGpuAcceleration,
       updateAgentStatus,
-      updateAgentView,
+            updateAgentView,
       updateLanguage,
+      updateAutoHibernate,
     ],
   )
 

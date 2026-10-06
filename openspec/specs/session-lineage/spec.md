@@ -259,7 +259,7 @@ SHALL 標明它不在執行中，本能力 SHALL NOT 為此喚醒它。
 
 #### Scenario: 休眠的母 session 標明不在執行中
 
-- **WHEN** 應用程式重新啟動之後，C 已被顯示而其母 session P 仍為休眠
+- **WHEN** 應用程式重新啟動之後，C has been woken while its parent session P is still dormant
 - **THEN** C 查詢自己的關係，結果標明 P 存在但不在執行中
 - **AND** P 仍為休眠
 

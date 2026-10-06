@@ -131,7 +131,12 @@ test('告知的內容給出「內容太長時怎麼辦」的做法', () => {
   test('名字與關係：說明以名字經 Claude Code 的訊息功能聯絡、不在執行者收不到且不會被喚醒', () => {
     assert.match(text, /SendMessage/)
     assert.match(text, /"running": false/)
-    assert.match(text, /will not\s+start it/)
+        assert.match(text, /will not\s+start it/)
+  })
+  test('relations: a relative listed as not running is hibernated, returns when the user wakes it, and is not woken by the agent (session-hibernation)', () => {
+    assert.match(text, /"running": false is hibernated/)
+    assert.match(text, /comes back when the user wakes it/)
+    assert.match(text, /must not try to wake it/)
   })
   test('名字與關係：沒有名字與關係檔時不出現那一段', () => {
     assert.ok(!introText({ folders: [], outbox: '/o' }).includes('SendMessage'))

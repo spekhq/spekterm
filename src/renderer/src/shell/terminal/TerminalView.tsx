@@ -61,10 +61,12 @@ export function TerminalView({
   const { t } = useTranslation()
   // 解構出穩定的 callback。若依賴整個 api 物件，session 清單一變動就會重建 xterm
   // （連同 scrollback 一起消失）。
-  const { attach, setTitle, restoredScrollbackOf, registerFocus } = useSessions()
+    const { attach, setTitle, restoredScrollbackOf, registerFocus, registerSerializer, wake } = useSessions()
   const { terminal: termPrefs, gpuEnabled } = usePreferences()
   const hostRef = useRef<HTMLDivElement | null>(null)
-  const handleRef = useRef<XtermHandle | null>(null)
+    const handleRef = useRef<XtermHandle | null>(null)
+  /** The dormant screen's Wake button. It takes focus where the terminal would (`session-persistence`). */
+  const wakeButtonRef = useRef<HTMLButtonElement | null>(null)
   const [menu, setMenu] = useState<{ x: number; y: number; hasSelection: boolean } | null>(null)
 
   const copy = useCallback(() => {
@@ -186,9 +188,15 @@ export function TerminalView({
 
   // 讓側欄之類的遠端呼叫端有辦法把焦點交回這個終端 —— xterm 的把手只有這裡握著。
   // 註冊獨立於上面那個掛載 effect：它的 deps 多，重跑一次就白白解註冊再註冊一次。
-  useEffect(() => registerFocus(sessionId, () => handleRef.current?.focus()), [
+    useEffect(() => registerFocus(sessionId, () => handleRef.current?.focus()), [
     sessionId,
     registerFocus,
+  ])
+
+  // Hibernation serializes the screen at that moment (`session-hibernation`): only this view holds the xterm.
+  useEffect(() => registerSerializer(sessionId, () => handleRef.current?.serialize()), [
+    sessionId,
+    registerSerializer,
   ])
 
   // 尺寸同步。不同步的後果：agent 以為終端是 80 欄、實際更寬，輸出會在錯的位置換行。
@@ -324,12 +332,24 @@ export function TerminalView({
   // **fit 與 focus 的條件不同，那是承重的。** fit 只要有版面盒子就該做（`active`）；
   // 但**搶焦點要看使用者看不看得見**：對話 view 覆蓋在上面時，一個隱形的終端把焦點搶走，
   // 使用者接著打的字會進 pty 而畫面上什麼都沒有 —— 與「訊息被送到錯的地方」同一族的失效。
+    //
+  // **While the session is dormant the same rule focuses the Wake button instead** — one rule, not two
+  // effects racing for focus (`session-persistence`). So `Ctrl+Tab` then `Enter` wakes it, and an
+  // `Enter` can never be written to a pty that does not exist. The status is a dependency so that
+  // when the session starts running the terminal takes focus (the button is gone by then and focus
+  // would otherwise sit on `<body>`). Other status changes (a pty exiting) leave focus alone.
+  const previousStatus = useRef(status)
   useEffect(() => {
+    const was = previousStatus.current
+    previousStatus.current = status
     if (!active) return
     const size = handleRef.current?.fit()
     if (size) window.workspace.terminal.resize(sessionId, size.cols, size.rows)
-    if (!covered) handleRef.current?.focus()
-  }, [active, covered, sessionId])
+    if (covered) return
+    if (was !== status && was !== 'dormant' && status !== 'dormant') return
+    if (status === 'dormant') wakeButtonRef.current?.focus()
+    else handleRef.current?.focus()
+  }, [active, covered, sessionId, status])
 
   /**
    * GPU 加速：**只給當下顯示的那一個終端**，且使用者可以整個關掉。
@@ -416,7 +436,7 @@ export function TerminalView({
         不遮蔽它的細帶；claude 不重播（`--resume` 會自己重現對話），它背後真的是空的，所以
         提示置中、自己成為那個「有東西可看」。
       */}
-      {status === 'dormant' &&
+            {status === 'dormant' &&
         (wakeError ? (
           // **恢復不了是個錯誤狀態，它必須看得見。** 貼在底部的一條細帶太弱 —— 使用者面對的仍是
           // 一大塊黑色空白，只有邊緣一行小字。置中呈現，與 claude 的休眠提示同一種載體。
@@ -425,19 +445,26 @@ export function TerminalView({
           // 的終端，沒有東西值得點。讓它接住指標事件，這塊提示才是實心的 —— 而不是一層點得穿的
           // 幽靈。順帶也讓探針能以 `elementFromPoint` 做真正的 hit-test（`pointer-events-none`
           // 的元素會被它跳過，於是「它有沒有被 xterm 蓋住」根本量不到）。
+          //
+          // Its Wake button is the retry: a failed wake is no longer retried on its own.
           <div className="absolute inset-0 z-10 flex items-center justify-center">
-            <div className="max-w-[80%] rounded border border-hairline bg-shell/90 px-4 py-3 text-center text-2xs text-danger">
-              {t('sessions.wakeFailed', { message: wakeError })}
+            <div className="flex max-w-[80%] flex-col items-center gap-2 rounded border border-hairline bg-shell/90 px-4 py-3 text-center text-2xs text-danger">
+              <span>{t('sessions.wakeFailed', { message: wakeError })}</span>
+              <WakeButton ref={wakeButtonRef} onWake={() => wake(sessionId)} />
             </div>
           </div>
         ) : spawnTarget === 'shell' ? (
-          <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 bg-shell/90 px-3 py-2 text-2xs text-ink-faint">
-            {t('sessions.dormantShell')}
+          // The strip lets clicks through to the replayed history (selection, scrolling); only the
+          // button takes them.
+          <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 flex items-center gap-3 bg-shell/90 px-3 py-2 text-2xs text-ink-faint">
+            <span className="min-w-0 flex-1">{t('sessions.dormantShell')}</span>
+            <WakeButton ref={wakeButtonRef} onWake={() => wake(sessionId)} />
           </div>
         ) : (
           <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center">
-            <div className="rounded border border-hairline bg-shell/90 px-4 py-3 text-center text-2xs text-ink-faint">
-              {t('sessions.dormantClaude')}
+            <div className="flex flex-col items-center gap-2 rounded border border-hairline bg-shell/90 px-4 py-3 text-center text-2xs text-ink-faint">
+              <span>{t('sessions.dormantClaude')}</span>
+              <WakeButton ref={wakeButtonRef} onWake={() => wake(sessionId)} />
             </div>
           </div>
         ))}
@@ -458,5 +485,29 @@ export function TerminalView({
         />
       )}
     </div>
+  )
+}
+
+/**
+ * The dormant screen's only way to start the session (`session-persistence`: displaying a dormant
+ * session does not start it). A native `<button>`, so `Enter` and `Space` activate it with no key
+ * handling of our own; it takes pointer events inside overlays that otherwise let them through.
+ */
+export function WakeButton({
+  ref,
+  onWake,
+}: {
+  ref?: React.Ref<HTMLButtonElement>
+  onWake: () => void
+}): React.JSX.Element {
+  return (
+    <button
+      ref={ref}
+      type="button"
+      onClick={onWake}
+      className="pointer-events-auto shrink-0 cursor-pointer rounded border border-hairline bg-panel px-3 py-1 text-xs text-ink hover:bg-hover focus:outline focus:outline-2 focus:outline-accent"
+    >
+      {t('sessions.wake')}
+    </button>
   )
 }

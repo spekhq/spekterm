@@ -2608,8 +2608,10 @@ async function runHandoffRestored(_mode, _modeConfig, context) {
     read: () => app.client.evaluate(`(() => { ${railRowClick(sourceName)} return ${RAIL_SELECTION} === ${JSON.stringify(sourceName)} })()`),
     settled: Boolean,
     timeoutMs: 15_000,
-    label: '被還原的 session 所屬的 folder 已被選中',
+        label: '被還原的 session 所屬的 folder 已被選中',
   })
+  // Displaying a dormant session no longer starts it (session-hibernation): wake it explicitly.
+  await pollFor({ read: () => app.client.evaluate(CLICK_WAKE), settled: Boolean, timeoutMs: 15_000, label: 'Wake the restored session' })
   const sessionsBefore = await pollFor({
     read: () => ptySessionPids(marker).length,
     settled: (count) => count >= 1,
@@ -3682,8 +3684,9 @@ async function runLineage(_mode, _modeConfig, context) {
     read: () => app.client.evaluate(`(() => { ${railRowClick(nameB)} return ${RAIL_SELECTION} === ${JSON.stringify(nameB)} })()`),
     settled: Boolean,
     timeoutMs: 15_000,
-    label: '選中 folder B（喚醒它的 session）',
+        label: '選中 folder B（喚醒它的 session）',
   })
+  await pollFor({ read: () => app.client.evaluate(CLICK_WAKE), settled: Boolean, timeoutMs: 15_000, label: 'Wake the child in folder B' })
   const relaunch = await pollFor({
     read: () => stub.peerNames().slice(launchesBefore),
     settled: (list) => list.length >= 1,
@@ -3739,6 +3742,217 @@ const TAB_ORDER = `[...document.querySelectorAll(${JSON.stringify(`[role="tablis
  * 拖曳一律**往下、且至少三個兄弟**（`CLAUDE.md`「插入點與提交序位差一格，兩個項目時看不出來」）
  * —— 整塊移動會把那一格的偏移放大成整塊的長度。
  */
+/** Click the visible Wake button in the terminal stage (session-hibernation). True when clicked. */
+const CLICK_WAKE = `(() => {
+  const stage = document.querySelector('[aria-label="${copy('stage.terminal')}"]')
+  const button = [...(stage?.querySelectorAll('button') ?? [])].find(
+    (b) => b.textContent === ${JSON.stringify(copy('sessions.wake'))} && b.getBoundingClientRect().width > 0,
+  )
+  if (!button) return false
+  button.click()
+  return true
+})()`
+
+/** Whether any process of the stub agent for this conversation is still running. */
+function agentAlive(conversationId) {
+  for (const entry of readdirSync('/proc')) {
+    if (!/^\d+$/.test(entry) || Number(entry) === process.pid) continue
+    try {
+      if (readFileSync(`/proc/${entry}/cmdline`, 'utf8').includes(conversationId)) return true
+    } catch {
+      // the process ended while being read
+    }
+  }
+  return false
+}
+
+/** Select a rail item and wake its displayed (dormant) session. */
+async function wakeIn(app, folderName, label_) {
+  await pollFor({
+    read: () => app.client.evaluate(`(() => { ${railRowClick(folderName)} return ${RAIL_SELECTION} === ${JSON.stringify(folderName)} })()`),
+    settled: Boolean,
+    timeoutMs: 15_000,
+    label: `${label_}: select ${folderName}`,
+  })
+  await pollFor({
+    read: () => app.client.evaluate(CLICK_WAKE),
+    settled: Boolean,
+    timeoutMs: 15_000,
+    label: `${label_}: Wake`,
+  })
+}
+
+/**
+ * Hibernation and lineage (session-hibernation): a hibernated session is not closed — it stays in its
+ * relatives' relations (not running, not closed), keeps its drop point, shows no lifecycle state, and
+ * can hand off again once woken; its children's reports still reach it.
+ *
+ * Hibernation is requested through the renderer's API here; the menu and shortcut paths are probe:terminal's
+ * and probe:keyboard's. What this section checks happens in the main process and on disk.
+ */
+async function runHibernateLineage(_mode, _modeConfig, context) {
+  const { profile, folders } = seedProfile()
+  seedRouting(profile, { fallbackFolderId: folders[0].id })
+  const configDir = mkTemp('spekterm-intake-config-')
+  const marker = `spek-intake-hib-${process.pid}-${Date.now()}`
+  const stub = makeStubAgent(mkTemp, configDir, { readyDelaySeconds: 2 })
+  const [nameA, nameB] = [basename(folders[0].path), basename(folders[1].path)]
+
+  drop(profile, 'source', intake({ id: 'hib-src', title: 'HIB-SOURCE' }))
+  const app = await freshApp(context, { profile, configDir, stub, marker })
+  await openInbox(app)
+  await pollFor({
+    read: () => app.client.evaluate(acceptExpression('HIB-SOURCE')),
+    settled: Boolean,
+    timeoutMs: 20_000,
+    label: 'the parent is created by accepting',
+  })
+  const outbox = await awaitOutbox(profile, 'the parent drop point appears')
+  const P = basename(outbox)
+
+  writeFileSync(join(outbox, 'child.json'), JSON.stringify({ target: nameB, title: 'HIB-CHILD', body: 'child' }))
+  const child = await pollFor({
+    read: () => persistedSessions(profile).find((s) => s.lineage?.parentId === P && s.claudeSessionId) ?? null,
+    settled: Boolean,
+    timeoutMs: 30_000,
+    label: 'the child is persisted with its parent',
+  }).catch(() => null)
+  check(results, 'precondition: a handoff created the child', child !== null, JSON.stringify(persistedSessions(profile)))
+  if (!child) return
+
+  const childOf = () => relationsOf(profile, P)?.children?.find((c) => c.name === child.peerName) ?? null
+  const railMark = () =>
+    app.client.evaluate(`(() => {
+      const row = [...document.querySelectorAll('aside [role="button"]')].find((el) => (el.textContent ?? '').includes('HIB-CHILD'))
+      if (!row) return '(no row)'
+      const marks = [${['working', 'waiting', 'done'].map((key) => JSON.stringify(copy(`handoffLifecycle.${key}`))).join(', ')}]
+      return [...row.querySelectorAll('[role="img"]')].map((el) => el.getAttribute('aria-label')).find((l) => marks.includes(l)) ?? '(none)'
+    })()`)
+
+  const waiting = await pollFor({ read: childOf, settled: (c) => c?.state === 'waiting', timeoutMs: 20_000, label: 'the child reports waiting' }).catch(() => childOf())
+  const waitingMark = await pollFor({ read: railMark, settled: (m) => m === copy('handoffLifecycle.waiting'), timeoutMs: 10_000, label: 'the child shows waiting' }).catch(() => null)
+  check(results, 'precondition: the child shows waiting for the user', waiting?.state === 'waiting' && waitingMark === copy('handoffLifecycle.waiting'), `relations=${JSON.stringify(waiting)} mark=${waitingMark}`)
+
+  // ── Hibernate the child: dormant, no lifecycle state (in the relations and on the rail).
+  await app.client.evaluate(`window.workspace.terminal.hibernate(${JSON.stringify(child.id)})`)
+  const gone = await pollFor({ read: () => agentAlive(child.claudeSessionId), settled: (alive) => alive === false, timeoutMs: 15_000, label: 'the child hibernates' })
+  const idle = await pollFor({ read: childOf, settled: (c) => c?.state === 'idle', timeoutMs: 10_000, label: 'the parent sees the child idle' }).catch(() => childOf())
+  const mark = await pollFor({ read: railMark, settled: (m) => m === '(none)', timeoutMs: 10_000, label: 'the waiting mark is gone' }).catch(() => railMark())
+  check(
+    results,
+    'a hibernated handoff child shows no lifecycle state (relations idle, no mark on the rail)',
+    gone === false && idle?.state === 'idle' && idle?.running === false && mark === '(none)',
+    `alive=${gone} relations=${JSON.stringify(idle)} mark=${mark}`,
+  )
+
+  // ── Wake the child; hibernate the parent: listed as existing, not running, not closed; its record
+  // and drop point stay.
+  await wakeIn(app, nameB, 'wake the child')
+  await pollFor({ read: () => agentAlive(child.claudeSessionId), settled: Boolean, timeoutMs: 20_000, label: 'the child is awake' })
+  const parent = persistedSessions(profile).find((s) => s.id === P)
+  await app.client.evaluate(`window.workspace.terminal.hibernate(${JSON.stringify(P)})`)
+  await pollFor({ read: () => agentAlive(parent.claudeSessionId), settled: (alive) => alive === false, timeoutMs: 15_000, label: 'the parent hibernates' })
+  const parentSeen = await pollFor({
+    read: () => relationsOf(profile, child.id)?.parent ?? null,
+    settled: (p) => p?.running === false,
+    timeoutMs: 15_000,
+    label: 'the child sees its parent not running',
+  }).catch(() => relationsOf(profile, child.id)?.parent ?? null)
+  check(
+    results,
+    'a hibernated parent is listed as existing and not running (not closed)',
+    parentSeen?.running === false && parentSeen?.closed === undefined && parentSeen?.name === parent.peerName,
+    JSON.stringify(parentSeen),
+  )
+  check(
+    results,
+    'hibernation is not closing: the parent stays persisted and keeps its drop point',
+    persistedSessions(profile).some((s) => s.id === P) && existsSync(outbox),
+    `persisted=${persistedSessions(profile).some((s) => s.id === P)} outbox=${existsSync(outbox)}`,
+  )
+
+  // ── The child reports while its parent is hibernated: processed, shown done; the parent reads it once woken.
+  stub.command(child.claudeSessionId, [stub.report.stage('HIB DONE: reported'), stub.report.commit()].join('\n'))
+  const doneMark = await pollFor({ read: railMark, settled: (m) => m === copy('handoffLifecycle.done'), timeoutMs: 20_000, label: 'the child shows done' }).catch(() => railMark())
+  check(results, 'a child report is processed while its parent is hibernated (the child shows done)', doneMark === copy('handoffLifecycle.done'), `mark=${doneMark}`)
+  await wakeIn(app, nameA, 'wake the parent')
+  const withSummary = await pollFor({
+    read: childOf,
+    settled: (c) => c?.summary === 'HIB DONE: reported',
+    timeoutMs: 20_000,
+    label: 'the woken parent reads the report',
+  }).catch(() => childOf())
+  check(results, 'the woken parent lists the child with its report summary', withSummary?.summary === 'HIB DONE: reported' && withSummary?.state === 'done', JSON.stringify(withSummary))
+
+  // ── The woken parent hands off again.
+  await pollFor({ read: () => agentAlive(parent.claudeSessionId), settled: Boolean, timeoutMs: 20_000, label: 'the parent is awake' })
+  writeFileSync(join(outbox, 'again.json'), JSON.stringify({ target: nameA, title: 'HIB-AGAIN', body: 'again' }))
+  const again = await pollFor({
+    read: () => persistedSessions(profile).find((s) => s.lineage?.brief?.title === 'HIB-AGAIN') ?? null,
+    settled: Boolean,
+    timeoutMs: 30_000,
+    label: 'the second handoff arrives',
+  }).catch(() => null)
+  check(results, 'a woken session can hand off again (the new session lists it as parent)', again?.lineage?.parentId === P, JSON.stringify(again?.lineage ?? null))
+
+  // ── Closing a dormant session ends its drop point (it has no pty, so the close path must do it).
+  await app.client.evaluate(`window.workspace.terminal.hibernate(${JSON.stringify(child.id)})`)
+  await pollFor({ read: () => agentAlive(child.claudeSessionId), settled: (alive) => alive === false, timeoutMs: 15_000, label: 'the child hibernates again' })
+  const childOutbox = join(outboxRootOf(profile), child.id)
+  const before = existsSync(childOutbox)
+  await app.client.evaluate(`window.workspace.terminal.kill(${JSON.stringify(child.id)})`)
+  const after = await pollFor({ read: () => existsSync(childOutbox), settled: (exists) => exists === false, timeoutMs: 10_000, label: 'the dormant child drop point ends' })
+  check(results, 'closing a dormant session ends its drop point', before === true && after === false, `before=${before} after=${after}`)
+}
+
+/**
+ * A session holding a filled-in prompt whose send key did not take (`dropFirstSubmit`) is never
+ * hibernated automatically: resuming would discard the unsent text (session-hibernation).
+ */
+async function runHibernateUnsent(_mode, _modeConfig, context) {
+  const THRESHOLD_S = 4
+  const { profile, folders } = seedProfile()
+  seedRouting(profile, { fallbackFolderId: folders[0].id })
+  writeFileSync(
+    join(profile, 'preferences.json'),
+    JSON.stringify({ version: 1, terminal: { autoHibernateSeconds: THRESHOLD_S }, ui: { language: 'en' } }),
+  )
+  const configDir = mkTemp('spekterm-intake-config-')
+  const marker = `spek-intake-unsent-${process.pid}-${Date.now()}`
+  const stub = makeStubAgent(mkTemp, configDir, { readyDelaySeconds: 2, busySeconds: 1, dropFirstSubmit: true })
+  const nameB = basename(folders[1].path)
+
+  drop(profile, 'source', intake({ id: 'unsent-src', title: 'UNSENT-SOURCE' }))
+  const app = await freshApp(context, { profile, configDir, stub, marker })
+  await openInbox(app)
+  await pollFor({
+    read: () => app.client.evaluate(acceptExpression('UNSENT-SOURCE')),
+    settled: Boolean,
+    timeoutMs: 20_000,
+    label: 'the parent is created by accepting',
+  })
+  const outbox = await awaitOutbox(profile, 'the parent drop point appears')
+  const P = basename(outbox)
+  writeFileSync(join(outbox, 'child.json'), JSON.stringify({ target: nameB, title: 'UNSENT-CHILD', body: 'child' }))
+  const child = await pollFor({
+    read: () => persistedSessions(profile).find((s) => s.lineage?.parentId === P && s.claudeSessionId) ?? null,
+    settled: Boolean,
+    timeoutMs: 30_000,
+    label: 'the child is persisted',
+  }).catch(() => null)
+  check(results, 'precondition: a handoff created the child', child !== null, JSON.stringify(persistedSessions(profile)))
+  if (!child) return
+
+  // The child is not displayed; its first prompt was written but the send key was swallowed. Past the
+  // send-confirmation window (10 s) and the threshold, plus two ticks.
+    await new Promise((resolve) => setTimeout(resolve, (10 + THRESHOLD_S + 4) * 1000))
+  // It must be waiting (ready) — otherwise "still running" would be owed to its state, not to the
+  // unsent prompt.
+  const state = relationsOf(profile, P)?.children?.find((c) => c.name === child.peerName)?.state
+  check(results, 'precondition: the child with the unsent prompt is waiting for the user', state === 'waiting', `state=${state}`)
+  check(results, 'a session holding an unsent filled-in prompt is not hibernated automatically', agentAlive(child.claudeSessionId), `alive=${agentAlive(child.claudeSessionId)}`)
+}
+
 async function runLineageDrag(_mode, _modeConfig, context) {
   const { profile, folders } = seedProfile()
   const configDir = mkTemp('spekterm-intake-config-')
@@ -3890,7 +4104,9 @@ const SECTIONS = [
   { name: 'runChooseFolder', run: runChooseFolder },
   { name: 'runOpenedLifecycle', run: runOpenedLifecycle },
   { name: 'runLineage', run: runLineage },
-  { name: 'runLineageDrag', run: runLineageDrag },
+    { name: 'runLineageDrag', run: runLineageDrag },
+  { name: 'runHibernateLineage', run: runHibernateLineage },
+  { name: 'runHibernateUnsent', run: runHibernateUnsent },
 ]
 
 const outcome = await runSections({

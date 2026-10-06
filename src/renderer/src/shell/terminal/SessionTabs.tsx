@@ -5,7 +5,7 @@ import { useHandoffBrief } from './HandoffBrief'
 import type { SpawnTarget } from '../types'
 import { SessionNameDialog } from './SessionNameDialog'
 import { StatusDot, sessionLabel, sessionTitle, statusTitle } from './session-badge'
-import type { SessionState } from './sessions'
+import { type SessionState, useSessions } from './sessions'
 import { useDragReorder } from '../useDragReorder'
 import { useScrollIntoView } from '../useScrollIntoView'
 import { useSpawnMenu } from './useSpawnMenu'
@@ -49,7 +49,8 @@ export function SessionTabs({
   const { t } = useTranslation()
 
   const spawn = useSpawnMenu(onCreate)
-  const [menu, setMenu] = useState<{ x: number; y: number; session: SessionState } | null>(null)
+    const [menu, setMenu] = useState<{ x: number; y: number; session: SessionState } | null>(null)
+  const { hibernate } = useSessions()
   const briefs = useHandoffBrief()
   const [renaming, setRenaming] = useState<SessionState | null>(null)
   const tabRefs = useRef(new Map<number, HTMLDivElement>())
@@ -104,6 +105,18 @@ export function SessionTabs({
             setMenu(null)
           },
         },
+                // Offered only while the session has a process (`session-hibernation`).
+        ...(menu.session.status === 'running'
+          ? [
+              {
+                label: t('sessions.hibernate'),
+                onSelect: () => {
+                  hibernate(menu.session.id)
+                  setMenu(null)
+                },
+              },
+            ]
+          : []),
         {
           label: t('sessions.close'),
           tone: 'danger',

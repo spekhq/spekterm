@@ -351,7 +351,8 @@ function RailRow({
   const { t } = useTranslation()
   // 每個 folder 各持有自己的選單狀態 —— rail 上有很多列，共用一份會錨錯位置。
   const spawn = useSpawnMenu(onCreateSession)
-  const [menu, setMenu] = useState<{ x: number; y: number; session: SessionState } | null>(null)
+    const [menu, setMenu] = useState<{ x: number; y: number; session: SessionState } | null>(null)
+  const { hibernate } = useSessions()
   // folder 標題列自己的右鍵選單 —— 與 session 子列那一份分開：兩者的項目不同，共用一份狀態會
   // 讓「在標題列按右鍵」跳出 session 的選單。
   const [folderMenu, setFolderMenu] = useState<{ x: number; y: number } | null>(null)
@@ -413,6 +414,18 @@ function RailRow({
             setMenu(null)
           },
         },
+                // Offered only while the session has a process (`session-hibernation`).
+        ...(menu.session.status === 'running'
+          ? [
+              {
+                label: t('sessions.hibernate'),
+                onSelect: () => {
+                  hibernate(menu.session.id)
+                  setMenu(null)
+                },
+              },
+            ]
+          : []),
         {
           label: t('sessions.close'),
           tone: 'danger',

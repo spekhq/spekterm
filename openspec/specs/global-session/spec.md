@@ -36,10 +36,11 @@ SHALL 位於所有 folder 之前，且 SHALL 恆為 rail **置頂段**的第一�
 全域項目 SHALL 呈現一個標籤，SHALL NOT 呈現 git 分支 —— 它沒有 repo 可讀（見 `repo-branch`，
 該能力的措辭限於 workspace 的 folder）。
 
-**全域項目 SHALL NOT 於冷啟動時被預設選中。** 它恆常存在，因此「預設選中它」是極其自然的實作 ——
-而那會使冷啟動立刻喚醒它的 focused session，`session-persistence`「開啟應用程式時至多一個 session
-被啟動」所倚賴的前提（沒有任何項目被選中）即失效。代價是使用者要多按一下，換來的是那條論證原封
-不動地成立。
+**全域項目 SHALL NOT 於冷啟動時被預設選中。** This rule was introduced so that cold start would not wake
+the global item's focused session. Since dormant sessions now start only on an explicit wake (see
+`session-persistence`), selecting an item no longer starts anything, and that reason is gone; the rule stays
+because "what is selected" must not depend on what an earlier run left behind, and the empty state is the
+honest one when the user has not chosen yet.
 
 **rail 上「選中哪個項目」的表示 SHALL 使「未選中」與「選中全域項目」互斥可辨。** 兩者若共用同一個
 缺席值，每一處以「有沒有選中」為條件的行為（快捷鍵的無操作條件、狀態列的空狀態）都會把使用者
@@ -292,7 +293,8 @@ agent 在錯的地方動手，且使用者以為它在對的地方。
 
 全域 session SHALL 與 folder 的 session 一樣被持久化並於下次開啟應用程式時重建，包含：spawn 目標、
 使用者取的名字、分頁順序、pty 最近一次宣告的終端標題，以及 claude 目標的對話識別碼。重建的 session
-SHALL 同樣為休眠態，於首次被顯示時才啟動 pty（見 `session-persistence`）。
+SHALL 同樣為休眠態, and SHALL start its pty only when the user explicitly wakes it, like any other
+dormant session（見 `session-persistence`）.
 
 持久化的內容 SHALL 以「不隸屬任何 folder」為一個明確表示的狀態，SHALL NOT 以某個保留的 folder
 識別碼字串偽裝成隸屬於某個 folder —— 後者會使每一處「以識別碼查找 folder」的程式碼靜默地查無此
@@ -307,6 +309,11 @@ folder，而型別檢查對此無能為力。
 
 - **WHEN** 一個全域 claude session 曾與 agent 對話過，關閉並重新開啟應用程式後被喚醒
 - **THEN** 該 session 續接同一個對話
+
+#### Scenario: Selecting the global item does not start its sessions
+
+- **WHEN** the application is reopened with several global sessions and the user selects the global item
+- **THEN** its focused session is displayed as dormant and no global session has started a pty
 
 #### Scenario: 落盤內容以明確狀態表示不隸屬任何 folder
 

@@ -33,7 +33,10 @@ import type {
   SpecVersionView,
   WorktreeOption,
 } from '../main/openspec-service'
-import type { SpawnTarget } from '../main/terminal'
+import type { ExitReason, SpawnTarget } from '../main/terminal'
+
+/** The reasons a renderer is told about. `disposed` never reaches it (the session did not end). */
+type TerminalExitReason = Exclude<ExitReason, 'disposed'>
 import type { WatchBatch } from '../main/watch-service'
 import type { WorkspaceFolder } from '../main/workspace-store'
 
@@ -263,8 +266,11 @@ const workspaceApi = {
      *
      * **它是全域的** —— 切換任何一個 agent session 的 view，所有 agent session 一起改變。
      */
-    setAgentView: (view: 'terminal' | 'conversation' | null): Promise<ProjectedPreferences> =>
+        setAgentView: (view: 'terminal' | 'conversation' | null): Promise<ProjectedPreferences> =>
       ipcRenderer.invoke('workspace:settings:setAgentView', view),
+    /** Automatic hibernation threshold in seconds; `0` = off, `null` = back to the default (24 hours). */
+    setAutoHibernate: (seconds: number | null): Promise<ProjectedPreferences> =>
+      ipcRenderer.invoke('workspace:settings:setAutoHibernate', seconds),
     /**
      * UI 語言。`null` ＝清為預設（＝英文）。
      *
@@ -394,8 +400,29 @@ const workspaceApi = {
     resize: (sessionId: string, cols: number, rows: number): void => {
       ipcRenderer.send('workspace:terminal:resize', sessionId, cols, rows)
     },
-    kill: (sessionId: string): void => {
+        kill: (sessionId: string): void => {
       ipcRenderer.send('workspace:terminal:kill', sessionId)
+    },
+    /**
+     * Put a running session back to dormant (`session-hibernation`). Without a token it is the user's
+     * request; with one it answers `onHibernateRequest` and the main process checks its policy again.
+     * The session becomes dormant when its exit arrives with reason `hibernated`, not when this resolves.
+     */
+    hibernate: (sessionId: string, token?: string): Promise<{ ok: boolean }> =>
+      ipcRenderer.invoke('workspace:terminal:hibernate', sessionId, token),
+    /** Tell the main process which session this renderer displays (`null` = none). It is never hibernated automatically. */
+    displayed: (sessionId: string | null): void => {
+      ipcRenderer.send('workspace:terminal:displayed', sessionId)
+    },
+    /** The main process asks for an idle session to be hibernated. Returns an unsubscribe function. */
+    onHibernateRequest: (listener: (sessionId: string, token: string) => void): (() => void) => {
+      const handler = (_event: IpcRendererEvent, sessionId: string, token: string): void => {
+        listener(sessionId, token)
+      }
+      ipcRenderer.on('workspace:terminal:hibernateRequest', handler)
+      return () => {
+        ipcRenderer.off('workspace:terminal:hibernateRequest', handler)
+      }
     },
     /** pty → renderer 的輸出。回傳取消訂閱的函式。 */
     onData: (listener: (sessionId: string, chunk: string) => void): (() => void) => {
@@ -407,10 +434,21 @@ const workspaceApi = {
         ipcRenderer.off('workspace:terminal:data', handler)
       }
     },
-    /** pty 結束。回傳取消訂閱的函式。 */
-    onExit: (listener: (sessionId: string, exitCode: number) => void): (() => void) => {
-      const handler = (_event: IpcRendererEvent, sessionId: string, exitCode: number): void => {
-        listener(sessionId, exitCode)
+        /**
+     * pty 結束。回傳取消訂閱的函式。
+     *
+     * `hibernated` is not an ending: the session stays and becomes dormant (`session-hibernation`).
+     */
+    onExit: (
+      listener: (sessionId: string, exitCode: number, reason: TerminalExitReason) => void,
+    ): (() => void) => {
+      const handler = (
+        _event: IpcRendererEvent,
+        sessionId: string,
+        exitCode: number,
+        reason: TerminalExitReason,
+      ): void => {
+        listener(sessionId, exitCode, reason)
       }
       ipcRenderer.on('workspace:terminal:exit', handler)
       return () => {

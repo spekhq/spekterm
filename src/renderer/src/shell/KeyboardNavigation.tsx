@@ -203,8 +203,12 @@ export function KeyboardNavigation({
       // `Ctrl+Shift+W` 關閉當前 session。選 Shift 版而非 `Ctrl+W`：後者是 zsh／bash 的高頻刪字鍵，
       // 且沒有 `Ctrl+T` 的「GNOME Terminal 早已拿走」豁免；`Ctrl+Shift+<字母>` 編碼不出來，pty 內
       // 收不到，代價為零（design D1）。
-      const isCloseSession = event.shiftKey && event.key.toLowerCase() === 'w'
-      if (!isTab && !isUp && !isDown && !isNewSession && !isCloseSession) return
+            const isCloseSession = event.shiftKey && event.key.toLowerCase() === 'w'
+      // `Ctrl+Shift+H` hibernates the current session (`session-hibernation`). Same class as
+      // `Ctrl+Shift+W`: a `Ctrl+Shift+<letter>` chord cannot be encoded in the terminal protocol, so
+      // the pty loses nothing. Rebinding it is this one condition plus spec and probe.
+      const isHibernate = event.shiftKey && event.key.toLowerCase() === 'h'
+      if (!isTab && !isUp && !isDown && !isNewSession && !isCloseSession && !isHibernate) return
       if ((isUp || isDown || isNewSession) && event.shiftKey) return
 
       // **早於 xterm 與 Monaco 攔下它。** stopPropagation 讓事件到不了它們綁在 DOM 節點上的
@@ -233,6 +237,15 @@ export function KeyboardNavigation({
         if (!selection) return
         const focusedId = sessions.focusedIdFor(itemKey)
         if (focusedId) sessions.close(focusedId)
+        return
+      }
+
+            if (isHibernate) {
+        // The focused session of the selected rail item (the global item included). No-op without a
+        // selection, without a session, or on a dormant or exited one (`hibernate` checks the last).
+        if (!selection) return
+        const focusedId = sessions.focusedIdFor(itemKey)
+        if (focusedId) sessions.hibernate(focusedId)
         return
       }
 
