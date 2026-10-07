@@ -4081,6 +4081,64 @@ async function runLineageDrag(_mode, _modeConfig, context) {
   )
 }
 
+/**
+ * `maximize-panel-and-confirm-close` design M4: a session created **without the user asking at that
+ * moment** — a handoff accepted on arrival — does not restore the maximized side panel, even when it
+ * lands in the selected item (where it becomes that item's focused session). The control in the same
+ * section: the creation really happened (one more pty), so "still maximized" is not a no-op.
+ */
+async function runMaximizeHandoff(_mode, _modeConfig, context) {
+  const { profile, folders } = seedProfile()
+  seedRouting(profile, { fallbackFolderId: folders[0].id })
+  const configDir = mkTemp('spekterm-intake-config-')
+  const marker = `spek-intake-${process.pid}-${Date.now()}`
+  const stub = makeStubAgent(mkTemp, configDir)
+
+  drop(profile, 'source', intake({ id: 'src-max', title: 'MAX-SOURCE' }))
+  const app = await freshApp(context, { profile, configDir, stub, marker })
+  await openInbox(app)
+  await pollFor({ read: () => app.client.evaluate(acceptExpression('MAX-SOURCE')), settled: Boolean, timeoutMs: 20_000, label: 'source session created' })
+  const outbox = await awaitOutbox(profile, 'drop point exists')
+  const closeInbox = `(() => {
+    const dialog = document.querySelector('[role="dialog"]${label('intake.label')}')
+    if (dialog) dialog.querySelector(${JSON.stringify(label('intake.close'))})?.click()
+    return !document.querySelector('[role="dialog"]${label('intake.label')}')
+  })()`
+  await pollFor({ read: () => app.client.evaluate(closeInbox), settled: Boolean, timeoutMs: 15_000, label: 'inbox closed' })
+
+  // Accepting does not select the folder in the rail; select it, so the handoff below lands in the
+  // selected item.
+  const selectSource = `(() => {
+    const row = document.querySelector('aside${label('rail.label')} div[role="button"][aria-label="${folders[0].name}"]')
+    if (!row) return false
+    row.click()
+    return true
+  })()`
+  await pollFor({ read: () => app.client.evaluate(selectSource), settled: Boolean, timeoutMs: 10_000, label: 'select the source folder' })
+  const ENTRY = `document.querySelector('${label('stage.maximizeSidePanel')}, ${label('stage.restoreSidePanel')}')`
+  const MAXIMIZED = `${ENTRY}?.getAttribute('aria-pressed') === 'true'`
+  const HEADER_NAME = `document.querySelector('main${label('stage.label')} header')?.innerText.split('\\n')[0].trim() ?? null`
+  await app.client.evaluate(`${ENTRY}?.click()`)
+  const maximized = await pollFor({ read: () => app.client.evaluate(MAXIMIZED), settled: (v) => v === true, timeoutMs: 5000, label: 'maximized' })
+  const selectedName = await app.client.evaluate(HEADER_NAME)
+  check(results, '[maximize] precondition: maximized, the source folder selected', maximized === true && selectedName === folders[0].name,
+    `maximized=${maximized} selected=${selectedName} expected=${folders[0].name}`)
+
+  const before = ptySessionPids(marker).length
+  writeFileSync(join(outbox, '.max-child.json.tmp'), JSON.stringify({ target: basename(folders[0].path), title: 'MAX-CHILD', body: 'work' }))
+  renameSync(join(outbox, '.max-child.json.tmp'), join(outbox, 'max-child.json'))
+  const after = await pollFor({ read: () => ptySessionPids(marker).length, settled: (n) => n > before, timeoutMs: 30_000, label: 'handoff session created' })
+  await new Promise((resolve) => setTimeout(resolve, 800))
+  const stillMax = await app.client.evaluate(MAXIMIZED)
+  const stillSelected = await app.client.evaluate(HEADER_NAME)
+  check(
+    results,
+    '[maximize] a handoff arriving in the selected item does not restore the side panel',
+    after > before && stillMax === true && stillSelected === folders[0].name,
+    `sessions ${before} → ${after}; maximized=${stillMax}; selected=${stillSelected}`,
+  )
+}
+
 const SECTIONS = [
   { name: 'runIngest', run: runIngest },
   { name: 'runPlainText', run: runPlainText },
@@ -4107,6 +4165,7 @@ const SECTIONS = [
     { name: 'runLineageDrag', run: runLineageDrag },
   { name: 'runHibernateLineage', run: runHibernateLineage },
   { name: 'runHibernateUnsent', run: runHibernateUnsent },
+  { name: 'runMaximizeHandoff', run: runMaximizeHandoff },
 ]
 
 const outcome = await runSections({

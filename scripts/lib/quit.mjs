@@ -19,9 +19,10 @@
  * ## 時限與升級不可省
  *
  * 一個沒有時限的「等到結束」只是把競態換成 hang —— 而那正是 issue #22 的形狀（一輪
- * `test:e2e` 卡住 1 小時 30 分且永遠不會結束）。**面板留有未存變更時關閉會觸發原生對話框，
- * 它會擋住主行程的訊息迴圈使 SIGTERM 失效**（`docs/lessons/probes.md`），那條路徑上每一次
- * 都會吃滿時限 —— 所以時限要訂得能忍受，但一定要有。
+ * `test:e2e` 卡住 1 小時 30 分且永遠不會結束）。**With unsaved changes in the panel the first
+ * SIGTERM does not end the app**: the quit's `close` is prevented to ask, which cancels the quit
+ * (the message loop keeps running — `docs/lessons/probes.md`). Every quit on that path uses up the
+ * whole limit, so the limit has to be bearable, but it has to exist.
  */
 import { setTimeout as sleep } from 'node:timers/promises'
 

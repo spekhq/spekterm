@@ -260,9 +260,13 @@ worktree 是**另一個**工作目錄，由工作目錄選擇器切換。
 
 - side panel 的檔案操作對話框（新增檔案與重新命名的命名對話框、刪除確認）與右鍵選單**渲染於側欄
   的 DOM 子樹之內** —— 使用者正在為一個新檔案命名時按下 `Ctrl+P`，本能力的觸發條件恰好成立。
-- Graph／Timeline 的**全視窗 overlay** 移出至文件頂層，但它**由側欄之內的按鈕開啟且不移動焦點**
-  —— 焦點因此仍留在側欄那顆按鈕上，觸發條件**同樣恰好成立**，而那時畫面被一塊全視窗的內容蓋著。
-  只看側欄子樹的判定會讓入口在 overlay 底下開起來。
+- A dialog rendered at the top of the document (the inbox and conversation-metrics overlays, the
+  Settings dialog) can be open while focus is still inside the side panel — any dialog that does not
+  take focus when it opens leaves it there. The trigger condition then holds while the screen is
+  covered by something else. A check limited to the side panel's subtree would open the entry under
+  that dialog. (The Graph / Timeline overlay was the first such case; it is gone — Graph and
+  Timeline are now views of the maximized side panel, see `openspec-panel` — and the rule does not
+  depend on any particular dialog existing.)
 
 判定 SHALL 以對話框與選單的無障礙角色（`dialog` / `menu`）之存在為準，SHALL NOT 逐一列舉特定的
 對話框 —— 此為 `keyboard-navigation` 既有的同一條判定紀律，**兩者 SHALL 使用相同的判準與相同的
@@ -275,8 +279,9 @@ worktree 是**另一個**工作目錄，由工作目錄選擇器切換。
 
 #### Scenario: 全視窗 overlay 開啟時按下快捷鍵
 
-- **WHEN** 使用者自 side panel 之內的按鈕開啟 Graph 或 Timeline 的全視窗 overlay，隨後按下 `Ctrl+P`
-- **THEN** 快速開啟的入口未出現，overlay 維持開啟
+- **WHEN** the inbox's full-window overlay is open, focus is inside the side panel, and the user
+  presses `Ctrl+P`
+- **THEN** the quick-open entry does not appear and the overlay stays open
 
 ### Requirement: 清單於開啟時取得，開啟期間為靜態
 

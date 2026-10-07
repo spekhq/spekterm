@@ -53,6 +53,7 @@ function editableTextHasFocus(): boolean {
  * | `Ctrl+↓` / `Ctrl+↑` | rail 上的下一個／上一個 repo（可循環） |
  * | `Ctrl+T` | 開啟建立 session 的入口（spawn 選單） |
  * | `Ctrl+Shift+W` | 關閉當前 focused 的 session |
+ * | `Ctrl+Shift+M` | maximize / restore the side panel |
  * | `Shift+↓` / `Shift+↑` | 把選中的 repo 在 rail 上往下／往上移動一格（**不循環**） |
  * | `Shift+→` / `Shift+←` | 把 focused session 在分頁列上往右／往左移動一格（**不循環**） |
  *
@@ -208,7 +209,12 @@ export function KeyboardNavigation({
       // `Ctrl+Shift+W`: a `Ctrl+Shift+<letter>` chord cannot be encoded in the terminal protocol, so
       // the pty loses nothing. Rebinding it is this one condition plus spec and probe.
       const isHibernate = event.shiftKey && event.key.toLowerCase() === 'h'
-      if (!isTab && !isUp && !isDown && !isNewSession && !isCloseSession && !isHibernate) return
+      // `Ctrl+Shift+M` maximizes / restores the side panel (`maximize-panel-and-confirm-close`).
+      // Same class again: nothing for the pty to lose.
+      const isMaximize = event.shiftKey && event.key.toLowerCase() === 'm'
+      if (!isTab && !isUp && !isDown && !isNewSession && !isCloseSession && !isHibernate && !isMaximize) {
+        return
+      }
       if ((isUp || isDown || isNewSession) && event.shiftKey) return
 
       // **早於 xterm 與 Monaco 攔下它。** stopPropagation 讓事件到不了它們綁在 DOM 節點上的
@@ -227,6 +233,18 @@ export function KeyboardNavigation({
         // 改動就會**靜默地**廢掉這顆快捷鍵 —— 字串比對不會使型別檢查失敗，也不會有任何紅燈
         // （`ui-localization`：以文案定位介面元素的程式碼自字典取得該文案）。
         const entry = document.querySelector<HTMLElement>(`[aria-label="${t('sessions.new')}"]`)
+        entry?.click()
+        return
+      }
+
+      if (isMaximize) {
+        // **Activate the header entry, like `Ctrl+T`** — one code path for mouse and keyboard, and
+        // the maximized state stays in `MainStage`. The entry's label says what it will do, so it is
+        // found by either label, both from the dictionary (design M3). It exists with no item
+        // selected too: the header is always there.
+        const entry = document.querySelector<HTMLElement>(
+          `[aria-label="${t('stage.maximizeSidePanel')}"], [aria-label="${t('stage.restoreSidePanel')}"]`,
+        )
         entry?.click()
         return
       }

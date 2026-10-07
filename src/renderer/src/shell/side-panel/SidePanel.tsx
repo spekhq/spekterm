@@ -4,7 +4,7 @@ import { FilesPanel } from '../files/FilesPanel'
 import type { RootPrefix } from '../files/paths'
 import { OpenSpecPanel } from '../openspec/OpenSpecPanel'
 import type { ContinuationBlock } from '../openspec/continuation'
-import type { VizKind } from '../openspec/VizOverlay'
+import type { VizKind } from '../maximize-state'
 import type { FileRequest, OpenSpecRequest, OpenSpecTarget } from '../openspec/nav'
 import type { PanelIdentity, WorkspaceFolder, WorktreeOption } from '../types'
 import { PanelSourceBar } from './PanelSourceBar'
@@ -65,8 +65,10 @@ interface SidePanelProps {
   /** 由跨身分導航送來的請求，各自交給對應的身分。 */
   fileRequest: FileRequest | null
   openSpecRequest: OpenSpecRequest | null
-  /** 開啟全視窗 overlay 的 Graph／Timeline。 */
-  onOpenViz: (kind: VizKind) => void
+  /** Graph or Timeline shown in the maximized side panel (`null` = the OpenSpec identity's own view). */
+  viz: VizKind | null
+  onChooseViz: (kind: VizKind) => void
+  onLeaveViz: () => void
 }
 
 /**
@@ -156,7 +158,9 @@ export function SidePanel({
   onViewInOpenSpec,
   fileRequest,
   openSpecRequest,
-  onOpenViz,
+  viz,
+  onChooseViz,
+  onLeaveViz,
 }: SidePanelProps): React.JSX.Element {
   const { t } = useTranslation()
 
@@ -210,7 +214,9 @@ export function SidePanel({
         onOpenSessionHere={onOpenSessionHere}
         onOpenFile={onOpenFile}
         request={openSpecRequest}
-        onOpenViz={onOpenViz}
+        viz={viz}
+        onChooseViz={onChooseViz}
+        onLeaveViz={onLeaveViz}
       />
     )
 

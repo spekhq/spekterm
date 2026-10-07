@@ -33,7 +33,9 @@ OpenSpec 結構的側欄，讓使用者不必另外開 IDE 就能一邊駕駛 ag
   **every dormant session starts only on an explicit Wake**, never on display. Hibernation is a
   per-session `dispose`, not a `kill`: the record, drop point and lineage stay. The shell idle test and
   why are in `docs/lessons/terminal.md`.
-- **側欄** —— OpenSpec 與 Files 兩個身分、artifact 分頁與兩棵樹、Graph／Timeline overlay、
+- **側欄** —— OpenSpec 與 Files 兩個身分、artifact 分頁與兩棵樹、Graph／Timeline、
+  **maximize over the main stage** (`Ctrl+Shift+M`; it covers the terminal without resizing it, and
+  Graph／Timeline are views shown only maximized)、
   worktree 聚合、雙向交叉導覽、`Ctrl+P` 快速開檔、續寫入口（送 `/opsx:continue`）。
   座標（來源 repo／工作目錄／錨定的 change）是 **per-folder** 的，落盤於 `panel.json`。
 - **agent 對話 view** —— agent session 有終端與對話兩種可切換的呈現（**終端為預設**）。
@@ -91,6 +93,10 @@ OpenSpec 結構的側欄，讓使用者不必另外開 IDE 就能一邊駕駛 ag
 **session 常駐**（讓 pty 活過 app 的生命）已排入路線圖但**刻意不做** —— 見 `docs/PRD.md` §11 的
 tmux 與自寫 daemon 取捨。**不要把「重建」誤當成「常駐」**：關掉 app，pty 一定會死（master fd
 必須有人持有），跑到一半的 build 或 dev server 救不回來。
+**That is why closing the window asks first** while any session holds a process
+(`maximize-panel-and-confirm-close`): one native dialog together with the unsaved-changes question,
+cancel as the default. A quit started by a signal (logout, `kill`) does not ask — the guard tells
+them apart by event order (`before-quit` comes first only for a signal), see `src/main/close-guard.ts`.
 
 ### 權威來源
 
@@ -439,6 +445,7 @@ addon-unicode-graphemes、i18next、electron-builder（Phase 6）。
 | `Ctrl+T` | 開啟建立 session 的入口（spawn 選單，可全鍵盤操作） |
 | `Ctrl+Shift+W` | 關閉當前 focused 的 session |
 | `Ctrl+Shift+H` | Hibernate the focused session (end its process, keep it dormant in the workspace). Effective with focus in the editor; suppressed while a dialog or menu is open |
+| `Ctrl+Shift+M` | Maximize / restore the side panel (covers the session tabs and the terminal; the rail stays). Effective anywhere, terminal and editor included; suppressed while a dialog or menu is open |
 | `Shift+↓` / `Shift+↑` | 把**選中的 repo** 在 rail 上移動一格（**不循環**；全域項目上無操作）。**置頂段與其餘之間的分界算一格** —— 跨過它即改變置頂狀態，而該 repo 在畫面上幾乎不動 |
 | `Shift+→` / `Shift+←` | 把 **focused session** 在分頁列上移動一格（**不循環**） |
 | `Ctrl+P` | **側欄持有焦點時**開啟檔案快速搜尋。**終端持有焦點時讓路給 pty** |
@@ -467,7 +474,7 @@ DOM 節點上的 listener** —— `stopPropagation()` 一下，兩者都收不�
 
 - **`Ctrl+Tab` 是白撿的。** 它在標準終端編碼下**送不出去**（`Tab` 就是 `Ctrl+I`＝`0x09`），
   pty 內零損失。GNOME Terminal、iTerm2 敢拿它切分頁正是這個原因。
-- **`Ctrl+Shift+<字母>`（`Ctrl+Shift+W`／`H`／`C`／`V`）代價確定為零** —— 在終端協定裡編碼不出來。
+- **`Ctrl+Shift+<字母>`（`Ctrl+Shift+W`／`H`／`M`／`C`／`V`）代價確定為零** —— 在終端協定裡編碼不出來。
   **選 Shift 版而非 `Ctrl+W`**：後者在 zsh 是 `backward-kill-word`、bash 是 `unix-word-rubout`。
 - **`Ctrl+↑/↓` 送得出去**（`CSI 1;5A`/`B`），攔截它等於從 pty 裡的程式手上**永久沒收**這顆鍵。
   實測 zsh 與 bash 皆未綁定；**唯一的犧牲者是 tmux**（pane resize、copy-mode 捲動）—— 而這個 app
@@ -494,7 +501,7 @@ DOM 節點上的 listener** —— `stopPropagation()` 一下，兩者都收不�
   項目上四顆鍵全部失效，而型別檢查對此完全無感。
 - **對話框開啟時抑制快捷鍵，以 `[role="dialog"]` 的存在判定** —— 任何遵守這個無障礙慣例的新對話框
   自動被尊重，不必記得去某份清單註冊。代價是**漏掉 `role` 的對話框會靜默失效**，因此驗收須以
-  **多種**對話框各驗一次（session 命名、files 的、Graph／Timeline overlay）。這條紀律寫在
+  **多種**對話框各驗一次（session 命名、files 的、收件匣的全視窗 overlay —— Graph／Timeline 已不再是對話框）。這條紀律寫在
   `keyboard-navigation` 的 spec 裡。`Ctrl+P` 的抑制判準與作用域必須與此**完全一致**（document-wide、
   同時看 `[role="menu"]`）—— 兩者若分歧，不會有紅燈。
 - **排序快捷鍵有一條導航快捷鍵沒有的例外：可編輯文字讓路。** `Shift+arrow` 就是文字選取鍵，

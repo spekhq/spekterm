@@ -213,6 +213,10 @@ side panel 的檔案快速開啟入口（見 `quick-open`）是**第三組**快�
 artifacts instead of sessions (see `openspec-panel`). That exception is decided by focus and does
 not touch this requirement: with focus in the terminal they switch sessions and do not reach the pty.
 
+**`Ctrl+Shift+M` (maximize / restore the side panel) is on the navigation side**: it SHALL take
+effect with focus in the terminal, and the key SHALL NOT reach the pty (see "`Ctrl+Shift+M`
+maximizes and restores the side panel").
+
 #### Scenario: 終端持有焦點時切換 session
 
 - **WHEN** 使用者的焦點在終端中，按下 `Ctrl+Tab`
@@ -249,6 +253,10 @@ above.
 in the editor. It is a session command, like `Ctrl+Shift+W`, not a text-editing key, so it has none of the
 reordering shortcuts' cost.
 
+**`Ctrl+Shift+M` (maximize / restore the side panel) is on the navigation side** as well: it SHALL
+take effect with focus in the editor. It is a layout command with no text-editing meaning, so it has
+none of the reordering shortcuts' cost.
+
 #### Scenario: 編輯器持有焦點時切換 session
 
 - **WHEN** 使用者的焦點在 side panel 的編輯器中，按下 `Ctrl+Tab`
@@ -267,11 +275,14 @@ reordering shortcuts' cost.
 
 ### Requirement: 對話框或選單開啟時導航快捷鍵不生效
 
-本能力的快捷鍵（**導航與排序**）SHALL NOT 於任一對話框或選單開啟期間生效。對話框（session 命名、檔案操作的命名與刪除確認、Graph／Timeline 的全視窗 overlay、未存變更的提示）與選單（spawn 選單、右鍵選單）正在等待使用者的裁決 —— 否則使用者會在回答問題的同時把畫面切走或把清單重排，而選單的方向鍵導覽也會被搶走。
+本能力的快捷鍵（**導航與排序**）SHALL NOT 於任一對話框或選單開啟期間生效。對話框（session 命名、檔案操作的命名與刪除確認、收件匣與對話計量的全視窗 overlay、Settings、未存變更的提示）與選單（spawn 選單、右鍵選單）正在等待使用者的裁決 —— 否則使用者會在回答問題的同時把畫面切走或把清單重排，而選單的方向鍵導覽也會被搶走。
 
 判定 SHALL 以對話框與選單的無障礙角色（`dialog` / `menu`）之存在為準，**SHALL NOT 逐一列舉特定的對話框** —— 任何遵守該慣例的新對話框皆自動被尊重。此規則的失效模式因此不是判定邏輯出錯，而是**某個對話框漏了該角色標記，於是靜默地不被尊重**；驗收 SHALL 因此以**多種不同的對話框**各驗一次，而非只驗一種。
 
 > 對話框裡的輸入框同時也是可編輯文字元素 —— 排序快捷鍵因此有**兩道**讓路的理由（本條與「排序快捷鍵於可編輯文字持有焦點時不生效」）。這是刻意的冗餘：對話框裡沒有輸入框的情況（刪除確認、全視窗 overlay）只有本條擋得住。
+
+The maximized side panel, including its Graph and Timeline views, is **not** a dialog: the shortcuts
+work while it is shown.
 
 #### Scenario: 命名對話框開啟時按下導航快捷鍵
 
@@ -280,8 +291,9 @@ reordering shortcuts' cost.
 
 #### Scenario: 全視窗 overlay 開啟時按下導航快捷鍵
 
-- **WHEN** Graph 或 Timeline 的全視窗 overlay 開啟中，使用者按下切換 repo 的導航快捷鍵
-- **THEN** 選中的 folder 不變，overlay 維持開啟
+- **WHEN** the inbox's full-window overlay is open and the user presses the shortcut that switches
+  repos
+- **THEN** the selected folder is unchanged and the overlay stays open
 
 #### Scenario: 選單開啟時按下導航快捷鍵
 
@@ -681,3 +693,30 @@ reach the pty. It SHALL NOT take effect while a dialog or menu is open (the exis
 - **WHEN** a dialog is open — the session-rename dialog, a Files dialog, or the Settings dialog — and the user
   presses `Ctrl+Shift+H`
 - **THEN** no session is hibernated
+
+### Requirement: `Ctrl+Shift+M` maximizes and restores the side panel
+
+The system SHALL provide `Ctrl+Shift+M`, which maximizes the side panel when it is not maximized and
+restores it when it is (see `workspace-layout`, "The side panel can be maximized over the main
+stage"). It SHALL work wherever focus is — the terminal, the editor, the rest of the side panel —
+and with no rail item selected. While a dialog or a menu is open it SHALL do nothing, using the same
+`[role="dialog"]` / `[role="menu"]` check as every other shortcut.
+
+It is intercepted in the window's capture phase like the other shortcuts, and the key SHALL NOT
+reach the pty. `Ctrl+Shift+<letter>` cannot be encoded in the terminal protocol, so taking it costs
+nothing inside the pty (the reason `Ctrl+Shift+W` and `Ctrl+Shift+H` were chosen).
+
+#### Scenario: Ctrl+Shift+M from the terminal maximizes the side panel
+
+- **WHEN** focus is in the terminal and the user presses `Ctrl+Shift+M`
+- **THEN** the side panel is maximized and the key does not reach the pty
+
+#### Scenario: Ctrl+Shift+M restores
+
+- **WHEN** the side panel is maximized, focus is in its editor, and the user presses `Ctrl+Shift+M`
+- **THEN** the side panel is restored and the editor's content is unchanged
+
+#### Scenario: Ctrl+Shift+M does nothing while a dialog is open
+
+- **WHEN** the session-rename dialog is open and the user presses `Ctrl+Shift+M`
+- **THEN** the side panel's state is unchanged and the dialog stays open

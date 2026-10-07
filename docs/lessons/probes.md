@@ -552,8 +552,19 @@ instance 耗盡），三輪探針約 30 分鐘全花在懷疑產品 —— 而�
   孤兒，繼續佔著自己那個 debugging port（配置見 `scripts/lib/ports.mjs`），讓下一輪 probe 連到殭屍而讀到空樹（實測：一連串失敗看起來
   像 regression，其實是殭屍）。**兩種收法**：electron 以獨一無二的 `--user-data-dir=<profile>` 用
   `pkill -9 -f <profile>` 連根拔除；dev server 以 `detached: true` spawn 成 group leader 再
-  `process.kill(-pid)`。**另外，面板留有未存變更時關閉會觸發原生對話框，它會擋住主行程訊息迴圈使
-  SIGTERM 失效** —— 這也是必須連根拔除的理由。
+  `process.kill(-pid)`。**Also: with unsaved changes in the panel, the first `SIGTERM` does not end
+  the app.** That is not a blocked message loop (the earlier wording here was wrong — measured with
+  Electron 43.5.0): a signal starts a quit, the quit emits `close`, the close guard prevents it to
+  ask, and preventing a `close` cancels the quit. The loop keeps running. A **second** `SIGTERM`
+  exits at once — and skips `before-quit` / `will-quit` / `quit`, so the app's own cleanup and last
+  persistence write do not run. Hence the root-and-branch kill. Under a throwaway profile the
+  dialog is the close stand-in (`src/main/close-dialog-stub.ts`), which answers cancel unless told
+  otherwise, so a probe that quits with unsaved changes still escalates — by design.
+- **To close the window the way its close button does, write `close-stub/close`** (throwaway
+  profiles only): the main process calls `BrowserWindow.close()`, the documented equivalent of the
+  button. In this app the renderer's `window.close()` (over CDP, or `executeJavaScript`) reaches
+  the same `close` handler too — measured 2026-10-08, contrary to an earlier scratch experiment
+  that reported it bypasses `close` — but the stand-in does not depend on that.
   **`probe:files` 的每次失敗若伴隨「樹是空的」，先 `pgrep -f spekterm[-]files-profile` 檢查殭屍。**
 - **註解在 template literal 之內時，反引號會把字串提前關掉。** 探針的選擇器與 evaluate 表達式
   幾乎都是 template literal，而在裡面寫中文註解是常態 —— 一個順手的 `` `build-identity` ``

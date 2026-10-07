@@ -1,5 +1,8 @@
 import { type WebContents, ipcMain } from 'electron'
 import { effectiveHibernateSeconds } from '@shared/hibernation/settings'
+import { t } from '@shared/i18n'
+import { preferredTitle } from '../../shared/lineage/label'
+import type { LiveSession } from '../close-prompt'
 import { clearAgentEvents } from '../agent-events'
 import { clearAgentStatus } from '../agent-status'
 import { clearWait, subscribeWait, waitStateOf } from '../agent-wait'
@@ -95,6 +98,69 @@ const hibernation = new HibernationTracker({
 /** 所有服務中目前持有 pty 的 claude session —— 關係檔的「是否在執行」。 */
 export function runningAgents(): string[] {
   return [...services.values()].flatMap((service) => service.runningAgents())
+}
+
+/**
+ * The window's sessions that hold a pty, for the close confirmation (`workspace-app-shell`, design C2
+ * of `maximize-panel-and-confirm-close`).
+ *
+ * **Synchronous and main-only**: the `close` handler has to decide inside its own call, so nothing
+ * here waits on the renderer. Dormant and exited sessions hold no pty and are absent by construction.
+ * Order: the global item first, then folders in rail order, then the store's order.
+ */
+export function liveSessionsOf(contentsId: number, store: FolderLookup, sessions: SessionStore): LiveSession[] {
+  const service = services.get(contentsId)
+  if (!service) return []
+  const records = new Map(sessions.view().map(({ session }) => [session.id, session]))
+  // **The renderer's latest push wins for the name.** The store only receives it after the persist
+  // debounce, so a session created or renamed in the last half second would otherwise be listed
+  // without its ordinal or under its old name. Only display fields are taken, and only when they
+  // have the right type — the push is the renderer's word, used here for a label and nothing else.
+  for (const entry of pending.get(contentsId)?.incoming ?? []) {
+    const stored = records.get(entry?.id)
+    if (!stored) continue
+    records.set(stored.id, {
+      ...stored,
+      ...(typeof entry.ordinal === 'number' ? { ordinal: entry.ordinal } : {}),
+      // Absent in the push means cleared (a custom name removed), not "unknown".
+      title: typeof entry.title === 'string' ? entry.title : undefined,
+      customTitle: typeof entry.customTitle === 'string' ? entry.customTitle : undefined,
+    })
+  }
+  const folders = store.list()
+  const rank = (folderId: string | null | undefined): number =>
+    folderId === null ? -1 : folders.findIndex((folder) => folder.id === folderId)
+
+  return service
+    .liveSessionIds()
+    .map((id) => {
+      const record = records.get(id)
+      const facts = service.idleFactsOf(id)
+      const target = facts?.target ?? record?.spawnTarget ?? 'shell'
+      let working: boolean | null = null
+      if (target === 'shell') {
+        if (facts?.shell === 'busy') working = true
+        else if (facts?.shell === 'idle') working = false
+      } else {
+        const state = waitStateOf(id)
+        if (state === 'busy' || state === 'awaiting-choice') working = true
+        else if (state === 'ready') working = false
+      }
+      const folderId = record?.folderId
+      // The tab's own fallback is `<target> <ordinal>`; a record the renderer has not pushed yet
+      // carries no ordinal, so it falls back to the target alone.
+      const fallback = record?.ordinal ? `${target} ${record.ordinal}` : target
+      return {
+        rank: rank(folderId),
+        session: {
+          railLabel: folderId === null ? t('rail.globalName') : (railLabelOf(store, folderId ?? null) ?? ''),
+          label: (record && preferredTitle(record)) ?? fallback,
+          working,
+        },
+      }
+    })
+    .sort((a, b) => a.rank - b.rank)
+    .map(({ session }) => session)
 }
 
 /** 計算關係所需的當下狀態（`handoff-relations.ts`）。 */

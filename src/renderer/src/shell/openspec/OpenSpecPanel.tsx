@@ -6,10 +6,26 @@ import { ChangeView } from './ChangeView'
 import type { ContinuationBlock } from './continuation'
 import { SpecDetail } from './SpecDetail'
 import type { OpenSpecRequest } from './nav'
-import type { VizKind } from './VizOverlay'
+import type { VizKind } from '../maximize-state'
+import { VizView } from './VizView'
 
 /** OpenSpec 身分**內部**的第二層導航。與 side panel 的身分切換（OpenSpec │ Files）不同層級。 */
 export type OpenSpecTab = 'change' | 'browse'
+
+/**
+ * Graph and Timeline in the same view switch. They are not `OpenSpecTab`s: they are a layer above
+ * the panel's own view, owned by `MainStage` (design M5), so choosing one never touches `tab` —
+ * "the view before Graph" is simply `tab`.
+ */
+const VIZ_TABS: {
+  id: VizKind
+  icon: string
+  labelKey: 'viz.graph' | 'viz.timeline'
+  titleKey: 'openspec.graphTooltip' | 'openspec.timelineTooltip'
+}[] = [
+  { id: 'graph', icon: '◈', labelKey: 'viz.graph', titleKey: 'openspec.graphTooltip' },
+  { id: 'timeline', icon: '▤', labelKey: 'viz.timeline', titleKey: 'openspec.timelineTooltip' },
+]
 
 const TABS: { id: OpenSpecTab; labelKey: 'openspec.tabChange' | 'openspec.tabBrowse' }[] = [
   { id: 'change', labelKey: 'openspec.tabChange' },
@@ -43,8 +59,12 @@ interface OpenSpecPanelProps {
   onOpenFile: (relPath: string) => void
   /** 自 Files 身分跳過來的目標（「在 OpenSpec 中檢視」）。 */
   request: OpenSpecRequest | null
-  /** 開啟全視窗 overlay 的 Graph／Timeline（design D12）。 */
-  onOpenViz: (kind: VizKind) => void
+  /** Graph or Timeline shown on top of this panel's own view; `null` = the panel's own view. */
+  viz: VizKind | null
+  /** Show Graph or Timeline (this maximizes the side panel). */
+  onChooseViz: (kind: VizKind) => void
+  /** Back to the panel's own view; the side panel stays maximized. */
+  onLeaveViz: () => void
 }
 
 /**
@@ -55,8 +75,9 @@ interface OpenSpecPanelProps {
  * 一度是四個視圖（本 change / Specs / Changes / Graph）—— 使用者的判定是「Specs 跟 Changes 這兩個
  * nav 放在這邊感覺太浪費了」。兩棵樹讓他同時看見兩邊的輪廓，而不是在分頁之間來回切換（design D11）。
  *
- * **Graph 與 Timeline 不在這裡** —— 它們在全視窗 overlay（design D12）：Timeline 的最小可用寬度
- * 超過 900px，而側欄上限是 620px。
+ * **Graph and Timeline** are offered in the same view switch, but only shown while the side panel is
+ * maximized: Timeline needs more than 900px, the side panel's normal width is far less
+ * (`openspec-panel`, "Graph and Timeline are views of the maximized side panel").
  */
 export function OpenSpecPanel({
   folder,
@@ -68,7 +89,9 @@ export function OpenSpecPanel({
   onOpenSessionHere,
   onOpenFile,
   request,
-  onOpenViz,
+  viz,
+  onChooseViz,
+  onLeaveViz,
 }: OpenSpecPanelProps): React.JSX.Element {
   const { t } = useTranslation()
 
@@ -127,7 +150,11 @@ export function OpenSpecPanel({
         <nav aria-label={t('openspec.pathNav')} className="min-w-0 flex-1 truncate text-ink-faint">
           <span>{folder.name}</span>
           <span className="px-1">/</span>
-          <Crumb tab={activeTab} anchoredChange={anchoredChange} openSpec={openSpec} />
+          {viz ? (
+            <span>{t(viz === 'graph' ? 'viz.graph' : 'viz.timeline')}</span>
+          ) : (
+            <Crumb tab={activeTab} anchoredChange={anchoredChange} openSpec={openSpec} />
+          )}
         </nav>
       </header>
 
@@ -141,13 +168,14 @@ export function OpenSpecPanel({
             key={id}
             type="button"
             role="tab"
-            aria-selected={activeTab === id}
+            aria-selected={viz === null && activeTab === id}
             onClick={() => {
+              onLeaveViz()
               setTab(id)
               if (id === 'browse') setOpenSpec(null)
             }}
             className={`rounded px-2 py-[3px] text-xs transition-colors ${
-              activeTab === id
+              viz === null && activeTab === id
                 ? 'bg-accent-soft font-bold text-accent'
                 : 'text-ink-dim hover:bg-hover hover:text-ink'
             }`}
@@ -156,33 +184,32 @@ export function OpenSpecPanel({
           </button>
         ))}
 
-        <span className="flex-1" />
-
-        {/*
-          Graph 與 Timeline 的入口。它們**不是這一列的視圖** —— 點下去是蓋滿視窗的 overlay
-          （Timeline 的最小可用寬度遠超過側欄的上限，design D12）。
-        */}
-        <button
-          type="button"
-          onClick={() => onOpenViz('graph')}
-          aria-label={t('openspec.openGraph')}
-          title={t('openspec.graphTooltip')}
-          className="rounded px-2 py-[3px] text-xs text-ink-dim hover:bg-hover hover:text-accent"
-        >
-          ◈
-        </button>
-        <button
-          type="button"
-          onClick={() => onOpenViz('timeline')}
-          aria-label={t('openspec.openTimeline')}
-          title={t('openspec.timelineTooltip')}
-          className="rounded px-2 py-[3px] text-xs text-ink-dim hover:bg-hover hover:text-accent"
-        >
-          ▤
-        </button>
+        {VIZ_TABS.map(({ id, icon, labelKey, titleKey }) => (
+          <button
+            key={id}
+            type="button"
+            role="tab"
+            aria-selected={viz === id}
+            onClick={() => onChooseViz(id)}
+            title={t(titleKey)}
+            className={`rounded px-2 py-[3px] text-xs transition-colors ${
+              viz === id
+                ? 'bg-accent-soft font-bold text-accent'
+                : 'text-ink-dim hover:bg-hover hover:text-ink'
+            }`}
+          >
+            {`${icon} ${t(labelKey)}`}
+          </button>
+        ))}
       </nav>
 
-      <div className="min-h-0 flex-1 overflow-auto">
+      {/*
+        **Hidden, not unmounted, while Graph or Timeline is shown — and it is this scroll container
+        itself that is hidden.** A hidden scroller keeps its `scrollTop`; an outer scroller whose
+        content is swapped resets to 0, and Browse scrolls here (This change and the spec detail
+        have their own scrollers). So restoring shows the view exactly as it was (design M5).
+      */}
+      <div className="min-h-0 flex-1 overflow-auto" hidden={viz !== null}>
         {/*
           `activeTab === 'change'` 不會讓 TypeScript 知道 `anchoredChange` 非 null —— 兩者的
           關聯在 `activeTab` 的推導裡，而編譯器看不見。明寫那個判斷。
@@ -216,6 +243,21 @@ export function OpenSpecPanel({
             />
           ))}
       </div>
+
+      {viz !== null && (
+        <VizView
+          folderId={folder.id}
+          kind={viz}
+          onSelectChange={(slug) => {
+            onLeaveViz()
+            anchorAndShow(slug)
+          }}
+          onSelectSpec={(topic) => {
+            onLeaveViz()
+            showSpec(topic)
+          }}
+        />
+      )}
     </section>
   )
 }

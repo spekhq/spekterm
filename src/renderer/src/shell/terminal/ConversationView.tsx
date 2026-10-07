@@ -34,6 +34,12 @@ interface Props {
   active: boolean
   /** 休眠的 session 尚未有 pty，也就還沒有紀錄可跟。 */
   dormant: boolean
+  /**
+   * Covered by the maximized side panel: still displayed (it keeps its subscriptions), but the user
+   * cannot see it, so it takes no focus — otherwise `Enter` could wake a session nobody sees. When
+   * the cover goes, it takes focus (`workspace-layout`, design M2).
+   */
+  covered?: boolean
 }
 
 /*
@@ -93,7 +99,7 @@ function Row({ event }: { event: ViewEvent }): React.JSX.Element | null {
   )
 }
 
-export function ConversationView({ sessionId, active, dormant }: Props): React.JSX.Element {
+export function ConversationView({ sessionId, active, dormant, covered = false }: Props): React.JSX.Element {
   const { t } = useTranslation()
   const [events, setEvents] = useState<ViewEvent[]>([])
   const [status, setStatus] = useState<ConversationUpdate['status']>('attaching')
@@ -112,14 +118,20 @@ export function ConversationView({ sessionId, active, dormant }: Props): React.J
 
   // The same focus rule as the terminal view (`session-persistence`): a displayed dormant session's
   // Wake button takes focus, so `Enter` wakes it; once it is running, its composer does.
+  //
+  // Covered by the maximized side panel it takes no focus; uncovered again, it takes it — the Wake
+  // button when dormant, the composer otherwise (design M2: restoring returns focus to the session).
   const wasDormant = useRef(dormant)
+  const wasCovered = useRef(covered)
   useEffect(() => {
     const was = wasDormant.current
+    const uncovered = wasCovered.current && !covered
     wasDormant.current = dormant
-    if (!active) return
+    wasCovered.current = covered
+    if (!active || covered) return
     if (dormant) wakeButtonRef.current?.focus()
-    else if (was) rootRef.current?.querySelector('textarea')?.focus()
-  }, [active, dormant])
+    else if (was || uncovered) rootRef.current?.querySelector('textarea')?.focus()
+  }, [active, dormant, covered])
 
 
   useEffect(() => {

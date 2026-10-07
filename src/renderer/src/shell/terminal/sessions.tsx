@@ -101,6 +101,13 @@ export interface SessionsApi {
   countFor(folderId: string | null): number
   /** 該 folder 當前聚焦的 session。未明確指定時退回它的第一個。 */
   focusedIdFor(folderId: string | null): string | null
+  /**
+   * Moves on every action by which the user turns to a session: `focus()` (also for the session that
+   * is already focused), `create()` unless it is a background creation, `sendInput()`. The value
+   * means nothing; only a change does — the maximized side panel restores on it
+   * (`maximize-panel-and-confirm-close` design M4).
+   */
+  attention: number
   focus(folderId: string | null, sessionId: string): void
   /**
    * `worktreeKey` 指定它開在哪個工作目錄（不可逆識別碼，**不是路徑**）。省略＝ folder 根。
@@ -118,6 +125,11 @@ export interface SessionsApi {
       worktreeKey?: string
       /** 交接的單次憑證 —— 主行程簽發，renderer 原樣轉交（見 `handoff-ticket.ts`）。 */
       ticket?: string
+      /**
+       * Created without the user asking at that moment (a handoff accepted on arrival). The session
+       * still becomes its item's focused session, but `attention` does not move.
+       */
+      background?: boolean
     },
   ): Promise<CreateOutcome>
     /**
@@ -252,6 +264,8 @@ export function SessionsProvider({ children }: { children: React.ReactNode }): R
   // 鍵是 session 的歸屬（`null` ＝ 全域）。Map 對 `null` 鍵完全合法，於是全域項目的 focus
   // 記憶不需要第二套資料結構。
   const [focused, setFocused] = useState<ReadonlyMap<string | null, string>>(() => new Map())
+  /** See `SessionsApi.attention`. */
+  const [attention, setAttention] = useState(0)
 
   // 回呼需要當下的清單，但不該因清單變動而重新產生。
   const sessionsRef = useRef(sessions)
@@ -514,7 +528,7 @@ export function SessionsProvider({ children }: { children: React.ReactNode }): R
     async (
       folderId: string,
       spawnTarget: SpawnTarget,
-      options?: { worktreeKey?: string; ticket?: string },
+      options?: { worktreeKey?: string; ticket?: string; background?: boolean },
     ): Promise<CreateOutcome> => {
       const worktreeKey = options?.worktreeKey
       const result = await window.workspace.terminal.create(folderId, spawnTarget, worktreeKey, options?.ticket)
@@ -528,6 +542,7 @@ export function SessionsProvider({ children }: { children: React.ReactNode }): R
         placeChild([...previous, { id: sessionId, folderId, spawnTarget, status: 'running', ordinal, worktreeKey, lineage }], sessionId),
       )
       setFocused((previous) => new Map(previous).set(folderId, sessionId))
+      if (!options?.background) setAttention((n) => n + 1)
 
       return { status: 'created', sessionId }
     },
@@ -562,6 +577,7 @@ export function SessionsProvider({ children }: { children: React.ReactNode }): R
 
   const focus = useCallback((folderId: string, sessionId: string) => {
     setFocused((previous) => new Map(previous).set(folderId, sessionId))
+    setAttention((n) => n + 1)
   }, [])
 
   const setTitle = useCallback((sessionId: string, title: string) => {
@@ -666,6 +682,7 @@ export function SessionsProvider({ children }: { children: React.ReactNode }): R
   const sendInput = useCallback((sessionId: string, text: string) => {
     window.workspace.terminal.write(sessionId, text)
     focusers.current.get(sessionId)?.()
+    setAttention((n) => n + 1)
   }, [])
 
   const attach = useCallback((sessionId: string, write: (chunk: string) => void) => {
@@ -692,7 +709,8 @@ export function SessionsProvider({ children }: { children: React.ReactNode }): R
         if (explicit && sessions.some((session) => session.id === explicit)) return explicit
         return sessions.find((session) => session.folderId === folderId)?.id ?? null
       },
-            focus,
+      attention,
+      focus,
       create,
       wake,
       hibernate,
@@ -710,6 +728,7 @@ export function SessionsProvider({ children }: { children: React.ReactNode }): R
     [
       sessions,
       focused,
+      attention,
       focus,
       create,
       wake,

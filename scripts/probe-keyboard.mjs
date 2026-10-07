@@ -456,6 +456,11 @@ const RAIL_SESSIONS = (folderName) => `(() => {
  * 同源的坑，`terminal-clipboard` 已經踩過）。它把選取畫成 view overlay 上的 `.selected-text`
  * 元素，那是唯一從外部觀察得到的憑據。
  */
+/** Is the side panel maximized? Read from the header entry's `aria-pressed` (either label). */
+const SIDE_PANEL_MAXIMIZED = `document.querySelector('[aria-label="${copy('stage.maximizeSidePanel')}"], [aria-label="${copy('stage.restoreSidePanel')}"]')?.getAttribute('aria-pressed') === 'true'`
+
+const EDITOR_LINES = `document.querySelector('section[aria-label="${copy('files.label')}"] .monaco-editor .view-lines')?.innerText ?? null`
+
 const EDITOR_HAS_SELECTION = `Boolean(
   document.querySelector('section[aria-label="${copy('files.label')}"] .monaco-editor .selected-text')
 )`
@@ -503,6 +508,7 @@ const KEYS = {
   t: { key: 't', code: 'KeyT', vk: 84 },
     w: { key: 'w', code: 'KeyW', vk: 87 },
   h: { key: 'H', code: 'KeyH', vk: 72 },
+  m: { key: 'M', code: 'KeyM', vk: 77 },
   p: { key: 'p', code: 'KeyP', vk: 80 },
   Enter: { key: 'Enter', code: 'Enter', vk: 13 },
   Escape: { key: 'Escape', code: 'Escape', vk: 27 },
@@ -1152,6 +1158,12 @@ async function runMode(label, { port, rendererUrl }) {
     await sleep(400)
     const statusDuringNameDialog = await app.client.evaluate(FOCUSED_STATUS)
     check(results, `${label}：Ctrl+Shift+H does nothing while the session-rename dialog is open`, !statusDuringNameDialog?.includes(copy('sessions.statusDormant')), `status=${JSON.stringify(statusDuringNameDialog)}`)
+    // Ctrl+Shift+M too (maximize-panel-and-confirm-close); its positive control is checkMaximizeShortcut.
+    await pressKey(app.client, 'm', ['ctrl', 'shift'])
+    await sleep(400)
+    const maximizedDuringDialog = await app.client.evaluate(SIDE_PANEL_MAXIMIZED)
+    const dialogAfterM = await app.client.evaluate(DIALOG_OPEN)
+    check(results, `${label}：Ctrl+Shift+M does nothing while the session-rename dialog is open`, maximizedDuringDialog === false && dialogAfterM === true, `maximized=${maximizedDuringDialog} dialog=${dialogAfterM}`)
 
 
     // 關掉它（Esc）
@@ -1508,6 +1520,70 @@ async function checkHibernateShortcut(label, { port, rendererUrl }) {
     await pressKey(app.client, 'h', ['ctrl', 'shift'])
     const editorStatus = await pollUntil(app.client, FOCUSED_STATUS, (status) => Boolean(status?.includes(dormantText)), 6000)
     check(results, `${label}：Ctrl+Shift+H takes effect with focus in the editor`, Boolean(editorStatus?.includes(dormantText)), `status=${JSON.stringify(editorStatus)}`)
+  } finally {
+    await app.destroy()
+  }
+}
+
+/**
+ * `Ctrl+Shift+M` maximizes / restores the side panel (`maximize-panel-and-confirm-close`): with no
+ * item selected; from the terminal (the key never reaches it); from the editor while maximized it
+ * restores and the editor's content is unchanged. The dialog case is in `runMode`.
+ */
+async function checkMaximizeShortcut(label, { port, rendererUrl }) {
+  const repos = makeFixture()
+  const profile = seedProfile(repos)
+  const app = await launch({ port, profileDir: profile, rendererUrl })
+
+  try {
+    // No selection (cold start): the header is there, so the shortcut works.
+    const mountedCold = await pollUntil(app.client, MOUNTED, (value) => value?.ok === true, 10_000)
+    await pressKey(app.client, 'm', ['ctrl', 'shift'])
+    const coldMax = await pollUntil(app.client, SIDE_PANEL_MAXIMIZED, (value) => value === true, 4000)
+    check(results, `${label}：Ctrl+Shift+M works with no rail item selected`, mountedCold?.ok === true && coldMax === true, `maximized=${coldMax} ${describeMounted(mountedCold)}`)
+    await pressKey(app.client, 'm', ['ctrl', 'shift'])
+    const coldRestored = await pollUntil(app.client, SIDE_PANEL_MAXIMIZED, (value) => value === false, 4000)
+    check(results, `${label}：Ctrl+Shift+M again restores`, coldRestored === false, `maximized=${coldRestored}`)
+
+    await pollUntil(app.client, SELECT_FOLDER('repo-a'), (value) => value === true, 10_000)
+    await sleep(300)
+    await createSession(app.client)
+    await pollUntil(app.client, TABS, (list) => list.length === 1, 8000)
+    await realClick(app.client, await pollUntil(app.client, TERMINAL_RECT, (v) => v !== null, 6000))
+    await sleep(400)
+    const armed = await app.client.evaluate(`(() => {
+      const target = document.activeElement
+      if (!target || target.tagName !== 'TEXTAREA') return false
+      window.__maximizeKeyReached = false
+      target.addEventListener('keydown', (event) => { if (event.key.toLowerCase() === 'm') window.__maximizeKeyReached = true })
+      return true
+    })()`)
+    check(results, `${label}：precondition: the terminal has focus (maximize)`, armed === true, `activeElement is a textarea=${armed}`)
+    await pressKey(app.client, 'm', ['ctrl', 'shift'])
+    const maximized = await pollUntil(app.client, SIDE_PANEL_MAXIMIZED, (value) => value === true, 4000)
+    const reached = await app.client.evaluate('window.__maximizeKeyReached')
+    check(
+      results,
+      `${label}：Ctrl+Shift+M from the terminal maximizes the side panel, and the key does not reach the terminal`,
+      maximized === true && reached === false,
+      `maximized=${maximized} key reached the terminal=${reached}`,
+    )
+
+    // With focus in the editor while maximized: restores, content unchanged.
+    check(results, `${label}：switch to the Files identity (maximize)`, (await app.client.evaluate(IDENTITY_FILES)) === true)
+    await pollUntil(app.client, OPEN_FILE('notes.txt'), (value) => value === true, 8000)
+    const editorFocused = await pollUntil(app.client, EDITOR_TEXTAREA_FOCUSED, (value) => value === true, 10_000)
+    const linesBefore = await pollUntil(app.client, EDITOR_LINES, (value) => typeof value === 'string' && value.length > 0, 6000)
+    check(results, `${label}：precondition: maximized with the editor focused`, editorFocused === true && (await app.client.evaluate(SIDE_PANEL_MAXIMIZED)) === true, `editor focused=${editorFocused}`)
+    await pressKey(app.client, 'm', ['ctrl', 'shift'])
+    const restored = await pollUntil(app.client, SIDE_PANEL_MAXIMIZED, (value) => value === false, 4000)
+    const linesAfter = await app.client.evaluate(EDITOR_LINES)
+    check(
+      results,
+      `${label}：Ctrl+Shift+M with focus in the editor restores, and the editor content is unchanged`,
+      restored === false && linesAfter === linesBefore,
+      `maximized=${restored} content same=${linesAfter === linesBefore}`,
+    )
   } finally {
     await app.destroy()
   }
@@ -2968,6 +3044,7 @@ const SECTIONS = [
   { name: 'checkEmptyWorkspace', run: checkEmptyWorkspace, onTimeout: killStrays },
     { name: 'checkScrollAnchoring', run: checkScrollAnchoring, onTimeout: killStrays },
   { name: 'checkHibernateShortcut', run: checkHibernateShortcut, onTimeout: killStrays },
+  { name: 'checkMaximizeShortcut', run: checkMaximizeShortcut, onTimeout: killStrays },
 ]
 
 const outcome = await runSections({

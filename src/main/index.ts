@@ -17,10 +17,13 @@ import { broadcastLifecycle, registerHandoffHandlers, revealHandoffBrief } from 
 import { registerSettingsHandlers } from './ipc/settings'
 import { registerSlackHandlers } from './ipc/slack'
 import { registerShellHandlers } from './ipc/shell'
-import { currentRelationsWorld, onPtyChange, registerTerminalHandlers, runningAgents } from './ipc/terminal'
+import { currentRelationsWorld, liveSessionsOf, onPtyChange, registerTerminalHandlers, runningAgents } from './ipc/terminal'
 import { applyNavigationGuards } from './navigation'
 import { formatScanSummary, scanRepo } from './openspec'
-import { guardUnsavedChanges } from './unsaved-changes'
+import { type AskClose, type QuitState, guardWindowClose } from './close-guard'
+import { nativeCloseDialog, requestSaveAll } from './close-dialog'
+import { createCloseDialogStub, stubCloseRoot } from './close-dialog-stub'
+import type { FolderLookup } from './workspace-store'
 import { configureAgentEvents } from './agent-events'
 import { configureAgentInjection } from './agent-injection'
 import { configureAgentStatus } from './agent-status'
@@ -72,7 +75,25 @@ const trustModel = {
   sandbox: false,
 } as const
 
-function createWindow(dirty: DirtyStateStore): BrowserWindow {
+/**
+ * Set on `before-quit`. A close the user starts comes before any `before-quit`; a quit started by a
+ * signal or the OS comes after it — that is how the close guard tells them apart (`close-guard.ts`).
+ */
+const quitState: QuitState = { quitting: false }
+
+app.on('before-quit', () => {
+  quitState.quitting = true
+})
+
+interface WindowDeps {
+  dirty: DirtyStateStore
+  store: FolderLookup
+  sessions: SessionStore
+  /** The acceptance stand-in for the native close dialog; `undefined` = the real one. */
+  closeAsk?: AskClose
+}
+
+function createWindow({ dirty, store, sessions, closeAsk }: WindowDeps): BrowserWindow {
   // 完全移除 menu —— 這個 app 不定義任何 menu 內容，一條空的 menu bar 只會擋住畫面。
   // **不是 `autoHideMenuBar`**（那只是平時隱藏、按 `Alt` 仍浮出）：要的是按 `Alt` 什麼都不發生
   //（design D2）。setApplicationMenu 是 app 層的，設一次即涵蓋整個應用程式。
@@ -91,7 +112,14 @@ function createWindow(dirty: DirtyStateStore): BrowserWindow {
 
   // 在載入任何內容之前掛上。renderer 從第一幀起就會渲染使用者 repo 裡的不受信任內容。
   applyNavigationGuards(window.webContents)
-  guardUnsavedChanges(window, dirty)
+  // The one close handler: unsaved changes and running sessions, in one dialog (`close-guard.ts`).
+  guardWindowClose(window, {
+    dirty,
+    liveSessions: (contentsId) => liveSessionsOf(contentsId, store, sessions),
+    ask: closeAsk ?? nativeCloseDialog(window),
+    saveAll: () => requestSaveAll(window),
+    quit: quitState,
+  })
 
   const contentsId = window.webContents.id
   // 重新載入不會銷毀 webContents，但新頁面沒有任何未存的變更 —— 舊快照必須作廢，
@@ -453,7 +481,15 @@ void app.whenReady().then(async () => {
   })
   registerInsightsHandlers(insights, reports)
 
-  createWindow(dirty)
+  // The close confirmation's acceptance stand-in — same gate as the notification stub above.
+  const closeAsk = usingThrowawayProfile()
+    ? createCloseDialogStub({
+        root: stubCloseRoot(app.getPath('userData')),
+        closeWindow: () => BrowserWindow.getAllWindows()[0]?.close(),
+      }).ask
+    : undefined
+
+  createWindow({ dirty, store, sessions: sessionStore, closeAsk })
 
   /**
    * 檔案落點：**mkdir → 建立監看並等它就緒 → 掃描既有內容**。
@@ -605,7 +641,7 @@ void app.whenReady().then(async () => {
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
-      createWindow(dirty)
+      createWindow({ dirty, store, sessions: sessionStore, closeAsk })
     }
   })
 })

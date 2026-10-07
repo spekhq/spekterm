@@ -1431,6 +1431,149 @@ async function runAutoHibernateAgent(_mode, _config, context) {
   )
 }
 
+/**
+ * The maximized side panel covers the terminal (`maximize-panel-and-confirm-close`): the same
+ * transition as the conversation view on top — the terminal keeps its box, loses visibility, and
+ * must return its renderer share (`terminal-sessions`). Observed the same way as above: the context
+ * the probe holds is lost. Also the focus rules of design M2: restoring hands focus to the
+ * conversation input, and a covered conversation view never takes focus (a dormant one would put it
+ * on a Wake button nobody sees).
+ */
+async function runMaximizeCover(_mode, _config, context) {
+  if (context.app) await context.app.close()
+  const repo = mkTemp('spekterm-agentview-repo-max-')
+  const configDir = mkTemp('spekterm-agentview-config-max-')
+  const stub = makeStubAgent(mkTemp, configDir)
+  const profile = seedProfile(repo)
+  const app = await launch({ profile, configDir, stub, port: PORT })
+  context.app = app
+  await openConversation(app, repo.split('/').pop())
+
+  const ENTRY = `document.querySelector('[aria-label="${copy('stage.maximizeSidePanel')}"], [aria-label="${copy('stage.restoreSidePanel')}"]')`
+  const MAXIMIZED = `${ENTRY}?.getAttribute('aria-pressed') === 'true'`
+  const toggleMaximized = async (want) => {
+    await app.client.evaluate(`${ENTRY}?.click()`)
+    return pollFor({ read: () => app.client.evaluate(MAXIMIZED), settled: (v) => v === want, timeoutMs: 5000, label: `maximized=${want}` })
+  }
+  const CAPTURE_SHOWN_GL = `(() => {${RENDER_PATH_PRELUDE}
+    window.__probeGlMax = window.__probeGlMax ?? []
+    const shown = hostsOf().filter((d) => !d.classList.contains('hidden'))
+    const host = shown[0]
+    if (!host) return 'no-shown-host'
+    const screen = host.querySelector('.xterm-screen')
+    const main = screen
+      ? [...screen.querySelectorAll('canvas')].find((c) => !c.classList.contains('xterm-link-layer'))
+      : null
+    const gl = main ? main.getContext('webgl2') : null
+    if (!gl) return 'no-context'
+    window.__probeGlMax.push(gl)
+    return 'captured'
+  })()`
+  const LOST = `window.__probeGlMax.map((gl) => (gl ? gl.isContextLost() : null))`
+  const FOCUS = `(() => {
+    const el = document.activeElement
+    if (!el || el === document.body) return 'body'
+    if (el.matches('${label('conversation.composer')}')) return 'composer'
+    if (el.tagName === 'BUTTON' && el.textContent === ${JSON.stringify(copy('sessions.wake'))}) return 'wake'
+    if (document.querySelector('section[aria-label="${copy('openspec.sidePanel')}"]')?.contains(el)) return 'panel'
+    if (el.closest('.xterm')) return 'terminal'
+    return el.tagName.toLowerCase()
+  })()`
+
+  // ── GPU share: terminal view, capture, maximize ⇒ lost; restore ⇒ held again ──
+  await app.client.evaluate(TOGGLE_VIEW)
+  await pollFor({ read: () => app.client.evaluate(VIEW_STATE), settled: (state) => !state.hasComposer, timeoutMs: 15_000, label: 'terminal view' })
+  const captured = await pollFor({ read: () => app.client.evaluate(CAPTURE_SHOWN_GL), settled: (r) => r === 'captured', timeoutMs: 15_000, label: 'capture the shown terminal context' })
+  check(results, '[maximize] precondition: the shown terminal holds a renderer context', captured === 'captured', `capture=${captured}`)
+  await toggleMaximized(true)
+  const lost = await pollFor({ read: () => app.client.evaluate(LOST), settled: (list) => list[list.length - 1] === true, timeoutMs: 15_000, label: 'context lost under the cover' })
+  check(results, '[maximize] the covered terminal returns its renderer share', lost[lost.length - 1] === true, `lost=${JSON.stringify(lost)}`)
+  await toggleMaximized(false)
+  const again = await pollFor({ read: () => app.client.evaluate(CAPTURE_SHOWN_GL), settled: (r) => r === 'captured', timeoutMs: 15_000, label: 'context again after restore' })
+  const newest = await app.client.evaluate(LOST)
+  check(results, '[maximize] after restoring the terminal holds a renderer again', again === 'captured' && newest[newest.length - 1] === false,
+    `capture=${again} lost=${JSON.stringify(newest)}`)
+
+  // ── Restoring returns focus to the conversation input ──
+  await app.client.evaluate(TOGGLE_VIEW)
+  await pollFor({ read: () => app.client.evaluate(VIEW_STATE), settled: (state) => state.hasComposer, timeoutMs: 15_000, label: 'conversation view' })
+  await toggleMaximized(true)
+  const focusMax = await pollFor({ read: () => app.client.evaluate(FOCUS), settled: (v) => v === 'panel', timeoutMs: 3000, label: 'focus in the panel' })
+  await toggleMaximized(false)
+  const focusBack = await pollFor({ read: () => app.client.evaluate(FOCUS), settled: (v) => v === 'composer', timeoutMs: 3000, label: 'focus in the composer' })
+  check(results, '[maximize] restoring returns focus to the conversation input', focusMax === 'panel' && focusBack === 'composer',
+    `maximized=${focusMax} restored=${focusBack}`)
+
+  // ── A covered conversation view takes no focus: hibernate under the cover ──
+  await toggleMaximized(true)
+  for (const type of ['rawKeyDown', 'keyUp']) {
+    await app.client.send('Input.dispatchKeyEvent', { type, key: 'H', code: 'KeyH', windowsVirtualKeyCode: 72, nativeVirtualKeyCode: 72, modifiers: 2 | 8 })
+  }
+  const dormant = await pollFor({ read: () => app.client.evaluate(WAKE_IN_STAGE), settled: (v) => v === true, timeoutMs: 8000, label: 'dormant under the cover' })
+  await new Promise((resolve) => setTimeout(resolve, 600))
+  const focusDormant = await app.client.evaluate(FOCUS)
+  const stillMax = await app.client.evaluate(MAXIMIZED)
+  check(results, '[maximize] a covered dormant conversation view does not take focus',
+    dormant === true && stillMax === true && focusDormant !== 'wake', `dormant=${dormant} maximized=${stillMax} focus=${focusDormant}`)
+  await toggleMaximized(false)
+  const focusWake = await pollFor({ read: () => app.client.evaluate(FOCUS), settled: (v) => v === 'wake', timeoutMs: 3000, label: 'focus on Wake after restore' })
+  check(results, '[maximize] restoring a dormant conversation view focuses its Wake button', focusWake === 'wake', `focus=${focusWake}`)
+}
+
+/**
+ * The close confirmation marks a working agent (workspace-app-shell, "A working agent is marked").
+ * The native dialog is the stand-in in src/main/close-dialog-stub.ts (throwaway profile): writing
+ * close-stub/close makes the main process close the window as its close button does, and the prompt
+ * is read back from close-stub/dialogs.jsonl.
+ */
+async function runCloseConfirmAgent(_mode, _config, context) {
+  if (context.app) await context.app.close()
+  const repo = mkTemp('spekterm-agentview-repoC-')
+  const configDir = mkTemp('spekterm-agentview-configC-')
+  const stub = makeStubAgent(mkTemp, configDir, { busySeconds: 30 })
+  const profile = seedProfile(repo)
+  const app = await launch({ profile, configDir, stub, port: PORT })
+  context.app = app
+  const repoName = repo.split('/').pop()
+  const root = join(profile, 'close-stub')
+  const dialogs = () => {
+    try {
+      return readFileSync(join(root, 'dialogs.jsonl'), 'utf8').split('\n').filter(Boolean).map((line) => JSON.parse(line))
+    } catch {
+      return []
+    }
+  }
+
+  await openConversation(app, repoName)
+  await sendFromConversation(app, 'MAKE-IT-BUSY')
+  await pollFor({
+    read: () => app.client.evaluate(VIEW_STATE),
+    settled: (state) => state.text.toUpperCase().includes(copy('conversation.busy').toUpperCase()),
+    timeoutMs: 20_000,
+    label: 'the agent reports working',
+  })
+
+  writeFileSync(join(root, 'answer'), 'cancel')
+  writeFileSync(join(root, 'close'), String(Date.now()))
+  const prompts = await pollFor({
+    read: dialogs,
+    settled: (value) => value.length >= 1,
+    timeoutMs: 8000,
+    interval: 100,
+    label: 'the close prompt',
+  })
+  const firstLine = (prompts[0]?.detail ?? '').split('\n')[0]
+  const slot = 'LABEL_SLOT'
+  const [prefix, suffix] = copy('closeConfirm.lineWorking', { item: repoName, label: slot }).split(slot)
+  check(
+    results,
+    'a working agent is marked in the close confirmation',
+    firstLine.startsWith(prefix) && firstLine.endsWith(suffix) && firstLine.length > prefix.length + suffix.length,
+    `line=${JSON.stringify(firstLine)} expected ${JSON.stringify(prefix)}…${JSON.stringify(suffix)}`,
+  )
+}
+
+
 const SECTIONS = [
   { name: 'runViewAndSend', run: runViewAndSend },
   { name: 'runRebuiltWidth', run: runRebuiltWidth, requires: ['runViewAndSend'] },
@@ -1441,9 +1584,11 @@ const SECTIONS = [
   { name: 'runAwaitingChoice', run: runAwaitingChoice },
   { name: 'runIncompleteContent', run: runIncompleteContent },
   { name: 'runCoveredReleasesQuota', run: runCoveredReleasesQuota },
+  { name: 'runMaximizeCover', run: runMaximizeCover },
   { name: 'runRelocateByEvent', run: runRelocateByEvent },
     { name: 'runBusyIndicator', run: runBusyIndicator },
   { name: 'runAutoHibernateAgent', run: runAutoHibernateAgent },
+  { name: 'runCloseConfirmAgent', run: runCloseConfirmAgent },
 ]
 
 const outcome = await runSections({

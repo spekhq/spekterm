@@ -1,117 +1,42 @@
 import { ChangeTimeline, SpecGraph, buildLanes } from '@spekjs/ui'
-import { useEffect, useMemo, useState } from 'react'
-import { createPortal } from 'react-dom'
+import { useMemo, useState } from 'react'
 import type { ChangeInfo } from '../types'
+import type { VizKind } from '../maximize-state'
 import { useChanges, useGraphData } from './data'
 import { ErrorNote, Loading } from './ui'
 import { useTranslation } from 'react-i18next'
 
-/** overlay 裡的兩個視覺化。**它們是不同的東西** —— Graph 是關聯結構，Timeline 是生命週期。 */
-export type VizKind = 'graph' | 'timeline'
-
-interface VizOverlayProps {
+interface VizViewProps {
   folderId: string
-  folderName: string
   kind: VizKind
-  onChangeKind: (kind: VizKind) => void
-  onClose: () => void
-  /** 在圖上選一個 change＝錨定它並關閉 overlay。 */
+  /** A change chosen in the graph or the timeline: the panel shows it in This change. */
   onSelectChange: (slug: string) => void
-  /** 在圖上選一個 spec＝關閉 overlay 並在側欄檢視它。 */
+  /** A spec chosen in the graph: the panel shows it in Browse. */
   onSelectSpec: (topic: string) => void
 }
 
-/** 圖示是呈現、文案是文案 —— 只有後者進字典。 */
-const TABS: { id: VizKind; icon: string; labelKey: 'viz.graph' | 'viz.timeline' }[] = [
-  { id: 'graph', icon: '◈', labelKey: 'viz.graph' },
-  { id: 'timeline', icon: '▤', labelKey: 'viz.timeline' },
-]
-
 /**
- * Graph 與 Timeline 的全視窗 overlay。
+ * Graph and Timeline as views of the maximized side panel (`openspec-panel`, "Graph and Timeline
+ * are views of the maximized side panel"). They used to be a full-window overlay because Timeline
+ * needs more than 900px; the maximized side panel spans the main stage, and on a narrower window
+ * this view scrolls horizontally.
  *
- * **它們不屬於 side panel。** Timeline 的最小可用寬度是 920px（label 欄 200 + 圖表區 720，都是
- * `@spekjs/ui` 的預設值），而側欄上限是 620px —— 硬塞的話只看得到時間軸的一小段。而它們是
- * 「**搞懂全局**」的動作，不是「一邊駕駛 agent 一邊盯著」的動作，沒有與 terminal 並存的需求
- *（design D12）。
+ * **They are different things** — Graph is the structure of specs and changes, Timeline the life
+ * cycle of changes. Both come from **`@spekjs/ui`**, the same code spek web uses; this is only the
+ * host's part: fetching, loading / error, and handing the user's choice back.
  *
- * 兩個視覺化本身來自 **`@spekjs/ui`** —— 與 spek web 用的是同一份程式碼。這裡只做宿主的事：
- * 取數、loading／error、把使用者的選擇接回錨定。**不傳 `themeKey`**：這個 app 只有深色主題，
- * 沒有換膚可言。
- *
- * 以 portal 掛到 `document.body`：`position: fixed` 若有祖先帶 `transform` / `filter` 就會改以
- * 那個祖先為定位基準 —— 而它上面是 `react-resizable-panels`。不賭這件事。
+ * This element is the sibling of the panel's own scroll container, which stays mounted and hidden
+ * while this is shown — so that view comes back exactly as it was (design M5).
  */
-export function VizOverlay({
-  folderId,
-  folderName,
-  kind,
-  onChangeKind,
-  onClose,
-  onSelectChange,
-  onSelectSpec,
-}: VizOverlayProps): React.JSX.Element {
-  const { t } = useTranslation()
-
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent): void => {
-      if (event.key === 'Escape') onClose()
-    }
-    window.addEventListener('keydown', onKeyDown)
-    return () => window.removeEventListener('keydown', onKeyDown)
-  }, [onClose])
-
-  return createPortal(
-    <div
-      role="dialog"
-      aria-modal="true"
-      aria-label={kind === 'graph' ? t('viz.graph') : t('viz.timeline')}
-      className="fixed inset-0 z-50 flex flex-col bg-stage"
-    >
-      <header className="flex shrink-0 items-center gap-2 border-b border-hairline px-4 py-2">
-        <span className="text-sm text-ink-faint">{folderName}</span>
-
-        <nav aria-label={t('viz.label')} role="tablist" className="ml-3 flex gap-1">
-          {TABS.map(({ id, icon, labelKey }) => (
-            <button
-              key={id}
-              type="button"
-              role="tab"
-              aria-selected={kind === id}
-              onClick={() => onChangeKind(id)}
-              className={`rounded px-3 py-1 text-xs transition-colors ${
-                kind === id
-                  ? 'bg-accent-soft font-bold text-accent'
-                  : 'text-ink-dim hover:bg-hover hover:text-ink'
-              }`}
-            >
-              {`${icon} ${t(labelKey)}`}
-            </button>
-          ))}
-        </nav>
-
-        <span className="flex-1" />
-
-        <button
-          type="button"
-          onClick={onClose}
-          aria-label={t('viz.close')}
-          title={t('viz.closeTooltip')}
-          className="rounded border border-hairline px-2 py-1 text-xs text-ink-dim hover:border-accent hover:text-accent"
-        >
-          ✕ Esc
-        </button>
-      </header>
-
-      <div className="min-h-0 flex-1 overflow-auto p-4">
-        {kind === 'graph' ? (
-          <GraphPane folderId={folderId} onSelectChange={onSelectChange} onSelectSpec={onSelectSpec} />
-        ) : (
-          <TimelinePane folderId={folderId} onSelectChange={onSelectChange} />
-        )}
-      </div>
-    </div>,
-    document.body,
+export function VizView({ folderId, kind, onSelectChange, onSelectSpec }: VizViewProps): React.JSX.Element {
+  return (
+    <div className="min-h-0 flex-1 overflow-auto p-4">
+      {kind === 'graph' ? (
+        <GraphPane folderId={folderId} onSelectChange={onSelectChange} onSelectSpec={onSelectSpec} />
+      ) : (
+        <TimelinePane folderId={folderId} onSelectChange={onSelectChange} />
+      )}
+    </div>
   )
 }
 

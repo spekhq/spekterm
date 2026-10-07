@@ -134,7 +134,7 @@ Electron，目標產出 macOS / Windows / Linux 三平台安裝檔。
 | F2 | File Explorer | 多 folder 檔案樹、子目錄 lazy load、chokidar 監控外部變更 | Phase 2 |
 | F3 | 檔案檢視／編輯 | 於 side panel 內開檔（markdown 渲染／原始碼切換、其餘 Monaco 語法高亮）；編輯、dirty 狀態（跨換頁與跨 folder 存活）、`Cmd/Ctrl+S` 存檔、完整 CRUD 屬 Phase 3 | Phase 2–3 |
 | F4 | 多 session terminal | 底部 dock，`node-pty` 多 session，跑 agent 主場，預設 cwd = 選中 folder | Phase 4 |
-| F5 | OpenSpec 側欄 | **本 change**（每個 artifact 一個分頁）＋ **瀏覽**（Specs / Changes 兩棵樹），經 `IpcAdapter` 取自主行程；跟隨 focused session 錨定的 change。Graph 與 Timeline 另在全視窗 overlay，來自 `@spekjs/ui` | Phase 5 ✅ |
+| F5 | OpenSpec 側欄 | **本 change**（每個 artifact 一個分頁）＋ **瀏覽**（Specs / Changes 兩棵樹），經 `IpcAdapter` 取自主行程；跟隨 focused session 錨定的 change。Graph 與 Timeline 是放大側欄時的視圖（`Ctrl+Shift+M`），來自 `@spekjs/ui` | Phase 5 ✅ |
 | F6 | 交叉導覽 | spec/change ↔ 底層檔案互跳 | Phase 5 |
 | F7 | 打包發佈 | electron-builder 三平台安裝檔、主題、持久化 layout | Phase 6 |
 | F7b | UI 語言 | 介面文案可切換語言（`en` / `zh-TW`），立即生效且跨重啟保留；首次啟動取自作業系統的偏好語言。**寫給 agent 讀的文字不在地化**（見下） | Phase 6 ✅ |
@@ -220,7 +220,7 @@ OpenSpec 與 Files 是 side panel 的**兩個同層級、互斥的身分**，用
 
 | 身分 | 內容 | 條件 |
 |------|------|------|
-| `◈ OpenSpec`（預設） | **本 change** 與 **瀏覽** 兩個視圖，資料經 `IpcAdapter` 取自主行程；**跟隨 focused session 錨定的 change**。Graph 與 Timeline 另在全視窗 overlay | 條件式：repo 要有 `openspec/` 才可用；否則此鈕 disabled/dim |
+| `◈ OpenSpec`（預設） | **本 change** 與 **瀏覽** 兩個視圖，資料經 `IpcAdapter` 取自主行程；**跟隨 focused session 錨定的 change**。Graph 與 Timeline 是側欄放大時才呈現的視圖 | 條件式：repo 要有 `openspec/` 才可用；否則此鈕 disabled/dim |
 | `▤ Files` | 當前 repo 的檔案樹（子目錄 lazy load、chokidar 監控、git 狀態 tag） | 恆可用 |
 
 - **OpenSpec 是條件式身分**：沒有 `openspec/` 的 repo（如 mockup 的 spek-web），OpenSpec 鈕 disabled，side panel 退為 Files。這正是「spek 以 OpenSpec 為核心，但版面不因缺 OpenSpec 就殘廢」的體現。
@@ -229,7 +229,7 @@ OpenSpec 與 Files 是 side panel 的**兩個同層級、互斥的身分**，用
   - 初版把 tasks 與 spec deltas 攤開、其餘收合成區塊，一路往下堆 —— 使用者的判定是「在找資料的時候不好找」。**並排的分頁讓「找」變成一次點擊，而不是一次搜尋。**
 - **瀏覽視圖**：上下堆疊、各自可收合的**兩棵樹** —— Specs（`topic → heading`）與 Changes（`Active / Archived → change`，帶進度）。
   - **藍本是 VSCode extension 的 tree provider，不是 spek web 的 sidebar** —— 後者只是五個扁平的 nav link，內容全在主頁面裡。VSCode 的兩棵樹才是為 ~300px 窄側欄設計的。
-- **Graph 與 Timeline 在全視窗 overlay，不在側欄**（`openspec-side-panel` 的 design D12）：Timeline 的最小可用寬度超過 900px，而側欄上限是 620px。而且它們是「**搞懂全局**」的動作，不是「一邊駕駛 agent 一邊盯著」的動作 —— 沒有與 terminal 並存的需求。兩者**是不同的視覺化**：Graph 是關聯結構（無時間），Timeline 是生命週期（有時間軸）。
+- **Graph 與 Timeline 原在全視窗 overlay**（`openspec-side-panel` 的 design D12）；**since `maximize-panel-and-confirm-close` they are views of the side panel, shown only while it is maximized over the main stage** —— the reasoning below is why they need that width：Timeline 的最小可用寬度超過 900px，而側欄上限是 620px。而且它們是「**搞懂全局**」的動作，不是「一邊駕駛 agent 一邊盯著」的動作 —— 沒有與 terminal 並存的需求。兩者**是不同的視覺化**：Graph 是關聯結構（無時間），Timeline 是生命週期（有時間軸）。
 - **錨定關係由使用者建立，系統不猜**（design D3）：pty 裡的 agent 不會宣告它在做哪個 change，任何從終端標題／輸出去比對 slug 的推測都會假陽性與假陰性 —— 一個偶爾莫名其妙跳到別的 change 的側欄，比沒有側欄更糟。唯一的自動值是**衍生的預設**：該 folder **恰有一個** active change 時就顯示它（不需要先建 session）。使用者在 Changes 樹點一個 change 即可改變錨定。**Phase 7 的 handoff 會自然填上這個欄位** —— 屆時系統知道 session 在做哪個 change，是因為有人告訴它。
 - **交叉導覽**：spec/change ↔ 底層 `.md` 互跳（保留 spek 現有 UX）。
 
@@ -510,7 +510,7 @@ contributions (see `CONTRIBUTING.md`).
 - 主行程以 `@spekjs/core` 為每個 folder 供應 OpenSpec 結構，經 `openspec.*` IPC 送達 renderer（快取 + `openspec/` 的 chokidar 監看 → agent 改檔，側欄自己更新）。
 - 實作 **`IpcAdapter`** —— 形狀對齊 spek 的 `ApiAdapter` 介面契約。
 - side panel 的 OpenSpec 身分：**本 change**（每個 artifact 一個分頁）與 **瀏覽**（Specs / Changes 兩棵樹）—— 依 mockup 與 VSCode 的 tree provider 自刻，非搬 spek 的頁面（見 §9.2）。
-- **抽出 `@spekjs/ui`**（發佈至 npm）：`SpecGraph`（d3 力導向圖）與 `ChangeTimeline`（Gantt），與 spek web 共用同一份程式碼 —— 兩者放在**全視窗 overlay**，不在側欄（Timeline 的最小可用寬度超過 900px）。
+- **抽出 `@spekjs/ui`**（發佈至 npm）：`SpecGraph`（d3 力導向圖）與 `ChangeTimeline`（Gantt），與 spek web 共用同一份程式碼 —— 兩者原放在**全視窗 overlay**（Timeline 的最小可用寬度超過 900px），現為**放大的側欄**中的視圖。
 - session 的**錨定 change**：側欄跟隨 focused session；錨定由使用者建立，系統不猜（§6.3）。
 - 交叉導覽：spec/change ↔ 底層檔案互跳。
 

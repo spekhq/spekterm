@@ -398,7 +398,18 @@ async function launch({ port, profileDir, rendererUrl, marker, stub }) {
      */
     async quitGracefully() {
       client.close()
-      await quitAndWait(child)
+      return quitAndWait(child)
+    },
+    /** Send a signal without waiting — the close confirmation's "signal during an open dialog". */
+    signal(name) {
+      child.kill(name)
+    },
+    /** Wait for the app to exit by itself (no signal sent). Resolves `true` when it did in time. */
+    async waitForExit(timeoutMs = 10_000) {
+      if (child.exitCode !== null || child.signalCode !== null) return true
+      const exited = new Promise((resolve) => child.once('exit', () => resolve(true)))
+      // An event wait, not a poll — the same reasoning as `quitAndWait`.
+      return Promise.race([exited, sleep(timeoutMs, false)])
     },
     /** 收尾：連根拔除 electron 樹。pty 若還在，是 app 的漏網之魚，不是這裡的責任。 */
     async destroy() {
@@ -4784,6 +4795,269 @@ const killStrays = () => {
   }
 }
 
+// ── Close confirmation (maximize-panel-and-confirm-close, workspace-app-shell) ─────────────────
+//
+// The native dialog is replaced by the stand-in in src/main/close-dialog-stub.ts (throwaway
+// profiles only): prompts are read from close-stub/dialogs.jsonl, answers written to "answer",
+// a "hold" file keeps a prompt open, and writing "close" makes the main process close the window
+// the way the close button does.
+
+function closeStub(profile) {
+  const root = join(profile, 'close-stub')
+  const lines = (name) => {
+    try {
+      return readFileSync(join(root, name), 'utf8').split('\n').filter(Boolean).map((line) => JSON.parse(line))
+    } catch {
+      return []
+    }
+  }
+  return {
+    dialogs: () => lines('dialogs.jsonl'),
+    closes: () => lines('closes.jsonl').length,
+    answer: (role) => writeFileSync(join(root, 'answer'), role),
+    hold: (on) => (on ? writeFileSync(join(root, 'hold'), '') : rmSync(join(root, 'hold'), { force: true })),
+    close: () => writeFileSync(join(root, 'close'), String(Date.now())),
+  }
+}
+
+async function waitDialogs(stub, count, timeoutMs = 8000) {
+  return pollFor({
+    read: () => stub.dialogs(),
+    settled: (value) => value.length >= count,
+    timeoutMs,
+    interval: 100,
+    label: `close-stub prompts ≥ ${count}`,
+  })
+}
+
+async function waitCloses(stub, count, timeoutMs = 8000) {
+  return pollFor({
+    read: () => stub.closes(),
+    settled: (value) => value >= count,
+    timeoutMs,
+    interval: 100,
+    label: `close-stub triggers consumed ≥ ${count}`,
+  })
+}
+
+/**
+ * Wait until the renderer's record of `count` sessions (with their ordinals) has reached the main
+ * process. A session closed within milliseconds of its creation is listed by its target alone
+ * ("shell"), because the tab's ordinal is only known once the renderer has pushed it; the persisted
+ * file is the observable sign that the push arrived (it is written from that push).
+ */
+async function waitPersisted(profile, count) {
+  return pollFor({
+    read: () => {
+      try {
+        const parsed = JSON.parse(readFileSync(join(profile, 'sessions.json'), 'utf8'))
+        return (parsed.sessions ?? []).filter((session) => session.ordinal > 0).length
+      } catch {
+        return 0
+      }
+    },
+    settled: (value) => value >= count,
+    timeoutMs: 8000,
+    interval: 100,
+    label: `sessions.json lists ${count} sessions with ordinals`,
+  })
+}
+
+/** Is the app still answering CDP? */
+async function responsive(client) {
+  try {
+    return (await client.evaluate('1 + 1')) === 2
+  } catch {
+    return false
+  }
+}
+
+async function runCloseConfirm(label, { port, rendererUrl }) {
+  console.log(`\n── ${label}（close confirmation）──`)
+
+  const marker = `spek-close-${process.pid}-${Date.now()}`
+  const { repo } = makeFixture()
+  const profile = seedProfile([['f1', repo]])
+  const stub = makeStubClaude()
+  const close = closeStub(profile)
+  const line = (item, name, working = false) =>
+    copy(working ? 'closeConfirm.lineWorking' : 'closeConfirm.line', { item, label: name })
+
+  let app = null
+  try {
+    app = await launch({ port, profileDir: profile, rendererUrl, marker, stub })
+    await pollUntil(app.client, SELECT_FOLDER('repo-a'), (value) => value === true, 10_000)
+    await sleep(300)
+
+    // ── One running shell, the close button, cancel.
+    await openSessionViaMenu(app.client, copy('sessions.spawnShell'))
+    await pollUntil(app.client, TABS, (value) => value.length === 1, 8000)
+    const firstPid = await newSessionPid(marker, [])
+    const [firstLabel] = await app.client.evaluate(TAB_LABELS)
+    await waitPersisted(profile, 1)
+    close.answer('cancel')
+    close.close()
+    const asked = await waitDialogs(close, 1)
+    await sleep(500)
+    const stillUp = await responsive(app.client)
+    const prompt = asked[0]
+    check(
+      results,
+      `${label}: closing with a running session asks first (window kept, one session listed by item and label)`,
+      asked.length === 1 &&
+        stillUp &&
+        prompt?.message === copy('closeConfirm.message_one', { count: 1 }) &&
+        Boolean(prompt?.detail?.includes(line('repo-a', firstLabel))),
+      `prompts=${asked.length} responsive=${stillUp} message=${JSON.stringify(prompt?.message)} detail=${JSON.stringify(prompt?.detail)} tab=${JSON.stringify(firstLabel)}`,
+    )
+    check(
+      results,
+      `${label}: the safe answer is the default (default and cancel answers are both cancel)`,
+      prompt?.defaultRole === 'cancel' && prompt?.cancelRole === 'cancel' && JSON.stringify(prompt?.roles) === '["quit","cancel"]',
+      JSON.stringify({ roles: prompt?.roles, defaultRole: prompt?.defaultRole, cancelRole: prompt?.cancelRole }),
+    )
+    check(
+      results,
+      `${label}: cancelling keeps every session running (same process)`,
+      stillUp && alive(firstPid) && ptySessionPids(marker).includes(firstPid),
+      `responsive=${stillUp} pid ${firstPid} alive=${alive(firstPid)} pids=${JSON.stringify(ptySessionPids(marker))}`,
+    )
+
+    // ── A second shell running a command: listed first, marked as working.
+    await openSessionViaMenu(app.client, copy('sessions.spawnShell'))
+    await pollUntil(app.client, TABS, (value) => value.length === 2, 8000)
+    await newSessionPid(marker, [firstPid])
+    const labels = await app.client.evaluate(TAB_LABELS)
+    await realClick(app.client, await app.client.evaluate(TERMINAL_RECT))
+    await typeLine(app.client, 'sleep 600')
+    await sleep(800)
+    const promptsWorking = close.dialogs().length
+    close.close()
+    const second = (await waitDialogs(close, promptsWorking + 1))[promptsWorking]
+    const detailLines = (second?.detail ?? '').split('\n')
+    check(
+      results,
+      `${label}: a working session is marked and listed first`,
+      detailLines[0] === line('repo-a', labels[1], true) && detailLines[1] === line('repo-a', labels[0]),
+      `lines=${JSON.stringify(detailLines.slice(0, 2))} tabs=${JSON.stringify(labels)}`,
+    )
+
+    // ── Hold the prompt open: a second close and a signal do not ask twice or end the app.
+    const promptsBefore = close.dialogs().length
+    const closesBefore = close.closes()
+    close.hold(true)
+    close.close()
+    await waitDialogs(close, promptsBefore + 1)
+    await waitCloses(close, closesBefore + 1)
+    close.close()
+    const consumed = await waitCloses(close, closesBefore + 2)
+    await sleep(800)
+    const afterSecond = close.dialogs().length
+    const upAfterSecond = await responsive(app.client)
+    check(
+      results,
+      `${label}: a second close while the dialog is open does not ask twice (one prompt, window open)`,
+      consumed >= closesBefore + 2 && afterSecond === promptsBefore + 1 && upAfterSecond,
+      `triggers ${closesBefore} → ${consumed} prompts ${promptsBefore} → ${afterSecond} responsive=${upAfterSecond}`,
+    )
+
+    app.signal('SIGTERM')
+    await sleep(1500)
+    const upAfterSignal = await responsive(app.client)
+    close.answer('cancel')
+    await sleep(800)
+    close.hold(false)
+    const upAfterCancel = await responsive(app.client)
+    close.close()
+    const askedAgain = await waitDialogs(close, promptsBefore + 2)
+    check(
+      results,
+      `${label}: a signal during the open dialog does not disable the question (still running after cancel; the next close asks again)`,
+      upAfterSignal && upAfterCancel && askedAgain.length === promptsBefore + 2,
+      `responsive after SIGTERM=${upAfterSignal} after cancel=${upAfterCancel} prompts=${askedAgain.length} (expected ${promptsBefore + 2})`,
+    )
+
+    // ── Confirm: the app exits by itself, no pty remains, the sessions come back dormant.
+    close.answer('quit')
+    close.close()
+    const exited = await app.waitForExit(10_000)
+    const ptysGone = await waitPtysGone(marker)
+    app.client.close()
+    if (!exited) await app.quitGracefully()
+    app = null
+
+    app = await launch({ port, profileDir: profile, rendererUrl, marker, stub })
+    await pollUntil(app.client, SELECT_FOLDER('repo-a'), (value) => value === true, 10_000)
+    const statuses = await pollUntil(
+      app.client,
+      TAB_STATUS,
+      (value) => value.length === 2 && value.every((tab) => tab.title.includes(copy('sessions.statusDormant'))),
+      10_000,
+    )
+    check(
+      results,
+      `${label}: confirming closes the window and ends the sessions (exits by itself, no pty, dormant on relaunch)`,
+      exited && ptysGone && statuses.length === 2 && statuses.every((tab) => tab.title.includes(copy('sessions.statusDormant'))),
+      `exited=${exited} ptysGone=${ptysGone} relaunch=${JSON.stringify(statuses.map((tab) => tab.title))}`,
+    )
+
+    // ── Only dormant sessions: no prompt, the window closes.
+    const promptsDormant = close.dialogs().length
+    const closesDormant = close.closes()
+    close.answer('cancel')
+    close.close()
+    const dormantExited = await app.waitForExit(10_000)
+    check(
+      results,
+      `${label}: only dormant sessions close without asking`,
+      dormantExited && close.closes() === closesDormant + 1 && close.dialogs().length === promptsDormant,
+      `exited=${dormantExited} triggers ${closesDormant} → ${close.closes()} prompts ${promptsDormant} → ${close.dialogs().length}`,
+    )
+    app.client.close()
+    if (!dormantExited) await app.quitGracefully()
+    app = null
+
+    // ── A global session counts; then SIGTERM with sessions running quits without asking.
+    app = await launch({ port, profileDir: profile, rendererUrl, marker, stub })
+    await pollUntil(app.client, `!!document.querySelector('aside[aria-label="${copy('rail.label')}"]')`, (v) => v === true, 10_000)
+    const GLOBAL_NEW_SESSION = `(() => {
+      const btn = document.querySelector('aside[aria-label="${copy('rail.label')}"] [aria-label="${copy('rail.newSessionIn', { name: copy('rail.globalName') })}"]')
+      if (!btn) return null
+      const r = btn.getBoundingClientRect()
+      return { x: r.x, y: r.y, width: r.width, height: r.height }
+    })()`
+    await realClick(app.client, await pollUntil(app.client, GLOBAL_NEW_SESSION, (v) => v !== null, 8000))
+    await realClick(app.client, await pollUntil(app.client, MENU_ITEM_RECT(copy('sessions.spawnShell')), (v) => v !== null, 4000))
+    await waitForPtyCount(marker, 1, 12_000)
+    const [globalLabel] = await pollUntil(app.client, TAB_LABELS, (value) => value.length === 1, 8000)
+    // Two dormant repo-a sessions plus the new global one.
+    await waitPersisted(profile, 3)
+    const promptsGlobal = close.dialogs().length
+    close.answer('cancel')
+    close.close()
+    const globalPrompt = (await waitDialogs(close, promptsGlobal + 1))[promptsGlobal]
+    check(
+      results,
+      `${label}: a global session counts (listed under the global item's name)`,
+      Boolean(globalPrompt?.detail?.includes(line(copy('rail.globalName'), globalLabel))),
+      `detail=${JSON.stringify(globalPrompt?.detail)} tab=${JSON.stringify(globalLabel)}`,
+    )
+
+    const promptsSignal = close.dialogs().length
+    const quit = await app.quitGracefully()
+    const signalPtysGone = await waitPtysGone(marker)
+    app = null
+    check(
+      results,
+      `${label}: a termination signal quits with sessions running (no prompt, exits by itself, no pty remains)`,
+      quit?.escalated === false && close.dialogs().length === promptsSignal && signalPtysGone,
+      `escalated=${quit?.escalated} prompts ${promptsSignal} → ${close.dialogs().length} ptysGone=${signalPtysGone}`,
+    )
+  } finally {
+    if (app) await app.destroy()
+  }
+}
+
 /** 五次冷啟動的兩段給更長的時限；dev 模式的冷啟動是 30 秒級（unbundled ESM + Monaco）。 */
 const LONG = 14 * 60 * 1000
 
@@ -4804,6 +5078,7 @@ const SECTIONS = [
   { name: 'runContinuation', run: runContinuation, onTimeout: killStrays },
   { name: 'runWorktree', run: runWorktree, onTimeout: killStrays },
   { name: 'runGlobalSession', run: runGlobalSession, onTimeout: killStrays },
+  { name: 'runCloseConfirm', run: runCloseConfirm, timeoutMs: LONG, onTimeout: killStrays },
 ]
 
 const outcome = await runSections({

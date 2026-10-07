@@ -26,7 +26,9 @@ side panel 的 OpenSpec 身分 SHALL 於其內部提供**瀏覽**視圖，並 SH
 
 視圖採**換頁而非並列**，理由與 Files 身分相同：side panel 的寬度不足以並列多個視圖。
 
-Graph 與 Timeline **不是**這裡的視圖 —— 它們在全視窗 overlay 中呈現（見下）。
+The same view switch also offers **Graph** and **Timeline**, which are only shown while the side
+panel is maximized (see "Graph and Timeline are views of the maximized side panel"). "Exactly one
+view is shown" counts them too.
 
 #### Scenario: 切換至瀏覽視圖
 
@@ -319,41 +321,6 @@ NOT 被省略」只約束分頁的**存在**；內容的呈現是逐一按 artif
 
 - **WHEN** 當前的側欄座標錨定了某個 change，使用者檢視 Changes 樹
 - **THEN** 該 change 的節點於視覺上被標示
-
-### Requirement: Graph 與 Timeline 於全視窗 overlay 中呈現
-
-應用程式 SHALL 提供 **Graph**（spec 與 change 的關聯結構）與 **Timeline**（change 生命週期的
-Gantt 時間軸）兩個視覺化，且它們 SHALL 於**覆蓋整個視窗**的 overlay 中呈現，SHALL NOT 被塞進
-side panel。
-
-side panel 的 OpenSpec 身分 SHALL 提供開啟這兩者的入口。overlay SHALL 可以 `Esc` 關閉。
-
-**理由**：Timeline 的最小可用寬度遠大於 side panel 的上限（label 欄與圖表區的寬度下限相加即超過
-900px），在窄欄中只看得到時間軸的一小段。而 Graph 與 Timeline 是「**搞懂全局**」的動作，不是
-「一邊駕駛 agent 一邊盯著」的動作 —— 它們沒有與 terminal 並存的需求。
-
-Graph 與 Timeline 是**兩個不同的視覺化**：Graph 呈現 spec ↔ change 的關聯（無時間概念），
-Timeline 呈現 change 的生命週期（有時間軸）。SHALL NOT 以其中一個代替另一個。
-
-#### Scenario: 自側欄開啟 Graph
-
-- **WHEN** 使用者觸發 Graph 的入口
-- **THEN** Graph 於覆蓋整個視窗的 overlay 中呈現
-
-#### Scenario: 自側欄開啟 Timeline
-
-- **WHEN** 使用者觸發 Timeline 的入口
-- **THEN** Timeline 於覆蓋整個視窗的 overlay 中呈現，change 的生命週期以時間軸上的橫條呈現
-
-#### Scenario: 以 Esc 關閉 overlay
-
-- **WHEN** overlay 開啟中，使用者按下 `Esc`
-- **THEN** overlay 關閉，side panel 回到原本的視圖
-
-#### Scenario: 於 Graph 中觸發一個 change
-
-- **WHEN** 使用者於 Graph 中觸發一個 change 節點
-- **THEN** overlay 關閉，該 change 成為側欄呈現的 change
 
 ### Requirement: OpenSpec 與 Files 兩個身分之間可交叉導覽
 
@@ -692,5 +659,87 @@ a menu is open they SHALL do nothing, as for every other shortcut.
 
 #### Scenario: An open overlay blocks artifact switching
 
-- **WHEN** focus is in the change view, the Graph overlay is open, and the user presses `Ctrl+Tab`
+- **WHEN** focus is in the change view, the inbox's full-window overlay is open, and the user presses
+  `Ctrl+Tab`
 - **THEN** the selected artifact does not change
+
+### Requirement: Graph and Timeline are views of the maximized side panel
+
+The OpenSpec identity SHALL offer **Graph** (the structure of specs and changes) and **Timeline**
+(the lifecycle of changes on a time axis) as views next to **This change** and **Browse**. They
+SHALL only be shown while the side panel is maximized (see `workspace-layout`, "The side panel can
+be maximized over the main stage"):
+
+- Choosing Graph or Timeline while the side panel is not maximized SHALL maximize it and show that
+  view. They SHALL be available whether or not the repo has a resolvable anchored change.
+- Restoring the side panel while Graph or Timeline is shown SHALL return the OpenSpec identity to
+  the This change or Browse view that was shown before Graph or Timeline was first chosen, **as it
+  was** — the same artifact and scroll position, the same browse tree or spec. Switching between
+  Graph and Timeline does not change which view that is.
+- Choosing This change or Browse while Graph or Timeline is shown SHALL show that view; the side
+  panel stays maximized.
+- Triggering a change in Graph or Timeline SHALL show that change in the **This change** view,
+  anchored as in "於瀏覽視圖選擇 change 即錨定至當前的側欄座標", and the side panel SHALL stay
+  maximized. Triggering a spec in Graph SHALL show that spec in the Browse view, likewise still
+  maximized.
+- **Graph or Timeline stays shown when the side-panel source changes** (another repo selected while
+  maximized) — it then shows the new source's data — **and when the user switches to Files and back
+  to OpenSpec** while maximized. **Cross navigation is the exception**: when the user asks to see a
+  particular change or spec in OpenSpec (see "OpenSpec 與 Files 兩個身分之間可交叉導覽"), that target
+  SHALL be shown, not Graph or Timeline.
+- Whenever the side panel stops being maximized, by whatever path, Graph and Timeline SHALL NOT be
+  shown again by the next maximize unless chosen again.
+
+**Why not in the narrow side panel**: Timeline's minimum usable width (label column plus chart
+area) is above 900px, far beyond the side panel's normal width. Maximized, the side panel spans the
+main stage; on a window too narrow for that, the view scrolls horizontally.
+
+Graph and Timeline are **two different visualizations**: Graph shows spec ↔ change relations (no
+time), Timeline shows the change lifecycle (on a time axis). Neither SHALL stand in for the other.
+
+They are not dialogs: while they are shown, shortcuts work as they do in the rest of the side
+panel (see `keyboard-navigation`).
+
+#### Scenario: Choosing Graph maximizes the side panel
+
+- **WHEN** the side panel is not maximized and the user chooses the Graph view
+- **THEN** the side panel is maximized and shows Graph with the nodes and edges of specs and changes
+
+#### Scenario: Choosing Timeline
+
+- **WHEN** the user chooses the Timeline view
+- **THEN** the side panel is maximized and shows the changes' lifecycles as bars on a time axis
+
+#### Scenario: A change chosen in Graph opens in the maximized side panel
+
+- **WHEN** Graph is shown and the user triggers a change node
+- **THEN** the This change view shows that change and the side panel is still maximized
+
+#### Scenario: Restoring leaves Graph
+
+- **WHEN** the Browse view was shown, the user chose Graph, and then restores the side panel
+- **THEN** the side panel is restored and shows the Browse view
+
+#### Scenario: Navigation shortcuts work while Graph is shown
+
+- **WHEN** Graph is shown and the user presses `Ctrl+↓`
+- **THEN** the next rail item is selected
+- **AND** Graph is still shown, now for that item's side-panel source
+
+#### Scenario: View in OpenSpec while Graph was shown
+
+- **WHEN** Graph is shown, the user switches to Files and triggers View in OpenSpec for a change's
+  artifact
+- **THEN** the This change view shows that change, not Graph
+
+#### Scenario: Graph without a resolvable anchored change
+
+- **WHEN** the side-panel source has several active changes and none is anchored, and the user
+  chooses Graph
+- **THEN** Graph is shown with its nodes and edges
+
+#### Scenario: Restoring returns to the change as it was
+
+- **WHEN** the This change view shows the design artifact scrolled down, the user chooses Graph,
+  then Timeline, then restores the side panel
+- **THEN** the This change view shows the design artifact at the same scroll position

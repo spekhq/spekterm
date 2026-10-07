@@ -338,13 +338,25 @@ export function TerminalView({
   // `Enter` can never be written to a pty that does not exist. The status is a dependency so that
   // when the session starts running the terminal takes focus (the button is gone by then and focus
   // would otherwise sit on `<body>`). Other status changes (a pty exiting) leave focus alone.
+  //
+  // **A change of `covered` alone does not fit** (`maximize-panel-and-confirm-close`). Covering keeps
+  // the box, so there is nothing to measure — and the GPU renderer is released or taken back on that
+  // same transition, and the two renderers measure different cells (DOM ≈ 9.63px, webgl 9px wide):
+  // a fit there would send the pty a size computed from the renderer that is not the one in use, and
+  // the agent would reflow for nothing (measured: 63 → 57 columns on maximize + restore).
   const previousStatus = useRef(status)
+  // `false` at first, so the first run with a box fits.
+  const previousActive = useRef(false)
   useEffect(() => {
     const was = previousStatus.current
+    const wasActive = previousActive.current
     previousStatus.current = status
+    previousActive.current = active
     if (!active) return
-    const size = handleRef.current?.fit()
-    if (size) window.workspace.terminal.resize(sessionId, size.cols, size.rows)
+    if (!wasActive || was !== status) {
+      const size = handleRef.current?.fit()
+      if (size) window.workspace.terminal.resize(sessionId, size.cols, size.rows)
+    }
     if (covered) return
     if (was !== status && was !== 'dormant' && status !== 'dormant') return
     if (status === 'dormant') wakeButtonRef.current?.focus()

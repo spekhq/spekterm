@@ -457,6 +457,33 @@ xterm 內建的寬度表是 **Unicode 6**，而 agent 依現代 wcwidth 排版 �
 | **`handleRef.focus()`** | **看不看得見** | 隱形的終端搶走焦點 ⇒ 使用者打的字進 pty 而**畫面上什麼都沒有** |
 | **`setGpuRenderer()`** | **看不看得見** | 被覆蓋時必須歸還並存額度，否則反覆切換會把額度耗盡 |
 
+### Covering must not resize: the two renderers measure different cells
+
+`maximize-panel-and-confirm-close` measured it: maximize + restore turned a 63-column pty into a
+57-column one, and nothing in the side panel touched the terminal's column. The chain:
+
+1. Covering releases the GPU renderer (the table above: `setGpuRenderer()` follows visibility).
+2. The DOM renderer lays the **same columns** out wider — about **9.63px** per cell against webgl's
+   **9px** (the shipped font; see "渲染" below). 63 columns became 607px of content in a 587px box.
+3. The `react-resizable-panels` panel wrapper is `overflow: auto` by default, so the column grew
+   **scrollbars**, the terminal's box shrank by their width (15px each way), and the resize observer
+   sent the pty the smaller size. The agent reflowed for a change nobody made.
+
+Two fixes, both needed:
+
+- **The terminal panel clips instead of scrolling** (`style={{ overflow: 'hidden' }}` on that
+  `Panel`). The box can no longer change because of what is drawn inside it.
+- **`TerminalView` does not fit on a change of `covered` alone** — only when it becomes `active` or
+  its status changes. A cover never changes the box, and the renderer is swapped on that very
+  transition, so a fit there measures with whichever renderer happens to be attached at that moment.
+  The effect order made it worse: the fit effect runs before the GPU effect, so on uncover it
+  measured with the DOM renderer and then webgl came back.
+
+**Still open (pre-existing, not changed here):** a terminal that becomes active fits in that same
+effect *before* the GPU effect attaches webgl, so its first size is DOM-based, and the resize
+observer's debounced fit can follow with the webgl-based one — two sizes for one switch. Nothing
+visible has been traced to it yet.
+
 ### 尺寸那一條為什麼不能用「記住上次的值」解決
 
 第一版的方案是「session 持有最後已知尺寸並落盤，沒有終端掛載時就用它」。**那正是

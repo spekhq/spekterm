@@ -38,7 +38,8 @@ spec —— 並且在 agent 寫入磁碟時跟著更新。
 - 跟隨當前 session 正在做的 change：每個 artifact 一個分頁、tasks 進度恆常可見、spec delta 標示
   `ADDED` / `MODIFIED`。
 - 瀏覽 specs 與 changes（進行中與已封存），包含住在其他 git worktree 裡的 change。
-- 全視窗的依賴圖與時間軸，與 [spek](https://github.com/spekhq/spek) 共用。
+- 依賴圖與時間軸，與 [spek](https://github.com/spekhq/spek) 共用，在放大後蓋住終端的側欄裡呈現 ——
+  任何 change 或檔案都能用同一個放大鍵拿到整個主舞台。
 - 在 spec、change 與底層檔案之間互跳；`Ctrl+P` 快速開檔；一鍵請 agent 繼續寫這個 change。
 
 **檔案**
@@ -95,6 +96,7 @@ npm run install:desktop                          # → ~/.local/bin ＋ 應用�
 | `Ctrl+T` | 開啟建立 session 的選單 |
 | `Ctrl+Shift+W` | 關閉當前的 session |
 | `Ctrl+Shift+H` | 讓當前的 session 休眠 |
+| `Ctrl+Shift+M` | 放大／還原側欄 |
 | `Shift+↓` / `Shift+↑` | 把選中的 repo 在 rail 上移動一格 |
 | `Shift+→` / `Shift+←` | 把當前的 session 在分頁列上移動一格 |
 | `Ctrl+P` | 快速開檔（側欄持有焦點時） |

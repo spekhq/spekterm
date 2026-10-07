@@ -64,6 +64,10 @@
     "terminal": "終端",
     "expandSidePanel": "展開側欄",
     "collapseSidePanel": "收合側欄",
+    "maximizeSidePanel": "放大側欄",
+    "restoreSidePanel": "還原側欄",
+    "maximize": "放大",
+    "restore": "還原",
     "noSession": "按「＋ session」開一個終端"
   },
   "panelSwitch": {
@@ -152,8 +156,6 @@
     "views": "OpenSpec 視圖",
     "tabChange": "這個 change",
     "tabBrowse": "瀏覽",
-    "openGraph": "開啟關係圖",
-    "openTimeline": "開啟時間軸",
     "graphTooltip": "關係圖 —— spec 與 change 如何關聯",
     "timelineTooltip": "時間軸 —— 每個 change 的生命週期",
     "expand": "展開",
@@ -196,11 +198,8 @@
     "breadcrumbSpecs": "spec"
   },
   "viz": {
-    "label": "視覺化",
     "graph": "關係圖",
     "timeline": "時間軸",
-    "close": "關閉",
-    "closeTooltip": "關閉（Esc）",
     "noGraph": "沒有可以呈現的 spec ↔ change 關聯。",
     "noTimeline": "沒有任何 change 可以放上時間軸。",
     "groupByTopic": "依主題分組",
@@ -242,6 +241,17 @@
     "more_other": "…另有 {{count}} 個檔案",
     "saveAll": "全部儲存",
     "discard": "不要儲存",
+    "cancel": "取消"
+  },
+  "closeConfirm": {
+    "message_other": "還有 {{count}} 個 session 正在執行",
+    "line": "{{item}} · {{label}}",
+    "lineWorking": "{{item}} · {{label}} —— 工作中",
+    "more_other": "…另有 {{count}} 個 session",
+    "consequence": "關閉 spekterm 會結束它們。執行中的指令與 agent 正在寫的回覆會遺失；喚醒時，claude session 會接續原本的對話，shell 會在最後的目錄重新啟動。",
+    "quit": "結束",
+    "saveAllAndQuit": "全部儲存並結束",
+    "quitWithoutSaving": "不儲存並結束",
     "cancel": "取消"
   },
   "sessions": {
@@ -293,7 +303,7 @@
     "aboutDirty": "有未提交的變更",
     "aboutDevelopment": "開發版建置",
     "language": "語言",
-        "languageHint": "立即生效。spekterm 寫給 agent 讀的文字維持英文。",
+    "languageHint": "立即生效。spekterm 寫給 agent 讀的文字維持英文。",
     "autoHibernate": "讓閒置的 session 休眠",
     "autoHibernateHint": "閒置超過這段時間的 session 會結束它的行程，但仍留在 workspace 裡，之後可以喚醒。畫面上正在顯示的 session、正在工作的 agent、正在跑工作的 shell 都不會被休眠。",
     "autoHibernateOff": "關閉",

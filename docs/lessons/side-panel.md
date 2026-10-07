@@ -33,9 +33,14 @@
 ## Graph ≠ Timeline
 
 **它們是兩個不同的功能。** Graph 是 spec ↔ change 的**關聯結構**（無時間概念）；Timeline 是 change
-的**生命週期**（Gantt，有日期軸）。**兩者都不屬於 side panel** —— Timeline 的最小可用寬度是
-**920px**，而側欄上限 620px。它們是「搞懂全局」的動作，不是「一邊駕駛 agent 一邊盯著」的動作，
-沒有與 terminal 並存的需求 → 全視窗 overlay。
+的**生命週期**（Gantt，有日期軸）。Timeline 的最小可用寬度是 **920px**，而側欄平常遠窄於此。
+They were a full-window overlay until `maximize-panel-and-confirm-close`; now they are views of the
+OpenSpec identity that are **only shown while the side panel is maximized** (choosing one maximizes
+it). Their state (`viz`) lives in `MainStage`, above `OpenSpecPanel` — that panel is remounted with
+`key={folder.id}` on every source change, and the identities mount exclusively, so state kept inside
+it would vanish on a repo switch. While one is shown, the panel's own scroll container stays mounted
+and **hidden** (a hidden scroller keeps its `scrollTop`; an outer scroller whose content is swapped
+resets to 0), so restoring returns the reader exactly where they were.
 
 ## `@spekjs/core` 的簽名與語意陷阱（全部實測）
 

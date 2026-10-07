@@ -65,6 +65,10 @@
     "terminal": "Terminal",
     "expandSidePanel": "Expand side panel",
     "collapseSidePanel": "Collapse side panel",
+    "maximizeSidePanel": "Maximize side panel",
+    "restoreSidePanel": "Restore side panel",
+    "maximize": "Maximize",
+    "restore": "Restore",
     "noSession": "Use + session to start a terminal"
   },
   "panelSwitch": {
@@ -154,8 +158,6 @@
     "views": "OpenSpec views",
     "tabChange": "This change",
     "tabBrowse": "Browse",
-    "openGraph": "Open Graph",
-    "openTimeline": "Open Timeline",
     "graphTooltip": "Graph — how specs and changes relate",
     "timelineTooltip": "Timeline — the life cycle of each change",
     "expand": "Expand",
@@ -198,11 +200,8 @@
     "breadcrumbSpecs": "specs"
   },
   "viz": {
-    "label": "Visualizations",
     "graph": "Graph",
     "timeline": "Timeline",
-    "close": "Close",
-    "closeTooltip": "Close (Esc)",
     "noGraph": "There are no spec ↔ change relations to show.",
     "noTimeline": "No change can be placed on the timeline.",
     "groupByTopic": "Group by topic",
@@ -246,6 +245,19 @@
     "more_other": "…and {{count}} more files",
     "saveAll": "Save All",
     "discard": "Don't Save",
+    "cancel": "Cancel"
+  },
+  "closeConfirm": {
+    "message_one": "{{count}} session is still running",
+    "message_other": "{{count}} sessions are still running",
+    "line": "{{item}} · {{label}}",
+    "lineWorking": "{{item}} · {{label}} — working",
+    "more_one": "…and {{count}} more session",
+    "more_other": "…and {{count}} more sessions",
+    "consequence": "Closing spekterm ends them. Running commands and any reply an agent is writing are lost; claude sessions resume their conversation and shells restart in their last directory when you wake them.",
+    "quit": "Quit",
+    "saveAllAndQuit": "Save All and Quit",
+    "quitWithoutSaving": "Quit Without Saving",
     "cancel": "Cancel"
   },
   "sessions": {
@@ -297,7 +309,7 @@
     "aboutDirty": "uncommitted changes",
     "aboutDevelopment": "development build",
     "language": "Language",
-        "languageHint": "Applies immediately. Text written by spekterm for the agent stays in English.",
+    "languageHint": "Applies immediately. Text written by spekterm for the agent stays in English.",
     "autoHibernate": "Hibernate idle sessions",
     "autoHibernateHint": "Ends the process of a session that has been idle this long, keeping it in the workspace to wake later. The session on screen, a working agent and a shell running a job are never hibernated.",
     "autoHibernateOff": "Off",

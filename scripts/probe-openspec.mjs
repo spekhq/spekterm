@@ -510,9 +510,13 @@ const CLICK_VIEW = (label) => `(() => {
 })()`
 
 /** 側欄同時只顯示一個視圖 —— 以各視圖的標誌性 landmark 判定。 */
+// Visible, not merely present: while Graph or Timeline is shown the panel's own view stays mounted
+// and hidden (maximize-panel-and-confirm-close design M5).
 const VISIBLE_VIEWS = `[
-  document.querySelector('[role="tablist"][aria-label="${copy('openspec.changeArtifact')}"]') ? 'change' : null,
-  document.querySelector('section[aria-label="${copy('openspec.specs')}"]') ? 'browse' : null,
+  document.querySelector('[role="tablist"][aria-label="${copy('openspec.changeArtifact')}"]')?.checkVisibility() ? 'change' : null,
+  document.querySelector('section[aria-label="${copy('openspec.specs')}"]')?.checkVisibility() ? 'browse' : null,
+  [...document.querySelectorAll('[role="tablist"][aria-label="${copy('openspec.views')}"] button[role="tab"][aria-selected="true"]')].some((b) => b.innerText.trim().endsWith('${copy('viz.graph')}')) ? 'graph' : null,
+  [...document.querySelectorAll('[role="tablist"][aria-label="${copy('openspec.views')}"] button[role="tab"][aria-selected="true"]')].some((b) => b.innerText.trim().endsWith('${copy('viz.timeline')}')) ? 'timeline' : null,
 ].filter(Boolean)`
 
 /** 「本 change」視圖顯示的 slug（該視圖不呈現時為 null）。 */
@@ -695,29 +699,50 @@ async function pressCtrlP(client) {
 }
 
 
-// ── Graph / Timeline 的全視窗 overlay ──────────────────────────────────────
+// ── Graph / Timeline: views of the maximized side panel ─────────────────────
+//
+// They used to be a full-window overlay (`role="dialog"`); since `maximize-panel-and-confirm-close`
+// they are entries of the OpenSpec view switch, shown only while the side panel is maximized.
+// Everything below is scoped to the OpenSpec panel instead of a dialog.
 
+/** The OpenSpec panel — the scope of every Graph / Timeline lookup. */
+const OPENSPEC_PANEL = `document.querySelector('section[aria-label="${copy('openspec.label')}"]')`
+
+/** Choose Graph or Timeline in the view switch (its text is the icon plus the dictionary label). */
 const CLICK_OPEN_VIZ = (kind) => `(() => {
-  const btn = document.querySelector('button[aria-label="${copy(
-    kind === 'Graph' ? 'openspec.openGraph' : 'openspec.openTimeline',
-  )}"]')
+  const label = ${JSON.stringify(kind === 'Graph' ? copy('viz.graph') : copy('viz.timeline'))}
+  const tab = [...document.querySelectorAll('[role="tablist"][aria-label="${copy('openspec.views')}"] button[role="tab"]')]
+    .find((el) => el.innerText.trim().endsWith(label))
+  if (!tab) return false
+  tab.click()
+  return true
+})()`
+
+/** The maximize / restore entry in the header (either label). */
+const MAXIMIZE_BUTTON = `document.querySelector('[aria-label="${copy('stage.maximizeSidePanel')}"], [aria-label="${copy('stage.restoreSidePanel')}"]')`
+
+/** Is the side panel maximized? Read from the entry's `aria-pressed`. */
+const MAXIMIZED = `(${MAXIMIZE_BUTTON})?.getAttribute('aria-pressed') === 'true'`
+
+const CLICK_MAXIMIZE = `(() => {
+  const btn = ${MAXIMIZE_BUTTON}
   if (!btn) return false
   btn.click()
   return true
 })()`
 
-/** overlay 存在嗎？它是什麼？以及它是否真的**蓋滿視窗**（design D12 的重點）。 */
+/**
+ * Which visualization is shown (the selected view entry), and whether the side panel is maximized.
+ * `null` when neither Graph nor Timeline is selected. Named OVERLAY for history: its users used to
+ * read the full-window overlay.
+ */
 const OVERLAY = `(() => {
-  const dialog = document.querySelector('[role="dialog"][aria-modal="true"]')
-  if (!dialog) return null
-  const r = dialog.getBoundingClientRect()
-  return {
-    label: dialog.getAttribute('aria-label'),
-    coversViewport:
-      Math.round(r.width) >= window.innerWidth && Math.round(r.height) >= window.innerHeight,
-    width: Math.round(r.width),
-    height: Math.round(r.height),
-  }
+  const selected = [...document.querySelectorAll('[role="tablist"][aria-label="${copy('openspec.views')}"] button[role="tab"][aria-selected="true"]')]
+    .map((b) => b.innerText.trim())
+  const label = [${JSON.stringify(copy('viz.graph'))}, ${JSON.stringify(copy('viz.timeline'))}]
+    .find((l) => selected.some((text) => text.endsWith(l)))
+  if (!label) return null
+  return { label, maximized: ${MAXIMIZED} }
 })()`
 
 /** 當前選中的 repo —— 主舞台的 header 第一行就是它。 */
@@ -728,8 +753,9 @@ const SELECTED_FOLDER = `(() => {
 
 /** 力導向圖的節點：spec 是 circle、change 是 rect。 */
 const GRAPH_NODES = `(() => {
-  const dialog = document.querySelector('[role="dialog"]')
-  const svg = dialog?.querySelector('svg')
+  const dialog = ${OPENSPEC_PANEL}
+  // The svg that holds the graph's nodes — the panel has other (icon) svgs.
+  const svg = dialog?.querySelector('.nodes')?.closest('svg')
   if (!svg) return null
   return {
     circles: svg.querySelectorAll('.nodes circle').length,
@@ -746,7 +772,7 @@ const GRAPH_NODES = `(() => {
  * 圖形與文字之間的空白處，點下去什麼也不會發生（實測踩到）。
  */
 const GRAPH_NODE_RECT = (nodeId) => `(() => {
-  const dialog = document.querySelector('[role="dialog"]')
+  const dialog = ${OPENSPEC_PANEL}
   // 以 d3 綁在元素上的 __data__.id 定位，**不要用節點的文字標籤** —— core 的
   // GraphNode.label 對 change 是 humanize 過的描述（"solo change"），不是 slug（"solo-change"）。
   const g = [...(dialog?.querySelectorAll('.nodes > g') ?? [])]
@@ -759,7 +785,7 @@ const GRAPH_NODE_RECT = (nodeId) => `(() => {
 })()`
 
 const TIMELINE = `(() => {
-  const dialog = document.querySelector('[role="dialog"]')
+  const dialog = ${OPENSPEC_PANEL}
   // 這個 aria-label 來自 **@spekjs/ui 套件內部**，不是我們的文案 —— 不歸字典管，硬編是對的。
   const svg = dialog?.querySelector('svg[aria-label="Change lifecycle timeline"]')
   if (!svg) return null
@@ -775,7 +801,7 @@ const TIMELINE = `(() => {
 })()`
 
 const TIMELINE_LABEL_RECT = (slug) => `(() => {
-  const dialog = document.querySelector('[role="dialog"]')
+  const dialog = ${OPENSPEC_PANEL}
   const btn = [...(dialog?.querySelectorAll('.spekui-timeline-label') ?? [])]
     .find((b) => b.innerText.includes(${JSON.stringify(slug)}))
   if (!btn) return null
@@ -1063,14 +1089,38 @@ const MENU_WITHIN_VIEWPORT = `(() => {
 
 /** Timeline 的分組標題（`.spekui-timeline-section` 的 title；套件內部的 class，不歸字典管）。 */
 const TIMELINE_SECTIONS = `(() => {
-  const dialog = document.querySelector('[role="dialog"]')
+  const dialog = ${OPENSPEC_PANEL}
   if (!dialog) return null
   return [...dialog.querySelectorAll('.spekui-timeline-section')].map((el) => el.getAttribute('title'))
 })()`
 
-/** overlay 的關閉按鈕。 */
+/** Leave Graph / Timeline: restore the side panel (there is no close button any more). */
 const CLICK_VIZ_CLOSE = `(() => {
-  const btn = document.querySelector('[role="dialog"] [aria-label="${copy('viz.close')}"]')
+  const btn = document.querySelector('[aria-label="${copy('stage.restoreSidePanel')}"]')
+  if (!btn) return false
+  btn.click()
+  return true
+})()`
+
+// ── the inbox overlay: the full-window dialog the suppression checks now use ──
+
+const OPEN_INBOX = `(() => {
+  const btn = document.querySelector('nav[aria-label="${copy('activityBar.label')}"] button[aria-label="${copy('activityBar.handoffs')}"]')
+  if (!btn) return false
+  btn.click()
+  return true
+})()`
+
+/** The inbox overlay, if open: a `role="dialog"` with `aria-modal`, covering the window. */
+const INBOX = `(() => {
+  const dialog = document.querySelector('[role="dialog"][aria-modal="true"][aria-label="${copy('intake.label')}"]')
+  if (!dialog) return null
+  const r = dialog.getBoundingClientRect()
+  return { coversViewport: Math.round(r.width) >= window.innerWidth && Math.round(r.height) >= window.innerHeight }
+})()`
+
+const CLOSE_INBOX = `(() => {
+  const btn = document.querySelector('[role="dialog"] [aria-label="${copy('intake.close')}"]')
   if (!btn) return false
   btn.click()
   return true
@@ -1078,7 +1128,7 @@ const CLICK_VIZ_CLOSE = `(() => {
 
 /** 點 overlay 裡的一顆 chip（group by topic 之類）—— 以可見文字定位。 */
 const CLICK_VIZ_CHIP = (label) => `(() => {
-  const dialog = document.querySelector('[role="dialog"]')
+  const dialog = ${OPENSPEC_PANEL}
   const btn = [...(dialog?.querySelectorAll('button') ?? [])]
     .find((b) => b.textContent?.trim() === ${JSON.stringify(label)})
   if (!btn) return false
@@ -1450,21 +1500,26 @@ async function runQuickOpenScope(app) {
 
   await app.client.evaluate(CLICK_IDENTITY('◈'))
   await sleep(800)
-  check(results, 'quick open 前置 —— 開啟 Graph overlay',
-    (await app.client.evaluate(CLICK_OPEN_VIZ('Graph'))) === true)
-  const overlayUp = await pollUntil(app.client, OVERLAY, (v) => v !== null, 8000)
-  check(results, 'quick open 前置 —— overlay 確實開啟', overlayUp !== null)
+  // The full-window overlay here used to be Graph / Timeline; they are now views of the maximized
+  // side panel, not dialogs. The inbox overlay is the carrier now: it takes focus when it opens, so
+  // focus is put back into the side panel — the condition the document-wide check exists for.
+  check(results, 'quick open 前置 —— 開啟收件匣 overlay',
+    (await app.client.evaluate(OPEN_INBOX)) === true)
+  const overlayUp = await pollUntil(app.client, INBOX, (v) => v !== null, 8000)
+  const refocused = await app.client.evaluate(FOCUS_SIDE_PANEL)
+  check(results, 'quick open 前置 —— overlay 確實開啟，且焦點在側欄之內',
+    overlayUp?.coversViewport === true && refocused === true,
+    `overlay=${JSON.stringify(overlayUp)}；焦點回到側欄=${refocused}`)
 
-  await app.client.evaluate(FOCUS_SIDE_PANEL)
   await pressCtrlP(app.client)
   const quickOpenUnderOverlay = await app.client.evaluate(QUICK_OPEN)
-  const overlayStillOpen = await app.client.evaluate(OVERLAY)
+  const overlayStillOpen = await app.client.evaluate(INBOX)
   check(results, '全視窗 overlay 開啟時 Ctrl+P 為無操作',
     quickOpenUnderOverlay === null && overlayStillOpen !== null,
     `quick open=${JSON.stringify(quickOpenUnderOverlay)}；overlay 仍開著=${overlayStillOpen !== null}`)
 
-  await app.client.evaluate(CLICK_VIZ_CLOSE)
-  await pollUntil(app.client, OVERLAY, (v) => v === null, 8000)
+  await app.client.evaluate(CLOSE_INBOX)
+  await pollUntil(app.client, INBOX, (v) => v === null, 8000)
   await sleep(400)
 
   await app.client.evaluate(FOCUS_SIDE_PANEL)
@@ -1695,13 +1750,14 @@ async function runPanelBasics(label, { port, rendererUrl }) {
     // **等到兩個視圖，不是「有就好」。** change 清單尚未載入時「本 change」的入口確實不在
     // （`openspec-panel`：沒有可解析的 change 就不呈現該入口）—— `length > 0` 會在那一刻就
     // settle，於是下一條斷言在啟動較慢時紅，而它是一個規格內的暫態，不是缺陷。
-    const tabs = await pollUntil(app.client, VIEW_TABS, (list) => list.length === 2, 8000)
+    // Since `maximize-panel-and-confirm-close` the same switch also offers Graph and Timeline.
+    const tabs = await pollUntil(app.client, VIEW_TABS, (list) => list.length === 4, 8000)
     check(
       results,
-      'OpenSpec 身分呈現「本 change」與「瀏覽」兩個視圖',
-      tabs.length === 2 &&
+      'OpenSpec 身分呈現「本 change」與「瀏覽」兩個視圖（及 Graph、Timeline 的入口）',
+      tabs.length === 4 &&
         tabs.map((t) => t.label).join(',') ===
-          [copy('openspec.tabChange'), copy('openspec.tabBrowse')].join(','),
+          [copy('openspec.tabChange'), copy('openspec.tabBrowse'), `◈ ${copy('viz.graph')}`, `▤ ${copy('viz.timeline')}`].join(','),
       tabs.map((t) => t.label).join(', '),
     )
     check(
@@ -2144,18 +2200,16 @@ async function runBrowseAndOverlays(label, config, { app }) {
     const backSpec = await pollUntil(app.client, SPEC_CONTENT, (text) => text.includes('core'), 8000)
     check(results, '呈現對應的 spec', backSpec.includes('core'))
 
-    // ── 全視窗 overlay：Graph ───────────────────────────────────────────────
+    // ── Graph / Timeline: views of the maximized side panel ─────────────────
     //
-    // Graph 與 Timeline 來自 @spekjs/ui（與 spek web 同一份程式碼）。這裡驗的是**宿主的接線**：
-    // overlay 真的蓋滿視窗、顏色契約真的接上、選一個 change 真的錨定。
-    console.log('\n全視窗 overlay：Graph')
+    // Graph and Timeline come from @spekjs/ui (the same code as spek web). What is verified here is
+    // the host's wiring: choosing one maximizes the side panel, the colour contract resolves to our
+    // theme, a chosen change opens in the same maximized panel (`openspec-panel`, "Graph and
+    // Timeline are views of the maximized side panel"). They used to be a full-window overlay.
+    console.log('\nGraph / Timeline in the maximized side panel')
 
-    // **對照組：這顆 `Ctrl+↓` 在沒有 overlay 時，真的切得動 repo。**
-    //
-    // 下面那條「overlay 開著時導航快捷鍵不生效」是一條**否定**斷言 —— 若這支探針送出的按鍵根本
-    // 沒抵達 renderer（事件型別錯、修飾鍵沒帶上、焦點不對），repo 當然不會變，它照樣全綠。
-    // **先證明這顆按鍵是活的，那條斷言才有意義。**（同 probe:terminal 的「沒有對話框」與「清空
-    // 名稱後標籤立即改變」那一對。）
+    // **Control: this `Ctrl+↓` really switches repos.** The assertion below ("works while Graph is
+    // shown") is positive now, but keeping the control tells a dead key apart from a wrong behaviour.
     const folderBase = await app.client.evaluate(SELECTED_FOLDER)
     await pressCtrlArrowDown(app.client)
     const folderSwitched = await pollUntil(
@@ -2166,7 +2220,7 @@ async function runBrowseAndOverlays(label, config, { app }) {
     )
     check(
       results,
-      'Ctrl+↓ 在無 overlay 時確實切換 repo（下方抑制斷言的對照組）',
+      'Ctrl+↓ 在側欄未放大時確實切換 repo（下方斷言的對照組）',
       folderSwitched !== folderBase,
       `${folderBase} → ${folderSwitched}`,
     )
@@ -2175,14 +2229,37 @@ async function runBrowseAndOverlays(label, config, { app }) {
     await app.client.evaluate(SELECT_FOLDER('repo-single'))
     await pollUntil(app.client, SELECTED_FOLDER, (value) => value?.includes('repo-single'), 6000)
 
-    check(results, '自側欄開啟 Graph', (await app.client.evaluate(CLICK_OPEN_VIZ('Graph'))) === true)
-    const graphOverlay = await pollUntil(app.client, OVERLAY, (value) => value !== null, 10_000)
-    check(results, 'Graph 於 overlay 中呈現', graphOverlay?.label === copy('viz.graph'), JSON.stringify(graphOverlay))
+    // ── A full-window overlay blocks the navigation shortcuts ──
+    //
+    // This used to be carried by the Graph overlay; Graph is no longer a dialog. The inbox overlay
+    // is: the suppression is decided by `[role="dialog"]`, and its failure mode is a dialog that
+    // forgot the role — so it is verified per kind of dialog. **Absolute check**: the folder after
+    // the key must be the one before it (four folders, so the key has somewhere to go — and the
+    // control above proves the key is alive).
+    check(results, 'precondition: open the inbox overlay', (await app.client.evaluate(OPEN_INBOX)) === true)
+    const inboxUp = await pollUntil(app.client, INBOX, (v) => v !== null, 6000)
+    const folderUnderInbox = await app.client.evaluate(SELECTED_FOLDER)
+    await pressCtrlArrowDown(app.client)
+    await sleep(500)
+    const folderAfterInbox = await app.client.evaluate(SELECTED_FOLDER)
+    const inboxStill = await app.client.evaluate(INBOX)
     check(
       results,
-      'overlay 覆蓋整個視窗',
-      graphOverlay?.coversViewport === true,
-      `${graphOverlay?.width}x${graphOverlay?.height}`,
+      'overlay 開啟時，導航快捷鍵不生效（overlay 仍開著、repo 未被切走）',
+      inboxUp?.coversViewport === true && folderAfterInbox === folderUnderInbox && inboxStill !== null,
+      `overlay=${JSON.stringify(inboxUp)}；repo：${folderUnderInbox} → ${folderAfterInbox}；仍開著=${inboxStill !== null}`,
+    )
+    await app.client.evaluate(CLOSE_INBOX)
+    await pollUntil(app.client, INBOX, (v) => v === null, 6000)
+
+    check(results, '[maximize] precondition: the side panel is not maximized', (await app.client.evaluate(MAXIMIZED)) === false)
+    check(results, '自側欄開啟 Graph', (await app.client.evaluate(CLICK_OPEN_VIZ('Graph'))) === true)
+    const graphShown = await pollUntil(app.client, OVERLAY, (value) => value?.maximized === true, 10_000)
+    check(
+      results,
+      '[maximize] choosing Graph maximizes the side panel and shows Graph',
+      graphShown?.label === copy('viz.graph') && graphShown?.maximized === true,
+      JSON.stringify(graphShown),
     )
 
     const graph = await pollUntil(app.client, GRAPH_NODES, (value) => value && value.edges > 0, 12_000)
@@ -2197,11 +2274,7 @@ async function runBrowseAndOverlays(label, config, { app }) {
     //
     // **`--spek-accent` 一個人擋不住漏接**：我們的 `--color-accent` 與套件的深色預設值都是
     // `#f59e0b`，於是就算這一行覆寫整個消失，這條斷言照樣通過。`--spek-node-active` 才是有
-    // 鑑別力的那個（我們 `#34d399` vs 套件 `#22c55e`）—— 它也正是 `@spekjs/ui` 1.3 新增、
-    // 而宿主漏接時會靜默沿用套件顏色的那一個。
-    //
-    // 名單層級的完整性由 `scripts/spek-theme-contract.test.mjs` 在 `npm test` 守著（套件再加
-    // 變數就變紅）；這裡驗的是**執行期真的解析成我們的值**，兩者不重複。
+    // 鑑別力的那個（我們 `#34d399` vs 套件 `#22c55e`）。
     const themeVars = await app.client.evaluate(SPEK_THEME_VARS)
     check(
       results,
@@ -2213,30 +2286,35 @@ async function runBrowseAndOverlays(label, config, { app }) {
       JSON.stringify(themeVars),
     )
 
-    // ── overlay 開著時，導航快捷鍵必須讓位（session-title-authority 的 design D4）
+    // ── Shortcuts work while Graph is shown (it used to be suppressed under the overlay) ──
     //
-    // overlay 蓋滿整個視窗 —— 這時候按 `Ctrl+↓` 切到別的 repo，切了也看不見，而使用者關掉
-    // overlay 之後會發現自己莫名其妙站在另一個 repo 上。抑制是以 `[role="dialog"]` 的存在判定
-    // 的（與對話框的身分無關），overlay 帶著那個角色，因此**理應**已被涵蓋 —— 但在此之前**從未
-    // 被驗證過**。
-    //
-    // **這條是本 change 的淨得。** 它取代了原本以「pty 標題衝突對話框」為載體的那條抑制驗收
-    //（該對話框已移除）。三種載體（session 命名、files 的對話框、這個 overlay）必須各驗一次：
-    // 抑制邏輯的失效模式不是判定寫錯，而是**某個對話框漏了 role="dialog"，於是靜默地不被尊重**
-    // —— 只驗一種就宣稱涵蓋，等於沒驗。
-    //
-    // fixture 有四個 folder，因此「folder 沒變」不是一條恆真的斷言 —— 快捷鍵若真的生效了，它
-    // **有地方可去**。而「這顆按鍵本身是活的」則由上面的對照組證明。
+    // The maximized side panel is not a dialog, and the rail stays so repos can be switched. The
+    // repo must change **and** Graph must still be shown, now for the new source — Graph's state
+    // lives above the remounted OpenSpec panel (design M5).
     const folderBeforeKey = await app.client.evaluate(SELECTED_FOLDER)
     await pressCtrlArrowDown(app.client)
-    await sleep(500)
-    const folderAfterKey = await app.client.evaluate(SELECTED_FOLDER)
-    const overlayAfterKey = await app.client.evaluate(OVERLAY)
+    const folderAfterKey = await pollUntil(app.client, SELECTED_FOLDER, (value) => value !== folderBeforeKey, 4000)
+    const graphAfterKey = await pollUntil(app.client, OVERLAY, (value) => value?.label === copy('viz.graph'), 4000)
     check(
       results,
-      'overlay 開啟時，導航快捷鍵不生效（overlay 仍開著、repo 未被切走）',
-      folderAfterKey === folderBeforeKey && overlayAfterKey !== null,
-      `repo：${folderBeforeKey} → ${folderAfterKey}；overlay=${overlayAfterKey?.label ?? 'null'}`,
+      '[maximize] Ctrl+↓ switches the repo while Graph is shown, and Graph stays shown',
+      folderAfterKey !== folderBeforeKey && graphAfterKey?.label === copy('viz.graph') && graphAfterKey?.maximized === true,
+      `repo：${folderBeforeKey} → ${folderAfterKey}；shown=${JSON.stringify(graphAfterKey)}`,
+    )
+    await app.client.evaluate(SELECT_FOLDER('repo-single'))
+    await pollUntil(app.client, SELECTED_FOLDER, (value) => value?.includes('repo-single'), 6000)
+
+    // Graph → Files → OpenSpec ⇒ Graph again.
+    await app.client.evaluate(CLICK_IDENTITY('▤'))
+    await pollUntil(app.client, IDENTITY, (value) => value === 'files', 6000)
+    await app.client.evaluate(CLICK_IDENTITY('◈'))
+    await pollUntil(app.client, IDENTITY, (value) => value === 'openspec', 6000)
+    const graphAfterIdentity = await pollUntil(app.client, OVERLAY, (value) => value?.label === copy('viz.graph'), 6000)
+    check(
+      results,
+      '[maximize] Graph survives switching to Files and back',
+      graphAfterIdentity?.label === copy('viz.graph') && graphAfterIdentity?.maximized === true,
+      JSON.stringify(graphAfterIdentity),
     )
 
     // 力導向圖是動的 —— 等它停下來再量節點位置。
@@ -2252,34 +2330,54 @@ async function runBrowseAndOverlays(label, config, { app }) {
     const settled = await app.client.evaluate(GRAPH_NODE_RECT('change:solo-change'))
     await realClick(app.client, settled ?? nodeRect)
     const afterGraphClick = await pollUntil(app.client, OVERLAY, (value) => value === null, 8000)
-    check(results, '於 Graph 觸發 change 節點後 overlay 關閉', afterGraphClick === null)
     //
     // **必須輪詢，不能 evaluate 一次就斷言。** 換一個 change 會把側欄的資料清掉、短暫回到
-    // 「載入中…」（key 變了就不沿用上一份 —— 否則會有一瞬間顯示上一個 change，那比 loading
-    // 更糟）。錨定其實已經成立（麵包屑與視圖都對了），只是 `h2` 還沒渲染出來 —— 讀一次會讀到
-    // null。實測：這條會隨時序時綠時紅。
+    // 「載入中…」。錨定其實已經成立，只是 `h2` 還沒渲染出來 —— 讀一次會讀到 null。
     const anchoredByGraph = await pollUntil(
       app.client,
       ANCHORED_SLUG,
       (value) => value === 'solo-change',
       8000,
     )
+    const stillMaximized = await app.client.evaluate(MAXIMIZED)
     check(
       results,
-      '該 change 成為側欄呈現的 change',
-      anchoredByGraph === 'solo-change',
-      String(anchoredByGraph),
+      '[maximize] a change chosen in Graph opens in This change and the side panel stays maximized',
+      afterGraphClick === null && anchoredByGraph === 'solo-change' && stillMaximized === true,
+      `graph=${JSON.stringify(afterGraphClick)} anchored=${anchoredByGraph} maximized=${stillMaximized}`,
     )
 
-    // ── 全視窗 overlay：Timeline ────────────────────────────────────────────
-    console.log('\n全視窗 overlay：Timeline')
-    check(results, '自側欄開啟 Timeline', (await app.client.evaluate(CLICK_OPEN_VIZ('Timeline'))) === true)
-    const timelineOverlay = await pollUntil(app.client, OVERLAY, (value) => value !== null, 10_000)
+    // ── View in OpenSpec while Graph was shown: the asked-for target wins ──
+    check(results, '[maximize] precondition: open the change artifact in Files', (await app.client.evaluate(CLICK_OPEN_FILE('solo-change'))) === true)
+    await pollUntil(app.client, OPEN_FILE_PATH, (value) => value?.includes('solo-change') === true, 8000)
+    await app.client.evaluate(CLICK_IDENTITY('◈'))
+    await pollUntil(app.client, IDENTITY, (value) => value === 'openspec', 6000)
+    await app.client.evaluate(CLICK_OPEN_VIZ('Graph'))
+    const graphBeforeFiles = await pollUntil(app.client, OVERLAY, (value) => value?.label === copy('viz.graph'), 6000)
+    await app.client.evaluate(CLICK_IDENTITY('▤'))
+    const fileBack = await pollUntil(app.client, OPEN_FILE_PATH, (value) => value?.includes('solo-change') === true, 8000)
+    check(results, '[maximize] precondition: Graph shown, then Files shows the artifact again',
+      graphBeforeFiles !== null && fileBack !== null, `graph=${JSON.stringify(graphBeforeFiles)} file=${fileBack}`)
+    check(results, '[maximize] View in OpenSpec from Files', (await app.client.evaluate(CLICK_VIEW_IN_OPENSPEC)) === true)
+    await pollUntil(app.client, IDENTITY, (value) => value === 'openspec', 8000)
+    const afterViewIn = await pollUntil(app.client, VISIBLE_VIEWS, (list) => list.includes('change'), 8000)
+    const shownSlug = await pollUntil(app.client, ANCHORED_SLUG, (value) => value === 'solo-change', 8000)
     check(
       results,
-      'Timeline 於 overlay 中呈現',
-      timelineOverlay?.label === 'Timeline',
-      JSON.stringify(timelineOverlay),
+      '[maximize] View in OpenSpec while Graph was shown shows the change, not Graph',
+      afterViewIn.join(',') === 'change' && shownSlug === 'solo-change',
+      `views=${afterViewIn.join(',')} slug=${shownSlug}`,
+    )
+
+    // ── Timeline ──
+    console.log('\nTimeline')
+    check(results, '自側欄開啟 Timeline', (await app.client.evaluate(CLICK_OPEN_VIZ('Timeline'))) === true)
+    const timelineShown = await pollUntil(app.client, OVERLAY, (value) => value?.label === copy('viz.timeline'), 10_000)
+    check(
+      results,
+      '[maximize] choosing Timeline shows it in the maximized side panel',
+      timelineShown?.label === copy('viz.timeline') && timelineShown?.maximized === true,
+      JSON.stringify(timelineShown),
     )
 
     const timeline = await pollUntil(app.client, TIMELINE, (value) => value !== null, 12_000)
@@ -2292,9 +2390,37 @@ async function runBrowseAndOverlays(label, config, { app }) {
     // active 的 change 延伸到 today 並在右端畫一個三角箭頭 —— 這是 Gantt，不是關聯圖。
     check(results, 'active 的 change 以箭頭延伸至今天', timeline?.arrows >= 1, `${timeline?.arrows} 個箭頭`)
 
-    await pressEscape(app.client)
-    const closed = await pollUntil(app.client, OVERLAY, (value) => value === null, 8000)
-    check(results, '以 Esc 關閉 overlay', closed === null)
+    // ── Restoring leaves Graph / Timeline and returns to the view before it ──
+    await app.client.evaluate(CLICK_MAXIMIZE) // restore
+    await pollUntil(app.client, MAXIMIZED, (value) => value === false, 6000)
+    await app.client.evaluate(CLICK_VIEW(copy('openspec.tabBrowse')))
+    await pollUntil(app.client, VISIBLE_VIEWS, (list) => list.join(',') === 'browse', 6000)
+    await app.client.evaluate(CLICK_OPEN_VIZ('Graph'))
+    await pollUntil(app.client, OVERLAY, (value) => value?.label === copy('viz.graph'), 6000)
+    check(results, '[maximize] restore', (await app.client.evaluate(CLICK_VIZ_CLOSE)) === true)
+    const afterRestore = await pollUntil(app.client, VISIBLE_VIEWS, (list) => list.join(',') === 'browse', 6000)
+    const restoredState = await app.client.evaluate(MAXIMIZED)
+    check(
+      results,
+      '[maximize] Browse → Graph → restore shows Browse, not maximized',
+      afterRestore.join(',') === 'browse' && restoredState === false,
+      `views=${afterRestore.join(',')} maximized=${restoredState}`,
+    )
+
+    // Graph → restore → maximize ⇒ the panel's own view, not Graph.
+    await app.client.evaluate(CLICK_MAXIMIZE)
+    await pollUntil(app.client, MAXIMIZED, (value) => value === true, 6000)
+    const reMaximized = await app.client.evaluate(OVERLAY)
+    const reViews = await app.client.evaluate(VISIBLE_VIEWS)
+    check(
+      results,
+      '[maximize] maximizing again after restoring from Graph does not show Graph',
+      reMaximized === null && reViews.join(',') === 'browse',
+      `shown=${JSON.stringify(reMaximized)} views=${reViews.join(',')}`,
+    )
+    await app.client.evaluate(CLICK_MAXIMIZE)
+    await pollUntil(app.client, MAXIMIZED, (value) => value === false, 6000)
+    await app.client.evaluate(CLICK_VIEW(copy('openspec.tabChange')))
 
     // ── 多個 active change：不猜 ────────────────────────────────────────────
     console.log('\n多個 active change：不猜')
@@ -2309,6 +2435,24 @@ async function runBrowseAndOverlays(label, config, { app }) {
       emptyText !== null,
       `剩下的視圖：${String(emptyText)}`,
     )
+
+    // Graph does not depend on a resolvable anchored change (`openspec-panel`): the derived
+    // "no change ⇒ Browse" applies to This change only.
+    // `createSession` returns once the menu item is clicked; the session appears when the pty is up.
+    // Creating a session restores the maximized panel (by design), so wait for it to land first.
+    await pollUntil(app.client, SESSION_TABS, (list) => list.length >= 1, 15_000)
+    await sleep(500)
+    check(results, '[maximize] choose Graph with several active changes and no anchor', (await app.client.evaluate(CLICK_OPEN_VIZ('Graph'))) === true)
+    const manyGraph = await pollUntil(app.client, GRAPH_NODES, (value) => value && value.edges > 0, 12_000)
+    const manyShown = await app.client.evaluate(OVERLAY)
+    check(
+      results,
+      '[maximize] Graph is shown without a resolvable anchored change',
+      manyShown?.label === copy('viz.graph') && manyGraph?.edges >= 1,
+      `shown=${JSON.stringify(manyShown)} graph=${JSON.stringify(manyGraph && { rects: manyGraph.rects, edges: manyGraph.edges })}`,
+    )
+    await app.client.evaluate(CLICK_VIZ_CLOSE)
+    await pollUntil(app.client, MAXIMIZED, (value) => value === false, 6000)
 }
 
 async function runAnchoringAndCoordinate(label, config, { app, single }) {
@@ -2471,6 +2615,18 @@ async function runAnchoringAndCoordinate(label, config, { app, single }) {
     check(results, '入口列出尚缺的 artifact（design 與 specs）',
       ownEntry !== null && ownEntry.text.includes('design') && ownEntry.text.includes('specs'),
       ownEntry?.text)
+
+    // ── maximize: the continuation entry turns to the session, so it restores the side panel ──
+    // (`workspace-layout`; design M4 — `sendInput` moves the attention counter). The command lands
+    // in the stub's shell, where it is a harmless "not found".
+    await app.client.evaluate(CLICK_MAXIMIZE)
+    const maxForContinue = await pollUntil(app.client, MAXIMIZED, (v) => v === true, 5000)
+    await app.client.evaluate(`document.querySelector('[aria-label="${copy('openspec.continueArtifact')}"]')?.click()`)
+    const restoredByContinue = await pollUntil(app.client, MAXIMIZED, (v) => v === false, 5000)
+    const focusAfterContinue = await pollUntil(app.client, FOCUS_PLACE, (v) => v === 'terminal', 3000)
+    check(results, '[maximize] the continuation entry restores the side panel and focuses the terminal',
+      maxForContinue === true && restoredByContinue === false && focusAfterContinue === 'terminal',
+      `maximized before=${maxForContinue} after=${restoredByContinue} focus=${focusAfterContinue}`)
 
     // ── 只有 archived change 的 repo：降級到正確的層級 ──────────────────────
     console.log('\n只有 archived change 的 repo')
@@ -3149,10 +3305,10 @@ async function runWorktreeAggregation(label, config, { app, worktree }) {
     //
     // 因此主行程必須**在剝掉 `source` 之前**把識別碼還原。這條斷言就是那件事的證明：
     // **它在還原之前必定紅**，而既有那條 Graph 點擊斷言跑在單一工作目錄的 fixture 上，看不到它。
-    // Timeline 的 overlay 還開著 —— 先收掉再從側欄開 Graph（用關閉按鈕，理由見下方註解）。
+    // Timeline is still shown — restore (that leaves it), then choose Graph from the side panel.
     await app.client.evaluate(CLICK_VIZ_CLOSE)
     const timelineClosed = await pollUntil(app.client, OVERLAY, (v) => v === null, 8000)
-    check(results, '關閉 Timeline overlay', timelineClosed === null, JSON.stringify(timelineClosed))
+    check(results, '關閉 Timeline（還原側欄）', timelineClosed === null, JSON.stringify(timelineClosed))
 
     check(
       results,
@@ -3178,9 +3334,9 @@ async function runWorktreeAggregation(label, config, { app, worktree }) {
     if (wtTarget) {
       await realClick(app.client, wtTarget)
     } else {
-      // **找不到節點時也要把 overlay 收掉。** `realClick(null)` 會 throw，而 throw 不是紅燈 ——
-      // 它讓整支探針從這裡中斷，後面每一段都不會跑（實測：對照組驗鑑別力時就是這樣斷的）。
-      // 留著 overlay 也一樣糟：其後的真滑鼠事件全部點不到，`createSession` 同樣是 throw。
+      // **找不到節點時也要把 Graph 收掉（還原側欄）。** `realClick(null)` 會 throw，而 throw 不是
+      // 紅燈 —— 它讓整支探針從這裡中斷（實測：對照組驗鑑別力時就是這樣斷的）。留著放大的側欄
+      // 也一樣糟：它蓋住分頁列，其後的真滑鼠事件點不到「+」，`createSession` 同樣是 throw。
       await app.client.evaluate(CLICK_VIZ_CLOSE)
     }
     await pollUntil(app.client, OVERLAY, (value) => value === null, 8000)
@@ -3397,13 +3553,14 @@ async function runWorktreeAggregation(label, config, { app, worktree }) {
     // 目錄在別處）而 `isFolderRoot` 為 true（session 就跑在這裡）—— 兩者相反。把判準換回
     // `isMain`，續寫入口會被錯誤地停用，而那個錯誤**只有人的眼睛看得到**：DTO 層的單元測試
     // 驗的是欄位值，不是入口亮不亮。
-    // 上面點 change 節點時 overlay 已自行關閉 —— 這裡只確認它真的不在了。
-    // 下面的 `createSession` 送的是**真滑鼠事件**，overlay 只要還蓋著就點不到「+ session」，
+    // A change chosen in Graph opens in the still-maximized side panel, which covers the tab strip.
+    // 下面的 `createSession` 送的是**真滑鼠事件**，側欄只要還蓋著就點不到「+ session」，
     // 而 `createSession` 是 throw 而不是回報紅燈 —— 整支探針會就此中斷（實測踩過）。
     // `SELECT_FOLDER` 之類的 `evaluate` 直接點 DOM，不受遮擋，所以「前一條是綠的」完全不代表
-    // overlay 已經退場。
-    const overlayGone = await pollUntil(app.client, OVERLAY, (v) => v === null, 8000)
-    check(results, 'overlay 已退場（真滑鼠事件的前置）', overlayGone === null, JSON.stringify(overlayGone))
+    // 側欄已經還原。
+    if ((await app.client.evaluate(MAXIMIZED)) === true) await app.client.evaluate(CLICK_MAXIMIZE)
+    const overlayGone = await pollUntil(app.client, MAXIMIZED, (v) => v === false, 8000)
+    check(results, '側欄已還原（真滑鼠事件的前置）', overlayGone === false, String(overlayGone))
 
     console.log('\nfolder 本身是 linked worktree')
 
@@ -4148,8 +4305,10 @@ async function runChangeViewKeyboard(label, config, { app, many }) {
       stripAfter?.selected === last && stripAfter?.selectedVisible === true, JSON.stringify(stripAfter))
 
     // ── An open overlay blocks artifact switching ──
-    check(results, '[change-view-keyboard] open the Graph overlay', (await client.evaluate(CLICK_OPEN_VIZ('Graph'))) === true)
-    const overlay = await pollUntil(client, OVERLAY, (v) => v !== null, 5000)
+    // The carrier is the inbox overlay (Graph / Timeline are no longer dialogs). It takes focus when
+    // it opens, so focus is put back into the change view — the key must still do nothing.
+    check(results, '[change-view-keyboard] open the inbox overlay', (await client.evaluate(OPEN_INBOX)) === true)
+    const overlay = await pollUntil(client, INBOX, (v) => v !== null, 5000)
     const focused = await client.evaluate(FOCUS_CHANGE_PANEL)
     const blockedFrom = await client.evaluate(CHANGE_PANEL)
     check(results, '[change-view-keyboard] precondition: overlay open and focus in the change view',
@@ -4159,10 +4318,10 @@ async function runChangeViewKeyboard(label, config, { app, many }) {
     await sleep(400)
     const blocked = await client.evaluate(CHANGE_PANEL)
     check(results, '[change-view-keyboard] Ctrl+Tab does nothing while an overlay is open',
-      blocked?.selected === blockedFrom?.selected && (await client.evaluate(OVERLAY)) !== null,
+      blocked?.selected === blockedFrom?.selected && (await client.evaluate(INBOX)) !== null,
       `${blockedFrom?.selected} → ${blocked?.selected}`)
-    await client.evaluate(CLICK_VIZ_CLOSE)
-    await pollUntil(client, OVERLAY, (v) => v === null, 5000)
+    await client.evaluate(CLOSE_INBOX)
+    await pollUntil(client, INBOX, (v) => v === null, 5000)
   } finally {
     await client.send('Emulation.clearDeviceMetricsOverride', {})
     await sleep(300)
@@ -4186,6 +4345,340 @@ const killStrays = () => {
   }
 }
 
+// ── maximize the side panel (`maximize-panel-and-confirm-close`) ──────────────
+
+/** A `Ctrl+Shift+<letter>` chord as a raw key event (no text reaches anything). */
+async function pressCtrlShift(client, letter) {
+  const upper = letter.toUpperCase()
+  const key = { key: upper, code: `Key${upper}`, windowsVirtualKeyCode: upper.charCodeAt(0), nativeVirtualKeyCode: upper.charCodeAt(0), modifiers: 2 | 8 }
+  await client.send('Input.dispatchKeyEvent', { type: 'rawKeyDown', ...key })
+  await client.send('Input.dispatchKeyEvent', { type: 'keyUp', ...key })
+}
+
+async function pressCtrlT(client) {
+  const key = { key: 't', code: 'KeyT', windowsVirtualKeyCode: 84, nativeVirtualKeyCode: 84, modifiers: 2 }
+  await client.send('Input.dispatchKeyEvent', { type: 'rawKeyDown', ...key })
+  await client.send('Input.dispatchKeyEvent', { type: 'keyUp', ...key })
+}
+
+/** The stage container the maximized side panel covers, the side panel, the rail and the header. */
+const MAXIMIZE_GEOMETRY = `(() => {
+  const rect = (el) => {
+    if (!el) return null
+    const r = el.getBoundingClientRect()
+    return { x: Math.round(r.x), y: Math.round(r.y), width: Math.round(r.width), height: Math.round(r.height) }
+  }
+  const panel = document.querySelector('section[aria-label="${copy('openspec.sidePanel')}"]')
+  const terminal = document.querySelector('section[aria-label="${copy('stage.terminal')}"]')
+  const tabs = document.querySelector('[role="tablist"][aria-label="${copy('sessions.tabs')}"]')
+  // The covered area: the parent shared by the tab strip and the panel group.
+  let stage = terminal?.parentElement ?? null
+  while (stage && tabs && !stage.contains(tabs)) stage = stage.parentElement
+  const box = (el) => el ? { cw: el.clientWidth, ow: el.offsetWidth, sw: el.scrollWidth, ch: el.clientHeight, oh: el.offsetHeight, sh: el.scrollHeight, ov: getComputedStyle(el).overflow } : null
+  const chain = []
+  for (let el = terminal; el && chain.length < 6; el = el.parentElement) chain.push(box(el))
+  return {
+    chain,
+    terminal: rect(terminal),
+    xterm: rect(document.querySelector('section[aria-label="${copy('stage.terminal')}"] .xterm:not(.hidden *)')),
+    panel: rect(panel),
+    panelSlot: rect(panel?.parentElement ?? null),
+    stage: rect(stage),
+    rail: rect(document.querySelector('aside[aria-label="${copy('rail.label')}"]')),
+    header: rect(document.querySelector('main[aria-label="${copy('stage.label')}"] > header')),
+    hit: (() => {
+      const r = terminal?.getBoundingClientRect()
+      if (!r) return null
+      const el = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2)
+      return el ? (panel?.contains(el) ? 'panel' : 'other') : null
+    })(),
+  }
+})()`
+
+/** Where focus is: inside the side panel, in a terminal, in a conversation input, or elsewhere. */
+const FOCUS_PLACE = `(() => {
+  const el = document.activeElement
+  if (!el || el === document.body) return 'body'
+  if (document.querySelector('section[aria-label="${copy('openspec.sidePanel')}"]')?.contains(el)) return 'panel'
+  if (el.closest('.xterm')) return 'terminal'
+  return el.tagName.toLowerCase() + ':' + (el.getAttribute('aria-label') ?? el.textContent ?? '').trim().slice(0, 40)
+})()`
+
+/** The OpenSpec panel's breadcrumb starts with the side-panel source's folder name. */
+const OPENSPEC_PANEL_FOLDER = `document.querySelector('nav[aria-label="${copy('openspec.pathNav')}"] span')?.textContent?.trim() ?? null`
+
+/** The rail rows of one folder's sessions: center point, title, and whether it is the shown session. */
+const RAIL_SESSION_ROWS_OF = (folderName) => `(() => {
+  const list = document.querySelector('aside[aria-label="${copy('rail.label')}"] ul[aria-label="${copy('rail.folderSessions', { name: folderName })}"]')
+  if (!list) return []
+  return [...list.querySelectorAll('li > div[role="button"]')].map((row) => {
+    const r = row.getBoundingClientRect()
+    return { x: r.x + r.width / 2, y: r.y + r.height / 2, title: row.getAttribute('title') ?? '' }
+  })
+})()`
+
+/** The stage separator between the terminal and the side panel. */
+const FOCUS_STAGE_SEPARATOR = `(() => {
+  const sep = document.querySelector('main[aria-label="${copy('stage.label')}"] [role="separator"]')
+  if (!sep) return false
+  sep.focus()
+  return document.activeElement === sep
+})()`
+
+const COLLAPSE_BUTTON_CLICK = `(() => {
+  const btn = document.querySelector('[aria-label="${copy('stage.collapseSidePanel')}"]')
+  if (!btn) return false
+  btn.click()
+  return true
+})()`
+
+const SIDE_PANEL_SLOT_WIDTH = `(() => {
+  const panel = document.querySelector('section[aria-label="${copy('openspec.sidePanel')}"]')
+  return panel ? Math.round(panel.parentElement.getBoundingClientRect().width) : null
+})()`
+
+/** The OpenSpec panel's own scroll container (Browse scrolls here). */
+const OPENSPEC_SCROLLER = `(() => {
+  const section = document.querySelector('section[aria-label="${copy('openspec.label')}"]')
+  const el = section ? [...section.children].find((c) => c.tagName === 'DIV' && getComputedStyle(c).overflowY === 'auto' && !c.querySelector('svg')) : null
+  return el ? { top: el.scrollTop, max: el.scrollHeight - el.clientHeight, hidden: el.hidden } : null
+})()`
+
+const SCROLL_OPENSPEC_SCROLLER = (top) => `(() => {
+  const section = document.querySelector('section[aria-label="${copy('openspec.label')}"]')
+  const el = section ? [...section.children].find((c) => c.tagName === 'DIV' && getComputedStyle(c).overflowY === 'auto') : null
+  if (!el) return null
+  el.scrollTop = ${top}
+  return el.scrollTop
+})()`
+
+function linesOf(path) {
+  return existsSync(path) ? readFileSync(path, 'utf8').split('\n').filter(Boolean).length : 0
+}
+
+async function runMaximize(label, config, { app }) {
+  console.log('\nmaximize the side panel')
+  const client = app.client
+  const dir = mkTemp('spekterm-openspec-maximize-')
+  const winchFile = join(dir, 'winch')
+  const leakFile = join(dir, 'leak')
+  const ensureRestored = async () => {
+    if ((await client.evaluate(MAXIMIZED)) === true) await client.evaluate(CLICK_MAXIMIZE)
+    return pollUntil(client, MAXIMIZED, (v) => v === false, 5000)
+  }
+  await ensureRestored()
+
+  // ── State: repo-single has a shell session (it will be switched to under the cover); repo-many
+  //    is selected with at least two shell sessions, OpenSpec identity.
+  await pollUntil(client, SELECT_FOLDER('repo-single'), (ok) => ok === true, 8000)
+  await sleep(500)
+  if ((await client.evaluate(SESSION_TABS)).length === 0) await createSession(client)
+  await pollUntil(client, SESSION_TABS, (list) => list.length >= 1, 15_000)
+  await pollUntil(client, SELECT_FOLDER('repo-many'), (ok) => ok === true, 8000)
+  await sleep(500)
+  if ((await client.evaluate(IDENTITY)) !== 'openspec') await client.evaluate(CLICK_IDENTITY('◈'))
+  const before = (await client.evaluate(SESSION_TABS)).length
+  for (let n = before; n < 2; n++) await createSession(client)
+  // A fresh shell as the focused session, so the trap below is set in a shell this section owns.
+  await createSession(client)
+  const tabs = await pollUntil(client, SESSION_TABS, (list) => list.length >= 3, 15_000)
+  check(results, '[maximize] precondition: repo-many has at least three sessions', tabs.length >= 3, JSON.stringify(tabs))
+
+  // ── Maximizing does not resize the terminal (SIGWINCH trap; dash runs it at the next line read,
+  //    so every step is followed by an Enter in the terminal).
+  await realClick(client, await stableRect(client, TERMINAL_RECT))
+  await typeLine(client, `trap 'echo W >> ${winchFile}' WINCH`)
+  await sleep(500)
+  check(results, '[maximize] precondition: focus the stage separator', (await client.evaluate(FOCUS_STAGE_SEPARATOR)) === true)
+  for (const type of ['rawKeyDown', 'keyUp']) {
+    await client.send('Input.dispatchKeyEvent', { type, key: 'ArrowLeft', code: 'ArrowLeft', windowsVirtualKeyCode: 37, nativeVirtualKeyCode: 37 })
+  }
+  await sleep(500)
+  await realClick(client, await stableRect(client, TERMINAL_RECT))
+  await typeLine(client, ':')
+  const winchFirst = (await pollFor({ read: () => linesOf(winchFile), settled: (n) => n > 0, timeoutMs: 5000, label: 'winch after separator' }))
+  check(results, '[maximize] precondition: a real resize reaches the trap', winchFirst > 0, `lines=${winchFirst}`)
+  // Let any late resize of that drag land, then take the baseline (and the pty size, for the detail).
+  await sleep(1500)
+  await typeLine(client, `stty size < /dev/tty >> ${winchFile}.size`)
+  await sleep(800)
+  const winchBase = linesOf(winchFile)
+
+  const geoBefore = await client.evaluate(MAXIMIZE_GEOMETRY)
+  check(results, '[maximize] header entry maximizes', (await client.evaluate(CLICK_MAXIMIZE)) === true)
+  await pollUntil(client, MAXIMIZED, (v) => v === true, 5000)
+  const geo = await pollUntil(client, MAXIMIZE_GEOMETRY, (g) => g?.panel?.width === g?.stage?.width, 5000)
+  check(
+    results,
+    '[maximize] the side panel covers the session tabs and the terminal; rail and header unchanged',
+    geo?.panel !== null &&
+      JSON.stringify(geo.panel) === JSON.stringify(geo.stage) &&
+      geo.hit === 'panel' &&
+      JSON.stringify(geo.rail) === JSON.stringify(geoBefore?.rail) &&
+      geo.header?.width === geoBefore?.header?.width,
+    JSON.stringify({ before: geoBefore, after: geo }),
+  )
+  const focusAfterMax = await pollUntil(client, FOCUS_PLACE, (v) => v === 'panel', 3000)
+  check(results, '[maximize] maximizing moves focus into the side panel', focusAfterMax === 'panel', focusAfterMax)
+
+  await client.evaluate(CLICK_MAXIMIZE) // restore
+  await pollUntil(client, MAXIMIZED, (v) => v === false, 5000)
+  const focusAfterRestore = await pollUntil(client, FOCUS_PLACE, (v) => v === 'terminal', 3000)
+  check(results, '[maximize] restoring returns focus to the focused terminal', focusAfterRestore === 'terminal', focusAfterRestore)
+  const geoRestored = await client.evaluate(MAXIMIZE_GEOMETRY)
+  check(results, '[maximize] restored: the side panel is back in its column',
+    JSON.stringify(geoRestored?.panel) === JSON.stringify(geoRestored?.panelSlot), JSON.stringify(geoRestored))
+  await typeLine(client, `stty size < /dev/tty >> ${winchFile}.size`)
+  await sleep(1200)
+  const winchAfter = linesOf(winchFile)
+  const sizes = existsSync(`${winchFile}.size`) ? readFileSync(`${winchFile}.size`, 'utf8').trim().split('\n') : []
+  check(results, '[maximize] maximizing and restoring send no resize to the pty', winchAfter === winchBase,
+    `trap lines ${winchBase} → ${winchAfter}; pty size before/after: ${sizes.join(' | ')}; terminal box before/maximized/restored: ${JSON.stringify([geoBefore?.terminal, geo?.terminal, geoRestored?.terminal])}; panel slot: ${JSON.stringify([geoBefore?.panelSlot, geo?.panelSlot, geoRestored?.panelSlot])}; chain maximized: ${JSON.stringify(geo?.chain)}`)
+
+  // ── Keys do not reach a covered terminal: switch to repo-single under the cover (its focused
+  //    terminal becomes active there), then type.
+  await client.evaluate(CLICK_MAXIMIZE)
+  await pollUntil(client, MAXIMIZED, (v) => v === true, 5000)
+  // The panel follows the selected item's side-panel source — which an earlier section pointed
+  // elsewhere for repo-single — so "follows" is judged as "changed from repo-many's".
+  const panelOfMany = await client.evaluate(OPENSPEC_PANEL_FOLDER)
+  await client.evaluate(SELECT_FOLDER('repo-single'))
+  const selectedSingle = await pollUntil(client, SELECTED_FOLDER, (v) => String(v).includes('repo-single'), 8000)
+  const sourceSingle = await pollUntil(client, OPENSPEC_PANEL_FOLDER, (v) => v !== null && v !== panelOfMany, 8000)
+  const stillMax = await client.evaluate(MAXIMIZED)
+  check(results, '[maximize] switching repos keeps the side panel maximized and follows the repo',
+    stillMax === true && String(selectedSingle).includes('repo-single') && sourceSingle !== panelOfMany,
+    `maximized=${stillMax} selected=${selectedSingle} panel ${panelOfMany} → ${sourceSingle}`)
+  await sleep(600)
+  await typeLine(client, `echo LEAK > ${leakFile}`)
+  await sleep(1500)
+  const focusUnderCover = await client.evaluate(FOCUS_PLACE)
+  check(results, '[maximize] keys typed while maximized reach no pty', !existsSync(leakFile) && focusUnderCover !== 'terminal',
+    `leak file=${existsSync(leakFile)} focus=${focusUnderCover}`)
+
+  // OpenSpec → Files while maximized: still maximized.
+  await client.evaluate(CLICK_IDENTITY('▤'))
+  await pollUntil(client, IDENTITY, (v) => v === 'files', 5000)
+  check(results, '[maximize] switching identity keeps the side panel maximized', (await client.evaluate(MAXIMIZED)) === true)
+  await client.evaluate(CLICK_IDENTITY('◈'))
+  await pollUntil(client, IDENTITY, (v) => v === 'openspec', 5000)
+
+  // ── Exit rules ──
+  await client.evaluate(SELECT_FOLDER('repo-many'))
+  await pollUntil(client, OPENSPEC_PANEL_FOLDER, (v) => String(v).includes('repo-many'), 8000)
+  check(results, '[maximize] precondition: still maximized after switching back', (await client.evaluate(MAXIMIZED)) === true)
+  const focusedLabel = (await client.evaluate(SESSION_TABS)).find((t) => t.selected)?.label ?? ''
+  const rows = await client.evaluate(RAIL_SESSION_ROWS_OF('repo-many'))
+  const otherRow = rows.find((r) => !r.title.startsWith(focusedLabel))
+  const sameRow = rows.find((r) => r.title.startsWith(focusedLabel))
+  check(results, '[maximize] precondition: rail rows of the focused and of another session',
+    Boolean(otherRow) && Boolean(sameRow), JSON.stringify({ focusedLabel, rows }))
+
+  // Hibernating the focused session does not end the maximized state.
+  await pressCtrlShift(client, 'h')
+  await sleep(800)
+  check(results, '[maximize] Ctrl+Shift+H keeps the side panel maximized', (await client.evaluate(MAXIMIZED)) === true)
+
+  if (otherRow) {
+    await realMouse(client, otherRow.x, otherRow.y)
+    const restoredByRow = await pollUntil(client, MAXIMIZED, (v) => v === false, 5000)
+    const nowFocused = (await client.evaluate(SESSION_TABS)).find((t) => t.selected)?.label ?? ''
+    check(results, '[maximize] selecting another session in the rail restores the side panel',
+      restoredByRow === false && nowFocused !== focusedLabel, `maximized=${restoredByRow} focused ${focusedLabel} → ${nowFocused}`)
+  }
+
+  await client.evaluate(CLICK_MAXIMIZE)
+  await pollUntil(client, MAXIMIZED, (v) => v === true, 5000)
+  const shownLabel = (await client.evaluate(SESSION_TABS)).find((t) => t.selected)?.label ?? ''
+  const rowsNow = await client.evaluate(RAIL_SESSION_ROWS_OF('repo-many'))
+  const shownRow = rowsNow.find((r) => r.title.startsWith(shownLabel))
+  if (shownRow) {
+    await realMouse(client, shownRow.x, shownRow.y)
+    const restoredBySame = await pollUntil(client, MAXIMIZED, (v) => v === false, 5000)
+    // The session's own focus target: its terminal, or its Wake button when it is dormant (the
+    // Ctrl+Shift+H above may have hibernated it).
+    const wakeFocus = `button:${copy('sessions.wake')}`
+    const focusAfterRow = await pollUntil(client, FOCUS_PLACE, (v) => v === 'terminal' || v === wakeFocus, 3000)
+    check(results, '[maximize] selecting the already focused session restores the side panel',
+      restoredBySame === false && (focusAfterRow === 'terminal' || focusAfterRow === wakeFocus), `maximized=${restoredBySame} focus=${focusAfterRow}`)
+  } else {
+    check(results, '[maximize] selecting the already focused session restores the side panel', false, `no row for ${shownLabel}`)
+  }
+
+  // Ctrl+T while maximized: creating a session restores.
+  await client.evaluate(CLICK_MAXIMIZE)
+  await pollUntil(client, MAXIMIZED, (v) => v === true, 5000)
+  const countBeforeCreate = (await client.evaluate(SESSION_TABS)).length
+  await client.evaluate(FOCUS_SIDE_PANEL)
+  await pressCtrlT(client)
+  const shellItem = await pollUntil(client, MENU_ITEM_RECT('shell'), (v) => v !== null, 5000)
+  if (shellItem) await realClick(client, shellItem)
+  const created = await pollUntil(client, SESSION_TABS, (list) => list.length > countBeforeCreate, 10_000)
+  const restoredByCreate = await pollUntil(client, MAXIMIZED, (v) => v === false, 5000)
+  check(results, '[maximize] creating a session with Ctrl+T restores the side panel',
+    created.length > countBeforeCreate && restoredByCreate === false,
+    `sessions ${countBeforeCreate} → ${created.length}; maximized=${restoredByCreate}`)
+
+  // ── Collapse interplay ──
+  const widthBeforeCollapse = await client.evaluate(SIDE_PANEL_SLOT_WIDTH)
+  await client.evaluate(COLLAPSE_BUTTON_CLICK)
+  await pollUntil(client, SIDE_PANEL_SLOT_WIDTH, (w) => w === 0, 5000)
+  await client.evaluate(CLICK_MAXIMIZE)
+  const maxFromCollapsed = await pollUntil(client, MAXIMIZED, (v) => v === true, 5000)
+  await client.evaluate(CLICK_MAXIMIZE)
+  await pollUntil(client, MAXIMIZED, (v) => v === false, 5000)
+  const widthAfter = await pollUntil(client, SIDE_PANEL_SLOT_WIDTH, (w) => w === widthBeforeCollapse, 5000)
+  check(results, '[maximize] maximizing a collapsed side panel, then restoring, gives the pre-collapse width',
+    maxFromCollapsed === true && widthAfter === widthBeforeCollapse, `${widthBeforeCollapse} → ${widthAfter}`)
+
+  await client.evaluate(CLICK_MAXIMIZE)
+  await pollUntil(client, MAXIMIZED, (v) => v === true, 5000)
+  await client.evaluate(COLLAPSE_BUTTON_CLICK)
+  const notMax = await pollUntil(client, MAXIMIZED, (v) => v === false, 5000)
+  const collapsedWidth = await pollUntil(client, SIDE_PANEL_SLOT_WIDTH, (w) => w === 0, 5000)
+  check(results, '[maximize] collapsing while maximized restores and collapses',
+    notMax === false && collapsedWidth === 0, `maximized=${notMax} width=${collapsedWidth}`)
+  await client.evaluate(`document.querySelector('[aria-label="${copy('stage.expandSidePanel')}"]')?.click()`)
+  await pollUntil(client, SIDE_PANEL_SLOT_WIDTH, (w) => w > 0, 5000)
+
+  // ── Restoring returns the panel's own view as it was (Graph / Timeline on top of it) ──
+  await client.send('Emulation.setDeviceMetricsOverride', { width: 1000, height: 380, deviceScaleFactor: 0, mobile: false })
+  await sleep(600)
+  try {
+    await client.evaluate(CLICK_VIEW(copy('openspec.tabChange')))
+    const scroller = await pollUntil(client, `(() => { const el = ${ARTIFACT_SCROLLER}; return el ? { top: el.scrollTop, max: el.scrollHeight - el.clientHeight } : null })()`, (v) => v !== null && v.max > 40, 6000)
+    await client.evaluate(`(() => { const el = ${ARTIFACT_SCROLLER}; if (el) el.scrollTop = 40 })()`)
+    const artifactBefore = (await client.evaluate(CHANGE_PANEL))?.selected
+    await client.evaluate(CLICK_OPEN_VIZ('Graph'))
+    await pollUntil(client, OVERLAY, (v) => v?.label === copy('viz.graph'), 6000)
+    await client.evaluate(CLICK_OPEN_VIZ('Timeline'))
+    await pollUntil(client, OVERLAY, (v) => v?.label === copy('viz.timeline'), 6000)
+    await client.evaluate(CLICK_VIZ_CLOSE)
+    await pollUntil(client, MAXIMIZED, (v) => v === false, 5000)
+    const after = await pollUntil(client, `(() => { const el = ${ARTIFACT_SCROLLER}; return el ? { top: el.scrollTop } : null })()`, (v) => v !== null, 5000)
+    const artifactAfter = (await client.evaluate(CHANGE_PANEL))?.selected
+    check(results, '[maximize] This change scrolled → Graph → Timeline → restore: same artifact at the same scroll position',
+      scroller !== null && after?.top === 40 && artifactAfter === artifactBefore,
+      `precondition max=${scroller?.max}; top ${after?.top}; artifact ${artifactBefore} → ${artifactAfter}`)
+
+    await client.evaluate(CLICK_VIEW(copy('openspec.tabBrowse')))
+    const browse = await pollUntil(client, OPENSPEC_SCROLLER, (v) => v !== null && v.max > 20, 6000)
+    await client.evaluate(SCROLL_OPENSPEC_SCROLLER(20))
+    await client.evaluate(CLICK_OPEN_VIZ('Graph'))
+    await pollUntil(client, OVERLAY, (v) => v?.label === copy('viz.graph'), 6000)
+    await client.evaluate(CLICK_VIZ_CLOSE)
+    await pollUntil(client, MAXIMIZED, (v) => v === false, 5000)
+    const browseAfter = await pollUntil(client, OPENSPEC_SCROLLER, (v) => v !== null && !v.hidden, 5000)
+    check(results, '[maximize] Browse scrolled → Graph → restore: the same scroll position',
+      browse !== null && browseAfter?.top === 20, `precondition max=${browse?.max}; top ${browseAfter?.top}`)
+    await client.evaluate(CLICK_VIEW(copy('openspec.tabChange')))
+  } finally {
+    await client.send('Emulation.clearDeviceMetricsOverride', {})
+    await sleep(300)
+    await ensureRestored()
+  }
+}
+
 const SECTIONS = [
   // **不宣告 `deps`，且必須排在第一個** —— 它自帶 profile 與 app（見該函式的說明），而共用鏈的
   // app 直到 `afterMode` 才關閉、同一個 mode 內所有段落共用同一個 debugging port。
@@ -4197,6 +4690,7 @@ const SECTIONS = [
   { name: 'runWorktreeAggregation', run: runWorktreeAggregation, deps: ['runAnchoringAndCoordinate'], onTimeout: killStrays },
   { name: 'runQuickOpenSection', run: runQuickOpenSection, deps: ['runWorktreeAggregation'], onTimeout: killStrays },
   { name: 'runChangeViewKeyboard', run: runChangeViewKeyboard, deps: ['runQuickOpenSection'], onTimeout: killStrays },
+  { name: 'runMaximize', run: runMaximize, deps: ['runChangeViewKeyboard'], onTimeout: killStrays },
 ]
 
 const outcome = await runSections({

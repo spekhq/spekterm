@@ -43,7 +43,8 @@ agent writes to disk.
 - Follows the change the focused session is working on: one tab per artifact, task progress always
   visible, spec deltas marked `ADDED` / `MODIFIED`.
 - Browse specs and changes (active and archived), including changes that live in other git worktrees.
-- Full-window dependency graph and timeline, shared with [spek](https://github.com/spekhq/spek).
+- Dependency graph and timeline, shared with [spek](https://github.com/spekhq/spek), in the side panel
+  maximized over the terminal — the same maximize that gives any change or file the whole stage.
 - Jump between specs, changes, and the underlying files; `Ctrl+P` for quick open; one click to ask the
   agent to continue the change.
 
@@ -107,6 +108,7 @@ run `npm run uninstall:desktop`.
 | `Ctrl+T` | Open the new-session menu |
 | `Ctrl+Shift+W` | Close the focused session |
 | `Ctrl+Shift+H` | Hibernate the focused session |
+| `Ctrl+Shift+M` | Maximize / restore the side panel |
 | `Shift+↓` / `Shift+↑` | Move the selected repository up / down the rail |
 | `Shift+→` / `Shift+←` | Move the focused session along the tab bar |
 | `Ctrl+P` | Quick open (when the side panel has focus) |

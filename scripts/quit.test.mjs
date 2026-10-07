@@ -19,8 +19,8 @@ const TEST_TIMEOUT = 3_000
 /**
  * 假的子行程。
  *
- * `exitAfterMs` 為 `null` 表示它**不回應**訊號（真實對應：面板留有未存變更時，關閉會觸發
- * 原生對話框，擋住主行程的訊息迴圈使 SIGTERM 失效）。
+ * `exitAfterMs` 為 `null` 表示它**不回應**訊號（真實對應：with unsaved changes in the panel, the
+ * quit's `close` is prevented to ask, which cancels the quit — the first SIGTERM does not end it）。
  */
 function fakeChild({ exitAfterMs = 0 } = {}) {
   const child = new EventEmitter()

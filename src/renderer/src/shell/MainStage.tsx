@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useReducer, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Group, Panel, Separator, usePanelRef } from 'react-resizable-panels'
 import {
@@ -9,7 +9,7 @@ import {
 import { ROOT_PATH } from './files/paths'
 import { resolveAnchoredChange } from './openspec/anchor'
 import { useChanges, useWorktrees } from './openspec/data'
-import { VizOverlay, type VizKind } from './openspec/VizOverlay'
+import { initialMaximizeState, maximizeReducer, type VizKind } from './maximize-state'
 import type { FileRequest, OpenSpecRequest, OpenSpecTarget } from './openspec/nav'
 import { usePanelCoordinate } from './panel-coordinate'
 import { QuickOpen } from './quick-open/QuickOpen'
@@ -74,8 +74,6 @@ export function MainStage({ selection, folders }: MainStageProps): React.JSX.Ele
   const [openSpecRequest, setOpenSpecRequest] = useState<OpenSpecRequest | null>(null)
   const nonce = useRef(0)
 
-  /** 全視窗 overlay 的 Graph／Timeline（design D12）。null＝沒開。 */
-  const [viz, setViz] = useState<VizKind | null>(null)
   const [quickOpen, setQuickOpen] = useState(false)
   /**
    * 側欄容器 —— quick open 關閉時焦點的退路。
@@ -88,6 +86,20 @@ export function MainStage({ selection, folders }: MainStageProps): React.JSX.Ele
 
   const sessions = useSessions()
   const panel = usePanelCoordinate()
+
+  /**
+   * The maximized side panel and the Graph / Timeline view in it (`maximize-panel-and-confirm-close`
+   * design M3–M5). The rules — every way out also leaves Graph — are in the pure reducer.
+   *
+   * **Turning to a session restores it** (design M4): the sessions context moves `attention` on every
+   * user-initiated focus, creation and input, and it is compared here during render — state, not a
+   * ref written during render, the same pattern as the request nonce in `OpenSpecPanel`.
+   */
+  const [maximize, dispatchMaximize] = useReducer(maximizeReducer, sessions.attention, initialMaximizeState)
+  if (sessions.attention !== maximize.seenAttention) {
+    dispatchMaximize({ type: 'attention', value: sessions.attention })
+  }
+  const maximized = maximize.maximized
 
   // **「駕駛」那半：當前選中的 rail 項目。** header、session 分頁與 terminal 一律以它為準
   // —— 側欄指向另一個 repo 時，這一半完全不受影響（`side-panel-source`）。
@@ -151,9 +163,41 @@ export function MainStage({ selection, folders }: MainStageProps): React.JSX.Ele
   const toggleSidePanel = useCallback(() => {
     const panel = sidePanelRef.current
     if (!panel) return
+    // Collapsing while maximized restores and collapses (`workspace-layout`).
+    if (maximized) {
+      dispatchMaximize({ type: 'restore' })
+      panel.collapse()
+      return
+    }
     if (panel.isCollapsed()) panel.expand()
     else panel.collapse()
-  }, [sidePanelRef])
+  }, [sidePanelRef, maximized])
+
+  /**
+   * Maximize / restore. Maximizing a collapsed side panel expands it first, so restoring returns an
+   * expanded panel at its previous width — the `Panel` remembers it (design M3).
+   */
+  const toggleMaximized = useCallback(() => {
+    if (!maximized) expandSidePanel()
+    dispatchMaximize({ type: 'toggle' })
+  }, [maximized, expandSidePanel])
+
+  const chooseViz = useCallback(
+    (kind: VizKind) => {
+      expandSidePanel()
+      dispatchMaximize({ type: 'chooseViz', kind })
+    },
+    [expandSidePanel],
+  )
+  const leaveViz = useCallback(() => dispatchMaximize({ type: 'leaveViz' }), [])
+
+  // Maximizing moves focus into the side panel, so no key lands in the covered terminal; restoring
+  // hands it back through the terminal's (or the conversation view's) own uncover rule (design M2).
+  useEffect(() => {
+    if (!maximized) return
+    const section = sidePanelSectionRef.current
+    if (section && !section.contains(document.activeElement)) section.focus()
+  }, [maximized])
 
   const selectIdentity = useCallback(
     (next: PanelIdentity) => {
@@ -397,6 +441,8 @@ export function MainStage({ selection, folders }: MainStageProps): React.JSX.Ele
       nonce.current += 1
       setOpenSpecRequest({ target, nonce: nonce.current })
       setIdentity('openspec')
+      // The user asked for this target — not for Graph (`openspec-panel`).
+      dispatchMaximize({ type: 'leaveViz' })
       expandSidePanel()
       if (target.kind === 'change') anchorChange(target.slug)
     },
@@ -437,7 +483,29 @@ export function MainStage({ selection, folders }: MainStageProps): React.JSX.Ele
         >
           {`▤ ${collapsed ? t('common.expand') : t('common.collapse')}`}
         </button>
+
+        {/*
+          Maximize / restore (`workspace-layout`). Its label says what it will do; `Ctrl+Shift+M`
+          finds it by either label (design M3).
+        */}
+        <button
+          type="button"
+          onClick={toggleMaximized}
+          aria-pressed={maximized}
+          aria-label={maximized ? t('stage.restoreSidePanel') : t('stage.maximizeSidePanel')}
+          title={maximized ? t('stage.restoreSidePanel') : t('stage.maximizeSidePanel')}
+          className="rounded border border-hairline px-2 py-1 text-sm text-ink-dim hover:text-accent"
+        >
+          {maximized ? `⤡ ${t('stage.restore')}` : `⤢ ${t('stage.maximize')}`}
+        </button>
       </header>
+
+      {/*
+        The area the maximized side panel covers: the session tab strip and the terminal. **`relative`
+        only while maximized** — always on, it would shrink the tab strip's own rename dialog to this
+        area (design M1).
+      */}
+      <div className={`flex min-h-0 flex-1 flex-col ${maximized ? 'relative' : ''}`}>
 
       {/* 分頁列只屬於當前選中的 rail 項目（mockup 的 .session-tabs）—— 全域項目也有它自己的。 */}
       {selection && (
@@ -456,7 +524,14 @@ export function MainStage({ selection, folders }: MainStageProps): React.JSX.Ele
       )}
 
       <Group orientation="horizontal" className="flex-1">
-        <Panel minSize="240px">
+        {/*
+          **Clip, do not scroll** (the library's default for a panel is `overflow: auto`). While the
+          terminal is covered it has no GPU renderer, and the DOM renderer lays the same columns out
+          wider (9.63px vs 9px per cell); with `auto` the column then shows scrollbars, its box
+          shrinks by their width, and the resize observer sends the pty a smaller size — a reflow
+          caused by nothing the user did (`workspace-layout`: maximizing SHALL NOT resize it).
+        */}
+        <Panel minSize="240px" style={{ overflow: 'hidden' }}>
           <section aria-label={t('stage.terminal')} className="relative h-full bg-shell">
             {/*
               **掛載所有 folder 的所有 session**，只讓當前 folder 的 focused 那一個顯示。
@@ -499,7 +574,8 @@ export function MainStage({ selection, folders }: MainStageProps): React.JSX.Ele
                     `covered` 另外表達「使用者看不看得見」，那是渲染資源與焦點的判準。
                   */
                   covered={
-                    session.id === focusedId && sessionViewOf(session, preferences.agentView) === 'conversation'
+                    maximized ||
+                    (session.id === focusedId && sessionViewOf(session, preferences.agentView) === 'conversation')
                   }
                 />
               ))}
@@ -518,6 +594,7 @@ export function MainStage({ selection, folders }: MainStageProps): React.JSX.Ele
                     sessionId={session.id}
                     active
                     dormant={session.status === 'dormant'}
+                    covered={maximized}
                   />
                 </div>
               ))}
@@ -546,7 +623,15 @@ export function MainStage({ selection, folders }: MainStageProps): React.JSX.Ele
             // 可程式聚焦、不進 Tab 序 —— quick open 關閉時焦點的退路（見 sidePanelSectionRef）。
             tabIndex={-1}
             aria-label={t('openspec.sidePanel')}
-            className="h-full overflow-hidden bg-panel outline-none"
+            /*
+              Maximized: the same element, in the same place in the tree, covers the tab strip and
+              the terminal — nothing is remounted and the terminal keeps its size (design M1).
+              `z-[15]`: above the conversation view (`z-10`), below the rail's rename dialog
+              (`z-20`), which shares this stacking context and comes earlier in the DOM.
+            */
+            className={`overflow-hidden bg-panel outline-none ${
+              maximized ? 'absolute inset-0 z-[15]' : 'h-full'
+            }`}
             onKeyDownCapture={onSidePanelKeyDown}
           >
             <SidePanel
@@ -571,11 +656,14 @@ export function MainStage({ selection, folders }: MainStageProps): React.JSX.Ele
               onViewInOpenSpec={viewInOpenSpec}
               fileRequest={fileRequest}
               openSpecRequest={openSpecRequest}
-              onOpenViz={setViz}
+              viz={maximize.viz}
+              onChooseViz={chooseViz}
+              onLeaveViz={leaveViz}
             />
           </section>
         </Panel>
       </Group>
+      </div>
 
       {quickOpen && panelFolder && (
         <QuickOpen
@@ -590,28 +678,6 @@ export function MainStage({ selection, folders }: MainStageProps): React.JSX.Ele
         />
       )}
 
-      {viz && panelFolder && (
-        <VizOverlay
-          folderId={panelFolder.id}
-          folderName={panelFolder.name}
-          kind={viz}
-          onChangeKind={setViz}
-          onClose={() => setViz(null)}
-          /*
-            在圖上選一個 change＝關閉 overlay 並讓側欄**呈現**它 —— 不只是錨定。
-            光呼叫 `anchorChange` 是不夠的：側欄可能正停在「瀏覽」視圖，於是使用者點完之後
-            什麼也沒發生（實測被探針抓到）。走跨身分導航這條路，它會一併把視圖切回本 change。
-          */
-          onSelectChange={(slug) => {
-            setViz(null)
-            viewInOpenSpec({ kind: 'change', slug })
-          }}
-          onSelectSpec={(topic) => {
-            setViz(null)
-            viewInOpenSpec({ kind: 'spec', topic })
-          }}
-        />
-      )}
     </main>
   )
 }

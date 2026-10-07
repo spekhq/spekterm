@@ -193,6 +193,13 @@ async function launch({ port, profileDir, rendererUrl }) {
     client,
     mounted,
     stderr: () => stderr,
+    /** Wait for the app to exit by itself (no signal sent). `true` when it did in time. */
+    async waitForExit(timeoutMs = 10_000) {
+      if (child.exitCode !== null || child.signalCode !== null) return true
+      const exited = new Promise((resolve) => child.once('exit', () => resolve(true)))
+      // An event wait, not a poll — the same reasoning as `quitAndWait`.
+      return Promise.race([exited, sleep(timeoutMs, false)])
+    },
     async close() {
       client.close()
       await quitAndWait(child)
@@ -859,6 +866,29 @@ async function probeBuild(fixture, profile) {
       beforeEdit !== afterEdit && /EDIT /.test(afterEdit ?? ''),
       `內容有變=${beforeEdit !== afterEdit}；含 EDIT=${/EDIT /.test(afterEdit ?? '')}`)
 
+    // ── maximize-panel-and-confirm-close: maximizing does not remount the side panel ──
+    // The unsaved edit, the open file and the undo history survive maximize + restore. Undo is the
+    // discriminating part: a remounted editor would show the same buffer (dirty buffers outlive
+    // it) but with an empty undo stack.
+    const MAXIMIZE_ENTRY = `document.querySelector('[aria-label="${copy('stage.maximizeSidePanel')}"], [aria-label="${copy('stage.restoreSidePanel')}"]')`
+    await app.client.evaluate(`${MAXIMIZE_ENTRY}?.click()`)
+    const maximizedFiles = await pollUntil(app.client, `${MAXIMIZE_ENTRY}?.getAttribute('aria-pressed') === 'true'`, (v) => v === true)
+    await app.client.evaluate(`${MAXIMIZE_ENTRY}?.click()`)
+    const restoredFiles = await pollUntil(app.client, `${MAXIMIZE_ENTRY}?.getAttribute('aria-pressed') === 'false'`, (v) => v === true)
+    const afterRestore = await app.client.evaluate(EDITOR_TEXT)
+    await app.client.evaluate(FOCUS_EDITOR)
+    for (const type of ['rawKeyDown', 'keyUp']) {
+      await app.client.send('Input.dispatchKeyEvent', { type, key: 'z', code: 'KeyZ', windowsVirtualKeyCode: 90, nativeVirtualKeyCode: 90, modifiers: 2 })
+    }
+    const undone = await pollUntil(app.client, EDITOR_TEXT, (text) => !/EDIT /.test(text ?? ''))
+    check(results, '[maximize] maximize + restore keep the open file, its unsaved edit and its undo history',
+      maximizedFiles === true && restoredFiles === true && afterRestore === afterEdit && !/EDIT /.test(undone ?? ''),
+      `maximized=${maximizedFiles} restored=${restoredFiles} same content=${afterRestore === afterEdit} undone=${!/EDIT /.test(undone ?? '')}`)
+    // Put the edit back: the steps below expect it.
+    await app.client.evaluate(FOCUS_EDITOR)
+    await app.client.send('Input.insertText', { text: 'EDIT ' })
+    await pollUntil(app.client, EDITOR_TEXT, (text) => /EDIT /.test(text ?? ''))
+
     // 返回檔案樹 —— 未存的變更必須活過這次換頁，且該列要標記出來（file-explorer / D9）。
     await app.client.evaluate(BACK_TO_TREE)
     const rowDirty = await pollUntil(app.client, ROW_IS_DIRTY('notes.unknownext'), (v) => v === true)
@@ -1229,6 +1259,128 @@ async function probeBuild(fixture, profile) {
 
 // ── 開發模式：只驗 worker 的載入路徑 ────────────────────────────────────────
 
+// ── Closing the window with unsaved changes (workspace-app-shell) ───────────
+//
+// The native dialog is replaced by the stand-in in src/main/close-dialog-stub.ts (throwaway profiles
+// only): prompts are read from close-stub/dialogs.jsonl, answers written to "answer", and writing
+// "close" makes the main process close the window the way the close button does. Before it, the
+// unsaved-changes requirement had no automated carrier at all.
+
+const SESSION_TABS = `[...document.querySelectorAll('[aria-label="${copy('sessions.tabs')}"] [role="tab"]')].map((tab) => ({
+  label: tab.innerText.trim(),
+  title: tab.getAttribute('title') ?? '',
+}))`
+const NEW_SESSION_EL = `document.querySelector('[aria-label="${copy('sessions.new')}"]')`
+const SPAWN_SHELL_EL = `[...(document.querySelector('[role="menu"]')?.querySelectorAll('button') ?? [])].find((b) => b.innerText.includes(${JSON.stringify(copy('sessions.spawnShell'))}))`
+const TERMINAL_EL = `document.querySelector('section[aria-label="${copy('stage.terminal')}"]')`
+
+async function probeCloseConfirm(fixture) {
+  console.log('\nClosing the window with unsaved changes')
+  const target = 'close-target.txt'
+  const original = 'close target\n'
+  writeFileSync(join(fixture.repo, target), original)
+  const profile = seedProfile([['f-openspec', fixture.repo]])
+  const root = join(profile, 'close-stub')
+  const dialogs = () => {
+    try {
+      return readFileSync(join(root, 'dialogs.jsonl'), 'utf8').split('\n').filter(Boolean).map((line) => JSON.parse(line))
+    } catch {
+      return []
+    }
+  }
+  const answer = (role) => writeFileSync(join(root, 'answer'), role)
+  const triggerClose = () => writeFileSync(join(root, 'close'), String(Date.now()))
+  const waitDialogs = (count) =>
+    pollFor({ read: dialogs, settled: (value) => value.length >= count, timeoutMs: 8000, interval: 100, label: `prompts ≥ ${count}` })
+  const responsive = async (client) => {
+    try {
+      return (await client.evaluate('1 + 1')) === 2
+    } catch {
+      return false
+    }
+  }
+  const fileLine = `repo-openspec/${target}`
+
+  let app = null
+  try {
+    app = await launch({ port: BUILD_PORT, profileDir: profile, rendererUrl: null })
+    await pollUntil(app.client, SELECT_FOLDER('repo-openspec'), (value) => value === true, 10_000)
+    await app.client.evaluate(CLICK_TAB('▤'))
+    await pollUntil(app.client, ROW_PATHS, (paths) => paths.includes(target))
+    await app.client.evaluate(CLICK_ROW(target))
+    await pollUntil(app.client, EDITOR_TEXT, (text) => /close target/.test(text ?? ''))
+    await app.client.evaluate(FOCUS_EDITOR)
+    await app.client.send('Input.insertText', { text: 'UNSAVED ' })
+    await pollUntil(app.client, EDITOR_TEXT, (text) => /UNSAVED /.test(text ?? ''))
+    // The dirty snapshot reaches the main process by a push; give it a moment.
+    await sleep(500)
+
+    // ── Unsaved changes only: held, the unsaved-changes dialog as before; cancel keeps them.
+    answer('cancel')
+    triggerClose()
+    const first = (await waitDialogs(1))[0]
+    await sleep(500)
+    const upAfterCancel = await responsive(app.client)
+    const stillDirty = /UNSAVED /.test((await app.client.evaluate(EDITOR_TEXT)) ?? '')
+    check(results, 'Closing with unsaved changes is held and asks (unsaved-changes dialog, Save All default)',
+      JSON.stringify(first?.roles) === '["saveAll","discard","cancel"]' && first?.defaultRole === 'saveAll' &&
+        Boolean(first?.detail?.includes(fileLine)),
+      JSON.stringify({ roles: first?.roles, defaultRole: first?.defaultRole, detail: first?.detail }))
+    check(results, 'Cancelling keeps the window and the unsaved changes',
+      upAfterCancel && stillDirty, `responsive=${upAfterCancel} dirty=${stillDirty}`)
+
+    // ── Unsaved changes and a running shell: exactly one dialog listing both, cancel the default.
+    const entry = await coordsOf(app.client, NEW_SESSION_EL)
+    await realMouse(app.client, entry.x, entry.y, 'left')
+    const item = await pollFor({
+      read: () => coordsOf(app.client, SPAWN_SHELL_EL),
+      settled: (value) => value !== null,
+      timeoutMs: 4000,
+      interval: 100,
+      label: 'spawn menu shell item',
+    })
+    await realMouse(app.client, item.x, item.y, 'left')
+    const tabs = await pollUntil(app.client, SESSION_TABS,
+      (value) => value.length === 1 && value[0].title.includes(copy('sessions.statusRunning')), 10_000)
+    const before = dialogs().length
+    triggerClose()
+    const shared = (await waitDialogs(before + 1))[before]
+    await sleep(800)
+    const promptCount = dialogs().length
+    check(results, 'Unsaved changes and running sessions share one dialog (one prompt, both listed, cancel default)',
+      promptCount === before + 1 && shared?.defaultRole === 'cancel' && shared?.cancelRole === 'cancel' &&
+        Boolean(shared?.detail?.includes(fileLine)) &&
+        Boolean(shared?.detail?.includes(copy('closeConfirm.line', { item: 'repo-openspec', label: tabs[0]?.label ?? '' }))),
+      `prompts ${before} → ${promptCount} ${JSON.stringify({ roles: shared?.roles, defaultRole: shared?.defaultRole, detail: shared?.detail })}`)
+    const tabsAfter = await app.client.evaluate(SESSION_TABS)
+    await app.client.evaluate(FOCUS_EDITOR)
+    const dirtyAfter = /UNSAVED /.test((await app.client.evaluate(EDITOR_TEXT)) ?? '')
+    check(results, 'Cancelling the shared dialog keeps both (window open, unsaved changes, session running)',
+      (await responsive(app.client)) && dirtyAfter && Boolean(tabsAfter[0]?.title.includes(copy('sessions.statusRunning'))),
+      `dirty=${dirtyAfter} tab=${JSON.stringify(tabsAfter[0])}`)
+
+    // ── End the shell, then "Don't Save": the window closes, the file on disk is untouched.
+    const terminal = await coordsOf(app.client, TERMINAL_EL)
+    await realMouse(app.client, terminal.x + 40, terminal.y, 'left')
+    await app.client.send('Input.insertText', { text: 'exit' })
+    const enter = { key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 }
+    await app.client.send('Input.dispatchKeyEvent', { type: 'keyDown', ...enter, text: '\r' })
+    await app.client.send('Input.dispatchKeyEvent', { type: 'keyUp', ...enter })
+    await pollUntil(app.client, SESSION_TABS, (value) => !value[0]?.title.includes(copy('sessions.statusRunning')), 8000)
+    answer('discard')
+    const beforeDiscard = dialogs().length
+    triggerClose()
+    const discarded = (await waitDialogs(beforeDiscard + 1))[beforeDiscard]
+    const exited = await app.waitForExit(10_000)
+    const disk = readFileSync(join(fixture.repo, target), 'utf8')
+    check(results, "Choosing Don't Save closes the window and leaves the file on disk unchanged",
+      exited && disk === original && discarded?.defaultRole === 'saveAll',
+      `exited=${exited} disk=${JSON.stringify(disk)} prompt=${JSON.stringify(discarded?.roles)}`)
+  } finally {
+    if (app) await app.close()
+  }
+}
+
 async function probeDev(fixture, profile) {
   writeFileSync(join(fixture.repo, 'sample.ts'), '// 參考 https://example.com/spec\nexport const answer = 42\n')
 
@@ -1301,6 +1453,7 @@ const profile = seedProfile([
 let exitCode = 1
 try {
   await probeBuild(fixture, profile)
+  await probeCloseConfirm(fixture)
   await probeDev(fixture, profile)
   exitCode = results.every(Boolean) ? 0 : 1
 } catch (error) {
