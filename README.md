@@ -2,13 +2,18 @@
 
 **English** | [繁體中文](README.zh-TW.md)
 
-An agent-first local development workbench. spekterm hosts one [Claude Code](https://code.claude.com/docs)
-session per repository in a single window, and puts an [OpenSpec](https://github.com/Fission-AI/OpenSpec)-aware
-side panel right next to it — so you can drive your agents and read the change they're working on
+An agent-first local development workbench. spekterm hosts [Claude Code](https://code.claude.com/docs)
+sessions for each repository in a single window, and puts an [OpenSpec](https://github.com/Fission-AI/OpenSpec)-aware
+side panel right next to them — so you can drive your agents and read the change they're working on
 without opening an IDE.
 
-> **Status:** early, and Linux only. `0.2.1` is the first published release. macOS and Windows builds,
-> auto-update, and code signing are not available yet.
+**Website and documentation: [spekterm.com](https://spekterm.com)** — the user guide lives at
+[spekterm.com/docs](https://spekterm.com/docs/).
+
+![spekterm: a Claude Code session in the conversation view, next to the side panel showing the tasks of the OpenSpec change it is working on](site/src/assets/screenshots/en/hero.png)
+
+> **Status:** early. Linux builds are available today; macOS and Windows are not supported yet.
+> Auto-update and code signing are not available yet.
 
 ## Why
 
@@ -17,60 +22,26 @@ to read the spec. spekterm's value over "four terminal tabs" is the side panel: 
 — the change a session is working on, its artifacts, its tasks, and its specs — and follows along as the
 agent writes to disk.
 
-## Features
+## What it does
 
-**Workspace**
+- **Workspace** — any number of repositories in one window, a global session for everything else.
+- **Real terminals** — `claude` and your shell in real ptys, several per repository; sessions survive a
+  restart and can be hibernated.
+- **OpenSpec side panel** — the change a session is working on, its artifacts and tasks, browse, graph,
+  and timeline, worktrees included.
+- **Conversation view, inbox, and handoffs** — read an agent as messages; Slack mentions become inbox
+  items; agents can hand work to another repository.
 
-- Add any number of folders; reorder them, pin the ones you use most.
-- A global session that belongs to no repository, for everything else.
-
-**Terminals**
-
-- Real terminals (`node-pty` + xterm.js with WebGL), several sessions per repository, git worktrees
-  included.
-- Sessions survive a restart: `claude` sessions resume their conversation, shells respawn in their last
-  working directory with the previous screen replayed. Restored sessions stay dormant — no process —
-  until you press Wake.
-- Sessions you keep for occasional use can be hibernated: their process ends and they wait, dormant,
-  in the workspace. You can do it by hand (`Ctrl+Shift+H` or the tab menu), and idle sessions are
-  hibernated automatically after 24 hours (configurable in Settings; never the one on screen, a working
-  agent or a shell running a job).
-- Agent sessions can switch between the terminal and a conversation view. The view is built from the
-  agent's own transcript and hooks — never by scraping the screen.
-
-**OpenSpec side panel**
-
-- Follows the change the focused session is working on: one tab per artifact, task progress always
-  visible, spec deltas marked `ADDED` / `MODIFIED`.
-- Browse specs and changes (active and archived), including changes that live in other git worktrees.
-- Dependency graph and timeline, shared with [spek](https://github.com/spekhq/spek), in the side panel
-  maximized over the terminal — the same maximize that gives any change or file the whole stage.
-- Jump between specs, changes, and the underlying files; `Ctrl+P` for quick open; one click to ask the
-  agent to continue the change.
-
-**Files**
-
-- File tree that updates as files change on disk, Markdown rendering, syntax highlighting (Monaco),
-  editing, and file operations.
-
-**Inbox and handoffs**
-
-- **Slack:** when someone mentions you, it becomes an inbox item. You read it and choose the folder
-  before any session is opened.
-- **Agent handoffs:** an agent can hand work off to another repository in your workspace. spekterm
-  opens a session there and sends the first prompt; the child session remembers its parent, reports
-  back when it's done, and you get a notification.
-
-**Built to render untrusted content**
-
-- The UI can only address files inside the folders you added, and every filesystem check runs in the
-  main process.
-- A strict Content-Security-Policy and a navigation guard keep repository content and terminal output
-  from running script or taking over the window.
+Everything is described in the [documentation](https://spekterm.com/docs/), including
+[keyboard shortcuts](https://spekterm.com/docs/reference/keyboard-shortcuts/),
+[troubleshooting](https://spekterm.com/docs/help/troubleshooting/), and
+[what spekterm connects to](https://spekterm.com/docs/reference/data-and-network/).
 
 ## Requirements
 
 - Linux x64 with `libfuse2` (needed to run AppImages; Ubuntu 22.04+ no longer installs it by default).
+  Without it the AppImage fails with `dlopen(): error loading libfuse.so.2`; run it without FUSE instead:
+  `./Spekterm-<version>.AppImage --appimage-extract-and-run`.
 - [Claude Code](https://code.claude.com/docs) (`claude` on your `PATH`) for agent sessions. spekterm runs
   the real CLI with your own subscription — it never asks for an API key.
 
@@ -86,7 +57,8 @@ chmod +x Spekterm-<version>.AppImage
 
 ## Install from source
 
-You'll need Node.js 22 (see [`.nvmrc`](.nvmrc)).
+You'll need Node.js 22 (see [`.nvmrc`](.nvmrc)). The first packaging needs network access: it downloads
+the Electron binary.
 
 ```bash
 git clone https://github.com/spekhq/spekterm.git
@@ -99,42 +71,9 @@ npm run install:desktop                          # → ~/.local/bin + your appli
 `install:desktop` can be re-run while spekterm is open; the running app keeps working. To remove it,
 run `npm run uninstall:desktop`.
 
-## Keyboard shortcuts
-
-| Shortcut | Action |
-| --- | --- |
-| `Ctrl+Tab` / `Ctrl+Shift+Tab` | Next / previous session in the current rail item; with focus in the side panel's change view, next / previous artifact |
-| `Ctrl+↓` / `Ctrl+↑` | Next / previous rail item |
-| `Ctrl+T` | Open the new-session menu |
-| `Ctrl+Shift+W` | Close the focused session |
-| `Ctrl+Shift+H` | Hibernate the focused session |
-| `Ctrl+Shift+M` | Maximize / restore the side panel |
-| `Shift+↓` / `Shift+↑` | Move the selected repository up / down the rail |
-| `Shift+→` / `Shift+←` | Move the focused session along the tab bar |
-| `Ctrl+P` | Quick open (when the side panel has focus) |
-| `Ctrl+Shift+C` / `Ctrl+Shift+V` | Copy / paste in the terminal |
-| `Ctrl+S` | Save |
-| `Esc` | Close overlays, dialogs, and menus |
-
-`Ctrl+C` in a terminal is always an interrupt, even with a selection on screen.
-
-## Troubleshooting
-
-- **The AppImage won't start (`dlopen(): error loading libfuse.so.2`).** Install `libfuse2`, or run it
-  without FUSE: `./Spekterm-*.AppImage --appimage-extract-and-run`.
-- **The side panel or file tree stops updating.** Your inotify watch limit is probably too low (the
-  error, `ENOSPC`, only shows up on the main process's stderr). Check
-  `cat /proc/sys/fs/inotify/max_user_watches`; if it's 8192, raise it:
-
-  ```bash
-  echo 'fs.inotify.max_user_watches=524288' | sudo tee /etc/sysctl.d/60-inotify.conf
-  sudo sysctl --system
-  ```
-
-- **Which build am I running?** Settings → About shows the version, build time, and commit.
-
 ## Documentation
 
+- [spekterm.com/docs](https://spekterm.com/docs/) — the user guide, in English and Traditional Chinese.
 - [`docs/PRD.md`](docs/PRD.md) — product requirements, roadmap, and architecture decisions.
 - [`docs/workspace-mockup.html`](docs/workspace-mockup.html) — the interactive UI mockup.
 - [`CLAUDE.md`](CLAUDE.md) and [`docs/lessons/`](docs/lessons/) — working notes for contributors and

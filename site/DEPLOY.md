@@ -28,21 +28,26 @@ Then, under Settings → Builds:
 - **Branch control** — preview branches: **None** (branches pushed from elsewhere must not get public
   preview URLs).
 
-### Items not verified before the first deploy
+### What the first deploy showed (2026-10-08)
 
-Record the outcome of each here after the first build.
-
-| item | if it fails |
+| item | outcome |
 |---|---|
-| The build reads files outside the root directory (`../scripts/...`) | Root directory `/`, build command `cd site && npm ci && npm run build`, output `site/dist` |
-| The clone has `git` and a `.git` directory (the root content guards need them) | Same as above; if `git` itself is missing, report it — the gate cannot run without it |
-| The clone carries tags (the version check fails on an empty tag list) | Build command prefixed with `git fetch --tags --force &&` |
-| The watch-path syntax (`site/*` vs `site/**`) | Push a commit that touches only `src/` and confirm no build starts |
-| The name and place of the preview-branch control | Note where it is |
+| The build reads files outside the root directory (`../scripts/...`) | Yes — the root content guards and the notices helpers ran from `site/` |
+| The clone has `git` and a `.git` directory | Yes |
+| The clone carries tags | **No** — the version check stopped the first build, as designed. The build command is `git fetch --tags --force && npm run build` |
+| Node version | `NODE_VERSION` was picked up (nodejs 22.22.0) |
+| GitHub connection | Installing the GitHub App from GitHub's side left Cloudflare unlinked ("internal issue with your Cloudflare Pages Git installation"); uninstalling it and installing again from the dashboard's *Connect GitHub* fixed it. The app has access to `spekhq/spekterm` only |
+| Watch paths and preview branches | Set through the API (`path_includes` as above, `preview_deployment_setting: none`) |
+
+The project was created through the Pages API with the maintainer's `wrangler` login; the settings above
+are what it holds.
 
 ## 2. The custom domain
 
-Pages project → Custom domains → add `spekterm.com`. Cloudflare creates the DNS record in the zone.
+Pages project → Custom domains → *Set up a custom domain* → `spekterm.com` → *Activate domain*. The
+dashboard creates the proxied `CNAME` to `spekterm.pages.dev` in the zone. **A domain added through the
+API does not get that record** (it stays *pending*, waiting for a manual `CNAME`) — add domains from the
+dashboard.
 
 ## 3. Redirects
 
@@ -55,9 +60,15 @@ domain creates. The `*.pages.dev` host is not redirected; every page's `rel="can
 
 ## 4. Zone features that change what is served
 
-In the `spekterm.com` zone, turn **off**: Web Analytics (for the Pages project as well), Bot Fight
-Mode, Email Address Obfuscation, Rocket Loader, and Automatic HTTPS Rewrites. Each can inject a script,
-a cookie, or rewrite the HTML without any change to the repository.
+Web Analytics, Bot Fight Mode, Email Address Obfuscation, Rocket Loader, and Automatic HTTPS Rewrites can
+each inject a script, a cookie, or rewrite the HTML without any change to the repository.
+
+**As of the first deploy they were left at the zones' defaults** (changing them needs a Zone Settings
+permission the `wrangler` login does not have), and the live check found every page served byte for byte
+as built with no cookie — so none of them changes the site today. Email Address Obfuscation acts only on
+a page that contains an email address; no page does. **If the live check ever fails, turn the culprit off
+in the `spekterm.com` zone's settings** and run it again. Web Analytics is off for the Pages project
+(`web_analytics_tag: null`).
 
 ## 5. The live check
 

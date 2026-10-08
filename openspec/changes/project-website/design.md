@@ -227,8 +227,10 @@ checked before it is live.
    with a query returns 301 to the same path and query on `https://spekterm.com`. Run after the first deploy and after any zone setting
    changes; it cannot run before a deploy, so it is a manual step and the spec says so.
 
-The setup tasks switch off Web Analytics, Bot Fight Mode, Email Address Obfuscation, Rocket Loader, and
-Automatic HTTPS Rewrites for the zone; the live check is what proves it.
+The live check is what proves none of Web Analytics, Bot Fight Mode, Email Address Obfuscation, Rocket
+Loader, or Automatic HTTPS Rewrites changes what is served. (Revised during apply: they were left at the
+zones' defaults — switching them needs a Zone Settings permission the deploy did not have — and the first
+live check passed with them as they are; `site/DEPLOY.md` says which to turn off if it ever fails.)
 
 ### D9. The network statement and its guard
 

@@ -86,3 +86,56 @@ test('control: a deleted build step is caught', () => {
   assert.deepEqual(stepsOf(source), SITE_BUILD_STEPS)
   assert.notDeepEqual(stepsOf(source.replace("step('origins', x)\n", '')), SITE_BUILD_STEPS)
 })
+
+// project-website: "The documentation is the user guide" and "Nothing says Linux only" (README half).
+// The READMEs link to the docs and keep what desktop-packaging reads them for — which gives that spec's
+// two README scenarios ("README 記載執行前提與逃生口", "README 記載安裝與移除") their first carrier.
+
+const README_NETWORK = { 'README.md': /network/i, 'README.zh-TW.md': /網路/ }
+
+/** Problems with one README's text. */
+function readmeProblems(name, text, linuxOnlyPhrases) {
+  const problems = []
+  if (!text.includes('https://spekterm.com/docs/')) problems.push(`${name}: no link to https://spekterm.com/docs/`)
+  const lower = text.toLowerCase()
+  for (const phrase of linuxOnlyPhrases) if (lower.includes(phrase.toLowerCase())) problems.push(`${name}: says "${phrase}"`)
+  const lines = text.split('\n')
+  const fuse = lines.findIndex((line) => line.includes('libfuse2'))
+  const hatch = lines.findIndex((line) => line.includes('--appimage-extract-and-run'))
+  if (fuse === -1) problems.push(`${name}: no libfuse2 requirement`)
+  if (hatch === -1) problems.push(`${name}: no --appimage-extract-and-run escape hatch`)
+  if (fuse !== -1 && hatch !== -1 && Math.abs(fuse - hatch) > 6) {
+    problems.push(`${name}: the escape hatch is not next to the libfuse2 requirement (lines ${fuse + 1} and ${hatch + 1})`)
+  }
+  const packaging = lines.findIndex((line) => line.includes('electron-builder'))
+  const window = packaging === -1 ? '' : lines.slice(Math.max(0, packaging - 10), packaging + 10).join('\n')
+  if (!README_NETWORK[name].test(window)) problems.push(`${name}: the first packaging's network need is not stated next to it`)
+  for (const command of ['npm run install:desktop', 'npm run uninstall:desktop']) {
+    if (!text.includes(command)) problems.push(`${name}: no ${command}`)
+  }
+  return problems
+}
+
+test('the READMEs link to the docs, never say Linux only, and keep the install facts', () => {
+  const plan = JSON.parse(readFileSync(join(repoRoot, 'site', 'src', 'content-plan.json'), 'utf8'))
+  const problems = Object.keys(README_NETWORK).flatMap((name) =>
+    readmeProblems(name, readFileSync(join(repoRoot, name), 'utf8'), plan.linuxOnlyPhrases),
+  )
+  assert.deepEqual(problems, [])
+})
+
+test('control: README problems are caught', () => {
+  const good = [
+    'See https://spekterm.com/docs/.',
+    'Needs libfuse2.',
+    'Without it: --appimage-extract-and-run',
+    'The first packaging downloads Electron and needs network access.',
+    'npm run build && npx electron-builder --linux',
+    'npm run install:desktop / npm run uninstall:desktop',
+  ].join('\n')
+  assert.deepEqual(readmeProblems('README.md', good, ['Linux only']), [])
+  assert.match(readmeProblems('README.md', `${good}\nLinux Only for now`, ['Linux only']).join(), /Linux only/)
+  assert.match(readmeProblems('README.md', good.replace('https://spekterm.com/docs/', ''), []).join(), /no link/)
+  assert.match(readmeProblems('README.md', good.replace('needs network access', 'is slow'), []).join(), /network need/)
+  assert.match(readmeProblems('README.md', `${good.replace('Without it: --appimage-extract-and-run\n', '')}\n\n\n\n\n\n\n\n--appimage-extract-and-run`, []).join(), /not next to/)
+})

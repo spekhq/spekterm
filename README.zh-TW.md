@@ -2,12 +2,16 @@
 
 [English](README.md) | **繁體中文**
 
-一個以 agent 為核心的本地開發工作台。spekterm 在同一個視窗裡為每個 repo 開一個
+一個以 agent 為核心的本地開發工作台。spekterm 在同一個視窗裡為每個 repo 跑
 [Claude Code](https://code.claude.com/docs) session，旁邊再放一塊懂 [OpenSpec](https://github.com/Fission-AI/OpenSpec)
 的側欄 —— 讓你不必另開 IDE，就能一邊駕駛 agent、一邊讀它正在做的那個 change。
 
-> **現況：** 早期版本，目前只支援 Linux。`0.2.1` 是第一個發佈的版本。macOS 與 Windows 的產物、
-> 自動更新與程式碼簽章都還沒有。
+**官網與文件：[spekterm.com](https://spekterm.com/zh-tw/)** —— 使用說明在
+[spekterm.com/docs](https://spekterm.com/docs/)（[繁體中文版](https://spekterm.com/zh-tw/docs/)）。
+
+![spekterm：Claude Code session 以對話檢視呈現，旁邊的側欄顯示它正在做的 OpenSpec change 的 tasks](site/src/assets/screenshots/zh-TW/hero.png)
+
+> **現況：** 早期版本。目前提供 Linux 版本，macOS 與 Windows 尚未支援。自動更新與程式碼簽章都還沒有。
 
 ## 為什麼
 
@@ -15,52 +19,24 @@
 「開四個終端機分頁」的價值在側欄：它懂 OpenSpec —— session 正在做的 change、它的 artifact、tasks 與
 spec —— 並且在 agent 寫入磁碟時跟著更新。
 
-## 功能
+## 它做什麼
 
-**工作區**
+- **工作區** —— 一個視窗放任意多個 repo，外加一個給其他所有事情用的全域 session。
+- **真正的終端** —— `claude` 與你的 shell 跑在真正的 pty 裡，每個 repo 可開多個；session 重開 app 也還在，
+  也能休眠。
+- **OpenSpec 側欄** —— session 正在做的 change、它的 artifact 與 tasks，瀏覽、關係圖、時間軸，含 worktree。
+- **對話檢視、收件匣與交接** —— 以訊息形式讀 agent；Slack 提及會變成收件匣項目；agent 可以把工作交給
+  另一個 repo。
 
-- 加入任意多個 folder，可排序，常用的可以置頂。
-- 一個不屬於任何 repo 的全域 session，給其他所有事情用。
-
-**終端**
-
-- 真正的終端（`node-pty` + xterm.js，WebGL 繪製），每個 repo 可開多個 session，含 git worktree。
-- 重開 app 後 session 還在：`claude` session 續接原本的對話，shell 在最後的工作目錄重生並重播畫面。
-    還原的 session 保持休眠（沒有行程），按「喚醒」才啟動。
-- 偶爾才用的 session 可以休眠：結束它的行程，但仍留在 workspace 裡等你喚醒。可以手動（`Ctrl+Shift+H`
-  或分頁選單），閒置的 session 也會在 24 小時後自動休眠（可在 Settings 調整；畫面上的 session、
-  正在工作的 agent、正在跑工作的 shell 都不會被休眠）。
-- agent session 可以在終端與對話 view 之間切換。對話 view 來自 agent 自己的紀錄與 hooks ——
-  從不解析終端畫面。
-
-**OpenSpec 側欄**
-
-- 跟隨當前 session 正在做的 change：每個 artifact 一個分頁、tasks 進度恆常可見、spec delta 標示
-  `ADDED` / `MODIFIED`。
-- 瀏覽 specs 與 changes（進行中與已封存），包含住在其他 git worktree 裡的 change。
-- 依賴圖與時間軸，與 [spek](https://github.com/spekhq/spek) 共用，在放大後蓋住終端的側欄裡呈現 ——
-  任何 change 或檔案都能用同一個放大鍵拿到整個主舞台。
-- 在 spec、change 與底層檔案之間互跳；`Ctrl+P` 快速開檔；一鍵請 agent 繼續寫這個 change。
-
-**檔案**
-
-- 隨磁碟變動即時更新的檔案樹、Markdown 渲染、語法高亮（Monaco）、編輯與檔案操作。
-
-**收件匣與交接**
-
-- **Slack：** 有人在 Slack 提及你，那件事就成為收件匣裡的一則項目。你讀過內容、選好 folder 之後，
-  才會開 session。
-- **agent 交接：** agent 可以把工作交接給工作區裡的另一個 repo。spekterm 在那裡開好 session 並送出
-  第一則 prompt；子 session 記得它的母 session，做完會回報，你會收到通知。
-
-**為渲染不受信任的內容而設計**
-
-- 介面只能存取你加入的 folder 之內的檔案，每一次檔案系統檢查都在主行程執行。
-- 嚴格的 Content-Security-Policy 與導航防護，讓 repo 內容與終端輸出無法執行 script 或接管視窗。
+完整說明都在[文件](https://spekterm.com/zh-tw/docs/)，包括[快捷鍵](https://spekterm.com/zh-tw/docs/reference/keyboard-shortcuts/)、
+[疑難排解](https://spekterm.com/zh-tw/docs/help/troubleshooting/)，以及
+[spekterm 會連到哪裡](https://spekterm.com/zh-tw/docs/reference/data-and-network/)。
 
 ## 需求
 
 - Linux x64，並安裝 `libfuse2`（執行 AppImage 需要；Ubuntu 22.04 起預設不再安裝）。
+  少了它，AppImage 會以 `dlopen(): error loading libfuse.so.2` 失敗；可改為不經 FUSE 執行：
+  `./Spekterm-<version>.AppImage --appimage-extract-and-run`。
 - [Claude Code](https://code.claude.com/docs)（`claude` 在 `PATH` 上），用於 agent session。spekterm
   執行的是真正的 CLI、用你自己的訂閱 —— 從不要求 API key。
 
@@ -75,7 +51,7 @@ chmod +x Spekterm-<version>.AppImage
 
 ## 從原始碼安裝
 
-需要 Node.js 22（見 [`.nvmrc`](.nvmrc)）。
+需要 Node.js 22（見 [`.nvmrc`](.nvmrc)）。第一次打包需要網路：它會下載 Electron 的執行檔。
 
 ```bash
 git clone https://github.com/spekhq/spekterm.git
@@ -87,41 +63,9 @@ npm run install:desktop                          # → ~/.local/bin ＋ 應用�
 
 `install:desktop` 可以在 spekterm 開著時重跑，執行中的 app 不受影響。移除用 `npm run uninstall:desktop`。
 
-## 快捷鍵
-
-| 快捷鍵 | 動作 |
-| --- | --- |
-| `Ctrl+Tab` / `Ctrl+Shift+Tab` | 當前 rail 項目內的下／上一個 session；焦點在側欄的 change 檢視時，切換下／上一個 artifact |
-| `Ctrl+↓` / `Ctrl+↑` | rail 上的下／上一個項目 |
-| `Ctrl+T` | 開啟建立 session 的選單 |
-| `Ctrl+Shift+W` | 關閉當前的 session |
-| `Ctrl+Shift+H` | 讓當前的 session 休眠 |
-| `Ctrl+Shift+M` | 放大／還原側欄 |
-| `Shift+↓` / `Shift+↑` | 把選中的 repo 在 rail 上移動一格 |
-| `Shift+→` / `Shift+←` | 把當前的 session 在分頁列上移動一格 |
-| `Ctrl+P` | 快速開檔（側欄持有焦點時） |
-| `Ctrl+Shift+C` / `Ctrl+Shift+V` | 終端的複製／貼上 |
-| `Ctrl+S` | 存檔 |
-| `Esc` | 關閉 overlay、對話框與選單 |
-
-終端裡的 `Ctrl+C` 永遠是中斷，即使畫面上有選取。
-
-## 疑難排解
-
-- **AppImage 開不起來（`dlopen(): error loading libfuse.so.2`）。** 安裝 `libfuse2`，或不經 FUSE
-  執行：`./Spekterm-*.AppImage --appimage-extract-and-run`。
-- **側欄或檔案樹停止更新。** 多半是 inotify 的監看上限太低（錯誤 `ENOSPC` 只出現在主行程的 stderr）。
-  用 `cat /proc/sys/fs/inotify/max_user_watches` 查看；若是 8192，調高它：
-
-  ```bash
-  echo 'fs.inotify.max_user_watches=524288' | sudo tee /etc/sysctl.d/60-inotify.conf
-  sudo sysctl --system
-  ```
-
-- **我在跑的是哪一份？** Settings → About 列出版本、建置時刻與 commit。
-
 ## 文件
 
+- [spekterm.com/docs](https://spekterm.com/zh-tw/docs/) —— 使用說明，有英文與繁體中文。
 - [`docs/PRD.md`](docs/PRD.md) —— 產品需求、路線圖與架構決策。
 - [`docs/workspace-mockup.html`](docs/workspace-mockup.html) —— 互動式 UI 雛型。
 - [`CLAUDE.md`](CLAUDE.md) 與 [`docs/lessons/`](docs/lessons/) —— 給貢獻者與 agent 的工作筆記，包含那些
