@@ -50,7 +50,8 @@
   - Shots: `hero` (conversation view + tasks), `terminal` (shell + proposal), `inbox` (Slack mention), in `en` and `zh-TW` at 1440×900 @2x (emulated viewport; `--force-device-scale-factor` on the virtual screen gave an 800×600 window). Transcript and inbox text are per language.
 - [x] 6.4 `scripts/screenshot-manifest.test.mjs`: every committed screenshot in the manifest with a matching hash, every manifest entry present, and at least one entry — committed together with 6.5. Verify: red when an image is replaced, when one is deleted, and with an empty manifest, recorded under this task
   - Controls in the same file: a replaced, an added, and a deleted image, and an empty manifest, each reported; the pre-capture verdict refuses a home path, an injected word, and an empty read.
-- [ ] 6.5 The maintainer reviews every captured image; commit them with the manifest. Verify: review recorded here with the date; `npm test` green
+- [x] 6.5 The maintainer reviews every captured image; commit them with the manifest. Verify: review recorded here with the date; `npm test` green
+  - Reviewed by the maintainer on the live site, 2026-10-08 ("看起來沒問題").
 
 ## 7. Content (English and Traditional Chinese together)
 
@@ -60,7 +61,8 @@
 - [x] 7.4 Using spekterm, part 2: Files and quick open, Inbox and Slack, Handoffs — both languages, same rule. Verify: build green
 - [x] 7.5 Reference: Keyboard shortcuts (from `CLAUDE.md`'s table), Settings, Data and network (design D9, both parts, the `openspec config set telemetry.enabled false` opt-out and why `.zshrc` variables do not reach `openspec`) — both languages. Verify: build green; the path matches the allow-list header in 2.1
 - [x] 7.6 Help: Troubleshooting (from the README), FAQ (differences from running Claude Code in a terminal and from parallel-agent workbenches, described by approach, no license terms) — both languages. Verify: build green
-- [ ] 7.7 Translation review: the maintainer reads each zh-TW page against its English page. Verify: recorded here with the date
+- [x] 7.7 Translation review: the maintainer reads each zh-TW page against its English page. Verify: recorded here with the date
+  - Reviewed by the maintainer on the live site, 2026-10-08.
 - [x] 7.8 `.github/workflows/site.yml`: on changes to `site/**`, `scripts/lib/third-party-licenses.mjs`, `scripts/lib/public-hygiene.mjs`, `scripts/public-hygiene.test.mjs`, `scripts/license.test.mjs` — checkout with `fetch-depth: 0`, `npm ci` and `npm run build` in `site/` on the `.nvmrc` Node — committed only once the site builds green. Verify: the workflow is green on its first run
   - First run (push of 3d3e629): green. Dependabot has started watching `site/` on its own; two of its update runs failed — its own jobs, not this workflow.
 
