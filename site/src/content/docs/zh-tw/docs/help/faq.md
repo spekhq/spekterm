@@ -33,6 +33,13 @@ design、tasks 與 specs —— 並在 agent 寫入磁碟時跟著更新。sessi
 spekterm 自己不會把你的程式碼送到任何地方。它替你啟動的程式 —— 例如 `claude` —— 會連到它們自己的服務。
 完整清單見 [資料與網路](/zh-tw/docs/reference/data-and-network/)。
 
+## spekterm 跟 spek 是什麼關係？
+
+[spek](https://github.com/spekhq/spek) 是同一群維護者做的唯讀 OpenSpec 檢視器，有網頁版、VS Code 擴充套件
+與 JetBrains 外掛。spekterm 用 spek 的引擎（`@spekjs/core`）讀 OpenSpec，側欄裡的關係圖與時間軸也來自
+spek（`@spekjs/ui`）。用 spekterm 不需要裝 spek，反過來也一樣；spek 讓你在編輯器或瀏覽器裡讀 spec，
+spekterm 讓你在 spec 旁邊跑 agent。
+
 ## spekterm 跟 Anthropic 或 OpenSpec 有關係嗎？
 
 沒有。spekterm 是一個獨立的開源專案。Claude Code 是 Anthropic 的產品，OpenSpec 是它自己的專案；

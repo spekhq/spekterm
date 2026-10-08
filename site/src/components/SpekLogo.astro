@@ -1,0 +1,26 @@
+---
+/**
+ * spek's logo (from the spek repository's `logo/`, MIT, the same maintainers), in the variant for the
+ * reader's color scheme — Starlight's `light:sl-hidden` / `dark:sl-hidden`, as its hero does.
+ */
+import { Image } from 'astro:assets'
+import dark from '../assets/spek/full-logo.svg'
+import light from '../assets/spek/full-logo-light.svg'
+---
+
+<div class="spek-logo not-content">
+  <Image src={dark} alt="spek" width={300} class="light:sl-hidden" />
+  <Image src={light} alt="spek" width={300} class="dark:sl-hidden" />
+</div>
+
+<style>
+  .spek-logo {
+    display: flex;
+    justify-content: center;
+    margin: 1.5rem 0;
+  }
+  .spek-logo img {
+    width: min(18rem, 70%);
+    height: auto;
+  }
+</style>

@@ -20,6 +20,7 @@ hero:
 import { Card, CardGrid, LinkCard, Steps } from '@astrojs/starlight/components'
 import Download from '../../../components/Download.astro'
 import Screenshot from '../../../components/Screenshot.astro'
+import SpekLogo from '../../../components/SpekLogo.astro'
 import hero from '../../../assets/screenshots/zh-TW/hero.png'
 import terminal from '../../../assets/screenshots/zh-TW/terminal.png'
 import inbox from '../../../assets/screenshots/zh-TW/inbox.png'
@@ -119,6 +120,30 @@ hooks —— spekterm 從不解析終端機畫面 —— 而終端機永遠只�
 spekterm 是桌面 app：你的 repository、session 與設定都留在你的電腦上。它沒有帳號、沒有遙測，也不檢查更新。
 它替你啟動的程式 —— `claude` CLI 與 `openspec` CLI —— 會自己連網；[資料與網路](/zh-tw/docs/reference/data-and-network/)
 逐項列出什麼連到哪裡。spekterm 以 MIT 授權釋出，原始碼在 [GitHub](https://github.com/spekhq/spekterm)。
+
+## 以 spek 為基礎
+
+<SpekLogo />
+
+[spek](https://github.com/spekhq/spek) 是 spekterm 的姊妹專案：同一群維護者做的開源、唯讀的 OpenSpec
+內容檢視器。它把 repository 的 `openspec/` 目錄變成可以瀏覽的介面 —— 總覽、spec 與 change 連同它們的
+tasks、所有 git worktree 的 change 併成一份清單、時間軸、全文搜尋 —— 在瀏覽器、VS Code 或 JetBrains IDE
+裡都能用。它和 spekterm 一樣只在本機執行，不會把任何東西送出去。
+
+spekterm 的側欄是站在 spek 的成果上：
+
+- **讀懂 OpenSpec 的引擎** —— 掃描 spec 與 change、task 進度、worktree 聚合，都來自 spek 的核心套件
+  `@spekjs/core`。
+- **關係圖與時間軸** —— 和 spek 畫的是同一套元件，來自它的 `@spekjs/ui` 套件。
+- **圖示** —— spekterm 的圖示就是 spek 的 S，旁邊加上一個終端機提示字元。
+
+側欄本身是 spekterm 自己做的，為終端機旁的窄欄設計。想在平常工作的地方讀 spec，用 spek；要在多個
+repository 之間駕駛 agent、讓 spec 待在旁邊，用 spekterm。兩者讀的是同一批檔案，誰也不需要誰。
+
+<CardGrid>
+  <LinkCard title="在瀏覽器裡試用 spek" description="線上 demo，不用安裝。" href="https://spekhq.github.io/spek/demo.html" />
+  <LinkCard title="GitHub 上的 spek" description="原始碼，以及網頁版、VS Code、JetBrains IDE 的安裝方式。" href="https://github.com/spekhq/spek" />
+</CardGrid>
 
 ## 常見問題
 

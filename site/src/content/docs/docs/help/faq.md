@@ -36,6 +36,14 @@ spekterm itself does not send your code anywhere. The programs it starts for you
 connect to their own services. See [Data and network](/docs/reference/data-and-network/) for the full
 list.
 
+## How is spekterm related to spek?
+
+[spek](https://github.com/spekhq/spek) is a read-only OpenSpec viewer — a web app, a VS Code extension,
+and a JetBrains plugin — from the same maintainers. spekterm uses spek's engine (`@spekjs/core`) to read
+OpenSpec, and spek's Graph and Timeline (`@spekjs/ui`) in its side panel. You do not need spek to use
+spekterm, or the other way around; spek is for reading specs in your editor or browser, spekterm for
+running agents next to them.
+
 ## Is spekterm affiliated with Anthropic or OpenSpec?
 
 No. spekterm is an independent open-source project. Claude Code is Anthropic's product and OpenSpec is

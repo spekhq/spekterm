@@ -20,6 +20,7 @@ hero:
 import { Card, CardGrid, LinkCard, Steps } from '@astrojs/starlight/components'
 import Download from '../../components/Download.astro'
 import Screenshot from '../../components/Screenshot.astro'
+import SpekLogo from '../../components/SpekLogo.astro'
 import hero from '../../assets/screenshots/en/hero.png'
 import terminal from '../../assets/screenshots/en/terminal.png'
 import inbox from '../../assets/screenshots/en/inbox.png'
@@ -125,6 +126,32 @@ account, no telemetry, and no update check. The programs it starts for you — t
 `openspec` CLI — make their own connections; [Data and network](/docs/reference/data-and-network/) lists
 exactly what connects where. spekterm is MIT-licensed, and its source is on
 [GitHub](https://github.com/spekhq/spekterm).
+
+## Built on spek
+
+<SpekLogo />
+
+[spek](https://github.com/spekhq/spek) is spekterm's sibling project: an open-source, read-only viewer
+for OpenSpec content, from the same maintainers. It turns a repository's `openspec/` directory into
+something you can browse — a dashboard, specs and changes with their tasks, every git worktree's changes
+in one list, a timeline, full-text search — in your browser, in VS Code, or in a JetBrains IDE. Like
+spekterm, it runs locally and sends nothing anywhere.
+
+spekterm's side panel stands on spek's work:
+
+- **The engine that reads OpenSpec** — scanning specs and changes, task progress, and worktree
+  aggregation come from spek's core package, `@spekjs/core`.
+- **The Graph and the Timeline** — the same components spek draws, from its `@spekjs/ui` package.
+- **The mark** — spekterm's icon is spek's S with a terminal prompt beside it.
+
+The side panel itself is spekterm's own, made for a narrow column next to a terminal. Use spek to read
+specs where you already work; use spekterm when you drive agents across repositories and want the spec
+beside them. They read the same files, and neither needs the other.
+
+<CardGrid>
+  <LinkCard title="Try spek in your browser" description="The live demo, no install needed." href="https://spekhq.github.io/spek/demo.html" />
+  <LinkCard title="spek on GitHub" description="Source, install instructions for the web app, VS Code, and JetBrains IDEs." href="https://github.com/spekhq/spek" />
+</CardGrid>
 
 ## Questions
 
