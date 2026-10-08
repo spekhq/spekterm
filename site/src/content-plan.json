@@ -1,0 +1,48 @@
+{
+  "$comment": "What check-content requires of the built site (project-website). topics: documentation pages that must exist in both languages (slugs without locale prefix). landing: the hero screenshot's file name stem, and the i18n key of the platform-status sentence the landing page must show verbatim. dataAndNetworkKeywords: words the data and network page must contain per language. linuxOnlyPhrases: matched case-insensitively against every page.",
+  "topics": [
+    "docs/getting-started/install",
+    "docs/getting-started/first-workspace",
+    "docs/using/terminals-and-sessions",
+    "docs/using/side-panel",
+    "docs/using/conversation-view",
+    "docs/using/files",
+    "docs/using/inbox-and-slack",
+    "docs/using/handoffs",
+    "docs/reference/keyboard-shortcuts",
+    "docs/reference/settings",
+    "docs/reference/data-and-network",
+    "docs/help/troubleshooting",
+    "docs/help/faq"
+  ],
+  "dataAndNetwork": "docs/reference/data-and-network",
+  "landing": {
+    "heroScreenshot": "hero",
+    "platformsString": "landing.platforms"
+  },
+  "dataAndNetworkKeywords": {
+    "en": [
+      "Slack",
+      "image",
+      "claude",
+      "openspec",
+      "openspec config set telemetry.enabled false",
+      "login shell"
+    ],
+    "zh-TW": [
+      "Slack",
+      "圖片",
+      "claude",
+      "openspec",
+      "openspec config set telemetry.enabled false",
+      "login shell"
+    ]
+  },
+  "linuxOnlyPhrases": [
+    "Linux only",
+    "Linux-only",
+    "只支援 Linux",
+    "僅支援 Linux",
+    "Linux 專用"
+  ]
+}

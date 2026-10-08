@@ -35,11 +35,14 @@ import { fileURLToPath } from 'node:url'
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..')
 
-/** 掃描的根目錄。產品原始碼、驗收腳本、共用字典全部涵蓋。 */
-const ROOTS = ['src', 'scripts', 'docs', 'openspec']
+/** 掃描的根目錄。產品原始碼、驗收腳本、共用字典全部涵蓋。The website's sources too (`site`). */
+const ROOTS = ['src', 'scripts', 'docs', 'openspec', 'site']
 
 /** 只看文字檔 —— 二進位資產（圖示之類）本來就含 NUL。 */
-const TEXT_FILE = /\.(ts|tsx|mjs|js|json|md|css|html|yaml|yml)$/
+const TEXT_FILE = /\.(ts|tsx|mjs|js|json|md|mdx|astro|css|html|yaml|yml)$/
+
+/** Generated or installed trees under the roots — not sources, and `site/node_modules` is large. */
+const SKIPPED_DIRS = new Set(['node_modules', 'dist', '.astro'])
 
 function* walk(dir) {
   let entries
@@ -50,7 +53,9 @@ function* walk(dir) {
   }
   for (const entry of entries) {
     const full = join(dir, entry.name)
-    if (entry.isDirectory()) yield* walk(full)
+    if (entry.isDirectory()) {
+      if (!SKIPPED_DIRS.has(entry.name)) yield* walk(full)
+    }
     else if (entry.isFile()) yield full
   }
 }

@@ -40,7 +40,12 @@ export const STUB_PORTS = {
 
 /** 探針名 → 該支所有 debugging port（鍵名說明它是哪一次啟動）。 */
 export const PROBE_PORTS = {
-  shell: { main: 9222 },
+  /**
+   * Two launches: the fresh profile, and one an earlier version left with a registered spell-check
+   * dictionary (`workspace-app-shell`'s no-connection-at-startup check). The second is started only after
+   * the first has quit, but its own port keeps `connectToApp` from reaching a lingering first app.
+   */
+  shell: { main: 9222, upgrade: 9247 },
   workspace: { main: 9223 },
   files: { build: 9224, dev: 9225 },
   terminal: { build: 9226, dev: 9227 },
@@ -80,6 +85,8 @@ export const PROBE_PORTS = {
    */
   intake: { main: 9241, restart: 9242 },
   package: { main: 9240 },
+  /** Not a probe: the website's screenshot capture (`scripts/capture-screenshots.mjs`) drives the built app. */
+  screenshots: { main: 9248 },
 }
 
 /**

@@ -1108,3 +1108,27 @@ The same run exposed a false green of the "no-op" family (see the section on rel
 visible. The assertion now also requires that the selected tab is the one the key should have
 reached. **Any "X is visible / in place after the action" assertion must also assert that the action
 happened.**
+
+## "No connection" needs a positive control — `--host-resolver-rules` fails silently
+
+`probe:shell` checks that the browser engine opens no connection at startup by mapping every host name to
+a local listener (`--host-resolver-rules=MAP * 127.0.0.1:<port>, EXCLUDE localhost`) and asserting the
+listener received nothing. Three things measured while building it, each of which turns the check into a
+false green:
+
+- **A malformed rule is ignored without a word.** The value passed as one argv element **with quotes**
+  (copied from a shell example), or with `;` between the rules, makes Chromium drop the rules entirely —
+  every connection then goes to the real network and the listener reads zero, exactly like a fixed app.
+  Hence the positive control in the same run: the renderer loads an image from `https://control.invalid/`
+  and the listener must see a connection with that SNI. Without it, "fixed" and "blind" are the same
+  number.
+- **The listener must be up before the app is spawned.** The spell checker's connection came ~0.6 s after
+  spawn, before the window existed — a listener opened after `connectToApp` misses it.
+- **It sees the browser engine only.** `net.fetch` is redirected, but the main process's global `fetch`
+  (Node's undici — what Slack uses) goes straight to the network. Node-side connections are
+  `scripts/network-surface.test.mjs`'s job.
+
+And one about the fixture: **a profile that already holds the downloaded dictionary does not connect even
+unfixed** — it cannot tell a fixed app from an unfixed one. The upgrade launch seeds only the `Preferences`
+entry an unfixed run writes (`{"spellcheck":{"dictionaries":["en-US"],"dictionary":""}}`), no file. The
+`Dictionaries/` directory is created in every configuration, fixed or not, so its absence proves nothing.

@@ -1,0 +1,51 @@
+name: Site
+
+# The website (`site/`) builds itself and runs its own gate (`site/scripts/build.mjs`): type check, the
+# repository's content guards, link validation, language parity, other-origin and content checks, and
+# the third-party notices. Cloudflare Pages runs the same build before publishing; this workflow is the
+# record for direct pushes and the signal for pull requests.
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'site/**'
+      - 'scripts/lib/third-party-licenses.mjs'
+      - 'scripts/lib/public-hygiene.mjs'
+      - 'scripts/public-hygiene.test.mjs'
+      - 'scripts/license.test.mjs'
+      - '.github/workflows/site.yml'
+  pull_request:
+    paths:
+      - 'site/**'
+      - 'scripts/lib/third-party-licenses.mjs'
+      - 'scripts/lib/public-hygiene.mjs'
+      - 'scripts/public-hygiene.test.mjs'
+      - 'scripts/license.test.mjs'
+      - '.github/workflows/site.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: site-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: site
+    steps:
+      # Full history with tags: the content check fails on an empty tag list (it compares the pages
+      # against every released version), and the content guards read the whole working tree.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: site/.nvmrc
+          cache: npm
+          cache-dependency-path: site/package-lock.json
+      - run: npm ci
+      - run: npm run build

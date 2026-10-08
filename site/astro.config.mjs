@@ -1,0 +1,60 @@
+// @ts-check
+import starlight from '@astrojs/starlight'
+import { defineConfig } from 'astro/config'
+import starlightLinksValidator from 'starlight-links-validator'
+import { collectNoticeModules, NOTICE_MODULES_FILE } from './scripts/collect-notice-modules.mjs'
+
+export default defineConfig({
+  // Every page declares its canonical URL on this host (project-website: spekterm.com is the
+  // canonical host) — including when the hosting provider's own host name serves the same build.
+  site: 'https://spekterm.com',
+  trailingSlash: 'always',
+  vite: { plugins: [collectNoticeModules(NOTICE_MODULES_FILE)] },
+  integrations: [
+    starlight({
+      title: 'spekterm',
+      defaultLocale: 'root',
+      locales: {
+        root: { label: 'English', lang: 'en' },
+        'zh-tw': { label: '繁體中文', lang: 'zh-TW' },
+      },
+      // The live check compares served pages with the build byte for byte, so the build must not
+      // depend on the environment; `lastUpdated` reads git history, whose depth differs per clone.
+      lastUpdated: false,
+      // Starlight's own "Built with Starlight" link is replaced by the disclaimer footer.
+      credits: false,
+      customCss: ['./src/styles/theme.css'],
+      social: [{ icon: 'github', label: 'GitHub', href: 'https://github.com/spekhq/spekterm' }],
+      components: {
+        Footer: './src/components/Footer.astro',
+      },
+      sidebar: [
+        {
+          label: 'Getting started',
+          translations: { 'zh-TW': '開始使用' },
+          items: [{ autogenerate: { directory: 'docs/getting-started' } }],
+        },
+        {
+          label: 'Using spekterm',
+          translations: { 'zh-TW': '使用 spekterm' },
+          items: [{ autogenerate: { directory: 'docs/using' } }],
+        },
+        {
+          label: 'Reference',
+          translations: { 'zh-TW': '參考' },
+          items: [{ autogenerate: { directory: 'docs/reference' } }],
+        },
+        {
+          label: 'Help',
+          translations: { 'zh-TW': '說明' },
+          items: [{ autogenerate: { directory: 'docs/help' } }],
+        },
+      ],
+      plugins: [
+        // Fails the build on a broken link or anchor in Markdown content. Component links (the
+        // footer, the landing page's buttons) are not seen by it; check-content covers those.
+        starlightLinksValidator({ exclude: ['/third-party-notices.txt'] }),
+      ],
+    }),
+  ],
+})

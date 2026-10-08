@@ -1,0 +1,11 @@
+/* The app's accent (amber #f59e0b, shared with spek) instead of Starlight's default blue, in both color schemes. */
+:root {
+  --sl-color-accent-low: #3b2506;
+  --sl-color-accent: #f59e0b;
+  --sl-color-accent-high: #ffd59a;
+}
+:root[data-theme='light'] {
+  --sl-color-accent-low: #ffe8c2;
+  --sl-color-accent: #a35f00;
+  --sl-color-accent-high: #4a2a00;
+}

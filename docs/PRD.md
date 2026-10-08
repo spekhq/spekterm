@@ -534,6 +534,11 @@ contributions (see `CONTRIBUTING.md`).
   - `npm run install:desktop` / `uninstall:desktop` 把產物裝進應用程式選單。這同時讓
     `desktop-packaging` 兩條「SHALL 以自桌面環境啟動驗收」的 requirement **首次具備可執行的前提**。
   - **仍未解**：agent CLI 在 nvm 之下的解析（issue #20）、應用程式圖示仍是 placeholder（#14）。
+- **The website** (`project-website`): `spekterm.com` — a landing page and the user documentation in
+  English and Traditional Chinese, built from `site/` and hosted on Cloudflare Pages; `spekterm.app`
+  and `www` redirect to it. Downloads link to the latest GitHub release. Its account of the app's network
+  behavior is held to the code by a unit guard, and the same change turned off Electron's spell checker,
+  which downloaded a dictionary from a third-party server at every fresh start.
 - 沿用 spek 深色主題（#0a0c0f / amber #f59e0b）、圖示、原生選單。
 - 持久化 layout（panel 尺寸）與最近工作區。
   **session 的持久化已由 `session-restore` 落地**（不屬於任何 Phase）—— session 清單、

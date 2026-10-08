@@ -4,7 +4,20 @@ import globals from 'globals'
 import tseslint from 'typescript-eslint'
 
 export default tseslint.config(
-  { ignores: ['out/**', 'dist/**', 'node_modules/**'] },
+  // The website (`site/`) is its own package with its own type check; only its build scripts are linted
+  // here, as plain Node modules (the rule for `scripts/` below). Without `site/**` the root `dist/**`
+  // pattern would not cover `site/dist/`, and the built bundle would be linted.
+  {
+    ignores: [
+      'out/**',
+      'dist/**',
+      'node_modules/**',
+      'site/**',
+      '!site/scripts/',
+      '!site/scripts/**/*.mjs',
+      'site/scripts/fixtures/**',
+    ],
+  },
 
   js.configs.recommended,
   ...tseslint.configs.recommended,
@@ -77,7 +90,7 @@ export default tseslint.config(
 
   // 驗收腳本：Node 環境的純 JS，不做型別檢查
   {
-    files: ['scripts/**/*.mjs'],
+    files: ['scripts/**/*.mjs', 'site/scripts/**/*.mjs'],
     languageOptions: { globals: globals.node },
     rules: {
       // probe 腳本刻意以 top-level await 驅動流程

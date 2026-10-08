@@ -1,0 +1,44 @@
+---
+/**
+ * Starlight's footer plus what every page must carry (project-website): the non-affiliation
+ * statement and the link to the third-party notices. The not-found page uses the same layout, so
+ * it carries them too.
+ */
+import Default from '@astrojs/starlight/components/Footer.astro'
+import { useStrings } from '../i18n'
+
+const t = useStrings(Astro.locals.starlightRoute.lang)
+---
+
+<Default />
+<div class="site-footer">
+  <p class="disclaimer">{t('footer.disclaimer')}</p>
+  <p class="links">
+    <a href="https://github.com/spekhq/spekterm">{t('footer.source')}</a>
+    <span aria-hidden="true">·</span>
+    <a href="https://github.com/spekhq/spekterm/blob/master/LICENSE">{t('footer.license')}</a>
+    <span aria-hidden="true">·</span>
+    <a href="/third-party-notices.txt">{t('footer.notices')}</a>
+  </p>
+</div>
+
+<style>
+  .site-footer {
+    margin-top: 2rem;
+    padding-top: 1rem;
+    border-top: 1px solid var(--sl-color-hairline);
+    font-size: var(--sl-text-xs);
+    color: var(--sl-color-gray-3);
+  }
+  .site-footer p {
+    margin: 0.25rem 0;
+  }
+  .links {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+  }
+  .links a {
+    color: var(--sl-color-gray-2);
+  }
+</style>

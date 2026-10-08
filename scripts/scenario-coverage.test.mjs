@@ -53,6 +53,7 @@ const COVERED_CHANGES = [
     'change-view-keyboard',
   'session-hibernation',
   'maximize-panel-and-confirm-close',
+  'project-website',
 ]
 
 /** change 的所在 —— 封存後它會搬到 `archive/` 之下，兩處都找。 */
@@ -1688,6 +1689,79 @@ export const TABLE = [
     'register a second, unsaved-only close guard beside the new one (the old guard kept)', '**Ran** (tasks 6.1): red (two prompts for one close).'],
   ['Cancelling the shared dialog keeps both', 'Cancelling the shared dialog keeps both', true,
     null, 'Green on the old guard (its unsaved-only dialog also keeps both on cancel). Its power is the row before it, on the same prompt'],
+  // ── project-website: project-website (new) ───────────────────────────────────
+  // Carriers in site/scripts are the build's own checks; each runs a self-test with a fixture built to
+  // violate it before running on the real output, so the mutation column names the violating fixture.
+  ['Packaging selects nothing from the site', 'the packaging configuration selects nothing under site/', false,
+    "add 'site/**' to build.files", "'control: a selection of site/** is caught' runs that mutation"],
+  ['The root project does not adopt the site', 'the root project does not adopt the site as a workspace or list it in its lockfile', false,
+    'declare "workspaces": ["site"] (lock entries under site/)', "'control: a workspace and its lock entries are caught'"],
+  ['A redirecting host keeps the path', null, false, null,
+    'Manual: site/scripts/check-live.mjs after a deploy (site/DEPLOY.md step 5) requests a deep path with a query on each redirecting host. It needs the deployed site; its own self-test covers a 302 and a dropped path against a local stub'],
+  ['Every page names its canonical URL', 'canonical URL is', false,
+    "self-test fixture 'a wrong canonical URL' (the pages.dev host)", 'site/scripts/check-content.mjs, every sitemap page'],
+  ['A page in one language only fails the build', 'has no Traditional Chinese counterpart', false,
+    "self-test fixture 'an English-only page'", 'judged on the source tree: Starlight lists its fallback page in the sitemap, so a sitemap comparison stays equal (verified with a real astro build)'],
+  ['A component string in one language only fails the build', 'is missing from zh-TW.json', false,
+    "self-test fixture 'a one-language string'", ''],
+  ['A screenshot in one language only fails the build', 'exists for en only', false,
+    "self-test fixture 'a one-language screenshot'", ''],
+  ['The language switch leads to the same page', 'language switch does not offer', false,
+    "self-test fixture 'a language switch to the wrong page'", ''],
+  ['The landing page carries the required content', 'does not state the platform status', false,
+    "self-test fixtures: no hero screenshot, no download link, no platform status", 'the same block checks Claude Code / OpenSpec, the docs link and the repository link'],
+  ['Every page carries the disclaimer', 'the non-affiliation statement is missing', false,
+    "self-test fixture 'a page without the disclaimer'", 'the not-found page is checked too'],
+  ['Nothing says Linux only', 'says "', true,
+    "self-test fixtures 'a \"Linux only\" phrase' and its Chinese form",
+    'Green on an empty site — the topics and landing checks are the positive side. The READMEs half is added with task 10.3 (site-boundary.test.mjs)'],
+  ['Every required topic has a page', 'required topic page', false,
+    "self-test fixture 'a missing topic'", 'the list is site/src/content-plan.json'],
+  ['The READMEs point to the documentation', null, false, null,
+    'Added with task 10.3, once the site is live: scripts/site-boundary.test.mjs gains the README assertions in the same commit that rewrites the READMEs'],
+  ['Download links target the latest release page', 'does not target', false,
+    "self-test fixture 'a link to a specific release'", ''],
+  ['The pages do not carry a version number', 'carries the app version', false,
+    "self-test fixture 'a released version on a page'", 'an empty tag list fails (a shallow clone would otherwise pass); word boundaries keep 10.2.1 from matching 0.2.1'],
+  ['A resource from another origin fails the build', 'style attribute loads', false,
+    'self-test fixtures: cross-origin script, style sheet, inline <style>, style attribute, srcset, frame, CSS font, @import', 'site/scripts/check-origins.mjs'],
+  ['Inline data and plain links do not fail the build', "value.startsWith('data:')", true,
+    null, "Green if the check did nothing at all; the passing fixture (Starlight's data: SVG CSS, an <a> to another origin) must pass while the violating ones fail — the self-test asserts both"],
+  ['The served site matches the build and sets no cookie', null, false, null,
+    'Manual: site/scripts/check-live.mjs after a deploy. It cannot run before there is a deployed site; its self-test catches an injected /cdn-cgi/ script and a cookie against local servers'],
+  ["The page states the app's own connections and the started programs", 'does not mention', false,
+    "self-test fixture 'a data and network page missing a keyword'", 'keywords per language in site/src/content-plan.json'],
+  ['Forbidden text on screen aborts the capture', 'control: the pre-capture verdict refuses forbidden text and an empty read', false,
+    'return null from screenVerdict', 'scripts/lib/screen-check.mjs, the verdict capture-screenshots.mjs applies before every capture'],
+  ['An empty read aborts the capture', 'reading the wrong page or nothing', false,
+    'drop the fixture-name check from screenVerdict', ''],
+  ['A screenshot not written by the script fails the test', 'every committed screenshot is one the capture script wrote, and none is missing', false,
+    'replace a PNG without recapturing', "'control: a replaced, an added, and a deleted screenshot, and an empty manifest, are caught'"],
+  ['A recorded screenshot that is missing fails the test', 'recorded but missing', false,
+    'delete a recorded PNG', ''],
+  ['The notices list what the browser receives', 'the notices omit packages known to ship', true,
+    null, 'The generator is its own carrier: a package its collection misses is not caught (the same gap the desktop notices row records). It does fail when a known-shipping package (Starlight, Pagefind, expressive-code) is missing or has no license'],
+  ['Every page links to the notices', 'no link to the third-party notices', false,
+    "self-test fixture 'the not-found page without the notices link'", ''],
+  ['A content-hygiene violation stops the build', "step('root content guards'", false,
+    "delete the step from site/scripts/build.mjs", "site-boundary.test.mjs asserts every step, in order; a page with a home path stopped the build at this step (tasks 5.6)"],
+  ['A broken documentation link stops the build', 'starlightLinksValidator', false,
+    'remove the validator plugin', 'site/astro.config.mjs; a /docs/nope/ link stopped the build (tasks 5.6)'],
+  ['A failed build leaves the published site in place', null, false, null,
+    "Cloudflare Pages' behavior, not the repository's: a failed build publishes nothing. Observed at setup (site/DEPLOY.md)"],
+  // ── project-website: workspace-app-shell ─────────────────────────────────────
+  ['Startup with a fresh profile opens no connection', 'Fresh profile', false,
+    'remove setSpellCheckerLanguages([]) (red run recorded in tasks 1.1: redirector.gvt1.com)', 'probe:shell'],
+  ["Startup with an earlier version's profile opens no connection", 'Profile with a registered, missing dictionary', false,
+    'remove setSpellCheckerLanguages([])', 'seeded Preferences without the dictionary file — a profile that has the file does not connect even unfixed'],
+  ['The check can see a connection', 'the listener sees a requested connection (positive control)', false,
+    'quote the resolver rule, or separate the rules with ;', 'the positive control the zero-connection rows depend on'],
+  ['A new network reference fails the test', "the app's own code references network APIs only where the allow-list says", false,
+    'remove the slack-api.ts fetch entry from the allow-list', 'control groups cover call, reference, alias, destructuring, globalThis, element access'],
+  ['A new module import fails the test', "the app's own code imports only allow-listed packages and built-in modules", false,
+    "remove 'chokidar' from the allow-list", 'control groups cover https, node:https, require, import(), re-export'],
+  ['A stale allow-list entry fails the test', 'control: a stale allow-list entry is reported', false,
+    'drop the stale check from verdict()', ''],
 ]
 
 /**
@@ -1753,6 +1827,9 @@ test('每一個載體標籤在原始碼中恰有一處命中', () => {
   }
   walk(join(repoRoot, 'src'))
   walk(join(repoRoot, 'scripts'))
+  // The website's checks are carriers too (project-website); its config holds the link validator.
+  walk(join(repoRoot, 'site', 'scripts'))
+  sources.push(['site/astro.config.mjs', readFileSync(join(repoRoot, 'site', 'astro.config.mjs'), 'utf8')])
 
   const problems = []
   for (const [scenario, carrier] of TABLE) {

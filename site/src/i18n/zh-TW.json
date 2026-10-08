@@ -1,0 +1,11 @@
+{
+  "footer.disclaimer": "spekterm 是一個獨立的開源專案，與 Anthropic 及 OpenSpec 專案沒有隸屬、背書或贊助關係。Claude 與 Claude Code 是 Anthropic, PBC 的商標。",
+  "footer.license": "MIT 授權",
+  "footer.notices": "第三方授權聲明",
+  "footer.source": "GitHub 原始碼",
+  "landing.download": "下載 Linux 版（AppImage）",
+  "landing.downloadNote": "來自 GitHub 上最新的發佈版本。",
+  "landing.early": "仍在早期、持續開發中 —— 難免有粗糙的地方。",
+  "landing.illustrative": "截圖內容為示意範例。",
+  "landing.platforms": "目前提供 Linux 版本，macOS 與 Windows 尚未支援。"
+}

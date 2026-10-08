@@ -61,6 +61,13 @@ export function makeStubAgent(
      * 沒見到開始工作就呈現待送出」—— 少了這個選項，那條退路沒有載體。
      */
     dropFirstSubmit = false,
+    /**
+     * A transcript file written to the session's transcript path **instead of** the `STUB-HELLO-<sid>`
+     * message, on every start (`--session-id` and `--resume` alike). The website's screenshots use it so
+     * the conversation view shows a prepared exchange — the path contains the session id, known only at
+     * spawn, so the fixture cannot be placed beforehand.
+     */
+    transcriptFixture = '',
   } = {},
 ) {
   const home = mkTemp('spekterm-agentview-stub-')
@@ -225,7 +232,9 @@ export function makeStubAgent(
     // 就緒的閘門 —— 判準的兩端都由檔案界定，呼叫端不必睡任何固定的時間。
     `date +%s%N > ${JSON.stringify(readyReceipt)}`,
     // 一則 agent 訊息 —— 讓「內容真的抵達對話 view」有東西可斷言。
-    `printf '{"type":"assistant","uuid":"a1","timestamp":"2026-09-06T00:00:00.000Z","message":{"role":"assistant","content":[{"type":"text","text":"STUB-HELLO-%s"}]}}\\n' "$sid" >> "$tp"`,
+    transcriptFixture
+      ? `cat ${JSON.stringify(transcriptFixture)} > "$tp"`
+      : `printf '{"type":"assistant","uuid":"a1","timestamp":"2026-09-06T00:00:00.000Z","message":{"role":"assistant","content":[{"type":"text","text":"STUB-HELLO-%s"}]}}\\n' "$sid" >> "$tp"`,
     // 大量紀錄 —— 供「初次附掛超過上限時只送最近一段並明示」。
     bulkRecords
       ? `i=0; while [ $i -lt ${bulkRecords} ]; do printf '{"type":"assistant","uuid":"b%s","timestamp":"2026-09-06T00:00:00.000Z","message":{"role":"assistant","content":[{"type":"text","text":"BULK-%s"}]}}\\n' "$i" "$i" >> "$tp"; i=$((i+1)); done`

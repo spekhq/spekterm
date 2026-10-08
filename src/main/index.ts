@@ -107,6 +107,9 @@ function createWindow({ dirty, store, sessions, closeAsk }: WindowDeps): Browser
     webPreferences: {
       preload: join(currentDir, '../preload/index.mjs'),
       ...trustModel,
+      // No input shows a spell-check underline. This alone does not stop the dictionary download —
+      // that is `setSpellCheckerLanguages([])` in `whenReady`.
+      spellcheck: false,
     },
   })
 
@@ -270,6 +273,13 @@ async function applyStartupLanguage(preferences: PreferencesStore): Promise<void
 }
 
 void app.whenReady().then(async () => {
+  // Electron's spell checker downloads a dictionary from a third-party server at startup (measured on
+  // Linux: before the window appears, with no input focused), for a feature no part of the app uses.
+  // Emptying the languages is what stops it — `spellcheck: false` and `setSpellCheckerEnabled(false)`
+  // do not, even in `session-created`. It also stops a profile that registered `en-US` earlier
+  // (`workspace-app-shell`; `probe:shell` checks both with a positive control).
+  session.defaultSession.setSpellCheckerLanguages([])
+
   // 通知的應用程式身分 —— 見 `DESKTOP_ENTRY_NAME` 的註解。
   app.setDesktopName?.(DESKTOP_ENTRY_NAME)
 

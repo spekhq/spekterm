@@ -10,18 +10,38 @@
  * 結束碼 0 表示全部 scenario 通過。
  */
 import { spawn } from 'node:child_process'
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { check, connectToApp, pollUntil } from './lib/cdp.mjs'
+import { setTimeout as sleep } from 'node:timers/promises'
+import { check, connectToApp, pollFor, pollUntil } from './lib/cdp.mjs'
 import { copy } from './lib/copy.mjs'
 import { electronExtraArgs } from './lib/display.mjs'
 import { quitAndWait } from './lib/quit.mjs'
 import { PROBE_PORTS } from './lib/ports.mjs'
 import { seedLanguage } from './lib/probe-language.mjs'
+import { resolverRulesArg, startSniListener } from './lib/sni-listener.mjs'
 
 const DEBUG_PORT = PROBE_PORTS.shell.main
+const UPGRADE_DEBUG_PORT = PROBE_PORTS.shell.upgrade
 const STARTUP_TIMEOUT_MS = 30_000
+
+/**
+ * How long a launch is left untouched before "no connection at startup" is judged. The spell checker's
+ * connection was measured at ~0.6 s after spawn and its download finished within 8 s; 10 s covers both.
+ * A connection later than this is not seen — the bound is stated in the check's detail.
+ */
+const SETTLE_MS = 10_000
+
+/** A host the renderer loads an image from after the settle window — the positive control. */
+const CONTROL_HOST = 'control.invalid'
+
+/**
+ * What an earlier version left in Chromium's `Preferences` with the spell checker on (measured: an unfixed
+ * run writes exactly this). Seeded **without** the dictionary file: a profile that already has the file
+ * does not connect even unfixed, so it could not tell a fixed app from an unfixed one.
+ */
+const EARLIER_SPELLCHECK_PREFERENCES = { spellcheck: { dictionaries: ['en-US'], dictionary: '' } }
 
 /** renderer 內求值：全部取自真實的 DOM 與 preload 介面，沒有專為驗收而生的鉤子。 */
 const PROBE_EXPRESSION = `(async () => {
@@ -310,28 +330,68 @@ const PROBE_EXPRESSION = `(async () => {
   }
 })()`
 
+/**
+ * Every launch sends every host name except `localhost` to the listener (`workspace-app-shell`: "The
+ * browser engine opens no connection at startup that nothing asked for"). The whitelist checks below load
+ * nothing remote, so the rules do not disturb them; CDP connects over 127.0.0.1, which is not resolved.
+ */
+const listener = await startSniListener()
+
+function launch(profileDir, port) {
+  const child = spawn(
+    process.platform === 'win32' ? 'electron.cmd' : 'electron',
+    [
+      `--remote-debugging-port=${port}`,
+      `--user-data-dir=${profileDir}`,
+      resolverRulesArg(listener.port),
+      ...electronExtraArgs(),
+      '.',
+    ],
+    { stdio: ['ignore', 'pipe', 'pipe'], env: process.env, shell: process.platform === 'win32' },
+  )
+  child.stderr.on('data', (chunk) => (stderr += chunk))
+  return { child, spawnedAt: Date.now() }
+}
+
+/**
+ * The startup check on one launch: zero connections after the settle window, then the positive control —
+ * without it, "the fix works" and "the rules were ignored" look the same (both read zero).
+ */
+async function checkStartupQuiet(client, spawnedAt, label) {
+  const remaining = SETTLE_MS - (Date.now() - spawnedAt)
+  if (remaining > 0) await sleep(remaining)
+  const quiet = listener.connections.map((entry) => entry.sni ?? '(no SNI)')
+  check(results, `${label}: no connection within ${SETTLE_MS / 1000} s of startup`, quiet.length === 0,
+    quiet.length === 0 ? 'listener received nothing' : `connections for: ${quiet.join(', ')}`)
+
+  const before = listener.connections.length
+  await client.evaluate(`(() => { new Image().src = 'https://${CONTROL_HOST}/p.png'; return true })()`)
+  const seen = await pollFor({
+    read: () => listener.connections.slice(before).filter((entry) => entry.sni === CONTROL_HOST).length,
+    settled: (count) => count > 0,
+    timeoutMs: 10_000,
+    label: `a connection for ${CONTROL_HOST}`,
+  })
+  check(results, `${label}: the listener sees a requested connection (positive control)`, seen > 0,
+    `${seen} connection(s) with SNI ${CONTROL_HOST}`)
+  listener.connections.length = 0
+}
+
 const profileDir = mkdtempSync(join(tmpdir(), 'spekterm-probe-shell-'))
 // 被測 app 的語言是**被指定的**：全新的 profile 會觸發首次啟動的語言偵測，
 // 而在一台非英文的機器上，那會讓每一條 `aria-label` 選擇器選不到元素。
 seedLanguage(profileDir)
 
-const electron = spawn(
-  process.platform === 'win32' ? 'electron.cmd' : 'electron',
-  [`--remote-debugging-port=${DEBUG_PORT}`, `--user-data-dir=${profileDir}`, ...electronExtraArgs(), '.'],
-  { stdio: ['ignore', 'pipe', 'pipe'], env: process.env, shell: process.platform === 'win32' },
-)
-
 let stderr = ''
-electron.stderr.on('data', (chunk) => (stderr += chunk))
-
 const results = []
 let exitCode = 1
+let { child: electron, spawnedAt } = launch(profileDir, DEBUG_PORT)
+let upgradeProfileDir = null
 
 try {
   const client = await connectToApp(DEBUG_PORT, { targetTimeoutMs: STARTUP_TIMEOUT_MS })
 
   const r = await pollUntil(client, PROBE_EXPRESSION, (value) => value?.mounted === true)
-  client.close()
 
   // spec 要求「檢查建立視窗時傳入的 webPreferences」—— 靜態驗證那兩個值是被明確寫出的，
   // 而非仰賴 Electron 當版的預設值。與下方的執行期效果檢查互補。
@@ -410,13 +470,30 @@ try {
     r?.surplusApiKeys?.length === 0,
     r?.surplusApiKeys?.length ? `多出：${r.surplusApiKeys.join(', ')}` : '無多餘 namespace')
 
+  // After the whitelist checks, so a failure here cannot hide them.
+  console.log('\nNo connection at startup:\n')
+  await checkStartupQuiet(client, spawnedAt, 'Fresh profile')
+  client.close()
+  await quitAndWait(electron)
+
+  upgradeProfileDir = mkdtempSync(join(tmpdir(), 'spekterm-probe-shell-upgrade-'))
+  seedLanguage(upgradeProfileDir)
+  writeFileSync(join(upgradeProfileDir, 'Preferences'), JSON.stringify(EARLIER_SPELLCHECK_PREFERENCES))
+  ;({ child: electron, spawnedAt } = launch(upgradeProfileDir, UPGRADE_DEBUG_PORT))
+  const upgradeClient = await connectToApp(UPGRADE_DEBUG_PORT, { targetTimeoutMs: STARTUP_TIMEOUT_MS })
+  await pollUntil(upgradeClient, PROBE_EXPRESSION, (value) => value?.mounted === true)
+  await checkStartupQuiet(upgradeClient, spawnedAt, 'Profile with a registered, missing dictionary')
+  upgradeClient.close()
+
   exitCode = results.every(Boolean) ? 0 : 1
 } catch (error) {
   console.error(`probe 失敗：${error.message}`)
   if (stderr.trim()) console.error(`electron stderr:\n${stderr.trim().slice(0, 800)}`)
 } finally {
   await quitAndWait(electron)
+  await listener.close()
   rmSync(profileDir, { recursive: true, force: true })
+  if (upgradeProfileDir) rmSync(upgradeProfileDir, { recursive: true, force: true })
 }
 
 console.log(`\n${exitCode === 0 ? '全部通過' : '有檢查未通過'}（${results.filter(Boolean).length}/${results.length}）`)

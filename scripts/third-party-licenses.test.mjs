@@ -170,3 +170,9 @@ test('彙總寫出每一個條目與內嵌聲明', () => {
   assert.match(text, /^react@19\.0\.0\nLicense: MIT\n-+\nMIT License$/m)
   assert.match(text, /From: monaco-editor\/esm\/vendored\.js\n\/\*! @license Vendored \*\//)
 })
+
+test('the summary heading defaults to the desktop artifact and can be named by the caller', () => {
+  const entry = { name: 'a', version: '1.0.0', license: 'MIT', texts: [] }
+  assert.match(renderSummary([entry]), /^Third-party software included in Spekterm\n/)
+  assert.match(renderSummary([entry], [], 'Third-party software on spekterm.com'), /^Third-party software on spekterm\.com\n/)
+})

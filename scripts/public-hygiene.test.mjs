@@ -21,36 +21,22 @@
  * 出現，列了會誤擋。內部系統所用的**公開產品名**也不列，它不是識別資訊。
  */
 import assert from 'node:assert/strict'
-import { createHash } from 'node:crypto'
 import { execFileSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
+import {
+  INTERNAL_WORDS,
+  KNOWN_PUBLIC_WORD,
+  MAINTAINER_HOME,
+  MAINTAINER_HOME_ENCODED,
+  hygieneHits,
+  sha256,
+  wordsOf,
+} from './lib/public-hygiene.mjs'
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..')
-
-/** 維護者宣告為內部的識別字詞（小寫）的 SHA-256。 */
-const INTERNAL_WORDS = new Set([
-  '83d9c871c274f06f8d411f8f0f4e10a07aac1d58681ed580eaba39cc78f6adf3',
-  '722155eed857ad7160a28c4059277baadb9b2f49e981bee3e8f06267df70f071',
-  'ee4e30e780bcc5fffa26e4aeb171857015b059da591faa3f8e271dcd65400f04',
-])
-
-/** 對照組：產品名。它一定出現在 repo 裡 —— 比不到它，就是切詞或雜湊流程壞了。 */
-const KNOWN_PUBLIC_WORD = '3b2b56084f042d3c2911f846265b790a5559e43924330ed2af082d17c8fb9501'
-
-/** 維護者的家目錄。使用者名稱本身是公開的 GitHub 帳號（`LICENSE`、`FUNDING.yml`），不在禁止之列。 */
-const MAINTAINER_HOME = ['', 'home', 'kewang'].join('/')
-
-/**
- * The same path in the form Claude Code uses for its per-project directory names (`/` replaced by `-`,
- * e.g. `~/.claude/projects/-home-<user>-git-<repo>`). The history rewrite before going public missed this
- * form at first — a check that only knows the slash form reports zero hits while the path is still there.
- */
-const MAINTAINER_HOME_ENCODED = ['', 'home', 'kewang', ''].join('-')
-
-const sha256 = (word) => createHash('sha256').update(word).digest('hex')
 
 /** 檢查範圍：追蹤的檔案 ＋ 未追蹤但未被 `.gitignore` 忽略的檔案，不排除任何路徑。 */
 function filesInScope() {
@@ -74,11 +60,6 @@ function textOf(file) {
   }
   if (bytes.subarray(0, 8192).includes(0)) return null
   return bytes.toString('utf8')
-}
-
-/** 依非英數字元切詞、轉小寫。`Some-Name_URL` → `some`、`name`、`url`。 */
-function wordsOf(text) {
-  return text.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean)
 }
 
 const files = filesInScope()
@@ -105,15 +86,18 @@ test('repo 不含維護者宣告為內部的識別字詞', () => {
   for (const file of files) {
     const text = textOf(file)
     if (text === null) continue
-    const seen = new Set()
-    for (const word of wordsOf(text)) {
-      if (seen.has(word)) continue
-      seen.add(word)
-      // 不印出字詞本身 —— 測試輸出也可能被貼到公開的地方。
-      if (INTERNAL_WORDS.has(sha256(word))) hits.push(`${file}（${sha256(word).slice(0, 12)}…）`)
-    }
+    // 不印出字詞本身 —— 測試輸出也可能被貼到公開的地方。
+    for (const prefix of hygieneHits(text).words) hits.push(`${file}（${prefix}）`)
   }
   assert.deepEqual(hits, [], `內部識別字詞出現在：\n${hits.join('\n')}`)
+})
+
+test('the shared matcher reports an injected word and a home path, and nothing for clean text', () => {
+  const injected = new Set([sha256('fixtureword')])
+  assert.deepEqual(hygieneHits('a FixtureWord-here', { hashes: injected }).words.length, 1)
+  assert.equal(hygieneHits(`cd ${MAINTAINER_HOME}/x`).homePath, true)
+  assert.equal(hygieneHits(`dir ${MAINTAINER_HOME_ENCODED}git`).homePath, true)
+  assert.deepEqual(hygieneHits('me@spekterm ~/api-server'), { words: [], homePath: false })
 })
 
 test('repo 不含維護者的本機家目錄路徑', () => {

@@ -137,9 +137,10 @@ export function dedupeNotices(notices) {
 const RULE = '='.repeat(72)
 const THIN = '-'.repeat(72)
 
-export function renderSummary(entries, notices = []) {
+/** `heading` names what the list is for; the desktop artifact keeps the default. */
+export function renderSummary(entries, notices = [], heading = 'Third-party software included in Spekterm') {
   const head = [
-    'Third-party software included in Spekterm',
+    heading,
     '',
     `This file lists every third-party package bundled into or shipped with this build (${entries.length} packages),`,
     'together with its license. It is generated at build time.',

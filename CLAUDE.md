@@ -82,6 +82,15 @@ OpenSpec 結構的側欄，讓使用者不必另外開 IDE 就能一邊駕駛 ag
   **代價：指定名字會把 agent 的終端標題固定成那個名字**（使用者以重新命名取回任務名稱）。
   完整的實測見 `docs/lessons/handoff.md`（第十一至十四節）。
 - **鍵盤** —— 見下文「快捷鍵」。
+- **Website** (`project-website`) — `spekterm.com` is built from `site/` (Astro + Starlight, its own
+  package, nothing of it reaches the app): a landing page and the user docs, English at `/` and
+  Traditional Chinese at `/zh-tw/`, **every page in both**. The docs are the authoritative user guide;
+  the READMEs keep the overview and the install facts `desktop-packaging` reads them for. Its
+  screenshots come only from `npm run capture:screenshots` (invented home, fixture repos, stub agent;
+  reads the on-screen text through the hygiene matcher before each capture). Its "Data and network" page
+  is held to the app by `scripts/network-surface.test.mjs` — **a new network API or import in
+  `src/main` / `src/preload` / `src/shared` fails it until the page is revisited**. How the site is
+  built, checked, and deployed: `site/README.md`, `site/DEPLOY.md`.
 
 **以 MIT 開源**（`open-source-mit`：`LICENSE`、`CONTRIBUTING.md`、產物根目錄附本身與第三方的授權文字；
 公開前已改寫全部 git 歷史）。**Linux 打包已可用**（`npm run dist:linux` → AppImage，`npm run install:desktop` 裝進應用程式
@@ -122,6 +131,7 @@ them apart by event order (`before-quit` comes first only for a signal), see `sr
 | `src/main/slack-*`、`src/main/secret-store.ts`、`scripts/probe-slack.mjs`、`scripts/lib/stub-slack.mjs`、或任何會把憑證交給第三方的東西 | **`docs/lessons/slack.md`** |
 | `src/main/handoff-*`、`src/main/handoff-service.ts` 的落點與上限、`scripts/probe-intake.mjs` 的 `runHandoff*` 段落、或任何**倚賴「注入的內容真的進入 agent 脈絡」**的東西 | **`docs/lessons/handoff.md`** |
 | `src/shared/i18n/`（含 `locale.ts`、`languages.ts`、任一份字典）、`scripts/dictionary-completeness.test.mjs` / `locale-source.test.mjs` / `probe-language.test.mjs`、任何探針的**啟動路徑**、或任何會**格式化時間／數字／排序字串**的東西 | **`docs/lessons/i18n.md`** |
+| `site/`、`scripts/capture-screenshots.mjs`、`scripts/network-surface.test.mjs`, or anything the website states about the app (network, platforms, features) | **`site/README.md`** |
 | `src/main/transcript-*`、`src/main/agent-events.ts`、`src/main/agent-injection.ts`、`src/main/insights*`、**`src/main/report.ts` 與 `src/main/report-*`**、`scripts/probe-insights.mjs`、`scripts/probe-agent-view.mjs`，或任何會讀 `~/.claude/projects`、**注入 `--settings`**、**或委派 `claude` CLI** 的東西 | **`docs/lessons/transcript.md`** |
 
 ## 開發指令
@@ -146,6 +156,10 @@ npm run typecheck       # tsc：main / preload（node）+ renderer（web）
 npm run lint            # eslint（**這個 repo 沒有 prettier** —— 別順手跑 npx prettier，
                         #   它會用預設值把無分號／單引號改成分號／雙引號）
 npm run measure:bundle  # renderer bundle 體積報告；產物出現語言服務 worker 即非零碼結束
+npm run capture:screenshots  # the website's screenshots (builds the app first) — see site/README.md
+(cd site && npm ci && npm run build)  # the website's build, which is also its gate (site/README.md)
+                        #   **Once Cloudflare Pages is wired (site/DEPLOY.md), a push to `master` that
+                        #   touches `site/` (or the root scripts its build reads) is a production deploy.**
 ```
 
 開發模式啟動時主行程會印一行掃描摘要，目標預設本 repo，以 `SPEKTERM_SCAN_PATH` 覆寫：
@@ -181,7 +195,9 @@ SPEKTERM_SCAN_PATH=../spek npm run dev
 只跑了 10 段中的 1 段，而那個數字被拿去推導了一份與事實相反的方案，見 `docs/lessons/probes.md`）。
 
 ```bash
-npm run probe:shell     # workspace-app-shell（視窗 + 信任模型 + preload 白名單）
+npm run probe:shell     # workspace-app-shell（視窗 + 信任模型 + preload 白名單）＋ the browser engine
+                        #   opens no connection at startup (every host mapped to a local listener, with a
+                        #   positive control — see docs/lessons/probes.md)
 npm run probe:workspace # workspace-folders / filesystem-access / workspace-layout / repo-branch /
                         #   terminal-preferences（分支呈現與更新、repo 拖曳排序、Settings 對話框）
 npm run probe:files     # file-explorer / file-viewer / 編輯 / CRUD / 導航防護 / worker / CSP
@@ -397,7 +413,7 @@ addon-unicode-graphemes、i18next、electron-builder（Phase 6）。
 > **`spekterm.com` 與 `spekterm.app` 已購入**（2026-07-12，Cloudflare，到期 2027-07-12）——
 > `appId` 的風險就此關閉。`com.spekterm.app` 是反寫 `spekterm.com`，若該 domain 落入他人手中，
 > 這個**已凍結**的 appId 就變成在宣告別人的命名空間，且事後**無法以改 appId 化解**。
-> **因此續約不是行政瑣事，是承重的。**
+> **因此續約不是行政瑣事，是承重的。** The website (`site/`, served at `spekterm.com`) depends on it too.
 
 **GitHub 位置（`spekhq/spekterm`）不是凍結身分的一部分** —— repo 改名與 transfer 皆自動 redirect。
 但 **npm scope 仍是 `@spekjs`，不要「順手對齊」成 `@spekhq`**：GitHub org 名與 npm scope 不一致是
@@ -413,6 +429,9 @@ addon-unicode-graphemes、i18next、electron-builder（Phase 6）。
 - **Archive 時 `tasks.md` 必須全部打勾** —— 做完，或**明確轉為 issue** 並把那一條改寫成
   「本 change 不做，已轉為 issue #N」再打勾。**一個帶著未打勾方框的已封存 change，等於宣稱自己
   完成了卻沒有**，而那些缺口從此不在任何工作清單上。「已知的缺口」與「被追蹤的缺口」是兩件事。
+- **A change that alters documented behavior updates the website's docs in both languages**
+  (`site/src/content/docs/` and `zh-tw/`) in the same change — the build only checks that both
+  languages have the same pages, not that they say the same thing or are current.
 
 開發路線圖見 `docs/PRD.md` §11。每個 change 的完整論證見
 `openspec/changes/archive/<date>-<slug>/`，**目錄名本身就是索引** —— 不必在這裡維護一份清單。
@@ -424,8 +443,9 @@ addon-unicode-graphemes、i18next、electron-builder（Phase 6）。
   files, and commit messages. The maintainer may think and draft in Traditional Chinese, but what gets committed is
   English. **Existing Chinese comments, docs, and commit messages stay as they are** — no wholesale back-translation or history rewrite — but
   anything new is English, including new sections added to this file. Exceptions: the README is
-  bilingual (`README.md` + `README.zh-TW.md`, kept in sync); the UI's `zh-TW` dictionary; and
-  conversation with the user, which stays in Traditional Chinese.
+  bilingual (`README.md` + `README.zh-TW.md`, kept in sync); the UI's `zh-TW` dictionary; the
+  website's Traditional Chinese files (`site/src/content/docs/zh-tw/**`, `site/src/i18n/zh-TW.json`);
+  and conversation with the user, which stays in Traditional Chinese.
 - **UI 文案為英文，且一律來自字典**（`src/shared/i18n/en.json`）—— 見下文「UI 文案與 i18n」。
   （舊的繁中註解與這條是分開的兩件事，而它們曾經混在一起：作者一邊用中文寫註解，一邊很自然地
   把中文寫進 `aria-label`。）

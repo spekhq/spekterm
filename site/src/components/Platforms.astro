@@ -1,0 +1,17 @@
+---
+/** The platform status under the hero, word for word from the dictionary (project-website). */
+import { useStrings } from '../i18n'
+
+const t = useStrings(Astro.locals.starlightRoute.lang)
+---
+
+<p class="platforms not-content">{t('landing.platforms')} {t('landing.early')}</p>
+
+<style>
+  .platforms {
+    margin: -1rem 0 0;
+    text-align: center;
+    font-size: var(--sl-text-sm);
+    color: var(--sl-color-gray-3);
+  }
+</style>
