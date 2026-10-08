@@ -38,11 +38,11 @@ list.
 
 ## How is spekterm related to spek?
 
-[spek](https://github.com/spekhq/spek) is a read-only OpenSpec viewer — a web app, a VS Code extension,
+[spek](/spek/) is a read-only OpenSpec viewer — a web app, a VS Code extension,
 and a JetBrains plugin — from the same maintainers. spekterm uses spek's engine (`@spekjs/core`) to read
 OpenSpec, and spek's Graph and Timeline (`@spekjs/ui`) in its side panel. You do not need spek to use
 spekterm, or the other way around; spek is for reading specs in your editor or browser, spekterm for
-running agents next to them.
+running agents next to them. See [spek's documentation](/spek/docs/).
 
 ## Is spekterm affiliated with Anthropic or OpenSpec?
 

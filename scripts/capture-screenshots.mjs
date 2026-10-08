@@ -80,7 +80,14 @@ function write(file, text) {
 }
 
 function git(cwd, ...args) {
-  const result = spawnSync('git', args, { cwd, env: fixtureEnv(), encoding: 'utf8' })
+  return gitAt(cwd, null, ...args)
+}
+
+/** git with the author and committer date set to `date` (a `YYYY-MM-DD`), or the fixture default. */
+function gitAt(cwd, date, ...args) {
+  const env = fixtureEnv()
+  if (date) env.GIT_AUTHOR_DATE = env.GIT_COMMITTER_DATE = `${date}T09:00:00Z`
+  const result = spawnSync('git', args, { cwd, env, encoding: 'utf8' })
   if (result.status !== 0) throw new Error(`git ${args.join(' ')} failed in ${cwd}: ${result.stderr}`)
 }
 
@@ -112,7 +119,8 @@ function seedApiServer(dir) {
     ].join('\n'),
   )
   const change = join(dir, 'openspec', 'changes', API_CHANGE)
-  write(join(change, '.openspec.yaml'), 'schema: spec-driven\ncreated: 2026-10-01\n')
+  write(join(change, '.openspec.yaml'), 'schema: spec-driven\ncreated: 2026-09-29\n')
+  API_HISTORY.push({ slug: API_CHANGE, created: '2026-09-29', path: change })
   write(
     join(change, 'proposal.md'),
     [
@@ -200,10 +208,24 @@ function seedSpec(dir, capability, purpose, requirement) {
   )
 }
 
+/**
+ * The api-server repository's change history, replayed as commits (`commitApiHistory`) so that git dates —
+ * which spek reads for each change's lifecycle and timeline — differ from change to change.
+ */
+const API_HISTORY = []
+
+function daysBefore(date, days) {
+  const d = new Date(`${date}T00:00:00Z`)
+  d.setUTCDate(d.getUTCDate() - days)
+  return d.toISOString().slice(0, 10)
+}
+
 /** An archived change that touched the given capabilities — the Graph's edges and the Timeline's rows. */
 function seedArchived(dir, date, slug, why, capabilities) {
   const change = join(dir, 'openspec', 'changes', 'archive', `${date}-${slug}`)
-  write(join(change, '.openspec.yaml'), `schema: spec-driven\ncreated: ${date}\n`)
+  const created = daysBefore(date, 4 + (slug.length % 9))
+  API_HISTORY.push({ slug, created, archived: date, path: change })
+  write(join(change, '.openspec.yaml'), `schema: spec-driven\ncreated: ${created}\n`)
   write(join(change, 'proposal.md'), `## Why\n\n${why}\n\n## What Changes\n\n- See the specs.\n`)
   write(join(change, 'tasks.md'), '## 1. Work\n\n- [x] 1.1 Implement\n- [x] 1.2 Test\n')
   for (const [capability, requirement] of Object.entries(capabilities)) {
@@ -258,6 +280,7 @@ function seedApiHistory(dir) {
   })
   const usage = join(dir, 'openspec', 'changes', 'usage-alerts')
   write(join(usage, '.openspec.yaml'), 'schema: spec-driven\ncreated: 2026-10-03\n')
+  API_HISTORY.push({ slug: 'usage-alerts', created: '2026-10-03', path: usage })
   write(join(usage, 'proposal.md'), '## Why\n\nCustomers find out they hit their budget from a 429.\n\n## What Changes\n\n- Warn by webhook at 80% of the budget.\n')
   write(
     join(usage, 'specs', 'webhooks', 'spec.md'),
@@ -372,11 +395,45 @@ function fixtureEnv(stubBin = '') {
     TERM: 'xterm-256color',
     // The screenshots' own `openspec` runs send no usage statistics.
     OPENSPEC_TELEMETRY: '0',
+    DO_NOT_TRACK: '1',
     GIT_AUTHOR_DATE: '2026-10-01T09:00:00Z',
     GIT_COMMITTER_DATE: '2026-10-01T09:00:00Z',
     // Display variables only — set by xvfb-run for this process.
     ...(process.env.DISPLAY ? { DISPLAY: process.env.DISPLAY } : {}),
     ...(process.env.XAUTHORITY ? { XAUTHORITY: process.env.XAUTHORITY } : {}),
+  }
+}
+
+/**
+ * Every change is held out of the tree, the rest committed first; then each change is proposed (committed
+ * at its active path on its creation date) and, if archived, moved into the archive on its archive date —
+ * in date order, as a real repository would have it.
+ */
+function commitApiHistory(dir) {
+  const hold = join(SHOTS_ROOT, 'hold')
+  for (const change of API_HISTORY) {
+    mkdirSync(hold, { recursive: true })
+    renameSync(change.path, join(hold, change.slug))
+  }
+  gitAt(dir, '2026-06-02', 'init', '-q')
+  gitAt(dir, '2026-06-02', 'add', '.')
+  gitAt(dir, '2026-06-02', 'commit', '-q', '-m', 'Initial commit')
+  const events = API_HISTORY.flatMap((change) => [
+    { date: change.created, kind: 'propose', change },
+    ...(change.archived ? [{ date: change.archived, kind: 'archive', change }] : []),
+  ]).sort((a, b) => (a.date === b.date ? (a.kind === 'propose' ? -1 : 1) : a.date < b.date ? -1 : 1))
+  for (const { date, kind, change } of events) {
+    const active = join(dir, 'openspec', 'changes', change.slug)
+    if (kind === 'propose') {
+      mkdirSync(dirname(active), { recursive: true })
+      renameSync(join(hold, change.slug), active)
+      gitAt(dir, date, 'add', '.')
+      gitAt(dir, date, 'commit', '-q', '-m', `Propose ${change.slug}`)
+    } else {
+      mkdirSync(dirname(change.path), { recursive: true })
+      gitAt(dir, date, 'mv', active, change.path)
+      gitAt(dir, date, 'commit', '-q', '-m', `Archive ${change.slug}`)
+    }
   }
 }
 
@@ -388,11 +445,10 @@ function prepareFixtures() {
   seedApiServer(REPOS.api)
   seedApiHistory(REPOS.api)
   seedWebApp(REPOS.web)
-  for (const dir of Object.values(REPOS)) {
-    git(dir, 'init', '-q')
-    git(dir, 'add', '.')
-    git(dir, 'commit', '-q', '-m', 'Initial commit')
-  }
+  git(REPOS.web, 'init', '-q')
+  git(REPOS.web, 'add', '.')
+  git(REPOS.web, 'commit', '-q', '-m', 'Initial commit')
+  commitApiHistory(REPOS.api)
   git(REPOS.api, 'checkout', '-q', '-b', API_CHANGE)
   for (const language of LANGUAGES) write(join(SHOTS_ROOT, `transcript.${language}.jsonl`), transcript(language))
 }
@@ -790,6 +846,152 @@ const SHOTS = {
   },
 }
 
+// ── spek ───────────────────────────────────────────────────────────────────────────────────────────
+//
+// spek's screenshots (design D7 of `spek-on-the-website`): spek's own static-page builder — the one its
+// GitHub Action runs — against the api-server fixture, from a spek checkout that is clean and at a release
+// tag, shown in a bare Electron window. spek's interface has one language, so these are written once, to
+// `neutral/`. The static page's header reads "demo", not the repository name, so each shot names the
+// fixture text it must show.
+
+const SPEK_DIR = process.env.SPEK_DIR ?? join(root, '..', 'spek')
+const NEUTRAL = 'neutral'
+const SPEK_FONT = 'Plus Jakarta Sans'
+
+function spekGit(...args) {
+  return spawnSync('git', ['-C', SPEK_DIR, ...args], { encoding: 'utf8' })
+}
+
+/** The checkout's release tag, or why it is not usable. */
+function spekRelease() {
+  if (!existsSync(join(SPEK_DIR, 'scripts', 'build-demo.ts'))) return { problem: `no spek checkout at ${SPEK_DIR} (set SPEK_DIR)` }
+  const dirty = spekGit('status', '--porcelain', '--untracked-files=normal').stdout.trim()
+  if (dirty) return { problem: `the spek checkout at ${SPEK_DIR} has uncommitted changes` }
+  // HEAD also carries core-v…, ui-v… and the moving v1; `git describe --exact-match` returns one of those.
+  const release = spekGit('tag', '--points-at', 'HEAD', '--list', 'v*')
+    .stdout.split('\n')
+    .map((tag) => tag.trim())
+    .find((tag) => /^v\d+\.\d+\.\d+$/.test(tag))
+  if (!release) return { problem: `the spek checkout at ${SPEK_DIR} is not at a release tag (v<major>.<minor>.<patch>)` }
+  return { release }
+}
+
+function run(command, args, options, label) {
+  const result = spawnSync(command, args, { encoding: 'utf8', ...options })
+  if (result.status !== 0) throw new Error(`${label} failed:\n${result.stdout}\n${result.stderr}`)
+}
+
+/** Build spek's core and ui in the checkout (their dist/ are git-ignored), then the static page. */
+function buildSpekPage(out) {
+  const env = fixtureEnv()
+  env.PATH = [join(SPEK_DIR, 'node_modules', '.bin'), env.PATH].join(':')
+  run('npm', ['run', 'build:core'], { cwd: SPEK_DIR, env }, 'spek build:core')
+  run('npm', ['run', 'build:ui'], { cwd: SPEK_DIR, env }, 'spek build:ui')
+  // The checkout's own tsx, not `npx` — npx's update notifier contacts the npm registry.
+  run(
+    join(SPEK_DIR, 'node_modules', '.bin', 'tsx'),
+    ['scripts/build-demo.ts', '--repo-dir', REPOS.api, '--output', out, '--title', 'spek'],
+    { cwd: SPEK_DIR, env: { ...env, NODE_ENV: 'production' } },
+    'spek build-demo',
+  )
+}
+
+const SPEK_SHOTS = {
+  'spek-dashboard': { route: '#/', shows: 'add rate limiting' },
+  // The change's artifact tabs are ordered by file time unless chosen; the shot chooses Specs.
+  'spek-change': { route: '#/changes/add-rate-limiting', tab: 'Specs', shows: 'Each key has a request budget' },
+  'spek-timeline': { route: '#/timeline', shows: 'sign-webhooks', crop: true },
+}
+
+async function captureSpek(client, name, { route, tab, shows, crop }, manifest) {
+  // The router reads the hash once it has mounted; a hash set before that is overwritten.
+  await until(client, `document.body?.innerText.includes('Overview') === true`, `${name}: the spek page has mounted`, 20_000)
+  await client.evaluate(`location.hash = ${JSON.stringify(route)}`)
+  if (tab) {
+    await until(
+      client,
+      `(() => {
+        const button = [...document.querySelectorAll('main button, main [role="tab"]')].find((el) => el.textContent.trim() === ${JSON.stringify(tab)})
+        if (!button) return false
+        button.click()
+        return true
+      })()`,
+      `${name}: choose the ${tab} tab`,
+    )
+  }
+  try {
+    await until(client, `document.body.innerText.includes(${JSON.stringify(shows)})`, `${name}: the page shows ${shows}`, 20_000)
+  } catch (error) {
+    const seen = await client.evaluate(`location.href + ' :: ' + document.body.innerText.slice(0, 300)`)
+    throw new Error(`${error.message} (the window shows: ${seen})`, { cause: error })
+  }
+  // Offline the page silently falls back to another font; a screenshot of that is not spek.
+  await until(
+    client,
+    `(async () => { await document.fonts.ready; return [...document.fonts].some((f) => f.family.includes(${JSON.stringify(SPEK_FONT)}) && f.status === 'loaded') })()`,
+    `${name}: ${SPEK_FONT} loaded`,
+    20_000,
+  )
+  const problem = screenVerdict(await client.evaluate(SCREEN_TEXT), { fixtureName: shows })
+  if (problem) throw new Error(`${name}: ${problem}`)
+  await sleep(400)
+  // A view whose content ends well above the window's bottom edge keeps the window down to it.
+  const bottom = crop
+    ? await client.evaluate(`Math.max(...[...document.querySelectorAll('main *')].map((el) => el.getBoundingClientRect().bottom))`)
+    : VIEWPORT.height
+  const height = Math.min(Math.ceil(bottom) + 32, VIEWPORT.height)
+  const { data } = await client.send('Page.captureScreenshot', {
+    format: 'png',
+    ...(height < VIEWPORT.height ? { clip: { x: 0, y: 0, width: VIEWPORT.width, height, scale: 1 } } : {}),
+  })
+  const bytes = Buffer.from(data, 'base64')
+  const file = join(OUT_DIR, NEUTRAL, `${name}.png`)
+  mkdirSync(dirname(file), { recursive: true })
+  writeFileSync(file, bytes)
+  manifest[relative(OUT_DIR, file)] = createHash('sha256').update(bytes).digest('hex')
+  console.log(`  ✓ ${relative(root, file)}`)
+}
+
+async function shootSpek(manifest, only) {
+  const wanted = Object.entries(SPEK_SHOTS).filter(([name]) => !only || only === name)
+  if (wanted.length === 0) return true
+  const { release, problem } = spekRelease()
+  if (problem) {
+    console.error(`  ✗ spek shots: ${problem}`)
+    return false
+  }
+  const page = join(SHOTS_ROOT, 'spek', 'spek.html')
+  mkdirSync(dirname(page), { recursive: true })
+  buildSpekPage(page)
+  const child = spawn(
+    join(root, 'node_modules', '.bin', 'electron'),
+    [`--remote-debugging-port=${PORT}`, `--user-data-dir=${join(SHOTS_ROOT, 'profiles', 'spek')}`, ...electronExtraArgs(), join(root, 'scripts', 'lib', 'static-page-window.mjs'), page],
+    { cwd: root, stdio: 'ignore', env: fixtureEnv() },
+  )
+  let ok = true
+  const client = await connectToApp(PORT, { targetTimeoutMs: 30_000 })
+  try {
+    await client.send('Emulation.setDeviceMetricsOverride', { width: VIEWPORT.width, height: VIEWPORT.height, deviceScaleFactor: 2, mobile: false })
+    // spek's default theme is dark (its README); it follows the system preference when nothing is stored.
+    await client.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: 'dark' }] })
+    await client.evaluate('location.reload()') // the theme is chosen once, at load
+    for (const [name, shot] of wanted) {
+      try {
+        await captureSpek(client, name, shot, manifest)
+      } catch (error) {
+        ok = false
+        console.error(`  ✗ ${name}: ${error.message}`)
+      }
+    }
+  } finally {
+    client.close()
+    await quitAndWait(child)
+  }
+  // Which spek release the screenshots show — beside them, not in the manifest (its keys are images).
+  if (ok) writeFileSync(join(OUT_DIR, NEUTRAL, 'SOURCE'), `${release}\n`)
+  return ok
+}
+
 // ── Main ───────────────────────────────────────────────────────────────────────────────────────────
 
 const onlyIndex = process.argv.indexOf('--only')
@@ -817,6 +1019,10 @@ for (const language of LANGUAGES) {
       await quitAndWait(app.child)
     }
   }
+}
+
+if (!only || only.startsWith('spek-')) {
+  if (!(await shootSpek(manifest, only))) failed = true
 }
 
 const sorted = Object.fromEntries(Object.entries(manifest).sort(([a], [b]) => (a < b ? -1 : 1)))

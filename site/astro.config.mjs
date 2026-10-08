@@ -13,9 +13,8 @@ export default defineConfig({
   integrations: [
     starlight({
       title: 'spekterm',
-      // The app's own icon (scripts/make-brand-images.mjs copies it from build/icon.svg).
-      logo: { src: './src/assets/logo.svg', alt: '' },
-      head: [{ tag: 'link', attrs: { rel: 'apple-touch-icon', href: '/apple-touch-icon.png' } }],
+      // Per product (src/product.mjs): the header title and switch (SiteTitle), the repository link
+      // (SocialIcons), and the icons, share image, site name, sidebar and pagination (routeData.ts).
       routeMiddleware: './src/routeData.ts',
       defaultLocale: 'root',
       locales: {
@@ -28,10 +27,11 @@ export default defineConfig({
       // Starlight's own "Built with Starlight" link is replaced by the disclaimer footer.
       credits: false,
       customCss: ['./src/styles/theme.css'],
-      social: [{ icon: 'github', label: 'GitHub', href: 'https://github.com/spekhq/spekterm' }],
       components: {
         Footer: './src/components/Footer.astro',
         Hero: './src/components/Hero.astro',
+        SiteTitle: './src/components/SiteTitle.astro',
+        SocialIcons: './src/components/SocialIcons.astro',
       },
       sidebar: [
         {
@@ -53,6 +53,27 @@ export default defineConfig({
           label: 'Help',
           translations: { 'zh-TW': '說明' },
           items: [{ autogenerate: { directory: 'docs/help' } }],
+        },
+        // spek's groups; routeData.ts shows each product only its own.
+        {
+          label: 'Getting started',
+          translations: { 'zh-TW': '開始使用' },
+          items: [{ autogenerate: { directory: 'spek/docs/getting-started' } }],
+        },
+        {
+          label: 'Using spek',
+          translations: { 'zh-TW': '使用 spek' },
+          items: [{ autogenerate: { directory: 'spek/docs/using' } }],
+        },
+        {
+          label: 'Reference',
+          translations: { 'zh-TW': '參考' },
+          items: [{ autogenerate: { directory: 'spek/docs/reference' } }],
+        },
+        {
+          label: 'Help',
+          translations: { 'zh-TW': '說明' },
+          items: [{ autogenerate: { directory: 'spek/docs/help' } }],
         },
       ],
       plugins: [

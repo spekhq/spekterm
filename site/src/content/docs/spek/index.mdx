@@ -1,0 +1,100 @@
+---
+title: spek — read your OpenSpec
+description: spek is a read-only viewer for OpenSpec content — specs, changes, tasks, schemas, and a timeline — in your browser, VS Code, a JetBrains IDE, or as a static page your CI builds.
+template: splash
+hero:
+  image:
+    file: ../../../assets/spek/spek-logomark.svg
+  title: Read your OpenSpec
+  tagline: spek turns a repository's openspec/ directory into something you can browse — specs, changes and their tasks, schemas, a timeline, full-text search. It only reads; it never changes a file.
+  actions:
+    - text: Try the live demo
+      link: https://spekhq.github.io/spek/demo.html
+      icon: external
+    - text: Read the docs
+      link: /spek/docs/
+      icon: right-arrow
+      variant: minimal
+---
+
+import { Card, CardGrid, LinkCard } from '@astrojs/starlight/components'
+import Screenshot from '../../../components/Screenshot.astro'
+import change from '../../../assets/screenshots/neutral/spek-change.png'
+import dashboard from '../../../assets/screenshots/neutral/spek-dashboard.png'
+import timeline from '../../../assets/screenshots/neutral/spek-timeline.png'
+
+<Screenshot
+  wide
+  src={change}
+  alt="spek showing an OpenSpec change: its delta specs grouped by capability, each requirement with its SHALL keyword highlighted, and tabs for the proposal, design, and tasks."
+  caption="A change's delta specs, requirement by requirement, with the normative keywords highlighted."
+/>
+
+## Specs are meant to be read
+
+OpenSpec keeps a project's requirements and every change to them as Markdown files under `openspec/`.
+That is the right format for an agent to write and for git to track, and a hard one to read: a change is a
+proposal, a design, a task list, and a delta per capability, spread over a dozen files. spek reads that
+directory and lays it out — with structure, links between specs and changes, and progress you can see at a
+glance.
+
+## What you can browse
+
+<CardGrid>
+  <Card title="Dashboard" icon="seti:info">
+    How many specs and changes there are, task completion, average lifecycle, and changes that have gone
+    stale.
+  </Card>
+  <Card title="Specs and changes" icon="document">
+    Specs as a folder tree with their history; changes active and archived, each with its proposal,
+    design, tasks, and delta specs as tabs.
+  </Card>
+  <Card title="Schemas, graph, timeline" icon="list-format">
+    The workflow schemas a repository uses, how specs and changes relate, and every change's lifecycle as a
+    Gantt-style timeline.
+  </Card>
+  <Card title="Every worktree at once" icon="seti:git">
+    The in-flight changes of all of a repository's git worktrees in one list — for agents working in
+    parallel.
+  </Card>
+</CardGrid>
+
+<Screenshot
+  wide
+  src={dashboard}
+  alt="spek's dashboard: counts of specs, active and archived changes, task completion and average lifecycle, then the active changes with their progress and the recently archived ones."
+  caption="The dashboard: what is in flight, how far along it is, and what was archived recently."
+/>
+
+## Four ways to run it
+
+All four show the same views. Pick the one that sits where you already work.
+
+<CardGrid>
+  <LinkCard title="VS Code extension" description="A panel and a sidebar in your editor. From the Visual Studio Marketplace." href="https://marketplace.visualstudio.com/items?itemName=kewang.spek-vscode" />
+  <LinkCard title="JetBrains plugin" description="A tool window in IntelliJ IDEA, WebStorm, PyCharm, and other JetBrains IDEs. From the JetBrains Marketplace." href="https://plugins.jetbrains.com/plugin/30600-spek--openspec-viewer" />
+  <LinkCard title="Web app" description="Run it from the source in your browser, against any repository on your machine." href="https://github.com/spekhq/spek" />
+  <LinkCard title="GitHub Action" description="Build a static spek page and status badges for your repository in CI. From the GitHub Marketplace." href="https://github.com/marketplace/actions/spek-openspec-static-site" />
+</CardGrid>
+
+How to install and use each: [Install spek](/spek/docs/getting-started/install/).
+
+<Screenshot
+  wide
+  src={timeline}
+  alt="spek's timeline: one row per change, archived changes as bars from creation to archive and active changes extending to today."
+  caption="Every change's lifecycle on one timeline."
+/>
+
+## spek and spekterm
+
+spek's engine reads OpenSpec for [spekterm](/) too: spekterm's side panel uses spek's core package
+(`@spekjs/core`) to scan specs and changes, and draws spek's graph and timeline (`@spekjs/ui`). spek is for
+reading specs where you already work; spekterm is a desktop workbench for running Claude Code sessions next
+to them. Neither needs the other.
+
+## Open source
+
+spek is MIT-licensed, and its source is on [GitHub](https://github.com/spekhq/spek). It has no account,
+no telemetry, and no analytics; [Data and network](/spek/docs/reference/data-and-network/) lists what each
+form connects to.

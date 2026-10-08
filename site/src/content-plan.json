@@ -1,5 +1,5 @@
 {
-  "$comment": "What check-content requires of the built site (project-website). topics: documentation pages that must exist in both languages (slugs without locale prefix). landing: the hero screenshot's file name stem, and the i18n key of the platform-status sentence the landing page must show verbatim. dataAndNetworkKeywords: words the data and network page must contain per language. linuxOnlyPhrases: matched case-insensitively against every page.",
+  "$comment": "What check-content requires of the built site (project-website). topics: documentation pages that must exist in both languages (slugs without locale prefix). landing: the hero screenshot's file name stem, and the i18n key of the platform-status sentence the landing page must show verbatim. dataAndNetworkKeywords: words the data and network page must contain per language. linuxOnlyPhrases: matched case-insensitively against every page. spek: the same for spek's pages — topics, its data and network page and keywords (matched as words), and the links spek's landing page must carry in its main content.",
   "topics": [
     "docs/getting-started/install",
     "docs/getting-started/first-workspace",
@@ -44,5 +44,48 @@
     "只支援 Linux",
     "僅支援 Linux",
     "Linux 專用"
-  ]
+  ],
+  "spek": {
+    "topics": [
+      "spek/docs/getting-started/install",
+      "spek/docs/using/browsing",
+      "spek/docs/using/worktrees",
+      "spek/docs/using/github-action",
+      "spek/docs/reference/data-and-network",
+      "spek/docs/help/faq"
+    ],
+    "dataAndNetwork": "spek/docs/reference/data-and-network",
+    "landing": {
+      "screenshotPrefix": "spek-",
+      "links": [
+        "https://github.com/spekhq/spek",
+        "https://marketplace.visualstudio.com/items?itemName=kewang.spek-vscode",
+        "https://plugins.jetbrains.com/plugin/30600-spek--openspec-viewer",
+        "https://github.com/marketplace/actions/spek-openspec-static-site",
+        "https://spekhq.github.io/spek/demo.html"
+      ]
+    },
+    "dataAndNetworkKeywords": {
+      "en": [
+        "Google Fonts",
+        "images",
+        "3001",
+        "127.0.0.1",
+        "git",
+        "jj",
+        "openspec config set telemetry.enabled false",
+        "GitHub Actions"
+      ],
+      "zh-TW": [
+        "Google Fonts",
+        "圖片",
+        "3001",
+        "127.0.0.1",
+        "git",
+        "jj",
+        "openspec config set telemetry.enabled false",
+        "GitHub Actions"
+      ]
+    }
+  }
 }

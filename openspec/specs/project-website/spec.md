@@ -1,9 +1,11 @@
 # project-website Specification
 
 ## Purpose
-The public website at `spekterm.com` — a landing page and the user documentation, in English and
-Traditional Chinese — built from this repository, kept out of the desktop app, and held to the same
-honesty about the app's behavior (platforms, network, screenshots) that the app's own specs require.
+The public website at `spekterm.com` of two products — spekterm at the root and spek, the read-only
+OpenSpec viewer spekterm's side panel is built on, under `/spek/` — each with a landing page and user
+documentation in English and Traditional Chinese; built from this repository, kept out of the desktop app,
+and held to the same honesty about each product's behavior (platforms, network, screenshots) that the
+app's own specs require.
 
 ## Requirements
 

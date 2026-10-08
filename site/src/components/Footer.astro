@@ -1,22 +1,24 @@
 ---
 /**
  * Starlight's footer plus what every page must carry (project-website): the non-affiliation
- * statement and the link to the third-party notices. The not-found page uses the same layout, so
+ * statement, the page's product's source and license, and the link to the third-party notices. The not-found page uses the same layout, so
  * it carries them too.
  */
 import Default from '@astrojs/starlight/components/Footer.astro'
 import { useStrings } from '../i18n'
+import { PRODUCTS, productOf } from '../product.mjs'
 
 const t = useStrings(Astro.locals.starlightRoute.lang)
+const product = PRODUCTS[productOf(Astro.url.pathname)]
 ---
 
 <Default />
 <div class="site-footer">
   <p class="disclaimer">{t('footer.disclaimer')}</p>
   <p class="links">
-    <a href="https://github.com/spekhq/spekterm">{t('footer.source')}</a>
+    <a href={product.repository}>{t('footer.source')}</a>
     <span aria-hidden="true">·</span>
-    <a href="https://github.com/spekhq/spekterm/blob/master/LICENSE">{t('footer.license')}</a>
+    <a href={product.license}>{t('footer.license')}</a>
     <span aria-hidden="true">·</span>
     <a href="/third-party-notices.txt">{t('footer.notices')}</a>
   </p>

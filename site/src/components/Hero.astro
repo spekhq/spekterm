@@ -8,6 +8,7 @@ import { Image } from 'astro:assets';
 import DraftContentNotice from '@astrojs/starlight/components/DraftContentNotice.astro';
 import { LinkButton } from '@astrojs/starlight/components';
 import { useStrings } from '../i18n';
+import { productOf } from '../product.mjs';
 
 // Starlight's PAGE_TITLE_ID, which its package does not export.
 const PAGE_TITLE_ID = '_top';
@@ -15,6 +16,8 @@ const t = useStrings(Astro.locals.starlightRoute.lang);
 
 const { data } = Astro.locals.starlightRoute.entry;
 const { title = data.title, tagline, image, actions = [] } = data.hero || {};
+// spekterm's platform status; spek's landing page has buttons too, and the status does not apply to it.
+const showPlatforms = actions.length > 0 && productOf(Astro.url.pathname) === 'spekterm';
 
 const imageAttrs = {
 	loading: 'eager' as const,
@@ -71,7 +74,7 @@ if (image) {
 				</div>
 			)
 		}
-		{actions.length > 0 && <p class="platforms">{t('landing.platforms')} {t('landing.early')}</p>}
+		{showPlatforms && <p class="platforms">{t('landing.platforms')} {t('landing.early')}</p>}
 	</div>
 </div>
 

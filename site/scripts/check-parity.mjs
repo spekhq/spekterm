@@ -1,7 +1,8 @@
 /**
  * project-website: Both languages carry the same pages (design D3).
  *
- * Fails when a page, a component string, or a screenshot exists in one language only.
+ * Fails when a page, a component string, or a screenshot exists in one language only. Screenshots under
+ * `neutral/` (an interface with one language, spek's) are compared with nothing.
  *
  * Pages are judged on the **source content tree**, not the sitemap: Starlight generates a fallback
  * page for a missing translation and lists it in the sitemap (measured), so a sitemap comparison
@@ -53,6 +54,8 @@ const PASS = {
   'src/i18n/zh-TW.json': '{"a":"甲","b":"乙"}',
   'src/assets/screenshots/en/hero.png': 'x',
   'src/assets/screenshots/zh-TW/hero.png': 'y',
+  // Language-neutral (spek's single-language interface): kept once, no counterpart needed.
+  'src/assets/screenshots/neutral/spek-change.png': 'z',
 }
 const without = (key) => Object.fromEntries(Object.entries(PASS).filter(([k]) => k !== key))
 

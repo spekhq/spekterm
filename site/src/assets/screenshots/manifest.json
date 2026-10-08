@@ -1,12 +1,15 @@
 {
   "en/graph.png": "26b1304954af138fa73fd03197cc4e6ff2e44946ddb275e198b1149ae580ed81",
-  "en/handoff.png": "89e1a3840301230c7dc7626172bbacbae2fcd5b8a0e5febe5388d6a69653773d",
+  "en/handoff.png": "96e7e976fedefc7e37a94a4f723018ecbaeb48384ad48353bb805732f3a21e2e",
   "en/hero.png": "008797b8d53997e7e3d6d9271b89924abc1fe4ee6fde674e4d20048374414ce7",
-  "en/inbox.png": "148fae6e7d9f0b595579e91c8391a494d180769bf8be6a746fc64bbbbe7e1518",
-  "en/terminal.png": "8d6c0e2b62c3826073ca0022a73fb36d4dc7d54980dfad2b014c30dd92066d6b",
+  "en/inbox.png": "2763298c02add756fc9522488db2f160c45efe94cac9834e65fac61ab6b5cbaa",
+  "en/terminal.png": "7c0905c5f5a8061fd6a5506f7289ea44825a975c629d4d0dfea219d3e5e3fabd",
+  "neutral/spek-change.png": "e52f60f5a94ad115e0e015bbe514f3054d6094163e8fd86cde7347240a3ff1b4",
+  "neutral/spek-dashboard.png": "f3ca7e3fff055030cd47e72b28a289c7f2dc8b10fc92c02483e6bd43d766c3db",
+  "neutral/spek-timeline.png": "121a6e342591a47a9f1539824642ddcadd1675d94bbe07d3da642ad3c397ab24",
   "zh-TW/graph.png": "f78687f33cbf7ae79894c2fea7ecfc2009b0391ae0889d6819cf7efe1250801d",
-  "zh-TW/handoff.png": "1f0ce29e8ef2f7ff7eb5da488fa7b58b3cb9721d5e3fa929c69cd6692ca4a191",
-  "zh-TW/hero.png": "8dbdbed83cc86e513e0c8419b971b58471751d08921850cb44ed54f153266eda",
-  "zh-TW/inbox.png": "c53caf80a4cb27f3e32738ccd9f46bb37a26483bd82a81cbcc2bf543876a6e62",
-  "zh-TW/terminal.png": "07ced591acb4fac672484f9ecc0514c6b1a95497ed6975afc825d8815fb097b2"
+  "zh-TW/handoff.png": "ec5e53fe789dfbd84ae4d4db0e7a788362a17bbb3c083ac26fbe6b0f801e9892",
+  "zh-TW/hero.png": "afb33bc53fd76c7b4a65cecebc2114e6d5ae4cb6339b9fb94d7e0560515f4fae",
+  "zh-TW/inbox.png": "c1c451fab61e5b5248135d7113126af3859bc8854e15fa442cfabd187195ae7a",
+  "zh-TW/terminal.png": "04daafe47e1c08a6ef6e6d9b9c69d4e358d001cd5fa5db273eda71018c1f850e"
 }

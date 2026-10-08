@@ -103,22 +103,23 @@ export function fixtureDir(files) {
 /**
  * Runs `check(dir)` (which returns a list of problems) on a passing fixture and on each violating
  * one. Every violating case must produce a problem containing `expect`; the passing one must
- * produce none. Throws with every miss listed.
+ * produce none. A case may bring its own `check` (for a violation that is not in the files). Throws
+ * with every miss listed.
  */
 export function selfTest(name, { pass, cases, check }) {
   const misses = []
-  const run = (files) => {
+  const run = (files, caseCheck = check) => {
     const dir = fixtureDir(files)
     try {
-      return check(dir)
+      return caseCheck(dir)
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
   }
   const clean = run(pass)
   if (clean.length > 0) misses.push(`the passing fixture failed: ${clean.join('; ')}`)
-  for (const { label, files, expect } of cases) {
-    const problems = run(files)
+  for (const { label, files, expect, check: caseCheck } of cases) {
+    const problems = run(files, caseCheck)
     if (!problems.some((p) => p.includes(expect))) {
       misses.push(`"${label}" was not caught (expected a problem mentioning "${expect}", got: ${problems.join('; ') || 'none'})`)
     }

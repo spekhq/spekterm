@@ -1,0 +1,70 @@
+---
+/**
+ * The header's product title (project-website: "The site serves two products"): the page's product —
+ * its logomark and name, linking to its landing page — and a switch to the other product's landing
+ * page, in the page's language. Replaces Starlight's single site title.
+ */
+import spektermLogo from '../assets/logo.svg'
+import spekLogo from '../assets/spek/spek-logomark.svg'
+import { useStrings } from '../i18n'
+import { landingOf, otherProduct, PRODUCTS, productOf } from '../product.mjs'
+
+const { lang } = Astro.locals.starlightRoute
+const t = useStrings(lang)
+const product = productOf(Astro.url.pathname)
+const other = otherProduct(product)
+const logo = product === 'spek' ? spekLogo : spektermLogo
+---
+
+<div class="product-title">
+  <a href={landingOf(product, lang)} class="site-title">
+    <img src={logo.src} width={logo.width} height={logo.height} alt="" />
+    <span translate="no">{PRODUCTS[product].name}</span>
+  </a>
+  <a
+    href={landingOf(other, lang)}
+    class="product-switch"
+    title={t('header.switchTo').replace('{product}', PRODUCTS[other].name)}
+    translate="no"
+  >
+    {PRODUCTS[other].name}
+  </a>
+</div>
+
+<style>
+  .product-title {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    min-width: 0;
+  }
+  .site-title {
+    display: flex;
+    align-items: center;
+    gap: var(--sl-nav-gap);
+    font-size: var(--sl-text-h4);
+    font-weight: 600;
+    color: var(--sl-color-text-accent);
+    text-decoration: none;
+    white-space: nowrap;
+    min-width: 0;
+  }
+  .site-title img {
+    height: calc(var(--sl-nav-height) - 2 * var(--sl-nav-pad-y));
+    width: auto;
+  }
+  .product-switch {
+    flex-shrink: 0;
+    padding: 0.125rem 0.5rem;
+    border: 1px solid var(--sl-color-gray-5);
+    border-radius: 999px;
+    font-size: var(--sl-text-xs);
+    color: var(--sl-color-gray-2);
+    text-decoration: none;
+    white-space: nowrap;
+  }
+  .product-switch:hover {
+    color: var(--sl-color-white);
+    border-color: var(--sl-color-gray-3);
+  }
+</style>

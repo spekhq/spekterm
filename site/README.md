@@ -1,8 +1,14 @@
 # spekterm.com
 
-The website: a landing page and the user documentation, in English (`/`) and Traditional Chinese
-(`/zh-tw/`). Built with Astro and Starlight; a self-contained package — nothing here reaches the desktop
-app (`openspec/specs/project-website`).
+The website of two products: spekterm (`/`, `/docs/`) and spek, the read-only OpenSpec viewer spekterm's
+side panel is built on (`/spek/`, `/spek/docs/`) — each with a landing page and user documentation, in
+English and Traditional Chinese (`/zh-tw/…`). Built with Astro and Starlight; a self-contained package —
+nothing here reaches the desktop app (`openspec/specs/project-website`).
+
+What belongs to one product — the header title and switch, logo, icons, share image, page-title suffix,
+repository links, sidebar, previous / next, platform status — follows the page's product: `src/product.mjs`
+(shared with `scripts/check-content.mjs`), `src/routeData.ts`, and the `SiteTitle`, `SocialIcons`, `Hero`,
+and `Footer` overrides.
 
 ## Develop
 
@@ -28,7 +34,26 @@ committing (text goes through the installed fonts):
 node scripts/make-brand-images.mjs
 ```
 
+spek's marks in `src/assets/spek/` are copied from spek's `logo/` at **v1.19.0**.
+
 The screenshots come from the repository root's `npm run capture:screenshots` (see the root `CLAUDE.md`).
+spek's three screenshots (`src/assets/screenshots/neutral/`, language-neutral: spek's interface has one
+language) need a spek checkout in `SPEK_DIR` (default `../spek`) that is clean, at a
+`v<major>.<minor>.<patch>` tag, and has run `npm ci`; the capture rebuilds spek's core and ui there (git-ignored
+output), runs spek's static-page builder against the fixture repository (it writes and removes
+`packages/web/dist-demo` in the checkout), and needs network access for spek's font. The tag it used is in
+`neutral/SOURCE`. A clean clone at the tag keeps a spek working tree with changes in progress out of it:
+
+```bash
+git clone --branch v1.19.0 ../spek /tmp/spek-release && (cd /tmp/spek-release && npm ci)
+SPEK_DIR=/tmp/spek-release npm run capture:screenshots
+```
+
+## When spek releases
+
+spek's pages describe spek's code, not its README, and nothing in this repository can see that code. On a
+spek release: read its changes against `/spek/` and `/spek/docs/` (both languages) — forms, settings,
+what it runs and connects to — recapture the spek screenshots from the new tag, and update the tag above.
 
 ## Build — the gate to publishing
 

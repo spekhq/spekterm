@@ -1,0 +1,23 @@
+---
+/** The header's repository link, to the page's product's repository (project-website). */
+import { Icon } from '@astrojs/starlight/components'
+import { PRODUCTS, productOf } from '../product.mjs'
+
+const product = PRODUCTS[productOf(Astro.url.pathname)]
+---
+
+<a href={product.repository} rel="me" class="sl-flex">
+  <span class="sr-only">GitHub</span>
+  <Icon name="github" />
+</a>
+
+<style>
+  a {
+    color: var(--sl-color-text-accent);
+    padding: 0.5em;
+    margin: -0.5em;
+  }
+  a:hover {
+    color: var(--sl-color-white);
+  }
+</style>

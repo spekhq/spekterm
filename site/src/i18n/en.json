@@ -1,12 +1,14 @@
 {
-  "footer.disclaimer": "spekterm is an independent open-source project. It is not affiliated with, endorsed by, or sponsored by Anthropic or the OpenSpec project. Claude and Claude Code are trademarks of Anthropic, PBC.",
+  "footer.disclaimer": "spekterm and spek are independent open-source projects. They are not affiliated with, endorsed by, or sponsored by Anthropic or the OpenSpec project. Claude and Claude Code are trademarks of Anthropic, PBC.",
   "footer.license": "MIT License",
   "footer.notices": "Third-party notices",
   "footer.source": "Source on GitHub",
+  "header.switchTo": "Go to {product}",
   "landing.download": "Download for Linux (AppImage)",
   "landing.downloadNote": "From the latest GitHub release.",
   "landing.early": "Early and actively developed — expect rough edges.",
   "landing.illustrative": "Screenshots show illustrative example content.",
   "landing.platforms": "Linux builds are available today. macOS and Windows are not supported yet.",
-  "social.imageAlt": "spekterm — The spec beside the agent"
+  "social.imageAlt": "spekterm — The spec beside the agent",
+  "social.spekImageAlt": "spek — the OpenSpec viewer"
 }
