@@ -3,6 +3,8 @@ title: 規格就在 agent 旁邊
 description: 一個桌面工作台：每個 repository 各自跑 Claude Code session，並把它正在做的 OpenSpec change 放在終端機旁邊。
 template: splash
 hero:
+  image:
+    file: ../../../assets/logo.svg
   title: 規格就在 agent 旁邊
   tagline: spekterm 在一個視窗裡為你的每個 repository 跑 Claude Code session，並把每個 session 正在做的 OpenSpec change —— proposal、design、tasks、specs —— 放在終端機旁邊。
   actions:
@@ -17,15 +19,15 @@ hero:
 
 import { Card, CardGrid, LinkCard, Steps } from '@astrojs/starlight/components'
 import Download from '../../../components/Download.astro'
-import Platforms from '../../../components/Platforms.astro'
 import Screenshot from '../../../components/Screenshot.astro'
 import hero from '../../../assets/screenshots/zh-TW/hero.png'
 import terminal from '../../../assets/screenshots/zh-TW/terminal.png'
 import inbox from '../../../assets/screenshots/zh-TW/inbox.png'
-
-<Platforms />
+import graph from '../../../assets/screenshots/zh-TW/graph.png'
+import handoff from '../../../assets/screenshots/zh-TW/handoff.png'
 
 <Screenshot
+  wide
   src={hero}
   alt="spekterm 的 Claude Code session 以對話檢視呈現，旁邊的側欄顯示 agent 正在做的 OpenSpec change 的 tasks。"
   caption="Claude Code session 與它正在做的 change 並排：agent 打勾的同時，tasks 跟著更新。"
@@ -55,12 +57,20 @@ import inbox from '../../../assets/screenshots/zh-TW/inbox.png'
 </CardGrid>
 
 <Screenshot
+  wide
+  src={graph}
+  alt="側欄放大蓋過主畫面，以關係圖呈現 repository 的每個 spec，以及動過它的進行中與已封存的 change。"
+  caption="把側欄放大，就看得到每個 spec 與 change 之間的關係。"
+/>
+
+## 不會隨手消失的 session
+
+<Screenshot
+  wide
   src={terminal}
   alt="shell session 顯示 git log 與 change 的檔案，旁邊的側欄顯示這個 change 的 proposal。"
   caption="真正的終端機，每個 repository 可以開好幾個，旁邊就是 change 的 proposal。"
 />
-
-## 不會隨手消失的 session
 
 - **真正的終端機** —— `claude` 與你的 login shell 跑在真正的 pty 裡，每個 repository 可以開好幾個，git
   worktree 也行。
@@ -75,15 +85,24 @@ hooks —— spekterm 從不解析終端機畫面 —— 而終端機永遠只�
 ## 自己找上門的工作
 
 <Screenshot
+  wide
   src={inbox}
-  alt="收件匣裡有一則待處理的 Slack 提及，設定為在 api-server repository 開啟。"
-  caption="收件匣裡一則待處理的 Slack 提及，接受後就在對的 repository 開成 session。"
+  alt="收件匣裡有三則待處理的 Slack 提及，各自設定在 routing 選中的 repository 開啟：api-server，來自 #frontend 的那則則是 web-app。"
+  caption="收件匣裡待處理的 Slack 提及，接受後就在對的 repository 開成 session。"
 />
 
 - **收件匣** —— 有人在 Slack 提及你時，那件事會進到收件匣；接受它，就會在你選的 repository 開好一個
   Claude Code session，context 也備妥了。
 - **交接** —— agent 可以把工作交給另一個 repository 的 agent。spekterm 會開好那個 session，在工作回報完成
   之前，交接的兩端你都看得到。
+
+
+<Screenshot
+  wide
+  src={handoff}
+  alt="一個把工作交給另外兩個 session 的 session：rail 標出每一個的狀態，已完成那一個的交接單顯示它的任務與回報的結果。"
+  caption="交接的兩端：rail 上看得出誰把什麼交給了誰，交接單留著任務與結果。"
+/>
 
 ## 怎麼運作
 
@@ -104,8 +123,8 @@ spekterm 是桌面 app：你的 repository、session 與設定都留在你的電
 ## 常見問題
 
 <CardGrid>
-  <LinkCard title="這跟直接在終端機跑 Claude Code 有什麼不同？" href="/zh-tw/docs/help/faq/" />
-  <LinkCard title="一定要用 OpenSpec 嗎？" href="/zh-tw/docs/help/faq/" />
+  <LinkCard title="這跟直接在終端機跑 Claude Code 有什麼不同？" href="/zh-tw/docs/help/faq/#這跟在終端機裡跑-claude-code-有什麼不同" />
+  <LinkCard title="一定要用 OpenSpec 嗎？" href="/zh-tw/docs/help/faq/#一定要用-openspec-嗎" />
   <LinkCard title="我的程式碼會被送到哪裡嗎？" href="/zh-tw/docs/reference/data-and-network/" />
   <LinkCard title="安裝與入門" href="/zh-tw/docs/getting-started/install/" />
 </CardGrid>

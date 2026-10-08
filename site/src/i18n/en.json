@@ -7,5 +7,6 @@
   "landing.downloadNote": "From the latest GitHub release.",
   "landing.early": "Early and actively developed — expect rough edges.",
   "landing.illustrative": "Screenshots show illustrative example content.",
-  "landing.platforms": "Linux builds are available today. macOS and Windows are not supported yet."
+  "landing.platforms": "Linux builds are available today. macOS and Windows are not supported yet.",
+  "social.imageAlt": "spekterm — The spec beside the agent"
 }

@@ -7,5 +7,6 @@
   "landing.downloadNote": "來自 GitHub 上最新的發佈版本。",
   "landing.early": "仍在早期、持續開發中 —— 難免有粗糙的地方。",
   "landing.illustrative": "截圖內容為示意範例。",
-  "landing.platforms": "目前提供 Linux 版本，macOS 與 Windows 尚未支援。"
+  "landing.platforms": "目前提供 Linux 版本，macOS 與 Windows 尚未支援。",
+  "social.imageAlt": "spekterm —— 規格就在 agent 旁邊"
 }

@@ -1,0 +1,169 @@
+---
+/**
+ * Starlight's hero (MIT, copied from @astrojs/starlight 0.42.5) with the platform status right under
+ * the download button, word for word from the dictionary (project-website). Starlight's hero has no
+ * slot there, and below the hero the status sat a screen's worth of padding away from the button.
+ */
+import { Image } from 'astro:assets';
+import DraftContentNotice from '@astrojs/starlight/components/DraftContentNotice.astro';
+import { LinkButton } from '@astrojs/starlight/components';
+import { useStrings } from '../i18n';
+
+// Starlight's PAGE_TITLE_ID, which its package does not export.
+const PAGE_TITLE_ID = '_top';
+const t = useStrings(Astro.locals.starlightRoute.lang);
+
+const { data } = Astro.locals.starlightRoute.entry;
+const { title = data.title, tagline, image, actions = [] } = data.hero || {};
+
+const imageAttrs = {
+	loading: 'eager' as const,
+	decoding: 'async' as const,
+	width: 400,
+	height: 400,
+	alt: image?.alt || '',
+};
+
+let darkImage: ImageMetadata | undefined;
+let lightImage: ImageMetadata | undefined;
+let rawHtml: string | undefined;
+if (image) {
+	if ('file' in image) {
+		darkImage = image.file;
+	} else if ('dark' in image) {
+		darkImage = image.dark;
+		lightImage = image.light;
+	} else {
+		rawHtml = image.html;
+	}
+}
+---
+
+<div class="hero">
+	{
+		darkImage && (
+			<Image
+				src={darkImage}
+				{...imageAttrs}
+				class:list={{ 'light:sl-hidden': Boolean(lightImage) }}
+			/>
+		)
+	}
+	{lightImage && <Image src={lightImage} {...imageAttrs} class="dark:sl-hidden" />}
+	{rawHtml && <div class="hero-html sl-flex" set:html={rawHtml} />}
+	<div class="sl-flex stack">
+		<div class="sl-flex copy">
+			<h1 id={PAGE_TITLE_ID} data-page-title set:html={title} />
+			{data.draft && <DraftContentNotice />}
+			{tagline && <div class="tagline" set:html={tagline} />}
+		</div>
+		{
+			actions.length > 0 && (
+				<div class="sl-flex actions">
+					{actions.map(
+						({ attrs: { class: className, ...attrs } = {}, icon, link: href, text, variant }) => (
+							<LinkButton {href} {variant} icon={icon?.name} class:list={[className]} {...attrs}>
+								{text}
+								{icon?.html && <Fragment set:html={icon.html} />}
+							</LinkButton>
+						)
+					)}
+				</div>
+			)
+		}
+		{actions.length > 0 && <p class="platforms">{t('landing.platforms')} {t('landing.early')}</p>}
+	</div>
+</div>
+
+<style>
+	@layer starlight.core {
+		.hero {
+			display: grid;
+			grid-template-columns: 100%;
+			align-items: center;
+			gap: 1rem;
+			padding-bottom: 1rem;
+		}
+
+		/* The app icon, not an illustration: small enough that the title stays on a phone's first screen. */
+		.hero > img,
+		.hero > .hero-html {
+			object-fit: contain;
+			width: min(40%, 8rem);
+			height: auto;
+			margin-inline: auto;
+		}
+
+		.stack {
+			flex-direction: column;
+			gap: clamp(1.5rem, calc(1.5rem + 1vw), 2rem);
+			text-align: center;
+		}
+
+		.copy {
+			flex-direction: column;
+			gap: 1rem;
+			align-items: center;
+		}
+
+		.copy > * {
+			max-width: 50ch;
+		}
+
+		h1 {
+			font-size: clamp(var(--sl-text-3xl), calc(0.25rem + 5vw), var(--sl-text-6xl));
+			line-height: var(--sl-line-height-headings);
+			font-weight: 600;
+			color: var(--sl-color-white);
+		}
+
+		.tagline {
+			font-size: clamp(var(--sl-text-base), calc(0.0625rem + 2vw), var(--sl-text-xl));
+			color: var(--sl-color-gray-2);
+		}
+
+		.actions {
+			gap: 1rem 2rem;
+			flex-wrap: wrap;
+			justify-content: center;
+		}
+
+		.platforms {
+			margin: 0;
+			max-width: 50ch;
+			margin-inline: auto;
+			font-size: var(--sl-text-sm);
+			color: var(--sl-color-gray-3);
+		}
+
+		@media (min-width: 50rem) {
+			.hero {
+				grid-template-columns: 7fr 4fr;
+				gap: 3%;
+				padding-block: clamp(2.5rem, calc(1rem + 10vmin), 10rem);
+			}
+
+			.hero > img,
+			.hero > .hero-html {
+				order: 2;
+				width: min(100%, 16rem);
+			}
+
+			.stack {
+				text-align: start;
+			}
+
+			.copy {
+				align-items: flex-start;
+			}
+
+			.actions {
+				justify-content: flex-start;
+			}
+
+			.platforms {
+				margin-inline: 0;
+			}
+		}
+	}
+</style>

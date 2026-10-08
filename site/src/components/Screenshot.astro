@@ -12,13 +12,19 @@ interface Props {
   src: ImageMetadata
   alt: string
   caption?: string
+  /**
+   * Wider than the text column, up to 72rem — the captures are 1440 CSS pixels of app UI, unreadable
+   * at the column's width. Only on pages without a sidebar (the landing page): the figure is centered
+   * on the column, which is centered in the viewport only there.
+   */
+  wide?: boolean
 }
 
-const { src, alt, caption } = Astro.props
+const { src, alt, caption, wide = false } = Astro.props
 const t = useStrings(Astro.locals.starlightRoute.lang)
 ---
 
-<figure class="screenshot not-content">
+<figure class:list={['screenshot', 'not-content', { wide }]}>
   <Image src={src} alt={alt} widths={[960, 1440, 2880]} sizes="(min-width: 72rem) 72rem, 100vw" />
   <figcaption>{caption ? `${caption} ` : ''}{t('landing.illustrative')}</figcaption>
 </figure>
@@ -26,6 +32,12 @@ const t = useStrings(Astro.locals.starlightRoute.lang)
 <style>
   .screenshot {
     margin: 2rem 0;
+  }
+  .wide {
+    position: relative;
+    left: 50%;
+    width: min(72rem, 100vw - 3rem);
+    transform: translateX(-50%);
   }
   .screenshot img {
     width: 100%;

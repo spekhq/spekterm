@@ -3,6 +3,8 @@ title: The spec beside the agent
 description: A desktop workbench that runs a Claude Code session for each repository and shows the OpenSpec change it is working on, right beside the terminal.
 template: splash
 hero:
+  image:
+    file: ../../assets/logo.svg
   title: The spec beside the agent
   tagline: spekterm runs Claude Code sessions for each of your repositories in one window, and shows the OpenSpec change each one is working on — proposal, design, tasks, specs — right next to the terminal.
   actions:
@@ -17,15 +19,15 @@ hero:
 
 import { Card, CardGrid, LinkCard, Steps } from '@astrojs/starlight/components'
 import Download from '../../components/Download.astro'
-import Platforms from '../../components/Platforms.astro'
 import Screenshot from '../../components/Screenshot.astro'
 import hero from '../../assets/screenshots/en/hero.png'
 import terminal from '../../assets/screenshots/en/terminal.png'
 import inbox from '../../assets/screenshots/en/inbox.png'
-
-<Platforms />
+import graph from '../../assets/screenshots/en/graph.png'
+import handoff from '../../assets/screenshots/en/handoff.png'
 
 <Screenshot
+  wide
   src={hero}
   alt="spekterm with a Claude Code session in the conversation view, next to the side panel showing the tasks of the OpenSpec change the agent is working on."
   caption="A Claude Code session next to the change it is working on: the tasks update as the agent checks them off."
@@ -57,12 +59,20 @@ working on and follows along as the agent writes to disk.
 </CardGrid>
 
 <Screenshot
+  wide
+  src={graph}
+  alt="The side panel maximized over the main stage, showing a graph of the repository's specs and the active and archived changes that touched each one."
+  caption="Maximize the side panel to see how every spec and change relate."
+/>
+
+## Sessions that last
+
+<Screenshot
+  wide
   src={terminal}
   alt="A shell session showing git log and the change's files, next to the side panel showing the change's proposal."
   caption="Real terminals, several per repository, beside the change's proposal."
 />
-
-## Sessions that last
 
 - **Real terminals** — `claude` and your login shell in real ptys, several per repository, git
   worktrees included.
@@ -80,15 +90,23 @@ always one click away.
 ## Work that arrives on its own
 
 <Screenshot
+  wide
   src={inbox}
-  alt="The inbox with a Slack mention waiting, set to open in the api-server repository."
-  caption="A Slack mention waiting in the inbox, ready to open as a session in the right repository."
+  alt="The inbox with three Slack mentions waiting, each set to open in the repository its routing picked: api-server, or web-app for the one from #frontend."
+  caption="Slack mentions waiting in the inbox, each ready to open as a session in the right repository."
 />
 
 - **Inbox** — when someone mentions you in Slack, it lands in the inbox; accept it to get a Claude Code
   session in the repository you choose, with the context filled in.
 - **Handoffs** — an agent can hand work to another repository's agent. spekterm opens the session, and
   you see both ends of the handoff until the work is reported done.
+
+<Screenshot
+  wide
+  src={handoff}
+  alt="A session that handed work to two others: the rail marks each one's state, and the handoff brief of the finished one shows its task and the result it reported."
+  caption="Both ends of a handoff: the rail shows who handed what to whom, and the brief keeps the task and its result."
+/>
 
 ## How it works
 
@@ -111,8 +129,8 @@ exactly what connects where. spekterm is MIT-licensed, and its source is on
 ## Questions
 
 <CardGrid>
-  <LinkCard title="How is this different from running Claude Code in a terminal?" href="/docs/help/faq/" />
-  <LinkCard title="Do I need OpenSpec?" href="/docs/help/faq/" />
+  <LinkCard title="How is this different from running Claude Code in a terminal?" href="/docs/help/faq/#how-is-this-different-from-running-claude-code-in-a-terminal" />
+  <LinkCard title="Do I need OpenSpec?" href="/docs/help/faq/#do-i-need-openspec" />
   <LinkCard title="Is my code sent anywhere?" href="/docs/reference/data-and-network/" />
   <LinkCard title="Install and first steps" href="/docs/getting-started/install/" />
 </CardGrid>

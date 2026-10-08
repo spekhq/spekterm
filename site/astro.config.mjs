@@ -13,6 +13,10 @@ export default defineConfig({
   integrations: [
     starlight({
       title: 'spekterm',
+      // The app's own icon (scripts/make-brand-images.mjs copies it from build/icon.svg).
+      logo: { src: './src/assets/logo.svg', alt: '' },
+      head: [{ tag: 'link', attrs: { rel: 'apple-touch-icon', href: '/apple-touch-icon.png' } }],
+      routeMiddleware: './src/routeData.ts',
       defaultLocale: 'root',
       locales: {
         root: { label: 'English', lang: 'en' },
@@ -27,6 +31,7 @@ export default defineConfig({
       social: [{ icon: 'github', label: 'GitHub', href: 'https://github.com/spekhq/spekterm' }],
       components: {
         Footer: './src/components/Footer.astro',
+        Hero: './src/components/Hero.astro',
       },
       sidebar: [
         {

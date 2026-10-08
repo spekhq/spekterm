@@ -2,7 +2,7 @@
 /**
  * The download call to action. It links to the latest release page, never to a file: asset names
  * carry the version (build-identity), and the site carries no version of its own (project-website).
- * The platform status is stated next to it, word for word from the dictionary.
+ * The platform status is stated once, under the hero's download button (Hero.astro).
  */
 import { LinkButton } from '@astrojs/starlight/components'
 import { useStrings } from '../i18n'
@@ -14,8 +14,7 @@ const t = useStrings(Astro.locals.starlightRoute.lang)
   <LinkButton href="https://github.com/spekhq/spekterm/releases/latest" icon="download" iconPlacement="start">
     {t('landing.download')}
   </LinkButton>
-  <p class="platforms">{t('landing.platforms')}</p>
-  <p class="note">{t('landing.downloadNote')} {t('landing.early')}</p>
+  <p class="note">{t('landing.downloadNote')}</p>
 </div>
 
 <style>
@@ -26,10 +25,6 @@ const t = useStrings(Astro.locals.starlightRoute.lang)
     gap: 0.5rem;
     margin: 2rem 0;
     text-align: center;
-  }
-  .platforms {
-    margin: 0.5rem 0 0;
-    color: var(--sl-color-white);
   }
   .note {
     margin: 0;

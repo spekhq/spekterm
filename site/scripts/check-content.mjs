@@ -5,7 +5,8 @@
  * Structural part — about every page, independent of what the pages say:
  *   canonical URL; language switch targets the counterpart; disclaimer and notices link (also on the
  *   not-found page); release links target the latest release; no released or current version
- *   number; the documentation home exists in both languages.
+ *   number; the documentation home exists in both languages; the brand — a tab icon the site serves
+ *   and the header logo (also on the not-found page), and a share image in the page's language.
  * Content part — about what specific pages say:
  *   the landing page's required elements; no "Linux only" phrase; every required topic has a page;
  *   the data and network page names what the spec lists.
@@ -33,6 +34,8 @@ import {
 } from './lib.mjs'
 
 const LATEST_RELEASE = 'https://github.com/spekhq/spekterm/releases/latest'
+/** The share image of each language (`scripts/make-brand-images.mjs`). */
+const SHARE_IMAGE = { en: '/og/en.png', 'zh-TW': '/og/zh-tw.png' }
 const RELEASES = /^https:\/\/github\.com\/spekhq\/spekterm\/releases(\/|$|\?|#)/
 
 /** Every version the app has been released under, plus the current one in the root package.json. */
@@ -100,6 +103,23 @@ export function checkContent(dist, { plan, strings, versions, structuralOnly = f
       for (const select of selects) {
         const values = select.querySelectorAll('option').map((option) => option.getAttribute('value'))
         if (!values.includes(target)) problems.push(`${path}: language switch does not offer ${target}`)
+      }
+    }
+
+    // A declared icon the build does not contain shows the browser's blank page icon (as it did
+    // before the site had one: Starlight declares /favicon.svg whether or not it exists).
+    const icon = root.querySelector('link[rel~="icon"]')?.getAttribute('href')
+    if (!icon) problems.push(`${path}: declares no tab icon`)
+    else if (!existsSync(join(dist, icon))) problems.push(`${path}: its tab icon ${icon} is not in the build`)
+    if (!root.querySelector('.site-title img')) problems.push(`${path}: no logo in the header`)
+    if (isPage) {
+      const expected = `${CANONICAL_ORIGIN}${SHARE_IMAGE[localeOf(path).lang]}`
+      for (const selector of ['meta[property="og:image"]', 'meta[name="twitter:image"]']) {
+        const image = root.querySelector(selector)?.getAttribute('content')
+        if (image !== expected) problems.push(`${path}: ${selector} is ${image ?? 'missing'}, expected ${expected}`)
+      }
+      if (!existsSync(join(dist, SHARE_IMAGE[localeOf(path).lang]))) {
+        problems.push(`${path}: its share image ${SHARE_IMAGE[localeOf(path).lang]} is not in the build`)
       }
     }
 
@@ -193,10 +213,15 @@ const STRINGS = { en: { 'landing.platforms': 'Linux builds today.' }, 'zh-TW': {
 const VERSIONS = ['0.2.1', '0.2.2']
 const PAGES = ['/', '/zh-tw/', '/docs/', '/zh-tw/docs/', '/docs/a/', '/zh-tw/docs/a/', '/docs/net/', '/zh-tw/docs/net/']
 
-function fakePage(path, { canonical, switchTo, footer = true, main = '', notices = true } = {}) {
+function fakePage(
+  path,
+  { canonical, switchTo, footer = true, main = '', notices = true, icon = '/favicon.svg', logo = true, share = path.startsWith('/zh-tw/') ? '/og/zh-tw.png' : '/og/en.png' } = {},
+) {
   const other = switchTo ?? counterpartOf(path)
   const self = path
-  return `<!doctype html><html><head><link rel="canonical" href="${canonical ?? CANONICAL_ORIGIN + path}"></head><body>
+  const shareUrl = share ? CANONICAL_ORIGIN + share : null
+  return `<!doctype html><html><head><link rel="canonical" href="${canonical ?? CANONICAL_ORIGIN + path}">${icon ? `<link rel="shortcut icon" href="${icon}" type="image/svg+xml">` : ''}${shareUrl ? `<meta property="og:image" content="${shareUrl}"><meta name="twitter:image" content="${shareUrl}">` : ''}</head><body>
+<header><a class="site-title" href="/">${logo ? '<img src="/_astro/logo.Ab12.svg" alt="">' : ''}<span>spekterm</span></a></header>
 <starlight-lang-select><select><option value="${path.startsWith('/zh-tw/') ? other : self}">English</option><option value="${path.startsWith('/zh-tw/') ? self : other}">繁體中文</option></select></starlight-lang-select>
 <main>${main}</main>
 <footer>${footer ? '<div class="site-footer"><p class="disclaimer">Not affiliated with Anthropic or the OpenSpec project.</p>' : '<div>'}<p><a href="https://github.com/spekhq/spekterm">Source</a>${notices ? ' <a href="/third-party-notices.txt">Notices</a>' : ''}</p></div></footer>
@@ -216,6 +241,9 @@ function fakeSite(overrides = {}, { omit = [] } = {}) {
       .map((p) => `<url><loc>${CANONICAL_ORIGIN}${p}</loc></url>`)
       .join('')}</urlset>`,
     '404.html': fakePage('/404/'),
+    'favicon.svg': '<svg/>',
+    'og/en.png': 'png',
+    'og/zh-tw.png': 'png',
   }
   for (const path of PAGES) {
     if (omit.includes(path)) continue
@@ -232,6 +260,8 @@ function fakeSite(overrides = {}, { omit = [] } = {}) {
   return { ...files, ...overrides }
 }
 
+const withoutFile = (files, name) => Object.fromEntries(Object.entries(files).filter(([key]) => key !== name))
+
 const run = (structuralOnly) => (dir) => checkContent(dir, { plan: PLAN, strings: STRINGS, versions: VERSIONS, structuralOnly })
 
 function runSelfTest() {
@@ -246,6 +276,12 @@ function runSelfTest() {
       { label: 'a link to a specific release', files: fakeSite({ 'docs/a/index.html': fakePage('/docs/a/', { main: '<a href="https://github.com/spekhq/spekterm/releases/tag/v0.2.1">x</a>' }) }), expect: 'does not target' },
       { label: 'a released version on a page', files: fakeSite({ 'docs/a/index.html': fakePage('/docs/a/', { main: '<p>Spekterm-0.2.1.AppImage</p>' }) }), expect: 'app version 0.2.1' },
       { label: 'no documentation home', files: fakeSite({}, { omit: ['/zh-tw/docs/'] }), expect: '/zh-tw/docs/ is not in the sitemap' },
+      { label: 'a declared tab icon that was not built', files: withoutFile(fakeSite(), 'favicon.svg'), expect: 'tab icon /favicon.svg is not in the build' },
+      { label: 'a page with no tab icon', files: fakeSite({ 'docs/a/index.html': fakePage('/docs/a/', { icon: null }) }), expect: '/docs/a/: declares no tab icon' },
+      { label: 'the not-found page without the logo', files: fakeSite({ '404.html': fakePage('/404/', { logo: false }) }), expect: '404.html: no logo in the header' },
+      { label: 'a page without a share image', files: fakeSite({ 'docs/a/index.html': fakePage('/docs/a/', { share: null }) }), expect: 'meta[property="og:image"] is missing' },
+      { label: 'a Chinese page with the English share image', files: fakeSite({ 'zh-tw/docs/a/index.html': fakePage('/zh-tw/docs/a/', { share: '/og/en.png' }) }), expect: 'expected https://spekterm.com/og/zh-tw.png' },
+      { label: 'a share image that was not built', files: withoutFile(fakeSite(), 'og/zh-tw.png'), expect: 'share image /og/zh-tw.png is not in the build' },
     ],
   })
   // Word boundaries: a longer number that contains a released version is not that version.

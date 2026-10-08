@@ -86,7 +86,8 @@ The landing page, in both languages, SHALL contain:
 
 - a statement of what spekterm is that names Claude Code and OpenSpec;
 - a screenshot showing a session next to the OpenSpec side panel;
-- the platform status: builds are available for Linux, and macOS and Windows are not supported yet;
+- the platform status: builds are available for Linux, and macOS and Windows are not supported yet —
+  stated next to the first download button;
 - a download link (see "Downloads link to the latest release");
 - links to the documentation, the source repository, and the releases;
 - a statement that spekterm is not affiliated with Anthropic or the OpenSpec project, which SHALL also
@@ -111,6 +112,35 @@ platform status describes the current builds, not a design limit.
 - **WHEN** the text of every built page, `README.md`, and `README.zh-TW.md` is searched,
   case-insensitively, for "Linux only", "Linux-only", 「只支援 Linux」, 「僅支援 Linux」, and 「Linux 專用」
 - **THEN** there is no match
+
+### Requirement: Every page carries the brand and a share preview
+
+Every page and the not-found page SHALL show the app's icon as the logo in the site header and SHALL
+declare a tab icon that the site itself serves. Every page SHALL declare a share image (`og:image` and
+`twitter:image`) on `https://spekterm.com` in the page's own language, and the site SHALL serve that
+image. The logo, the tab icon, and the share images are derived from the app's icon, so the site and the
+app carry the same mark.
+
+The site's build SHALL fail when a page declares a tab icon or a share image that the build does not
+contain, when a page or the not-found page has no header logo, or when a page's share image is missing
+or in the other language.
+
+#### Scenario: A declared tab icon that is not built fails the build
+
+- **WHEN** the pages declare `/favicon.svg` as their tab icon and the built site has no such file
+- **THEN** the build fails and names the icon
+
+#### Scenario: A page without the header logo fails the build
+
+- **WHEN** a page or the not-found page has no logo image in its header
+- **THEN** the build fails and names the page
+
+#### Scenario: Each page shares an image in its own language
+
+- **WHEN** every page of the built site is read
+- **THEN** each declares `og:image` and `twitter:image` as `https://spekterm.com/og/en.png` on an
+  English page and `https://spekterm.com/og/zh-tw.png` on a Traditional Chinese page, and the built site
+  contains that file
 
 ### Requirement: The documentation is the user guide
 
