@@ -32,36 +32,39 @@ const logo = product === 'spek' ? spekLogo : spektermLogo
 </div>
 
 <style>
+  /*
+   * One line of text at the title's size, not a flex row: the logo and the switch align with
+   * vertical-align: middle, which is the title font's x-height middle — where its lowercase letters
+   * sit. Centering boxes (flex) put the switch's border at the line box's middle, a few pixels above
+   * the letters of a large title, so the switch looked higher than the name beside it.
+   */
   .product-title {
-    display: flex;
-    align-items: center;
-    gap: 0.75rem;
     min-width: 0;
+    font-size: var(--sl-text-h4);
+    white-space: nowrap;
   }
   .site-title {
-    display: flex;
-    align-items: center;
-    gap: var(--sl-nav-gap);
-    font-size: var(--sl-text-h4);
     font-weight: 600;
     color: var(--sl-color-text-accent);
     text-decoration: none;
-    white-space: nowrap;
-    min-width: 0;
   }
   .site-title img {
     height: calc(var(--sl-nav-height) - 2 * var(--sl-nav-pad-y));
     width: auto;
+    margin-inline-end: var(--sl-nav-gap);
+    vertical-align: middle;
   }
   .product-switch {
-    flex-shrink: 0;
+    display: inline-block;
+    margin-inline-start: 0.75rem;
     padding: 0.125rem 0.5rem;
     border: 1px solid var(--sl-color-gray-5);
     border-radius: 999px;
     font-size: var(--sl-text-xs);
+    line-height: 1.5;
     color: var(--sl-color-gray-2);
     text-decoration: none;
-    white-space: nowrap;
+    vertical-align: middle;
   }
   .product-switch:hover {
     color: var(--sl-color-white);
