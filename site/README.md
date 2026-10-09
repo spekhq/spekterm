@@ -70,7 +70,7 @@ npm run build:structure  # same, minus check-content's content part (while pages
 | root content guards | an internal name or a maintainer home path anywhere in the repository; restrictive license wording (`../scripts/public-hygiene.test.mjs`, `../scripts/license.test.mjs` — they need git and the whole repository) |
 | `astro build` | a broken link or anchor in Markdown content (`starlight-links-validator`) |
 | `check-parity` | a page, string, or screenshot in one language only |
-| `check-origins` | anything loaded from another origin (scripts, styles, fonts, images, frames — including inline styles) |
+| `check-origins` | anything loaded from another origin (scripts, styles, fonts, images, frames — including inline styles), except the Google Analytics tag (`src/analytics.mjs`) |
 | `write-notices` | the third-party notices cannot be generated, or omit a package known to ship |
 | `check-content` | canonical URLs, language switches, the disclaimer and notices link, the tab icon, header logo and share image (each page's own language), release links, version numbers (needs git tags), the landing page's required content, required topics, the data and network page |
 

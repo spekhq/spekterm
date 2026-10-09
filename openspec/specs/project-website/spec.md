@@ -204,15 +204,19 @@ source repository; see "spek's landing page states what spek is and how to get i
   root `package.json`
 - **THEN** there is no match
 
-### Requirement: The site does not track its readers
+### Requirement: The site loads nothing from another origin but Google Analytics
 
-The site SHALL NOT set cookies and SHALL NOT load any script, style sheet, font, image, or frame from an
-origin other than its own; links that the reader follows are not loads. This SHALL hold for what the
-hosting serves, not only for what the build produces, because the hosting can inject content without any
-change to the repository.
+Every page SHALL load the Google Analytics tag (`https://www.googletagmanager.com/gtag/js` with the site's
+measurement ID), which tells where the site's readers come from. Apart from that tag, the site SHALL NOT
+load any script, style sheet, font, image, or frame from an origin other than its own; links that the
+reader follows are not loads. The hosting's responses SHALL NOT set cookies; the cookies Google Analytics
+sets in the reader's browser are the only ones the site has. This SHALL hold for what the hosting serves,
+not only for what the build produces, because the hosting can inject content without any change to the
+repository.
 
-The site's build SHALL fail when the built output references a resource from another origin. References a
-script would make at run time are not visible to the build; the site's scripts SHALL NOT make any.
+The site's build SHALL fail when the built output references a resource from another origin other than the
+Google Analytics tag as a script. References a script would make at run time are not visible to the build;
+the site's own scripts SHALL NOT make any, and the Google Analytics tag's are Google's.
 
 The served site SHALL be checked after deployment and after any change to the hosting's settings; that
 check needs a deployed site and is run by the maintainer.
@@ -222,6 +226,12 @@ check needs a deployed site and is run by the maintainer.
 - **WHEN** a built page — including its `<style>` elements and `style` attributes — or a built style
   sheet references a script, style sheet, font, image, or frame on another origin, and the site is built
 - **THEN** the build fails and names the reference
+
+#### Scenario: The Google Analytics tag does not fail the build
+
+- **WHEN** a built page loads the Google Analytics tag with the site's measurement ID as a script
+- **THEN** the build does not fail on it, and a Google tag with another ID, or the tag loaded as anything
+  but a script, still fails it
 
 #### Scenario: Inline data and plain links do not fail the build
 

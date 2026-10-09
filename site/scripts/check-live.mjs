@@ -1,5 +1,5 @@
 /**
- * project-website: The site does not track its readers — the served half (design D8.2), plus the
+ * project-website: The site loads nothing from another origin but Google Analytics — the served half (design D8.2), plus the
  * redirects of "spekterm.com is the canonical host".
  *
  * Run by the maintainer after a deploy and after any change to the hosting's settings: it needs a

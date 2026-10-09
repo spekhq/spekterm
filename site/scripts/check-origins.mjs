@@ -1,20 +1,22 @@
 /**
- * project-website: The site does not track its readers — the build half (design D8.1).
+ * project-website: The site loads nothing from another origin but Google Analytics — the build half (design D8.1).
  *
  * Every resource a built page or style sheet makes the browser load must be same-origin or a
- * `data:` URL. Hyperlinks (`<a href>`) load nothing and are allowed.
+ * `data:` URL — except the Google Analytics tag (`src/analytics.mjs`), allowed as a `<script src>` at
+ * exactly its URL. Hyperlinks (`<a href>`) load nothing and are allowed.
  *
  * Parsed, not grepped: Starlight's CSS contains `data:image/svg+xml…` with an
  * `http://www.w3.org/2000/svg` namespace inside it, which a regex over the file reports as a load.
  * Astro inlines small component styles into the page (measured), so `<style>` elements and `style`
  * attributes are read as well as the CSS files.
  *
- * What a script requests at run time is not visible here; the site's scripts make no such request
- * (project-website).
+ * What a script requests at run time is not visible here; the site's own scripts make no such
+ * request, and the Google Analytics tag's are Google's.
  */
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { parse } from 'node-html-parser'
+import { GA_SCRIPT_URL } from '../src/analytics.mjs'
 import { CANONICAL_ORIGIN, DIST, main, selfTest, walk, HTML_OPTIONS } from './lib.mjs'
 
 /** Attributes that make the browser load something, per element. */
@@ -101,7 +103,10 @@ export function checkOrigins(dist) {
           const value = el.getAttribute(attribute)
           if (value == null) continue
           const urls = attribute === 'srcset' ? srcsetUrls(value) : [value]
-          for (const url of urls) if (isForeign(url)) problems.push(`${file}: <${tag} ${attribute}> loads ${url}`)
+          for (const url of urls) {
+            if (tag === 'script' && url.trim() === GA_SCRIPT_URL) continue
+            if (isForeign(url)) problems.push(`${file}: <${tag} ${attribute}> loads ${url}`)
+          }
         }
       }
     }
@@ -120,7 +125,7 @@ export function checkOrigins(dist) {
 const page = (head, body = '') => `<!doctype html><html><head>${head}</head><body>${body}</body></html>`
 const PASS = {
   'index.html': page(
-    '<link rel="stylesheet" href="/_astro/common.css"><link rel="canonical" href="https://spekterm.com/"><link rel="alternate" hreflang="zh-TW" href="https://spekterm.com/zh-tw/"><script type="module" src="/_astro/page.js"></script><style>.a{background:url(/_astro/a.png)}</style>',
+    `<link rel="stylesheet" href="/_astro/common.css"><link rel="canonical" href="https://spekterm.com/"><link rel="alternate" hreflang="zh-TW" href="https://spekterm.com/zh-tw/"><script type="module" src="/_astro/page.js"></script><script async src="${GA_SCRIPT_URL}"></script><style>.a{background:url(/_astro/a.png)}</style>`,
     '<a href="https://github.com/spekhq/spekterm">repo</a><img src="/_astro/hero.webp" srcset="/_astro/hero.webp 1x, /_astro/hero@2.webp 2x"><div style="background:url(\'data:image/png;base64,AAAA\')"></div>',
   ),
   // Starlight's CSS embeds an SVG whose namespace is an http: URL inside a data: URL.
@@ -136,6 +141,8 @@ main('check-origins', {
       check: checkOrigins,
       cases: [
         { label: 'a cross-origin script', files: withPage('<script src="https://cdn.example.com/a.js"></script>'), expect: 'cdn.example.com' },
+        { label: 'another Google tag', files: withPage('<script async src="https://www.googletagmanager.com/gtag/js?id=G-OTHER"></script>'), expect: 'G-OTHER' },
+        { label: 'the Google tag as an image', files: withPage('', `<img src="${GA_SCRIPT_URL}">`), expect: '<img src>' },
         { label: 'a cross-origin style sheet', files: withPage('<link rel="stylesheet" href="https://fonts.example.com/f.css">'), expect: 'fonts.example.com' },
         { label: 'an inline-style background', files: withPage('<style>.x{background:url(https://example.com/bg.png)}</style>'), expect: 'example.com/bg.png' },
         { label: 'a style attribute', files: withPage('', '<div style="background:url(//track.example.net/p.gif)"></div>'), expect: 'track.example.net' },
