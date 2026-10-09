@@ -14,7 +14,7 @@ before the terminal does, and a key it uses never reaches the program running in
 | Shortcut | Action |
 | --- | --- |
 | `Ctrl+Tab` / `Ctrl+Shift+Tab` | Next / previous session in the current rail item, in tab order (wraps around). With focus in the side panel's change view: next / previous artifact |
-| `Ctrl+↓` / `Ctrl+↑` | Next / previous rail item, including the global item (wraps around) |
+| `Ctrl+↓` / `Ctrl+↑` | Next / previous rail item, including the global item (wraps around). On macOS, see [On macOS](#on-macos) |
 | `Ctrl+T` | Open the new-session menu (fully usable from the keyboard) |
 | `Ctrl+Shift+W` | Close the focused session |
 | `Ctrl+Shift+H` | Hibernate the focused session — its process ends, it stays in the workspace to wake later |
@@ -49,3 +49,18 @@ before the terminal does, and a key it uses never reaches the program running in
 
 One known cost: Claude Code's own agents view also uses `Shift+arrow`, which spekterm takes for
 reordering.
+
+## On macOS
+
+The shortcuts above are the same on macOS, with these differences:
+
+- **Copy and paste in the terminal** are `Cmd+C` and `Cmd+V`. `Ctrl+C` is still the interrupt.
+- **Save** is `Cmd+S`.
+- **`Cmd+Q`** (or **Spekterm → Quit Spekterm**) quits. When sessions are running, it asks first, the same
+  way closing the window does.
+- **There is no `Cmd+W`.** Close a session with `Ctrl+Shift+W`, as on Linux.
+- **`Ctrl+↑` / `Ctrl+↓`** are taken by Mission Control and App Exposé in macOS's default settings, so they
+  never reach spekterm. To use them for the rail, turn those shortcuts off in **System Settings →
+  Keyboard → Keyboard Shortcuts → Mission Control**.
+- The menu bar is minimal: the **Spekterm** menu (About, Hide, Hide Others, Show All, Quit) and the
+  **Edit** menu (Undo, Redo, Cut, Copy, Paste, Select All), whose shortcuts work in text fields.

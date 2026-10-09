@@ -305,22 +305,13 @@ function serviceFor(
     services.set(contents.id, service)
   owners.set(contents.id, contents)
 
-  contents.once('destroyed', () => {
-    owners.delete(contents.id)
-    hibernation.setDisplayed(contents.id, null)
-    sessions.dropProvisional()
-    services.delete(contents.id)
-    statusServices.get(contents.id)?.dispose()
-    statusServices.delete(contents.id)
-    flush(service, sessions)
-    service.dispose()
-  })
-
-  // 重新載入不會銷毀 webContents，因此 'destroyed' 不會觸發 —— 舊 pty 會變成孤兒行程，
-  // 且新頁面的 xterm 永遠收不到它們的輸出（listener 綁在已消失的舊 renderer 上）。必須在
-  // 'did-navigate' 殺光（design D2）。沿用 watcher 的教訓：用 'did-navigate'（已 commit），
-  // 不是 'did-start-navigation'（那對被擋下的導航也會觸發）。
-    contents.on('did-navigate', () => {
+  /**
+   * What a renderer leaves behind when it goes — **one body for both ways it can go**. The two paths used
+   * to be written out separately, and the destroyed one lacked `disposeConversationFor`: the conversation
+   * tracking of a closed window outlived it. On Linux that lasted only until the process ended with its
+   * window; on macOS the process keeps running and a window can be closed and reopened many times.
+   */
+  const releaseRenderer = (): void => {
     hibernation.setDisplayed(contents.id, null)
     // 尚未被 renderer 送來持久化的 session 永遠不會被送來了（新頁面不知道它們）。
     sessions.dropProvisional()
@@ -330,7 +321,19 @@ function serviceFor(
     statusServices.delete(contents.id)
     flush(service, sessions)
     service.dispose()
+  }
+
+  contents.once('destroyed', () => {
+    owners.delete(contents.id)
+    services.delete(contents.id)
+    releaseRenderer()
   })
+
+  // 重新載入不會銷毀 webContents，因此 'destroyed' 不會觸發 —— 舊 pty 會變成孤兒行程，
+  // 且新頁面的 xterm 永遠收不到它們的輸出（listener 綁在已消失的舊 renderer 上）。必須在
+  // 'did-navigate' 殺光（design D2）。沿用 watcher 的教訓：用 'did-navigate'（已 commit），
+  // 不是 'did-start-navigation'（那對被擋下的導航也會觸發）。
+  contents.on('did-navigate', releaseRenderer)
 
   return service
 }

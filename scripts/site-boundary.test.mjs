@@ -27,15 +27,34 @@ function selectsSite(selection) {
   return SITE_SAMPLES.some((sample) => matchesGlob(sample, from))
 }
 
-/** The packaging configuration's file selections — included files, extra files, extra resources. */
+/**
+ * The packaging configuration's file selections — included files, extra files, extra resources — at the top
+ * level and in every platform's section. electron-builder adds a platform's selections to the top-level
+ * ones, so a selection under `build.mac` reaches the macOS artifact as surely as a top-level one.
+ */
 function packagingSelections(build) {
   const asList = (value) => (value === undefined ? [] : Array.isArray(value) ? value : [value])
-  return [...asList(build.files), ...asList(build.extraFiles), ...asList(build.extraResources)]
+  const of = (section) => [
+    ...asList(section?.files),
+    ...asList(section?.extraFiles),
+    ...asList(section?.extraResources),
+  ]
+  return [...of(build), ...of(build.linux), ...of(build.mac), ...of(build.win)]
 }
 
 test('the packaging configuration selects nothing under site/', () => {
   const offending = packagingSelections(rootPackage.build).filter(selectsSite)
   assert.deepEqual(offending, [], `packaging selects the website: ${JSON.stringify(offending)}`)
+})
+
+test('control: a selection of site/** in a platform section is caught', () => {
+  for (const platform of ['linux', 'mac', 'win']) {
+    const build = {
+      ...rootPackage.build,
+      [platform]: { ...rootPackage.build[platform], extraResources: [{ from: 'site/dist', to: 'docs' }] },
+    }
+    assert.ok(packagingSelections(build).some(selectsSite), `not caught under build.${platform}`)
+  }
 })
 
 test('control: a selection of site/** is caught', () => {
@@ -94,11 +113,12 @@ test('control: a deleted build step is caught', () => {
 const README_NETWORK = { 'README.md': /network/i, 'README.zh-TW.md': /網路/ }
 
 /** Problems with one README's text. */
-function readmeProblems(name, text, linuxOnlyPhrases) {
+function readmeProblems(name, text, forbiddenPhrases) {
   const problems = []
   if (!text.includes('https://spekterm.com/docs/')) problems.push(`${name}: no link to https://spekterm.com/docs/`)
   const lower = text.toLowerCase()
-  for (const phrase of linuxOnlyPhrases) if (lower.includes(phrase.toLowerCase())) problems.push(`${name}: says "${phrase}"`)
+  const flat = lower.replace(/\s+/g, ' ')
+  for (const phrase of forbiddenPhrases) if (flat.includes(phrase.toLowerCase().replace(/\s+/g, ' '))) problems.push(`${name}: says "${phrase}"`)
   const lines = text.split('\n')
   const fuse = lines.findIndex((line) => line.includes('libfuse2'))
   const hatch = lines.findIndex((line) => line.includes('--appimage-extract-and-run'))
@@ -119,7 +139,7 @@ function readmeProblems(name, text, linuxOnlyPhrases) {
 test('the READMEs link to the docs, never say Linux only, and keep the install facts', () => {
   const plan = JSON.parse(readFileSync(join(repoRoot, 'site', 'src', 'content-plan.json'), 'utf8'))
   const problems = Object.keys(README_NETWORK).flatMap((name) =>
-    readmeProblems(name, readFileSync(join(repoRoot, name), 'utf8'), plan.linuxOnlyPhrases),
+    readmeProblems(name, readFileSync(join(repoRoot, name), 'utf8'), plan.forbiddenPhrases),
   )
   assert.deepEqual(problems, [])
 })

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * 產物清理 —— 只保留**版本序**上最新的兩份 AppImage。`dist:linux` 的最後一步。
+ * 產物清理 —— 每一種產物只保留**版本序**上最新的兩份。`dist:linux` 與 `dist:mac` 的最後一步。
  *
  * ## 為什麼需要它
  *
@@ -22,6 +22,12 @@
  *
  * 刪除只涵蓋本專案自己產出的產物檔。`Spekterm-0.1.0.AppImage.prev` 之類的手工備份不以
  * `.AppImage` 結尾，不會被誤傷。
+ *
+ * ## Each kind of artifact keeps its own two
+ *
+ * AppImages and dmgs are counted separately, so one platform's builds never push out the other's. A dmg's
+ * `.blockmap` (electron-builder writes one beside every dmg) belongs to it and goes with it — matched on
+ * its own, it would never be pruned and would pile up.
  */
 
 import { readdirSync, rmSync } from 'node:fs'
@@ -29,8 +35,14 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { compareVersions } from './lib/build-info.mjs'
 
-/** 本專案產物的檔名形態 —— `productName` 已凍結（`app-identity`），這個前綴不會漂移。 */
-const ARTIFACT = /^Spekterm-(\d+\.\d+\.\d+)\.AppImage$/
+/**
+ * 本專案產物的檔名形態 —— `productName` 已凍結（`app-identity`），這個前綴不會漂移。
+ * `companions` are files named after the artifact plus a suffix, deleted with it.
+ */
+const KINDS = [
+  { pattern: /^Spekterm-(\d+\.\d+\.\d+)\.AppImage$/, companions: [] },
+  { pattern: /^Spekterm-(\d+\.\d+\.\d+)-arm64\.dmg$/, companions: ['.blockmap'] },
+]
 
 /** 保留幾份。2 ＝ 當次 ＋ 前一次（退回上一版是換版出問題時的第一個處置）。 */
 const KEEP = 2
@@ -47,14 +59,25 @@ export function pruneRelease(releaseDir) {
     return [] // 還沒打包過，沒有東西要清
   }
 
-  const artifacts = entries
-    .map((name) => ({ name, version: name.match(ARTIFACT)?.[1] }))
-    .filter((a) => a.version !== undefined)
-    .sort((a, b) => compareVersions(b.version, a.version)) // 新 → 舊
+  const removed = []
+  for (const { pattern, companions } of KINDS) {
+    const artifacts = entries
+      .map((name) => ({ name, version: name.match(pattern)?.[1] }))
+      .filter((a) => a.version !== undefined)
+      .sort((a, b) => compareVersions(b.version, a.version)) // 新 → 舊
 
-  const doomed = artifacts.slice(KEEP)
-  for (const { name } of doomed) rmSync(join(releaseDir, name))
-  return doomed.map((a) => a.name)
+    for (const { name } of artifacts.slice(KEEP)) {
+      rmSync(join(releaseDir, name))
+      removed.push(name)
+      for (const suffix of companions) {
+        if (entries.includes(name + suffix)) {
+          rmSync(join(releaseDir, name + suffix))
+          removed.push(name + suffix)
+        }
+      }
+    }
+  }
+  return removed
 }
 
 // CLI：預設清本 repo 的 `release/`，測試以第一個引數指向暫存目錄。

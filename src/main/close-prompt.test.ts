@@ -79,4 +79,36 @@ describe('closePrompt', () => {
     assert.equal(label.length, MAX_LABEL)
     assert.ok(label.endsWith('…'))
   })
+
+  describe('the dialog is true on the platform it runs on', () => {
+    it('where a pty\'s directory cannot be read, shells restart in their folder', () => {
+      const prompt = closePrompt({ dirty: [], sessions: [shell('shell 1')], shellsRestartIn: 'folder' })
+      assert.ok(prompt?.detail.endsWith(t('closeConfirm.consequenceFolder')), prompt?.detail)
+      assert.doesNotMatch(prompt?.detail ?? '', /last directory/)
+    })
+
+    it('a close that leaves the application running speaks of the window, and its buttons close', () => {
+      const prompt = closePrompt({
+        dirty: [],
+        sessions: [shell('shell 1')],
+        closesApp: false,
+        shellsRestartIn: 'folder',
+      })
+      assert.ok(prompt?.detail.endsWith(t('closeConfirm.consequenceWindowFolder')), prompt?.detail)
+      assert.doesNotMatch(prompt?.detail ?? '', /Closing spekterm/)
+      assert.deepEqual(
+        prompt?.buttons.map((button) => button.label),
+        [t('closeConfirm.closeWindow'), t('closeConfirm.cancel')],
+      )
+    })
+
+    it('with unsaved files too, the window wording carries to both answers that close', () => {
+      const prompt = closePrompt({ dirty: [file], sessions: [shell('shell 1')], closesApp: false })
+      assert.deepEqual(
+        prompt?.buttons.map((button) => button.label),
+        [t('closeConfirm.saveAllAndClose'), t('closeConfirm.closeWithoutSaving'), t('closeConfirm.cancel')],
+      )
+    })
+  })
 })
+

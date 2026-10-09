@@ -26,20 +26,11 @@
       "!out/licenses/**",
       "!out/THIRD_PARTY_LICENSES.txt"
     ],
-    "extraFiles": [
-      {
-        "from": "LICENSE",
-        "to": "LICENSE"
-      },
-      {
-        "from": "out/THIRD_PARTY_LICENSES.txt",
-        "to": "THIRD_PARTY_LICENSES.txt"
-      }
-    ],
     "asarUnpack": [
       "**/node_modules/node-pty/**"
     ],
     "npmRebuild": false,
+    "afterPack": "scripts/after-pack.cjs",
     "linux": {
       "target": [
         {
@@ -51,7 +42,44 @@
       ],
       "icon": "build/icon.png",
       "category": "Development",
-      "syncDesktopName": true
+      "syncDesktopName": true,
+      "extraFiles": [
+        {
+          "from": "LICENSE",
+          "to": "LICENSE"
+        },
+        {
+          "from": "out/THIRD_PARTY_LICENSES.txt",
+          "to": "THIRD_PARTY_LICENSES.txt"
+        }
+      ]
+    },
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64"
+          ]
+        }
+      ],
+      "icon": "build/icon.png",
+      "category": "public.app-category.developer-tools",
+      "identity": "-",
+      "hardenedRuntime": false,
+      "extraResources": [
+        {
+          "from": "LICENSE",
+          "to": "LICENSE"
+        },
+        {
+          "from": "out/THIRD_PARTY_LICENSES.txt",
+          "to": "THIRD_PARTY_LICENSES.txt"
+        }
+      ]
+    },
+    "dmg": {
+      "artifactName": "${productName}-${version}-${arch}.${ext}"
     }
   },
   "engines": {
@@ -61,6 +89,7 @@
     "dev": "XDG_CONFIG_HOME=$HOME/.config/spekterm-dev electron-vite dev",
     "build": "electron-vite build && node scripts/third-party-licenses.mjs",
     "dist:linux": "node scripts/release-bump.mjs && npm run build && electron-builder --linux && node scripts/prune-release.mjs",
+    "dist:mac": "node scripts/release-check.mjs && npm ci && npm run build && node scripts/package-mac.mjs && node scripts/prune-release.mjs",
     "install:desktop": "node scripts/install-desktop.mjs",
     "uninstall:desktop": "node scripts/uninstall-desktop.mjs",
     "preview": "electron-vite preview",
@@ -87,9 +116,11 @@
     "probe:agent-view": "node scripts/run-probe.mjs agent-view",
     "probe:intake": "node scripts/run-probe.mjs intake",
     "probe:slack": "node scripts/run-probe.mjs slack",
-    "probe:package": "npm run dist:linux && node scripts/run-probe.mjs package"
+    "probe:package": "npm run dist:linux && node scripts/run-probe.mjs package",
+    "probe:package:mac": "node scripts/probe-package-mac.mjs"
   },
   "devDependencies": {
+    "@electron/get": "5.1.0",
     "@eslint/js": "^10.0.1",
     "@tailwindcss/vite": "^4.3.2",
     "@types/node": "^22.10.0",

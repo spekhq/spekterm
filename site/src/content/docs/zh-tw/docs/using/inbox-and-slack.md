@@ -66,7 +66,8 @@ users:read
 ### 提及什麼時候抵達
 
 spekterm 在啟動時、每五分鐘、以及你剛存下 token 的那一刻檢查新的提及。**回補範圍** 決定啟動時往回
-搜尋多久：spekterm 關著的時候發生的事，Slack 不會重送，所以早於這個範圍的提及會漏掉。
+搜尋多久：spekterm 關著的時候發生的事，Slack 不會重送，所以早於這個範圍的提及會漏掉。在 macOS 上，
+關掉視窗不會結束 spekterm：它沒有視窗地繼續執行時，收件匣照常收件，每五分鐘一次的檢查也會繼續。
 
 想在數秒內收到提及，再加一個 **app-level token**：替你的 Slack app 開啟 Socket Mode，並替它建立一個
 app-level token。**即時更新** 會顯示即時連線是否開著。連線中斷時，spekterm 會退回定期檢查。
@@ -78,7 +79,8 @@ app-level token。**即時更新** 會顯示即時連線是否開著。連線中
 
 ### 你的 token
 
-token 存在 `~/.config/Spekterm`，存取權限僅限你的使用者。它只會被送到 Slack（或你在 **API 端點**
+token 存在 spekterm 的資料目錄（Linux 上是 `~/.config/Spekterm`，macOS 上是
+`~/Library/Application Support/Spekterm`），存取權限僅限你的使用者。它只會被送到 Slack（或你在 **API 端點**
 設定的端點 —— 除非你知道為什麼，否則不要改它），絕不會進到你的終端或你的 agent。見
 [資料與網路](/zh-tw/docs/reference/data-and-network/)。
 

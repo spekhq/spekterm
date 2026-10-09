@@ -27,6 +27,26 @@ export interface CloseFacts {
   dirty: readonly DirtyEntry[]
   /** In rail order. Empty when the close is part of a quit that did not start with it (C3). */
   sessions: readonly LiveSession[]
+  /**
+   * Whether this close ends the application. `false` only on macOS for a plain close of the window, which
+   * leaves the application running — the dialog then says "the window", not "spekterm", and its buttons
+   * close rather than quit (`workspace-app-shell`: the dialog is true on the platform it runs on).
+   * Default `true`.
+   */
+  closesApp?: boolean
+  /**
+   * Where a shell restarts when woken: its last directory where the application can read a pty's working
+   * directory, its folder elsewhere (macOS). Default `'lastDirectory'`.
+   */
+  shellsRestartIn?: 'lastDirectory' | 'folder'
+}
+
+/** The consequence sentence for what closes and where shells come back. */
+function consequenceKey(facts: CloseFacts) {
+  const window = facts.closesApp === false
+  const folder = facts.shellsRestartIn === 'folder'
+  if (window) return folder ? 'closeConfirm.consequenceWindowFolder' : 'closeConfirm.consequenceWindow'
+  return folder ? 'closeConfirm.consequenceFolder' : 'closeConfirm.consequence'
 }
 
 export interface ClosePrompt {
@@ -61,15 +81,15 @@ export function orderSessions(sessions: readonly LiveSession[]): LiveSession[] {
   return [...sessions].sort((a, b) => Number(b.working === true) - Number(a.working === true))
 }
 
-function describeSessions(sessions: readonly LiveSession[]): string {
-  const ordered = orderSessions(sessions)
+function describeSessions(facts: CloseFacts): string {
+  const ordered = orderSessions(facts.sessions)
   const lines = ordered.slice(0, MAX_LISTED).map((session) => {
     const values = { item: cut(session.railLabel), label: cut(session.label) }
     return session.working === true ? t('closeConfirm.lineWorking', values) : t('closeConfirm.line', values)
   })
   const remaining = ordered.length - MAX_LISTED
   if (remaining > 0) lines.push(t('closeConfirm.more', { count: remaining }))
-  return `${lines.join('\n')}\n\n${t('closeConfirm.consequence')}`
+  return `${lines.join('\n')}\n\n${t(consequenceKey(facts))}`
 }
 
 /** The dialog for these facts, or `null` when closing ends nothing and loses nothing. */
@@ -77,6 +97,7 @@ export function closePrompt(facts: CloseFacts): ClosePrompt | null {
   const files = facts.dirty.length
   const sessions = facts.sessions.length
   if (files === 0 && sessions === 0) return null
+  const closesApp = facts.closesApp !== false
 
   if (sessions === 0) {
     // Unchanged from the unsaved-changes dialog this replaces: no session runs, so saving all and
@@ -97,9 +118,9 @@ export function closePrompt(facts: CloseFacts): ClosePrompt | null {
   if (files === 0) {
     return {
       message: t('closeConfirm.message', { count: sessions }),
-      detail: describeSessions(facts.sessions),
+      detail: describeSessions(facts),
       buttons: [
-        { role: 'quit', label: t('closeConfirm.quit') },
+        { role: 'quit', label: t(closesApp ? 'closeConfirm.quit' : 'closeConfirm.closeWindow') },
         { role: 'cancel', label: t('closeConfirm.cancel') },
       ],
       defaultRole: 'cancel',
@@ -110,10 +131,10 @@ export function closePrompt(facts: CloseFacts): ClosePrompt | null {
   // Both: one dialog (C1). **Cancel is the default** — either other answer ends every session (C4).
   return {
     message: t('unsaved.message', { count: files }),
-    detail: `${describeFiles(facts.dirty)}\n\n${t('closeConfirm.message', { count: sessions })}\n${describeSessions(facts.sessions)}`,
+    detail: `${describeFiles(facts.dirty)}\n\n${t('closeConfirm.message', { count: sessions })}\n${describeSessions(facts)}`,
     buttons: [
-      { role: 'saveAll', label: t('closeConfirm.saveAllAndQuit') },
-      { role: 'discard', label: t('closeConfirm.quitWithoutSaving') },
+      { role: 'saveAll', label: t(closesApp ? 'closeConfirm.saveAllAndQuit' : 'closeConfirm.saveAllAndClose') },
+      { role: 'discard', label: t(closesApp ? 'closeConfirm.quitWithoutSaving' : 'closeConfirm.closeWithoutSaving') },
       { role: 'cancel', label: t('closeConfirm.cancel') },
     ],
     defaultRole: 'cancel',

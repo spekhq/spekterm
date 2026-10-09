@@ -37,7 +37,7 @@ core 邏輯重用開源的 [`@spekjs/core`](https://github.com/spekhq/spek)（MI
 
 **護城河（moat，非 headline）**：跨異質 agent、以**磁碟狀態驗證**為核心的**結構化工作交接（handoff）**——一級功能、不綁 OpenSpec，任何 repo 都能用；工作對應到 OpenSpec change 時再額外錨定 change 做語意增強。見 §7。
 
-**現況**（2026-09）：Phase 0–5 已封存；Linux AppImage 可用；Phase 7 的本機收件匣、Slack 來件、agent 發起的跨 repo 交接與母子關係已交付。macOS／Windows 產物未做；Phase 8+ 付費層已裁決不做（§10）。UI 定案雛型見 `workspace-mockup.html`。
+**現況**（2026-09）：Phase 0–5 已封存；Linux AppImage 可用；Phase 7 的本機收件匣、Slack 來件、agent 發起的跨 repo 交接與母子關係已交付。macOS (Apple Silicon, ad-hoc signed dmg) is delivered by `macos-dmg-packaging` (2026-10); Windows 產物未做；Phase 8+ 付費層已裁決不做（§10）。UI 定案雛型見 `workspace-mockup.html`。
 
 ---
 
@@ -521,9 +521,17 @@ contributions (see `CONTRIBUTING.md`).
   載入 renderer、production CSP、pty 建得起來且指令真的被執行）。
   同一個 change 也讓**開發模式的 userData 與產物分家**（`dev` script 的 `XDG_CONFIG_HOME`，
   主行程零改動）。
-  **macOS 與 Windows 未動**，且各自帶著未解的前置問題：macOS 的應用程式 menu 是系統層的、
-  `Menu.setApplicationMenu(null)` 未實測；Windows 的檔案邊界在 `O_NOFOLLOW` 缺席下退為
-  `lstat` 二次確認，從未實測。
+  **macOS (Apple Silicon) is delivered by `macos-dmg-packaging`**: `npm run dist:mac`, run on a Mac,
+  packages a dmg from a release commit only (the version follows the Linux bump), ad-hoc signed so that
+  the whole bundle is sealed — a downloaded copy is "from an unidentified developer", allowed once, not
+  "damaged". Electron's archive is checked against the checksums the `electron` package ships, whatever
+  mirror served it. On macOS the app has a minimal menu (the Edit roles and a Quit that closes the window
+  first, so it asks like a close), and closing the window leaves the app running, as Terminal does.
+  Accepted by `npm run probe:package:mac` on the Mac, from a desktop launch's environment.
+  **Not done**: Developer ID signing and notarization (paid account), auto-update (needs them), Intel
+  Macs, building on CI; the macOS limitations (a pty's directory, idle hibernation, the font list,
+  `Ctrl+↑/↓` vs Mission Control) are tracked as issues.
+  **Windows 未動**：檔案邊界在 `O_NOFOLLOW` 缺席下退為 `lstat` 二次確認，從未實測。
 - **換版的辨識與桌面整合**，由 `appimage-version-and-desktop-entry` 交付（issue #13 / #15）：
   - `dist:linux` 自身**遞增 patch 版本並提交**（`chore(release): <v>`，不打 tag），於是每一份
     產物的檔名都不同、且對得回一個 commit。理由不是儀式：在此之前「修正沒生效」與「還在跑舊的」
@@ -781,10 +789,10 @@ session 脈絡裡送出的，彙整成一份跨數十天、跨數十個專案的
 
 ## 15. 建議的下一步（2026-09-29 改寫）
 
-Phase 0–5 已封存，Phase 6 的 Linux 打包與 Phase 7 的本機收件匣、交接、母子關係已交付。原本這一節的
+Phase 0–5 已封存，Phase 6 的 Linux 與 macOS（Apple Silicon）打包與 Phase 7 的本機收件匣、交接、母子關係已交付。原本這一節的
 「先做 Phase 0」已完成，不再適用。
 
-1. **開源已裁決**（§10）。接下來要決定的是 macOS／Windows 產物值不值得出，以及跨廠牌 agent 還做不做（§14）。
+1. **開源已裁決**（§10）。macOS (Apple Silicon) ships unsigned by a Developer ID; what remains to decide is whether a paid Apple account (notarization, auto-update) and a Windows artifact are worth it, and whether cross-vendor agents are still in scope (§14).
 2. **不論裁決結果都值得做的**：處理 §13 新增的三條官方介面風險（`--name` 撞名、組織關閉 hooks、
    `additionalContext` 上限）—— 它們影響的是已交付的功能。
 3. 若要保住「交接」這條差異化，**補上 §7.2 的磁碟狀態驗證**（交接單自動附 diff stat 與 tasks 進度），

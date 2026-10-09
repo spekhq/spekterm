@@ -39,14 +39,16 @@ observe what these programs do**:
 
   The environment variables `OPENSPEC_TELEMETRY=0` and `DO_NOT_TRACK=1` also work, but only if they are in
   the environment spekterm itself was started with. A value set in `.zshrc` does **not** reach `openspec`
-  when you start spekterm from the desktop menu: spekterm reads your login shell's environment once at
-  startup, gives it to the terminals it opens, and takes only `PATH` from it for its own process.
+  when you start spekterm from the desktop menu (or, on macOS, from the Dock or Finder): spekterm reads
+  your login shell's environment once at startup, gives it to the terminals it opens, and takes only
+  `PATH` from it for its own process.
 - **Your login shell** — runs once when spekterm starts, to read your environment (for example `PATH`).
   Whatever your shell configuration does at login happens then.
 
 ## Where your data is stored
 
-Everything spekterm keeps is on your machine, under `~/.config/Spekterm`:
+Everything spekterm keeps is on your machine, under `~/.config/Spekterm` on Linux and
+`~/Library/Application Support/Spekterm` on macOS:
 
 - your workspace (the folder list, the order, what is pinned) and the side panel's position per folder;
 - your sessions, and the last screen of each shell session so it can be replayed after a restart;
@@ -59,3 +61,9 @@ Everything spekterm keeps is on your machine, under `~/.config/Spekterm`:
 
 spekterm also **reads** Claude Code's own transcripts under `~/.claude/projects` to show the conversation
 view. It never writes there.
+
+## When spekterm runs without a window (macOS)
+
+On macOS, closing the window does not quit spekterm. While it keeps running without a window, the inbox
+keeps receiving deliveries and, if you saved Slack credentials, spekterm keeps checking Slack every five
+minutes. Quit it (`Cmd+Q`) to stop both.

@@ -54,15 +54,19 @@ const unsaved: DirtyEntry[] = [{ folderId: 'f1', folderName: 'api-server', relPa
 function setup(facts: { dirty?: DirtyEntry[]; sessions?: LiveSession[] } = {}) {
   const window = fakeWindow()
   const dialog = onDemandDialog()
+  const quits = { finished: 0 }
   const deps: CloseGuardDeps = {
     dirty: { list: () => facts.dirty ?? [] },
     liveSessions: () => facts.sessions ?? [],
     ask: dialog.ask,
     saveAll: async () => true,
     quit: { quitting: false },
+    onQuitClose: () => {
+      quits.finished += 1
+    },
   }
-  guardWindowClose(window, deps)
-  return { window, dialog, deps }
+  const guarded = guardWindowClose(window, deps)
+  return { window, dialog, deps, guarded, quits }
 }
 
 describe('guardWindowClose', () => {
@@ -152,5 +156,74 @@ describe('guardWindowClose', () => {
     assert.equal(window.closed, false)
     await dialog.answer('saveAll')
     assert.equal(window.closed, true)
+  })
+
+  describe('a close that belongs to a quit finishes the quit', () => {
+    it('the Quit item with nothing to ask closes and finishes the quit', () => {
+      const { window, dialog, guarded, quits } = setup()
+      guarded.closeForQuit()
+      assert.equal(window.closed, true)
+      assert.equal(dialog.prompts.length, 0)
+      assert.equal(quits.finished, 1)
+    })
+
+    it('the Quit item asks about running sessions like a close; confirming finishes the quit', async () => {
+      const { window, dialog, guarded, quits } = setup({ sessions: running })
+      guarded.closeForQuit()
+      assert.equal(window.closed, false)
+      assert.match(dialog.prompts[0].detail, /shell 1/)
+      await dialog.answer('quit')
+      assert.equal(window.closed, true)
+      assert.equal(quits.finished, 1)
+    })
+
+    it('a cancelled Quit leaves nothing behind: a later confirmed close does not quit', async () => {
+      const { window, dialog, guarded, quits } = setup({ sessions: running })
+      guarded.closeForQuit()
+      await dialog.answer('cancel')
+      assert.equal(window.closed, false)
+      window.userClose()
+      await dialog.answer('quit')
+      assert.equal(window.closed, true)
+      assert.equal(quits.finished, 0)
+    })
+
+    it('an OS quit whose unsaved changes are answered finishes the quit', async () => {
+      const { window, dialog, deps, quits } = setup({ dirty: unsaved, sessions: running })
+      deps.quit.quitting = true
+      assert.equal(window.userClose(), false)
+      assert.doesNotMatch(dialog.prompts[0].detail, /shell 1/)
+      await dialog.answer('discard')
+      assert.equal(window.closed, true)
+      assert.equal(quits.finished, 1)
+    })
+
+    it('a quit during the open prompt makes it a quit: answering close finishes it', async () => {
+      const { window, dialog, guarded, quits } = setup({ sessions: running })
+      window.userClose()
+      guarded.closeForQuit()
+      assert.equal(dialog.prompts.length, 1)
+      await dialog.answer('quit')
+      assert.equal(window.closed, true)
+      assert.equal(quits.finished, 1)
+    })
+
+    it('a quit during the open prompt, then cancel: a later confirmed close does not quit', async () => {
+      const { window, dialog, guarded, quits } = setup({ sessions: running })
+      window.userClose()
+      guarded.closeForQuit()
+      await dialog.answer('cancel')
+      window.userClose()
+      await dialog.answer('quit')
+      assert.equal(window.closed, true)
+      assert.equal(quits.finished, 0)
+    })
+
+    it('a plain close with nothing to ask does not quit', () => {
+      const { window, quits } = setup()
+      window.userClose()
+      assert.equal(window.closed, true)
+      assert.equal(quits.finished, 0)
+    })
   })
 })

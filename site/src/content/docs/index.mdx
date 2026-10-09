@@ -8,7 +8,7 @@ hero:
   title: The spec beside the agent
   tagline: spekterm runs Claude Code sessions for each of your repositories in one window, and shows the OpenSpec change each one is working on — proposal, design, tasks, specs — right next to the terminal.
   actions:
-    - text: Download for Linux (AppImage)
+    - text: Download
       link: https://github.com/spekhq/spekterm/releases/latest
       icon: download
     - text: Read the docs
@@ -77,8 +77,8 @@ working on and follows along as the agent writes to disk.
 
 - **Real terminals** — `claude` and your login shell in real ptys, several per repository, git
   worktrees included.
-- **They survive a restart** — `claude` sessions resume their conversation; shells come back in their
-  last directory with the previous screen replayed.
+- **They survive a restart** — `claude` sessions resume their conversation; shells come back with the
+  previous screen replayed, in their last directory (on macOS, in their folder).
 - **Hibernate what you are not using** — by hand or after a day idle, a session ends its process and waits,
   dormant, until you wake it.
 

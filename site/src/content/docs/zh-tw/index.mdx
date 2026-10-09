@@ -8,7 +8,7 @@ hero:
   title: 規格就在 agent 旁邊
   tagline: spekterm 在一個視窗裡為你的每個 repository 跑 Claude Code session，並把每個 session 正在做的 OpenSpec change —— proposal、design、tasks、specs —— 放在終端機旁邊。
   actions:
-    - text: 下載 Linux 版（AppImage）
+    - text: 下載
       link: https://github.com/spekhq/spekterm/releases/latest
       icon: download
     - text: 閱讀文件
@@ -75,7 +75,7 @@ import handoff from '../../../assets/screenshots/zh-TW/handoff.png'
 
 - **真正的終端機** —— `claude` 與你的 login shell 跑在真正的 pty 裡，每個 repository 可以開好幾個，git
   worktree 也行。
-- **重開 app 也還在** —— `claude` session 會接續原本的對話；shell 會回到上次的目錄，並重播先前的畫面。
+- **重開 app 也還在** —— `claude` session 會接續原本的對話；shell 會重播先前的畫面，並回到上次的目錄（macOS 上則回到資料夾的根目錄）。
 - **用不到的就讓它休眠** —— 手動或閒置一天後，session 會結束行程、進入休眠，等你喚醒。
 
 ## 讀 agent 在做什麼，不只是看終端機

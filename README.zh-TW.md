@@ -11,7 +11,8 @@
 
 ![spekterm：Claude Code session 以對話檢視呈現，旁邊的側欄顯示它正在做的 OpenSpec change 的 tasks](site/src/assets/screenshots/zh-TW/hero.png)
 
-> **現況：** 早期版本。目前提供 Linux 版本，macOS 與 Windows 尚未支援。自動更新與程式碼簽章都還沒有。
+> **現況：** 早期版本。目前提供 Linux（x86_64）與 Apple Silicon 的 macOS 版本；Windows 與 Intel Mac
+> 尚未支援。還沒有自動更新，macOS 版也沒有經過 Apple 公證（它以 ad hoc 方式簽章 —— 見 [macOS](#macos)）。
 
 ## 為什麼
 
@@ -37,10 +38,13 @@ spec —— 並且在 agent 寫入磁碟時跟著更新。
 - Linux x64，並安裝 `libfuse2`（執行 AppImage 需要；Ubuntu 22.04 起預設不再安裝）。
   少了它，AppImage 會以 `dlopen(): error loading libfuse.so.2` 失敗；可改為不經 FUSE 執行：
   `./Spekterm-<version>.AppImage --appimage-extract-and-run`。
+- 或是 Apple Silicon 的 macOS 12（Monterey）以上。已在 macOS 13（Ventura）上測試。
 - [Claude Code](https://code.claude.com/docs)（`claude` 在 `PATH` 上），用於 agent session。spekterm
   執行的是真正的 CLI、用你自己的訂閱 —— 從不要求 API key。
 
 ## 安裝
+
+### Linux
 
 從 [Releases 頁面](https://github.com/spekhq/spekterm/releases)下載最新的 `Spekterm-<version>.AppImage`，然後：
 
@@ -48,6 +52,37 @@ spec —— 並且在 agent 寫入磁碟時跟著更新。
 chmod +x Spekterm-<version>.AppImage
 ./Spekterm-<version>.AppImage
 ```
+
+spekterm 的資料放在 `~/.config/Spekterm`。
+
+### macOS
+
+從 [Releases 頁面](https://github.com/spekhq/spekterm/releases)下載最新的 `Spekterm-<version>-arm64.dmg`，
+打開它，把 **Spekterm** 拖進 **應用程式**（Applications）。這就是安裝；macOS 上沒有 `install:desktop`。
+
+- **第一次啟動。** 這個 app 沒有經過公證（那需要付費的 Apple Developer ID）；它以 ad hoc 方式簽章，
+  所以 macOS 會以「來自未識別的開發者」為由擋下它。macOS 14 及更早的版本：在「應用程式」裡按住
+  Control 點一下（或按右鍵）app → **打開** → **打開**；或先試著打開它，再到 **系統設定 → 隱私權與安全性
+  → 強制打開**（Open Anyway）。macOS 15 以後沒有 Control 點一下這條路了：先試著打開它一次，再到
+  **系統設定 → 隱私權與安全性 → 強制打開**，並輸入密碼確認。每安裝一個版本只會發生一次。
+- **「Spekterm 已損毀，無法打開」。** 移除隔離標記，再打開一次：
+  `xattr -dr com.apple.quarantine /Applications/Spekterm.app`。
+- **隱私權提示會掛著 Spekterm 的名字。** session 裡執行的程式所引發的提示，macOS 會算在 spekterm 頭上 ——
+  讀取家目錄底下檔案的 agent，可能引發行事曆、照片、聯絡人、提醒事項、桌面、文件或下載項目的提示。
+  拒絕它們是安全的，除非你有某個 repo 就放在那個受保護的位置（放在「文件」裡的 repo 需要「文件」的取用權限）。
+- **更新。** 每一個建置對 macOS 來說都是新的身分，所以裝了新版之後，macOS 可能會再問一次你先前允許過的
+  權限，包括那些隱私權提示。
+- **資料**放在 `~/Library/Application Support/Spekterm`。
+- **關掉視窗**會結束每個 session（若有 session 在執行，會先問你），但 spekterm 會像「終端機」與 iTerm2
+  那樣繼續在 Dock 裡執行；點 Dock 圖示就會拿回視窗，session 以休眠狀態還原。沒有視窗地執行時，收件匣
+  與 Slack 檢查（若有設定，每五分鐘一次）照常運作。`Cmd+Q` 會像關掉視窗那樣先問；從 Dock 結束、登出
+  或關機則不會問正在執行的 session（仍會問未儲存的檔案）。
+
+macOS 上已知的限制：還原的 shell 會在它的資料夾重新啟動，而不是在它最後的目錄；狀態列不顯示 focused
+session 的工作目錄與 git 狀態；閒置的 shell 永遠不會被自動休眠（手動休眠照常可用）；字型設定只提供系統
+預設的等寬字型；`Ctrl+↑` / `Ctrl+↓` 在 macOS 的預設設定裡被「指揮中心」與「App Exposé」拿走了（到
+系統設定 → 鍵盤 → 鍵盤快速鍵 → 指揮中心 把它們關掉）；沒有 `Cmd+W` —— 關閉 session 用 `Ctrl+Shift+W`。
+見[安裝說明](https://spekterm.com/zh-tw/docs/getting-started/install/#在-macos-上安裝)。
 
 ## 從原始碼安裝
 
@@ -62,6 +97,22 @@ npm run install:desktop                          # → ~/.local/bin ＋ 應用�
 ```
 
 `install:desktop` 可以在 spekterm 開著時重跑，執行中的 app 不受影響。移除用 `npm run uninstall:desktop`。
+
+### 在 macOS 上
+
+建置 macOS 版需要一台 Mac。`npm run dist:mac` 建置一個發佈版本：除非 checkout 是乾淨的發佈 commit
+（`chore(release): <version>`），否則它拒絕執行；接著它跑 `npm ci`、建置、以釘住的 checksum 驗證 Electron
+的壓縮檔，然後打包出 `release/Spekterm-<version>-arm64.dmg`。下載 Electron 壓縮檔需要網路。
+
+```bash
+npm run dist:mac                                   # 在發佈 commit 上 → release/Spekterm-<version>-arm64.dmg
+npm run build && node scripts/package-mac.mjs      # 在其他任何 commit 試建 —— 不是發佈版本
+```
+
+試建的產物不是發佈版本：若有未提交的變更，它的 **設定 → 關於** 會標示出來。
+GitHub 的 Electron 下載太慢時，把 `ELECTRON_MIRROR` 指向鏡像站（例如
+`ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/`）。它對 `npm ci`／`npm install` 與打包都有效，
+而釘住的 checksum 照樣適用。
 
 ## 文件
 

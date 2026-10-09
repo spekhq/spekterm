@@ -404,6 +404,12 @@ try {
   check(results, '第三方授權彙總保留了內嵌第三方原始碼的聲明',
     summary.includes('@license DOMPurify'),
     'monaco-editor 內嵌的 DOMPurify —— 它不是獨立套件，打包後的程式碼裡已沒有這段註解')
+  // Electron's and Chromium's own texts ship beside the binary, not in the summary (`project-license`).
+  // On Linux electron-builder puts them at the root; the macOS bundle needs the `afterPack` hook for it.
+  const electronLicences = ['LICENSE.electron.txt', 'LICENSES.chromium.html']
+  const missingElectron = electronLicences.filter((name) => !appDir || !existsSync(join(appDir, name)))
+  check(results, 'the AppImage root carries Electron\'s and Chromium\'s licence texts',
+    missingElectron.length === 0, `missing: ${missingElectron.join(', ') || 'none'}`)
 
 
   // ── production CSP ────────────────────────────────────────────────────────

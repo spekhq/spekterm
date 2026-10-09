@@ -38,6 +38,7 @@ import { execFileSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { VERSION_FILES, releaseSubject } from './lib/release-files.mjs'
 
 /** 預設為本 repo；測試以第一個引數指向暫存的 git fixture（見檔頭）。 */
 const repoRoot = process.argv[2] ?? dirname(dirname(fileURLToPath(import.meta.url)))
@@ -51,8 +52,6 @@ const repoRoot = process.argv[2] ?? dirname(dirname(fileURLToPath(import.meta.ur
 const LEVELS = ['patch', 'minor', 'major']
 const level = process.env.RELEASE_LEVEL || 'patch'
 
-/** 版本同時記載於這些檔案，而遞增工具會**一併改寫它們** —— 提交範圍必須涵蓋全部。 */
-const VERSION_FILES = ['package.json', 'package-lock.json']
 
 function git(args, { capture = true } = {}) {
   return execFileSync('git', args, {
@@ -114,7 +113,7 @@ const version = JSON.parse(readFileSync(join(repoRoot, 'package.json'), 'utf8'))
 
 try {
   // **`-m` 必須在 `--` 之前** —— 之後的一切都被當成 pathspec（實測：commit 會失敗）。
-  git(['commit', '-m', `chore(release): ${version}`, '--', ...VERSION_FILES], { capture: true })
+  git(['commit', '-m', releaseSubject(version), '--', ...VERSION_FILES], { capture: true })
 } catch {
   fail(`版本已遞增至 ${version}，但提交失敗 —— 未被提交的遞增會在下一次 checkout 時消失，請手動提交`)
 }

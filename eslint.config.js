@@ -97,4 +97,14 @@ export default tseslint.config(
       '@typescript-eslint/no-unused-vars': 'off',
     },
   },
+
+  // electron-builder hooks: CommonJS, because the package is `"type": "module"` and the packager
+  // `require`s its hooks
+  {
+    files: ['scripts/**/*.cjs'],
+    languageOptions: { globals: globals.node, sourceType: 'commonjs' },
+    rules: {
+      '@typescript-eslint/no-require-imports': 'off',
+    },
+  },
 )

@@ -34,14 +34,15 @@ spekterm 會執行你安裝的程式。它們送出什麼由它們自己決定�
   ```
 
   環境變數 `OPENSPEC_TELEMETRY=0` 與 `DO_NOT_TRACK=1` 也可以，但只在它們存在於 spekterm 本身被啟動時的
-  環境裡才有效。寫在 `.zshrc` 裡的值，在你從桌面選單啟動 spekterm 時**不會**傳到 `openspec`：spekterm
+  環境裡才有效。寫在 `.zshrc` 裡的值，在你從桌面選單（或 macOS 上的 Dock、Finder）啟動 spekterm 時**不會**傳到 `openspec`：spekterm
   在啟動時讀一次你的登入 shell（login shell）的環境，交給它開的終端，而它自己的行程只從中取用 `PATH`。
 - **你的登入 shell（login shell）** —— spekterm 啟動時執行一次，用來讀取你的環境（例如 `PATH`）。
   你的 shell 設定在登入時會做的事，那時都會發生。
 
 ## 你的資料存在哪裡
 
-spekterm 保存的一切都在你的機器上，位於 `~/.config/Spekterm`：
+spekterm 保存的一切都在你的機器上，Linux 上位於 `~/.config/Spekterm`，macOS 上位於
+`~/Library/Application Support/Spekterm`：
 
 - 你的 workspace（資料夾清單、順序、置頂了哪些）以及每個資料夾的側欄位置；
 - 你的 session，以及每個 shell session 最後的畫面，重新啟動後用來重播；
@@ -52,3 +53,8 @@ spekterm 保存的一切都在你的機器上，位於 `~/.config/Spekterm`：
   你的檔案的人都讀得到它。
 
 spekterm 也會**讀取** Claude Code 自己位於 `~/.claude/projects` 的對話紀錄，用來呈現對話檢視。它從不寫入那裡。
+
+## spekterm 沒有視窗地執行時（macOS）
+
+在 macOS 上，關掉視窗不會結束 spekterm。它沒有視窗地繼續執行時，收件匣照常接收投遞；若你存了 Slack
+憑證，spekterm 也照樣每五分鐘檢查一次 Slack。要兩者都停下來，就結束它（`Cmd+Q`）。

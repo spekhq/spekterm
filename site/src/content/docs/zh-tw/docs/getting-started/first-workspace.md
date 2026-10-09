@@ -52,16 +52,18 @@ change 還缺 artifact 時，**續寫**會請 focused 的 `claude` session 寫�
 
 - 拖曳資料夾調整順序，或選中一個之後按 `Shift+↑` / `Shift+↓`。
 - 滑過資料夾就能把它置頂，讓它留在最上面。rail 其餘部分捲動時，置頂的資料夾仍然看得到。
-- `Ctrl+↑` / `Ctrl+↓` 用鍵盤在 rail 的項目之間移動選取。
+- `Ctrl+↑` / `Ctrl+↓` 用鍵盤在 rail 的項目之間移動選取。在 macOS 上，「指揮中心」與「App Exposé」預設
+  佔用了這兩個鍵；到 **系統設定 → 鍵盤 → 鍵盤快速鍵 → 指揮中心** 把它們關掉，才能在這裡使用。
 
 ## 關掉再回來
 
 關閉 spekterm 時若還有 session 在執行，它會先問你並列出它們。關閉會結束它們的行程 —— 在 shell 裡
-跑著的 build 或 dev server 會停掉。
+跑著的 build 或 dev server 會停掉。在 macOS 上，關掉視窗會以同樣的方式結束 session，但 spekterm
+會繼續在 Dock 裡執行；點它的 Dock 圖示就會重新打開視窗。
 
 下次打開 spekterm，你的 session 都會回到分頁上，但處於**休眠**：在你按下 **喚醒**（或 session 有
 焦點時按 `Enter`）之前，沒有任何行程在跑。`claude` session 會接回同一段對話；shell 會在它最後的
-目錄重新啟動，先前的畫面呈現在一行 **以上為先前的內容** 之上。細節見
+目錄（macOS 上則是它的資料夾）重新啟動，先前的畫面呈現在一行 **以上為先前的內容** 之上。細節見
 [終端與 session](/zh-tw/docs/using/terminals-and-sessions/)。
 
 ## 接下來

@@ -238,6 +238,20 @@
     "invalidConversationId": "The conversation id is not a valid UUID",
     "spawnFailed": "Failed to allocate a pty: {{reason}}"
   },
+  "appMenu": {
+    "about": "About {{name}}",
+    "hide": "Hide {{name}}",
+    "hideOthers": "Hide Others",
+    "showAll": "Show All",
+    "quit": "Quit {{name}}",
+    "edit": "Edit",
+    "undo": "Undo",
+    "redo": "Redo",
+    "cut": "Cut",
+    "copy": "Copy",
+    "paste": "Paste",
+    "selectAll": "Select All"
+  },
   "unsaved": {
     "message_one": "{{count}} file has unsaved changes",
     "message_other": "{{count}} files have unsaved changes",
@@ -255,9 +269,15 @@
     "more_one": "…and {{count}} more session",
     "more_other": "…and {{count}} more sessions",
     "consequence": "Closing spekterm ends them. Running commands and any reply an agent is writing are lost; claude sessions resume their conversation and shells restart in their last directory when you wake them.",
+    "consequenceFolder": "Closing spekterm ends them. Running commands and any reply an agent is writing are lost; claude sessions resume their conversation and shells restart in their folder when you wake them.",
+    "consequenceWindow": "Closing the window ends them. Running commands and any reply an agent is writing are lost; claude sessions resume their conversation and shells restart in their last directory when you wake them.",
+    "consequenceWindowFolder": "Closing the window ends them. Running commands and any reply an agent is writing are lost; claude sessions resume their conversation and shells restart in their folder when you wake them.",
     "quit": "Quit",
     "saveAllAndQuit": "Save All and Quit",
     "quitWithoutSaving": "Quit Without Saving",
+    "closeWindow": "Close Window",
+    "saveAllAndClose": "Save All and Close",
+    "closeWithoutSaving": "Close Without Saving",
     "cancel": "Cancel"
   },
   "sessions": {

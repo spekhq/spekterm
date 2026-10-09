@@ -1,7 +1,7 @@
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { app, BrowserWindow, Menu, session } from 'electron'
-import { DEFAULT_LANGUAGE, resolveInitialLanguage, setLanguage } from '@shared/i18n'
+import { DEFAULT_LANGUAGE, i18n, resolveInitialLanguage, setLanguage } from '@shared/i18n'
 import { applyContentSecurityPolicy } from './content-security-policy'
 import { DirtyStateStore } from './dirty-state'
 import { registerAppHandlers } from './ipc/app'
@@ -20,7 +20,10 @@ import { registerShellHandlers } from './ipc/shell'
 import { currentRelationsWorld, liveSessionsOf, onPtyChange, registerTerminalHandlers, runningAgents } from './ipc/terminal'
 import { applyNavigationGuards } from './navigation'
 import { formatScanSummary, scanRepo } from './openspec'
-import { type AskClose, type QuitState, guardWindowClose } from './close-guard'
+import { type AskClose, type GuardedWindow, type QuitState, guardWindowClose } from './close-guard'
+import { applicationMenuTemplate } from './app-menu'
+import { ptyCwdReadable } from './pty-cwd'
+import { type WindowPresence, createWindowPresence } from './window-presence'
 import { nativeCloseDialog, requestSaveAll } from './close-dialog'
 import { createCloseDialogStub, stubCloseRoot } from './close-dialog-stub'
 import type { FolderLookup } from './workspace-store'
@@ -91,14 +94,39 @@ interface WindowDeps {
   sessions: SessionStore
   /** The acceptance stand-in for the native close dialog; `undefined` = the real one. */
   closeAsk?: AskClose
+  /** Told when a window's renderer goes away (destroyed or reloaded), so it must say it is ready again. */
+  presence?: WindowPresence
 }
 
-function createWindow({ dirty, store, sessions, closeAsk }: WindowDeps): BrowserWindow {
-  // 完全移除 menu —— 這個 app 不定義任何 menu 內容，一條空的 menu bar 只會擋住畫面。
-  // **不是 `autoHideMenuBar`**（那只是平時隱藏、按 `Alt` 仍浮出）：要的是按 `Alt` 什麼都不發生
-  //（design D2）。setApplicationMenu 是 app 層的，設一次即涵蓋整個應用程式。
-  Menu.setApplicationMenu(null)
+/** Each live window's guard, by `webContents.id` — the macOS Quit item asks it to close for a quit. */
+const guardedWindows = new Map<number, GuardedWindow>()
 
+/** The live window, if any. Looked up each time: after close → activate, a held reference is stale. */
+function liveWindow(): BrowserWindow | undefined {
+  return BrowserWindow.getAllWindows().find((candidate) => !candidate.isDestroyed())
+}
+
+/**
+ * The application menu (`app-menu.ts`): none on Linux and Windows, the minimal one on macOS. Set once
+ * for the process — **not per window**: a menu set in `createWindow` would be reset by the second window
+ * that macOS opens after the first one was closed. Rebuilt when the UI language changes, because the
+ * system draws it and its labels come from the dictionaries.
+ */
+function applyApplicationMenu(): void {
+  const template = applicationMenuTemplate({
+    platform: process.platform,
+    appName: app.getName(),
+    onQuit: () => {
+      const window = liveWindow()
+      const guarded = window ? guardedWindows.get(window.webContents.id) : undefined
+      if (guarded) guarded.closeForQuit()
+      else app.quit()
+    },
+  })
+  Menu.setApplicationMenu(template ? Menu.buildFromTemplate(template) : null)
+}
+
+function createWindow({ dirty, store, sessions, closeAsk, presence }: WindowDeps): BrowserWindow {
   const window = new BrowserWindow({
     width: 1280,
     height: 800,
@@ -116,19 +144,34 @@ function createWindow({ dirty, store, sessions, closeAsk }: WindowDeps): Browser
   // 在載入任何內容之前掛上。renderer 從第一幀起就會渲染使用者 repo 裡的不受信任內容。
   applyNavigationGuards(window.webContents)
   // The one close handler: unsaved changes and running sessions, in one dialog (`close-guard.ts`).
-  guardWindowClose(window, {
-    dirty,
-    liveSessions: (contentsId) => liveSessionsOf(contentsId, store, sessions),
-    ask: closeAsk ?? nativeCloseDialog(window),
-    saveAll: () => requestSaveAll(window),
-    quit: quitState,
-  })
-
   const contentsId = window.webContents.id
+  guardedWindows.set(
+    contentsId,
+    guardWindowClose(window, {
+      dirty,
+      liveSessions: (id) => liveSessionsOf(id, store, sessions),
+      ask: closeAsk ?? nativeCloseDialog(window),
+      saveAll: () => requestSaveAll(window),
+      quit: quitState,
+      // A close that belongs to a quit finishes the quit once the window is gone — on macOS closing the
+      // window alone leaves the application running (`close-guard.ts`).
+      onQuitClose: () => window.once('closed', () => app.quit()),
+      closeQuitsApp: process.platform !== 'darwin',
+      shellsRestartIn: ptyCwdReadable() ? 'lastDirectory' : 'folder',
+    }),
+  )
+
   // 重新載入不會銷毀 webContents，但新頁面沒有任何未存的變更 —— 舊快照必須作廢，
   // 否則關閉時會對著一份不存在的 dirty 集合發問（與 watcher 的釋放同源）。
-  window.webContents.on('did-navigate', () => dirty.release(contentsId))
-  window.webContents.once('destroyed', () => dirty.release(contentsId))
+  window.webContents.on('did-navigate', () => {
+    dirty.release(contentsId)
+    presence?.rendererGone(contentsId)
+  })
+  window.webContents.once('destroyed', () => {
+    dirty.release(contentsId)
+    presence?.rendererGone(contentsId)
+    guardedWindows.delete(contentsId)
+  })
 
   window.on('ready-to-show', () => {
     window.show()
@@ -208,7 +251,7 @@ const DESKTOP_ENTRY_NAME = 'spekterm.desktop'
  * 之後會指向一個已銷毀的物件。
  */
 function bringToFront(): void {
-  const window = BrowserWindow.getAllWindows().find((candidate) => !candidate.isDestroyed())
+  const window = liveWindow()
   if (!window) return
   if (window.isMinimized()) window.restore()
   window.show()
@@ -382,7 +425,18 @@ void app.whenReady().then(async () => {
   registerFsHandlers(store)
   registerOpenSpecHandlers(store)
   registerShellHandlers()
-  registerAppHandlers(dirty)
+  // Acting on the window from outside it (`window-presence.ts`). Created here because the renderer-ready
+  // IPC is registered here; it only creates a window later, once `windowDeps` below is set.
+  let windowDeps: WindowDeps | null = null
+  const presence = createWindowPresence({
+    existing: () => liveWindow()?.webContents.id ?? null,
+    create: () => {
+      if (!windowDeps) throw new Error('a window was requested before the window dependencies were set')
+      return createWindow(windowDeps).webContents.id
+    },
+    bringToFront,
+  })
+  registerAppHandlers(dirty, (contentsId) => presence.rendererReady(contentsId))
   registerConversationHandlers()
   registerTerminalHandlers(store, sessionStore, preferencesStore)
   registerClipboardHandlers()
@@ -454,7 +508,12 @@ void app.whenReady().then(async () => {
    * session，而**那則失敗從這條通道上消失**。
    */
   notifyBackend.onActivate((keys) => {
-    bringToFront()
+    // On macOS there may be no window at all (closing it leaves the application running): open one and
+    // act once its renderer can hear — otherwise the click does nothing (`window-presence.ts`).
+    void presence.ensure().then(() => actOnNotification(keys))
+  })
+
+  const actOnNotification = (keys: readonly { adapter: string; id: string }[]): void => {
     // **完成通知**（`handoff-completion`）：帶使用者去那個子 session 的交接單。它不是 intake，
     // 不查收件匣；session 已不存在時 renderer 那一側是無操作。
     if (keys.length === 1 && keys[0].adapter === COMPLETION_ADAPTER) {
@@ -470,7 +529,7 @@ void app.whenReady().then(async () => {
     // （實測三次有一次）。renderer 那側已經有一道「找不到就什麼都不做」，那才是對的位置。
     if (sessionId) focusSession?.(sessionId)
     else openInbox?.()
-  })
+  }
 
   const insights = createInsightsService({
     projectsDir: () => resolveProjectsDir(),
@@ -499,7 +558,11 @@ void app.whenReady().then(async () => {
       }).ask
     : undefined
 
-  createWindow({ dirty, store, sessions: sessionStore, closeAsk })
+  applyApplicationMenu()
+  i18n.on('languageChanged', applyApplicationMenu)
+
+  windowDeps = { dirty, store, sessions: sessionStore, closeAsk, presence }
+  createWindow(windowDeps)
 
   /**
    * 檔案落點：**mkdir → 建立監看並等它就緒 → 掃描既有內容**。
@@ -649,10 +712,10 @@ void app.whenReady().then(async () => {
     void logScanSummary()
   }
 
+  // macOS: activating the application with no window (the Dock icon, opening it again) reopens it; the
+  // renderer restores the sessions as dormant, as after a restart (`workspace-app-shell`).
   app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
-      createWindow({ dirty, store, sessions: sessionStore, closeAsk })
-    }
+    if (!liveWindow() && windowDeps) createWindow(windowDeps)
   })
 })
 

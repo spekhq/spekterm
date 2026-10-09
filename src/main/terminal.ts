@@ -6,6 +6,7 @@ import { clearAgentStatus, prepareInjection } from './agent-status'
 import { clearAgentEvents, prepareEventInjection } from './agent-events'
 import { type Injection, type InjectionContribution, composeInjection } from './agent-injection'
 import { isWithin } from './fs-boundary'
+import { readPtyCwd } from './pty-cwd'
 import { type FileIdentity, type ShellFacts, fileIdentity, readShellFacts } from './hibernation-policy'
 import { isUuid } from './session-store'
 import { getUserEnv, whenUserEnvReady } from './user-env'
@@ -290,23 +291,6 @@ interface Session {
    * whose process no longer matches has replaced itself (`exec vim`) and never qualifies as idle.
    */
   shellIdentity: FileIdentity | null
-}
-
-/**
- * pty 當下的工作目錄。
- *
- * **讀 `/proc/<pid>/cwd` 這個 symlink，不 spawn 任何外部程式**（與 `git-branch` 讀 `.git/HEAD`
- * 同一條紀律）。這是 Linux-only：macOS／Windows 沒有 `/proc`，於是回 `undefined` —— 那些平台上
- * shell 一律重生於 folder 根目錄，**優雅降級，不會壞**（不去 spawn `lsof`：慢，且違反上面那條）。
- *
- * pid 是 login shell 的 pid，它的 cwd 就是使用者 `cd` 到的地方（前景有子行程時也不受影響）。
- */
-function readPtyCwd(pid: number): string | undefined {
-  try {
-    return fs.readlinkSync(`/proc/${pid}/cwd`)
-  } catch {
-    return undefined
-  }
 }
 
 /**

@@ -69,3 +69,42 @@ export async function quitAndWait(child, { signal = 'SIGTERM', timeoutMs = QUIT_
   await Promise.race([exited, sleep(REAP_GRACE_MS, false)])
   return { escalated: true }
 }
+
+/**
+ * `quitAndWait` for a process that is not this script's child — an app started through macOS `open`,
+ * which hands the launch to LaunchServices and leaves no child handle. Same rules: a signal, a bounded
+ * wait for the process to be gone, then `SIGKILL`.
+ *
+ * @param {number} pid
+ * @param {{ signal?: NodeJS.Signals, timeoutMs?: number }} [options]
+ * @returns {Promise<{ escalated: boolean }>}
+ */
+export async function quitPidAndWait(pid, { signal = 'SIGTERM', timeoutMs = QUIT_TIMEOUT_MS } = {}) {
+  const alive = () => {
+    try {
+      process.kill(pid, 0)
+      return true
+    } catch {
+      return false
+    }
+  }
+  if (!alive()) return { escalated: false }
+  process.kill(pid, signal)
+  const { pollFor } = await import('./instrument.mjs')
+  const gone = await pollFor({
+    read: () => !alive(),
+    settled: (value) => value === true,
+    timeoutMs,
+    interval: 100,
+    label: `pid ${pid} to exit after ${signal}`,
+  })
+  if (gone) return { escalated: false }
+  console.log(`  ⏱ pid ${pid} did not exit within ${timeoutMs / 1000} s of ${signal}; sending SIGKILL`)
+  try {
+    process.kill(pid, 'SIGKILL')
+  } catch {
+    // already gone
+  }
+  await sleep(REAP_GRACE_MS)
+  return { escalated: true }
+}

@@ -11,7 +11,9 @@
  *   spek pages the title suffix and og:site_name (also on the not-found page where it applies).
  * Content part — about what specific pages say:
  *   both landing pages' required elements (read from the main content without the footer, which holds
- *   the disclaimer, and without the header, which holds the product switch); no "Linux only" phrase;
+ *   the disclaimer, and without the header, which holds the product switch); no forbidden platform
+ *   phrase ("Linux only", "Linux and macOS only", "macOS is not supported", a one-platform download
+ *   button); no download link on a landing page or documentation home that names one file format alone;
  *   spekterm's platform status on no spek page; every required topic of both products has a page; both
  *   data and network pages name what the spec lists; no page uses frontmatter prev / next (the sidebar
  *   filter recomputes pagination without them).
@@ -86,6 +88,17 @@ function hasWord(text, keyword) {
 }
 
 const under = (href, base) => href === base || href.startsWith(`${base}/`)
+
+/** Lower case with whitespace runs collapsed, as `textOf` collapses a page's text. */
+const normalise = (text) => text.replace(/\s+/g, ' ').trim().toLowerCase()
+
+/** The formats among `formats` that `text` names, as words, case-insensitively. */
+function formatsNamed(text, formats) {
+  return formats.filter((format) => {
+    const escaped = format.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    return new RegExp(`(?<![A-Za-z0-9_])${escaped}(?![A-Za-z0-9_])`, 'i').test(text)
+  })
+}
 
 /** Content files whose frontmatter sets prev / next. */
 function frontmatterPagination(sources) {
@@ -242,11 +255,12 @@ export function checkContent(dist, { plan, strings, versions, sources, structura
   if (structuralOnly) return problems
 
   // --- content -------------------------------------------------------------------------------
-  const phrases = plan.linuxOnlyPhrases.map((phrase) => phrase.toLowerCase())
+  const phrases = plan.forbiddenPhrases.map(normalise)
   for (const { path, file } of everyDocument) {
     if (!existsSync(file)) continue
     const text = textOf(parse(readFileSync(file, 'utf8'), HTML_OPTIONS))
-    for (const phrase of phrases) if (text.toLowerCase().includes(phrase)) problems.push(`${path}: says "${phrase}"`)
+    const lower = normalise(text)
+    for (const phrase of phrases) if (lower.includes(phrase)) problems.push(`${path}: says "${phrase}"`)
     if (path !== '404.html' && productOf(path) === 'spek') {
       const platforms = strings[localeOf(path).lang]?.[plan.landing.platformsString]
       if (platforms && text.includes(platforms)) problems.push(`${path}: states spekterm's platform status on a spek page`)
@@ -272,6 +286,18 @@ export function checkContent(dist, { plan, strings, versions, sources, structura
       links: main.querySelectorAll('a[href]').map((a) => a.getAttribute('href')),
       text: textOf(main),
       images: main.querySelectorAll('img').map((img) => (img.getAttribute('src') ?? '').split('/').pop()),
+    }
+  }
+
+  // A download call to action does not name one platform's file format as if it were the only download.
+  for (const path of ['/', '/zh-tw/', '/docs/', '/zh-tw/docs/']) {
+    const file = htmlFileOf(dist, path)
+    if (!existsSync(file)) continue // reported above (landing page, documentation home)
+    const main = mainContent(parse(readFileSync(file, 'utf8'), HTML_OPTIONS))
+    for (const a of main.querySelectorAll('a[href]')) {
+      if (!RELEASES.test(a.getAttribute('href'))) continue
+      const named = formatsNamed(textOf(a), plan.downloadFormats)
+      if (named.length === 1) problems.push(`${path}: the download link "${textOf(a)}" names ${named[0]} as the only download`)
     }
   }
 
@@ -335,7 +361,8 @@ const PLAN = {
   dataAndNetwork: 'docs/net',
   landing: { heroScreenshot: 'hero', platformsString: 'landing.platforms' },
   dataAndNetworkKeywords: { en: ['Slack', 'login shell'], 'zh-TW': ['Slack', 'login shell'] },
-  linuxOnlyPhrases: ['Linux only', '只支援 Linux'],
+  forbiddenPhrases: ['Linux only', '只支援 Linux', 'macOS is not supported', '尚未支援 macOS', 'Linux and macOS only', 'Download for Linux (AppImage)'],
+  downloadFormats: ['AppImage', 'dmg'],
   spek: {
     topics: ['spek/docs/x', 'spek/docs/net'],
     dataAndNetwork: 'spek/docs/net',
@@ -344,8 +371,8 @@ const PLAN = {
   },
 }
 const STRINGS = {
-  en: { 'landing.platforms': 'Linux builds today.', 'social.imageAlt': 'spekterm card', 'social.spekImageAlt': 'spek card' },
-  'zh-TW': { 'landing.platforms': '目前提供 Linux 版本。', 'social.imageAlt': 'spekterm 卡片', 'social.spekImageAlt': 'spek 卡片' },
+  en: { 'landing.platforms': 'Builds for Linux and for macOS on Apple Silicon.', 'social.imageAlt': 'spekterm card', 'social.spekImageAlt': 'spek card' },
+  'zh-TW': { 'landing.platforms': '目前提供 Linux 與 Apple Silicon 的 macOS 版本。', 'social.imageAlt': 'spekterm 卡片', 'social.spekImageAlt': 'spek 卡片' },
 }
 const VERSIONS = ['0.2.1', '0.2.2']
 const PAGES = [
@@ -495,7 +522,13 @@ function runSelfTest() {
     cases: [
       { label: 'a "Linux only" phrase', files: fakeSite({ 'docs/a/index.html': fakePage('/docs/a/', { main: '<p>spekterm is LINUX ONLY.</p>' }) }), expect: 'says "linux only"' },
       { label: 'a Chinese "Linux only" phrase', files: fakeSite({ 'zh-tw/docs/a/index.html': fakePage('/zh-tw/docs/a/', { main: '<p>目前只支援 Linux。</p>' }) }), expect: 'says "只支援 linux"' },
-      { label: "spekterm's platform status on a spek page", files: fakeSite({ 'spek/index.html': fakePage('/spek/', { main: `${spekLandingMain('en')}<p>Linux builds today.</p>` }) }), expect: "/spek/: states spekterm's platform status" },
+      { label: 'a "macOS is not supported" phrase across a line break', files: fakeSite({ 'docs/a/index.html': fakePage('/docs/a/', { main: '<p>macOS is not\n  supported yet.</p>' }) }), expect: 'says "macos is not supported"' },
+      { label: 'a Chinese "macOS unsupported" phrase', files: fakeSite({ 'zh-tw/docs/a/index.html': fakePage('/zh-tw/docs/a/', { main: '<p>目前尚未支援 macOS。</p>' }) }), expect: 'says "尚未支援 macos"' },
+      { label: 'a "Linux and macOS only" phrase', files: fakeSite({ 'docs/a/index.html': fakePage('/docs/a/', { main: '<p>spekterm is for Linux and macOS only.</p>' }) }), expect: 'says "linux and macos only"' },
+      { label: 'a one-platform download button', files: fakeSite({ 'docs/a/index.html': fakePage('/docs/a/', { main: '<a href="https://github.com/spekhq/spekterm/releases/latest">Download for Linux (AppImage)</a>' }) }), expect: 'says "download for linux (appimage)"' },
+      { label: 'a landing download link naming only the dmg', files: fakeSite({ 'index.html': fakePage('/', { main: `${landingMain('en')}<a href="${LATEST_RELEASE}">Get the DMG</a>` }) }), expect: '/: the download link "Get the DMG" names dmg as the only download' },
+      { label: 'a documentation-home download link naming only the AppImage', files: fakeSite({ 'zh-tw/docs/index.html': fakePage('/zh-tw/docs/', { main: `<a href="${LATEST_RELEASE}">下載 AppImage</a>` }) }), expect: '/zh-tw/docs/: the download link "下載 AppImage" names AppImage as the only download' },
+      { label: "spekterm's platform status on a spek page", files: fakeSite({ 'spek/index.html': fakePage('/spek/', { main: `${spekLandingMain('en')}<p>Builds for Linux and for macOS on Apple Silicon.</p>` }) }), expect: "/spek/: states spekterm's platform status" },
       { label: 'a missing topic', files: fakeSite({}, { omit: ['/zh-tw/docs/a/'] }), expect: '/zh-tw/docs/a/ is missing' },
       { label: 'a missing spek topic', files: fakeSite({}, { omit: ['/spek/docs/x/'] }), expect: '/spek/docs/x/ is missing' },
       { label: 'a landing page without the hero screenshot', files: fakeSite({ 'index.html': fakePage('/', { main: landingMain('en', { hero: false }) }) }), expect: 'no hero screenshot' },

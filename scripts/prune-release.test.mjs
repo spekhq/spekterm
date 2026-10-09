@@ -84,3 +84,26 @@ test('不刪除輸出目錄中的其他內容', () => {
 test('尚未打包過時不拋錯', () => {
   assert.deepEqual(pruneRelease(join(tmpdir(), 'spekterm-does-not-exist-' + process.pid)), [])
 })
+
+test('each kind of artifact keeps its own two, and a dmg takes its blockmap with it', () => {
+  const dmgs = ['0.1.8', '0.1.9', '0.1.10'].flatMap((v) => [
+    `Spekterm-${v}-arm64.dmg`,
+    `Spekterm-${v}-arm64.dmg.blockmap`,
+  ])
+  const appImages = ['0.1.8', '0.1.9', '0.1.10'].map((v) => `Spekterm-${v}.AppImage`)
+  const { dir, cleanup } = makeRelease([...dmgs, ...appImages, 'notes.txt'])
+  try {
+    pruneRelease(dir)
+    assert.deepEqual(readdirSync(dir).sort(), [
+      'Spekterm-0.1.10-arm64.dmg',
+      'Spekterm-0.1.10-arm64.dmg.blockmap',
+      'Spekterm-0.1.10.AppImage',
+      'Spekterm-0.1.9-arm64.dmg',
+      'Spekterm-0.1.9-arm64.dmg.blockmap',
+      'Spekterm-0.1.9.AppImage',
+      'notes.txt',
+    ])
+  } finally {
+    cleanup()
+  }
+})

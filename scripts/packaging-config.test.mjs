@@ -180,7 +180,12 @@ test('dist:linux 掛上換版與產物清理', () => {
  * 這條守的是「日後有人設定了它、卻漏掉版本」。
  */
 test('artifactName 若被設定則含版本', () => {
-  const names = [pkg.build?.artifactName, pkg.build?.linux?.artifactName].filter(Boolean)
+  const names = [
+    pkg.build?.artifactName,
+    pkg.build?.linux?.artifactName,
+    pkg.build?.mac?.artifactName,
+    pkg.build?.dmg?.artifactName,
+  ].filter(Boolean)
   for (const name of names) {
     assert.match(name, /\$\{version\}/, `artifactName 未含版本：${name}`)
   }
@@ -207,4 +212,143 @@ test('README 記載桌面整合的安裝與移除', () => {
   const readme = readFileSync(join(repoRoot, 'README.md'), 'utf8')
   assert.match(readme, /install:desktop/, 'README 未記載安裝指令')
   assert.match(readme, /uninstall:desktop/, 'README 未記載移除方式')
+})
+
+// ── macOS (`macos-dmg-packaging`) ─────────────────────────────────────────────
+//
+// Each check is a function of the package object, so that its control can hand it a mutated copy and see
+// it fail — a guard that was never seen red is not known to guard anything.
+
+/** The macOS target: a dmg for arm64, ad-hoc signed, without the hardened runtime (design P1). */
+function macTargetProblems(build) {
+  const mac = build?.mac ?? {}
+  const problems = []
+  const targets = (mac.target ?? []).map((t) => (typeof t === 'string' ? { target: t } : t))
+  const dmg = targets.find((t) => t.target === 'dmg')
+  if (!dmg) problems.push('build.mac.target has no dmg')
+  else if (JSON.stringify(dmg.arch) !== JSON.stringify(['arm64'])) problems.push(`dmg arch is ${JSON.stringify(dmg.arch)}`)
+  // `undefined` would make electron-builder search the keychain and sign nothing when it finds nothing.
+  if (mac.identity !== '-') problems.push(`build.mac.identity is ${JSON.stringify(mac.identity)}, not "-" (ad hoc)`)
+  if (mac.hardenedRuntime !== false) problems.push('build.mac.hardenedRuntime is not false')
+  return problems
+}
+
+/**
+ * Nothing may land at the top of the bundle's `Contents/`: a file there makes `codesign` fail the build
+ * (measured). electron-builder adds a platform's file set to the top-level one, so a top-level `extraFiles`
+ * reaches macOS too.
+ */
+function contentsTopProblems(build) {
+  const problems = []
+  if ((build?.extraFiles ?? []).length > 0) {
+    problems.push('top-level build.extraFiles reaches the macOS bundle\'s Contents/ and breaks signing')
+  }
+  if ((build?.mac?.extraFiles ?? []).length > 0) {
+    problems.push('build.mac.extraFiles lands in the bundle\'s Contents/ and breaks signing')
+  }
+  return problems
+}
+
+/** `dist:mac`: release check first, packaging only through the checksum step, pruning last, no bump. */
+function distMacProblems(scripts) {
+  const dist = scripts?.['dist:mac'] ?? ''
+  const problems = []
+  const at = (needle) => dist.indexOf(needle)
+  if (at('release-check') < 0) problems.push('dist:mac does not run release-check')
+  if (at('package-mac') < 0) problems.push('dist:mac does not package through package-mac')
+  if (at('prune-release') < 0) problems.push('dist:mac does not prune')
+  if (/electron-builder/.test(dist)) problems.push('dist:mac calls electron-builder directly, around the checksum step')
+  if (/release-bump/.test(dist)) problems.push('dist:mac bumps the version')
+  if (at('release-check') > at('npm run build')) problems.push('the release check must come before the build')
+  if (at('prune-release') < at('package-mac')) problems.push('pruning must come after packaging')
+  return problems
+}
+
+test('the macOS target is a sealed ad-hoc dmg for arm64', () => {
+  assert.deepEqual(macTargetProblems(pkg.build), [])
+})
+
+test('nothing is placed at the top of the macOS bundle\'s Contents/', () => {
+  assert.deepEqual(contentsTopProblems(pkg.build), [])
+})
+
+test('dist:mac checks the release, packages through the checksum step, and prunes', () => {
+  assert.deepEqual(distMacProblems(pkg.scripts), [])
+})
+
+test('control: each macOS check catches its mutation', () => {
+  const mutate = (path, value) => {
+    const copy = structuredClone(pkg)
+    let node = copy
+    for (const key of path.slice(0, -1)) node = node[key]
+    node[path.at(-1)] = value
+    return copy
+  }
+  assert.notDeepEqual(macTargetProblems(mutate(['build', 'mac', 'identity'], undefined).build), [])
+  assert.notDeepEqual(macTargetProblems(mutate(['build', 'mac', 'hardenedRuntime'], true).build), [])
+  assert.notDeepEqual(macTargetProblems(mutate(['build', 'mac', 'target'], ['zip']).build), [])
+  assert.match(
+    contentsTopProblems(mutate(['build', 'extraFiles'], [{ from: 'LICENSE', to: 'LICENSE' }]).build).join(),
+    /Contents\//,
+  )
+  assert.notDeepEqual(contentsTopProblems(mutate(['build', 'mac', 'extraFiles'], ['LICENSE']).build), [])
+  for (const dist of [
+    'node scripts/release-check.mjs && npm run build && electron-builder --mac && node scripts/prune-release.mjs',
+    'npm run build && node scripts/package-mac.mjs && node scripts/prune-release.mjs',
+    'node scripts/release-bump.mjs && node scripts/release-check.mjs && npm run build && node scripts/package-mac.mjs && node scripts/prune-release.mjs',
+    'node scripts/release-check.mjs && npm run build && node scripts/prune-release.mjs && node scripts/package-mac.mjs',
+  ]) {
+    assert.notDeepEqual(distMacProblems({ 'dist:mac': dist }), [], dist)
+  }
+})
+
+/**
+ * `@electron/get` is declared so that `package-mac.mjs` does not rest on npm hoisting, and it must be the
+ * copy `electron` itself uses — `electron` declares a range, so the copy is read from where `electron`
+ * resolves it, not from the hoisted root (which a different version could occupy).
+ */
+test('@electron/get is declared at the version electron uses', () => {
+  const declared = pkg.devDependencies?.['@electron/get']
+  const nested = join(repoRoot, 'node_modules', 'electron', 'node_modules', '@electron', 'get', 'package.json')
+  const hoisted = join(repoRoot, 'node_modules', '@electron', 'get', 'package.json')
+  const used = JSON.parse(readFileSync(existsSync(nested) ? nested : hoisted, 'utf8')).version
+  assert.equal(declared, used, `declared ${declared}, electron uses ${used}`)
+})
+
+/**
+ * desktop-packaging: "The documentation states how to install on macOS and what is limited there", and
+ * the README's macOS build. Each fact is one that a user, or the next person building on the Mac, cannot
+ * guess: the minimum version, the escape when macOS says "damaged", where the data lives, and how a
+ * release (and a trial build) is made.
+ *
+ * Its reach is the presence of those facts, not their wording; the prose is reviewed by hand.
+ */
+const MAC_INSTALL_FACTS = [/macOS 12/, /xattr -dr com\.apple\.quarantine/, /Library\/Application Support\/Spekterm/]
+const MAC_BUILD_FACTS = [/dist:mac/, /node scripts\/package-mac\.mjs/, /ELECTRON_MIRROR/]
+
+function missingFacts(text, facts) {
+  return facts.filter((fact) => !fact.test(text)).map(String)
+}
+
+test('the README and the install page state the macOS install facts, in both languages', () => {
+  const pages = [
+    'README.md',
+    'README.zh-TW.md',
+    'site/src/content/docs/docs/getting-started/install.md',
+    'site/src/content/docs/zh-tw/docs/getting-started/install.md',
+  ]
+  for (const page of pages) {
+    assert.deepEqual(missingFacts(readFileSync(join(repoRoot, page), 'utf8'), MAC_INSTALL_FACTS), [], page)
+  }
+})
+
+test('the README states how to build for macOS, in both languages', () => {
+  for (const page of ['README.md', 'README.zh-TW.md']) {
+    assert.deepEqual(missingFacts(readFileSync(join(repoRoot, page), 'utf8'), MAC_BUILD_FACTS), [], page)
+  }
+})
+
+test('control: a page without the facts is caught', () => {
+  assert.equal(missingFacts('Download the dmg and drag it to Applications.', MAC_INSTALL_FACTS).length, 3)
+  assert.equal(missingFacts('npm run dist:linux', MAC_BUILD_FACTS).length, 3)
 })

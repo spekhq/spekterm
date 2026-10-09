@@ -15,7 +15,8 @@ writes for the agent to read stays in English.
 
 ## Terminal
 
-- **Font family** — any monospace font installed on your system; empty means the system default.
+- **Font family** — any monospace font installed on your system; empty means the system default. On
+  macOS the list offers only the system's default monospace font.
 - **Font size** and **Line height** — empty means the default.
 - **GPU acceleration** — draws the terminal on the GPU. Turn it off if the terminal renders incorrectly on
   your machine.
@@ -30,7 +31,8 @@ bar. Your own Claude Code status line keeps working. It applies to sessions star
 
 Ends the process of a session that has been idle for the chosen time — Off, 4 hours, 24 hours (the
 default), 3 days, or 7 days — and keeps the session in the workspace so you can wake it later. The
-session on screen, an agent that is working, and a shell that is running a job are never hibernated. See
+session on screen, an agent that is working, and a shell that is running a job are never hibernated. On
+macOS, idle shells are never hibernated automatically. See
 [Terminals and sessions](/docs/using/terminals-and-sessions/).
 
 ## About

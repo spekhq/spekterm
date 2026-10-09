@@ -1,5 +1,5 @@
 {
-  "$comment": "What check-content requires of the built site (project-website). topics: documentation pages that must exist in both languages (slugs without locale prefix). landing: the hero screenshot's file name stem, and the i18n key of the platform-status sentence the landing page must show verbatim. dataAndNetworkKeywords: words the data and network page must contain per language. linuxOnlyPhrases: matched case-insensitively against every page. spek: the same for spek's pages — topics, its data and network page and keywords (matched as words), and the links spek's landing page must carry in its main content.",
+  "$comment": "What check-content requires of the built site (project-website). topics: documentation pages that must exist in both languages (slugs without locale prefix). landing: the hero screenshot's file name stem, and the i18n key of the platform-status sentence the landing page must show verbatim. dataAndNetworkKeywords: words the data and network page must contain per language. forbiddenPhrases: platform statements no page may make (Linux only; Linux and macOS only; macOS unsupported; a download call to action for one platform's format), matched case-insensitively and with whitespace normalised against every page. downloadFormats: file formats a download link to the latest release on a landing page or documentation home must not name alone. spek: the same for spek's pages — topics, its data and network page and keywords (matched as words), and the links spek's landing page must carry in its main content.",
   "topics": [
     "docs/getting-started/install",
     "docs/getting-started/first-workspace",
@@ -38,12 +38,28 @@
       "login shell"
     ]
   },
-  "linuxOnlyPhrases": [
+  "forbiddenPhrases": [
     "Linux only",
     "Linux-only",
     "只支援 Linux",
     "僅支援 Linux",
-    "Linux 專用"
+    "Linux 專用",
+    "macOS and Windows are not supported",
+    "macOS is not supported",
+    "A macOS build is tracked",
+    "macOS 與 Windows 尚未支援",
+    "尚未支援 macOS",
+    "macOS 版的進度",
+    "Linux and macOS only",
+    "macOS and Linux only",
+    "只支援 Linux 與 macOS",
+    "僅支援 Linux 與 macOS",
+    "Download for Linux (AppImage)",
+    "下載 Linux 版（AppImage）"
+  ],
+  "downloadFormats": [
+    "AppImage",
+    "dmg"
   ],
   "spek": {
     "topics": [

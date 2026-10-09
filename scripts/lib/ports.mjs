@@ -85,6 +85,8 @@ export const PROBE_PORTS = {
    */
   intake: { main: 9241, restart: 9242 },
   package: { main: 9240 },
+  /** The macOS packaging acceptance (`probe-package-mac.mjs`), run on a Mac, never in `test:e2e`. */
+  packageMac: { main: 9249 },
   /** Not a probe: the website's screenshot capture (`scripts/capture-screenshots.mjs`) drives the built app. */
   screenshots: { main: 9248 },
 }

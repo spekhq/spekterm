@@ -1,3 +1,4 @@
+import { useEffect } from 'react'
 import { Group, Panel, Separator } from 'react-resizable-panels'
 import { ActivityBar } from './ActivityBar'
 import { KeyboardNavigation } from './KeyboardNavigation'
@@ -23,6 +24,12 @@ const SEPARATOR_CLASS = 'w-[3px] cursor-col-resize bg-hairline transition-colors
 export function AppShell(): React.JSX.Element {
   const { folders, selection, select, addFolder, removeFolder, reorderFolders, setPinned } =
     useWorkspaceFolders()
+  // Tell the main process that the listeners outside actions talk to are mounted (`window-presence.ts`).
+  // **A parent's effect runs after its children's**, so by now the inbox (`ActivityBar`), the handoff
+  // brief (`HandoffBriefProvider`) and session focusing (`IntakeAutoAccept`) have subscribed.
+  useEffect(() => {
+    window.workspace.app.rendererReady()
+  }, [])
   // Provider 在此 —— 未存的變更必須活過切換 folder（FilesPanel 以 folder.id 為 key 掛載）。
   // SessionsProvider 同理，且要同時涵蓋 rail 與主舞台：rail 呈現所有 folder 的 session，
   // 主舞台掛載它們的終端（design D9）。

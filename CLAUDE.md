@@ -98,7 +98,8 @@ OpenSpec 結構的側欄，讓使用者不必另外開 IDE 就能一邊駕駛 ag
 **以 MIT 開源**（`open-source-mit`：`LICENSE`、`CONTRIBUTING.md`、產物根目錄附本身與第三方的授權文字；
 公開前已改寫全部 git 歷史）。**Linux 打包已可用**（`npm run dist:linux` → AppImage，`npm run install:desktop` 裝進應用程式
 選單）。**版號逐次遞增**且產物與執行中的 app 說得出同一個建置身分（Settings 的「About」段）。
-**尚未開始**：macOS／Windows 產物、自動更新與簽章（Phase 6 其餘）。
+**macOS (Apple Silicon) is packaged too** (`macos-dmg-packaging`): `npm run dist:mac` on a Mac, from a release
+commit only, ad-hoc signed (not notarized). **尚未開始**：Windows 產物、Intel Mac、Developer ID 簽章與公證、自動更新（Phase 6 其餘）。
 **交接已交付**（agent → 另一個 repo，以及母、子、兄弟之間經 Claude Code 本機訊息功能的往來）；
 **以工具而非寫檔投遞**（MCP）仍未做 —— 代價是 agent **收不到投遞的結果**，而那條缺口
 明文寫在 `agent-handoff-source` 的規格裡。
@@ -135,6 +136,7 @@ them apart by event order (`before-quit` comes first only for a signal), see `sr
 | `src/main/handoff-*`、`src/main/handoff-service.ts` 的落點與上限、`scripts/probe-intake.mjs` 的 `runHandoff*` 段落、或任何**倚賴「注入的內容真的進入 agent 脈絡」**的東西 | **`docs/lessons/handoff.md`** |
 | `src/shared/i18n/`（含 `locale.ts`、`languages.ts`、任一份字典）、`scripts/dictionary-completeness.test.mjs` / `locale-source.test.mjs` / `probe-language.test.mjs`、任何探針的**啟動路徑**、或任何會**格式化時間／數字／排序字串**的東西 | **`docs/lessons/i18n.md`** |
 | `site/`、`scripts/capture-screenshots.mjs`、`scripts/network-surface.test.mjs`, or anything the website states about the app (network, platforms, features) | **`site/README.md`** |
+| `build.mac` / `build.dmg`, `scripts/package-mac.mjs`, `scripts/after-pack.cjs`, `scripts/release-check.mjs`, `scripts/probe-package-mac.mjs`, `src/main/app-menu.ts`, `src/main/close-guard.ts`'s quit intent, or anything run on the build Mac | **`docs/lessons/macos.md`** |
 | `src/main/transcript-*`、`src/main/agent-events.ts`、`src/main/agent-injection.ts`、`src/main/insights*`、**`src/main/report.ts` 與 `src/main/report-*`**、`scripts/probe-insights.mjs`、`scripts/probe-agent-view.mjs`，或任何會讀 `~/.claude/projects`、**注入 `--settings`**、**或委派 `claude` CLI** 的東西 | **`docs/lessons/transcript.md`** |
 
 ## 開發指令
@@ -153,6 +155,12 @@ npm run dist:linux      # 換版 → 建置 → 打包 AppImage → 清掉更舊
                         #   `-- minor`：npm 把引數接在 `&&` 串的最後一步，而 bump 是第一步。
                         #   `package.json` / `package-lock.json` 任一已被改過時它**拒絕執行** ——
                         #   換版提交只能指名這兩個檔案，而遞增與你的編輯在同一個檔案裡。
+npm run dist:mac        # macOS only, on a Mac: refuses unless HEAD is the clean release commit of the declared
+                        #   version (it never bumps — the Linux command does), then `npm ci` → build →
+                        #   Electron archive checked against `electron/checksums.json` → ad-hoc signed dmg.
+                        #   **Set `ELECTRON_MIRROR` on the build Mac** — GitHub's download there stalls for
+                        #   ten minutes without a word. A trial build: `npm run build && node scripts/package-mac.mjs`
+                        #   (never a bare `electron-builder --mac`: the afterPack hook refuses it).
 npm run install:desktop # 把產物裝進應用程式選單（~/.local/bin ＋ .desktop ＋ 圖示，尊重 XDG_*）
 npm run uninstall:desktop
 npm run typecheck       # tsc：main / preload（node）+ renderer（web）
@@ -275,6 +283,10 @@ PROBE_DISPLAY=physical npm run probe:terminal     # 逃生口：畫在實體螢�
 npm run probe:package   # 打包 → 啟動 AppImage → 產物可執行／脫離 repo／載入 renderer／
                         #   production CSP／pty 建得起來且指令真的被執行／建置身分與檔名同版
 PROBE_PACKAGE_APPIMAGE=<path> node scripts/run-probe.mjs package   # 重用既有產物（迭代用）
+npm run probe:package:mac   # on a Mac only: the app inside the dmg, launched from a desktop launch's minimal
+                            #   environment; its key and menu sections need Accessibility + Automation
+                            #   for the SSH session's program (`docs/lessons/macos.md`)
+PROBE_PACKAGE_MAC_DMG=<dmg or .app> npm run probe:package:mac        # a trial or control build
 ```
 
 > **跑一次 `probe:package` 會產生一個 `chore(release)` commit** —— 它的入口就是
@@ -478,8 +490,11 @@ addon-unicode-graphemes、i18next、electron-builder（Phase 6）。
 
 **原生 menu bar 已整個移除**（`Menu.setApplicationMenu(null)`，app 層設一次涵蓋整個應用程式）——
 **不是** `autoHideMenuBar`，那只是「平時隱藏、按 `Alt` 浮出」，而 app 從未定義任何 menu 內容，
-浮出來的是一條空的東西擋畫面。**macOS 未實測**（它的應用程式 menu 是系統層的，不在視窗內），
-列為 Phase 6 打包前確認項。
+浮出來的是一條空的東西擋畫面。**macOS is the exception** (`src/main/app-menu.ts`): there the menu bar
+belongs to the system, and `Cmd+C`/`Cmd+V`/`Cmd+Q` come from its items, so macOS gets a minimal app menu
+and Edit menu. Its Quit is **not the Quit role** — that quits through `before-quit` first, which the
+close guard reads as a signal and would end every session without asking. The menu is set once per
+process in `whenReady`, never in `createWindow` (macOS opens a second window after the first is closed).
 
 ### 攔截點是 window 的 **capture 階段**
 

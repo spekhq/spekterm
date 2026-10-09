@@ -8,10 +8,18 @@ export const APP_CHANNELS = {
   saveAllRequest: 'workspace:app:saveAllRequest',
   /** renderer → 主行程：儲存全部的結果。 */
   saveAllResult: 'workspace:app:saveAllResult',
+  /**
+   * renderer → main: the listeners that outside actions talk to (the inbox, handoff briefs, focusing a
+   * session) are mounted. A notification click that had to open a window waits for this (`window-presence`).
+   */
+  rendererReady: 'workspace:app:rendererReady',
 } as const
 
-export function registerAppHandlers(dirty: DirtyStateStore): void {
+export function registerAppHandlers(dirty: DirtyStateStore, onRendererReady: (contentsId: number) => void): void {
   ipcMain.on(APP_CHANNELS.setDirtyState, (event, entries: DirtyEntry[]) => {
     dirty.set(event.sender.id, entries)
+  })
+  ipcMain.on(APP_CHANNELS.rendererReady, (event) => {
+    onRendererReady(event.sender.id)
   })
 }

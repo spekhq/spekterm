@@ -73,7 +73,9 @@ nothing else to fill in.
 
 spekterm checks for new mentions when it starts, every five minutes, and right after you save a token.
 **Look-back window** sets how far back the startup check searches: Slack does not replay what happened
-while spekterm was closed, so mentions older than the window are missed.
+while spekterm was closed, so mentions older than the window are missed. On macOS, closing the window does
+not quit spekterm: while it keeps running without a window, the inbox keeps receiving and the five-minute
+check continues.
 
 For mentions within seconds, also add an **app-level token**: enable Socket Mode for your Slack app and
 create an app-level token for it. **Live updates** then shows whether the live connection is on. If it
@@ -87,7 +89,8 @@ scopes. A broken connection never looks like "nobody mentioned you".
 
 ### Your tokens
 
-Tokens are stored in `~/.config/Spekterm` with access limited to your user. They are sent only to Slack
+Tokens are stored in spekterm's data directory (`~/.config/Spekterm` on Linux,
+`~/Library/Application Support/Spekterm` on macOS) with access limited to your user. They are sent only to Slack
 (or to the endpoint you set under **API endpoint** — only change it if you know why), and never reach
 your terminals or your agents. See [Data and network](/docs/reference/data-and-network/).
 

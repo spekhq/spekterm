@@ -205,6 +205,13 @@ const workspaceApi = {
     sendSaveAllResult: (ok: boolean): void => {
       ipcRenderer.send('workspace:app:saveAllResult', ok)
     },
+    /**
+     * The listeners that outside actions talk to are mounted (the inbox, handoff briefs, focusing a
+     * session). A notification click that had to open a window waits for this before acting.
+     */
+    rendererReady: (): void => {
+      ipcRenderer.send('workspace:app:rendererReady')
+    },
   },
   shell: {
     /** 協定的驗證在主行程。此處只是把 URL 交過去。 */

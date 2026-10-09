@@ -1,6 +1,6 @@
 ## Purpose
 
-把版控中的原始碼變成一份**可獨立分發、脫離 repo 執行**的 Linux 桌面產物 —— 打包指令與產物形態、
+把版控中的原始碼變成**可獨立分發、脫離 repo 執行**的桌面產物（Linux 的 AppImage、macOS on Apple Silicon 的 dmg）—— 打包指令與產物形態、
 打包設定的宣告位置、native 模組在 asar 中的處置、production 政策在產物中仍然生效，以及開發模式與
 產物之間的使用者資料隔離。
 

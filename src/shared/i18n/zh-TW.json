@@ -236,6 +236,20 @@
     "invalidConversationId": "對話 id 不是合法的 UUID",
     "spawnFailed": "配置 pty 失敗：{{reason}}"
   },
+  "appMenu": {
+    "about": "關於 {{name}}",
+    "hide": "隱藏 {{name}}",
+    "hideOthers": "隱藏其他",
+    "showAll": "顯示全部",
+    "quit": "結束 {{name}}",
+    "edit": "編輯",
+    "undo": "還原",
+    "redo": "重做",
+    "cut": "剪下",
+    "copy": "拷貝",
+    "paste": "貼上",
+    "selectAll": "全選"
+  },
   "unsaved": {
     "message_other": "{{count}} 個檔案有未儲存的變更",
     "more_other": "…另有 {{count}} 個檔案",
@@ -249,9 +263,15 @@
     "lineWorking": "{{item}} · {{label}} —— 工作中",
     "more_other": "…另有 {{count}} 個 session",
     "consequence": "關閉 spekterm 會結束它們。執行中的指令與 agent 正在寫的回覆會遺失；喚醒時，claude session 會接續原本的對話，shell 會在最後的目錄重新啟動。",
+    "consequenceFolder": "關閉 spekterm 會結束它們。執行中的指令與 agent 正在寫的回覆會遺失；喚醒時，claude session 會接續原本的對話，shell 會在它所屬的資料夾重新啟動。",
+    "consequenceWindow": "關閉視窗會結束它們。執行中的指令與 agent 正在寫的回覆會遺失；喚醒時，claude session 會接續原本的對話，shell 會在最後的目錄重新啟動。",
+    "consequenceWindowFolder": "關閉視窗會結束它們。執行中的指令與 agent 正在寫的回覆會遺失；喚醒時，claude session 會接續原本的對話，shell 會在它所屬的資料夾重新啟動。",
     "quit": "結束",
     "saveAllAndQuit": "全部儲存並結束",
     "quitWithoutSaving": "不儲存並結束",
+    "closeWindow": "關閉視窗",
+    "saveAllAndClose": "全部儲存並關閉",
+    "closeWithoutSaving": "不儲存並關閉",
     "cancel": "取消"
   },
   "sessions": {

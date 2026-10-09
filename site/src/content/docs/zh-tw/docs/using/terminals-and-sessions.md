@@ -23,7 +23,7 @@ spekterm 不包裝、也不模仿它們 —— 你打的字送給程式，程式
 
 ## 在終端裡工作
 
-- **複製與貼上：**`Ctrl+Shift+C` 與 `Ctrl+Shift+V`。`Ctrl+C` 永遠是中斷，即使畫面上有選取的文字 ——
+- **複製與貼上：**`Ctrl+Shift+C` 與 `Ctrl+Shift+V`（macOS 上是 `Cmd+C` 與 `Cmd+V`）。`Ctrl+C` 永遠是中斷，即使畫面上有選取的文字 ——
   所以失控的指令你隨時停得下來。
 - 終端輸出裡的**連結**，點下去會在瀏覽器開啟。
 - 用 `Ctrl+Tab` / `Ctrl+Shift+Tab` 在目前的 rail 項目內**切換 session**；拖曳分頁或用
@@ -46,9 +46,22 @@ build、dev server，或 agent 還在寫的回覆都會遺失；spekterm 關著�
 - 按 **喚醒**，或在休眠的 session 有焦點時按 `Enter`。
 - `claude` session 會從中斷的地方接回**同一段對話**。
 - shell 會**在它最後的工作目錄**重新啟動。先前的畫面呈現在一行 **以上為先前的內容** 之上，
-  新舊輸出一眼就分得出來。
+  新舊輸出一眼就分得出來。在 macOS 上，shell 則是在它的資料夾重新啟動，而不是在它最後的目錄；
+  關閉時的對話框會寫明這一點。
 
 如果對話接不回來（例如它已被刪除），session 會改開一段新的對話，而不是留給你一個用不了的分頁。
+
+## 在 macOS 上關閉與結束
+
+在 Linux 上，關掉視窗就會結束 spekterm。在 macOS 上，spekterm 的行為跟「終端機」與 iTerm2 一樣：
+
+- **關掉視窗**會結束每個 session —— 若有 session 在執行，會像上面那樣先問你 —— 但 spekterm 會繼續在
+  Dock 裡執行。點 Dock 圖示就會重新打開視窗；session 都回來了，處於休眠，跟重啟之後完全一樣
+  （`claude` 接回它的對話，shell 重新啟動）。
+- **spekterm 沒有視窗地執行時**，收件匣照常收件；若設定了 Slack，spekterm 也照樣每五分鐘檢查一次提及。
+  見[收件匣與 Slack](/zh-tw/docs/using/inbox-and-slack/)。
+- **`Cmd+Q`**（或 **Spekterm → 結束 Spekterm**）在有 session 執行時，會問跟關掉視窗時一樣的問題。
+- **從 Dock 結束、登出或關機**不會問正在執行的 session。有未儲存變更的檔案時仍然會問。
 
 ## 休眠
 
@@ -57,7 +70,8 @@ build、dev server，或 agent 還在寫的回覆都會遺失；spekterm 關著�
 
 - **手動：**`Ctrl+Shift+H`，或分頁、rail 那一列的選單裡的 **休眠**。
 - **自動：**閒置 24 小時的 session 會被休眠。到 **設定 → 讓閒置的 session 休眠** 改時間或關閉。
-  畫面上的 session 絕不會被自動休眠，正在工作的 agent、正在跑工作的 shell 也不會。
+  畫面上的 session 絕不會被自動休眠，正在工作的 agent、正在跑工作的 shell 也不會。在 macOS 上，閒置的
+  shell 永遠不會被自動休眠；手動休眠照常可用。
 
 休眠的 shell 會失去只存在於它行程裡的東西：未匯出的變數、還沒寫進磁碟的指令歷史，以及背景工作。
 休眠畫面會寫明這一點。休眠的 `claude` session 什麼都不會失去 —— 喚醒就接回對話。
@@ -66,7 +80,7 @@ build、dev server，或 agent 還在寫的回覆都會遺失；spekterm 關著�
 
 repo 若有 linked git worktree，側欄會呈現所有 worktree 的 change，並標示各自的工作目錄。change 位在
 另一個 worktree 時，側欄會提供 **在那裡開一個 session**，在那個 worktree 的根目錄開一個 `claude`
-session。狀態列會顯示 focused session 位在哪個 worktree（`wt <名稱>`）。
+session。狀態列會顯示 focused session 位在哪個 worktree（`wt <名稱>`），macOS 除外（見下文）。
 
 位在資料夾目錄之外的 worktree 也照樣能開 session；只有在側欄瀏覽它的檔案會受限。
 
@@ -75,3 +89,5 @@ session。狀態列會顯示 focused session 位在哪個 worktree（`wt <名稱
 視窗底部的狀態列顯示選中的 repo、focused session 的工作目錄與分支、開了幾個 session，以及錨定的
 change 的 task 進度。在設定裡打開 **在狀態列顯示 agent 狀態**，`claude` 還會在那裡回報它的模型、
 context 用量與花費。這個設定套用於改動之後才開的 session，你自己的 Claude Code status line 照常運作。
+
+在 macOS 上，狀態列不顯示 focused session 的工作目錄與它的 git 狀態（分支、未提交的變更、worktree）。

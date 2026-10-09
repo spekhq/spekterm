@@ -13,7 +13,7 @@ sidebar:
 
 ## 終端
 
-- **字型** —— 系統上安裝的任何等寬字型；留空即系統預設。
+- **字型** —— 系統上安裝的任何等寬字型；留空即系統預設。在 macOS 上，清單只提供系統預設的等寬字型。
 - **字型大小** 與 **行高** —— 留空即預設值。
 - **GPU 加速** —— 以 GPU 繪製終端。若終端在你的機器上顯示不正確，把它關掉。
 - **預覽** —— 以選定的字型顯示一段範例，包含容易混淆的字元。
@@ -27,7 +27,7 @@ status line 照常運作。只對此後建立的 session 生效。
 
 閒置超過選定時間的 session 會結束它的行程 —— 可選關閉、4 小時、24 小時（預設）、3 天或 7 天 ——
 但仍留在 workspace 裡，之後可以喚醒。畫面上正在顯示的 session、正在工作的 agent、正在跑工作的 shell
-都不會被休眠。見 [終端與 session](/zh-tw/docs/using/terminals-and-sessions/)。
+都不會被休眠。在 macOS 上，閒置的 shell 永遠不會被自動休眠。見 [終端與 session](/zh-tw/docs/using/terminals-and-sessions/)。
 
 ## 關於
 

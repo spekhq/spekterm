@@ -48,8 +48,9 @@ import { basename } from 'node:path'
  *
  * **命令是固定的字串常數，沒有任何拼接** —— 這是選 `env -0` 而非「讓 shell 執行我們的
  * `process.execPath` 以 node 模式印 JSON」的主要理由（後者要把一個路徑拼進 shell 命令）。
- * 代價是 `env -0` 為 GNU coreutils 的旗標，**macOS 的 `env` 不支援，未實測** —— 屆時的退路是
- * 上述 `ELECTRON_RUN_AS_NODE` 方案。在那之前，解析不出標記即放棄（＝退回今天的行為）。
+ * `env -0` began as a GNU coreutils flag, but **macOS's `env` supports it too** (measured on macOS 13.7:
+ * NUL-separated entries, `macos-dmg-packaging` design). An `env` without it makes the markers unparseable,
+ * and the query then gives up (＝退回今天的行為).
  *
  * **驗證「`printf '\0'` 真的印得出 NUL」時不可經 `$(...)`** —— command substitution 會剝掉 NUL，
  * 於是會量到相反的結論。要直接 pipe（`| od -c`）。

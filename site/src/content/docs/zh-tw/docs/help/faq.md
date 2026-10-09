@@ -19,7 +19,9 @@ sidebar:
 
 ## 可以在 macOS 或 Windows 上用嗎？
 
-還不行 —— 目前提供的是 Linux 版。macOS 版的進度可以追蹤 [issue #63](https://github.com/spekhq/spekterm/issues/63)。
+macOS 可以：有給 Apple Silicon 的 Mac 用的版本，需要 macOS 12（Monterey）以上。它沒有經過 Apple 公證，
+所以第一次啟動要多一個步驟，而且有幾項功能在 macOS 上受限 —— 見[在 macOS 上安裝](/zh-tw/docs/getting-started/install/#在-macos-上安裝)。
+Windows 與 Intel Mac 尚未支援。
 
 ## 我的程式碼會被送到哪裡嗎？
 
