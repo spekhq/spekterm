@@ -3,7 +3,7 @@ import starlight from '@astrojs/starlight'
 import { defineConfig } from 'astro/config'
 import starlightLinksValidator from 'starlight-links-validator'
 import { collectNoticeModules, NOTICE_MODULES_FILE } from './scripts/collect-notice-modules.mjs'
-import { GA_HEAD } from './src/analytics.mjs'
+import { ANALYTICS_HEAD } from './src/analytics.mjs'
 
 export default defineConfig({
   // Every page declares its canonical URL on this host (project-website: spekterm.com is the
@@ -27,8 +27,8 @@ export default defineConfig({
       lastUpdated: false,
       // Starlight's own "Built with Starlight" link is replaced by the disclaimer footer.
       credits: false,
-      // The Google Analytics tag (src/analytics.mjs) — the only resource from another origin.
-      head: GA_HEAD,
+      // Google Analytics behind the consent script (src/analytics.mjs); the banner is in the Footer.
+      head: ANALYTICS_HEAD,
       customCss: ['./src/styles/theme.css'],
       components: {
         Footer: './src/components/Footer.astro',

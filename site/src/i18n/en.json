@@ -1,4 +1,9 @@
 {
+  "consent.accept": "Allow",
+  "consent.decline": "Decline",
+  "consent.label": "Analytics consent",
+  "consent.text": "This site uses Google Analytics to learn where its readers come from. It loads Google Analytics, which sets cookies, only if you allow it.",
+  "footer.analytics": "Analytics settings",
   "footer.disclaimer": "spekterm and spek are independent open-source projects. They are not affiliated with, endorsed by, or sponsored by Anthropic or the OpenSpec project. Claude and Claude Code are trademarks of Anthropic, PBC.",
   "footer.license": "MIT License",
   "footer.notices": "Third-party notices",

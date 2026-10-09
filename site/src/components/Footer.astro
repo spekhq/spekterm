@@ -2,7 +2,8 @@
 /**
  * Starlight's footer plus what every page must carry (project-website): the non-affiliation
  * statement, the page's product's source and license, and the link to the third-party notices. The not-found page uses the same layout, so
- * it carries them too.
+ * it carries them too. Also the analytics consent banner and its settings button, both driven by the
+ * consent script in the page's head (`src/analytics.mjs`); the banner stays hidden unless it shows it.
  */
 import Default from '@astrojs/starlight/components/Footer.astro'
 import { useStrings } from '../i18n'
@@ -21,7 +22,16 @@ const product = PRODUCTS[productOf(Astro.url.pathname)]
     <a href={product.license}>{t('footer.license')}</a>
     <span aria-hidden="true">·</span>
     <a href="/third-party-notices.txt">{t('footer.notices')}</a>
+    <span aria-hidden="true">·</span>
+    <button type="button" class="consent-open" data-consent-open>{t('footer.analytics')}</button>
   </p>
+</div>
+<div id="analytics-consent" class="consent" role="region" aria-label={t('consent.label')} hidden>
+  <p>{t('consent.text')}</p>
+  <div class="consent-actions">
+    <button type="button" data-consent="denied">{t('consent.decline')}</button>
+    <button type="button" class="primary" data-consent="granted">{t('consent.accept')}</button>
+  </div>
 </div>
 
 <style>
@@ -40,7 +50,56 @@ const product = PRODUCTS[productOf(Astro.url.pathname)]
     flex-wrap: wrap;
     gap: 0.5rem;
   }
-  .links a {
+  .links a,
+  .consent-open {
     color: var(--sl-color-gray-2);
+  }
+  .consent-open {
+    padding: 0;
+    border: 0;
+    background: none;
+    font: inherit;
+    text-decoration: underline;
+    cursor: pointer;
+  }
+  .consent {
+    position: fixed;
+    z-index: 100;
+    inset-inline: 1rem;
+    bottom: 1rem;
+    max-width: 36rem;
+    margin-inline: auto;
+    padding: 1rem;
+    border: 1px solid var(--sl-color-gray-5);
+    border-radius: 0.5rem;
+    background: var(--sl-color-bg-nav);
+    box-shadow: var(--sl-shadow-lg);
+    font-size: var(--sl-text-sm);
+    color: var(--sl-color-white);
+  }
+  .consent[hidden] {
+    display: none;
+  }
+  .consent p {
+    margin: 0 0 0.75rem;
+  }
+  .consent-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.5rem;
+  }
+  .consent-actions button {
+    padding: 0.375rem 1rem;
+    border: 1px solid var(--sl-color-gray-4);
+    border-radius: 999rem;
+    background: transparent;
+    color: var(--sl-color-white);
+    font: inherit;
+    cursor: pointer;
+  }
+  .consent-actions .primary {
+    border-color: var(--sl-color-accent);
+    background: var(--sl-color-accent);
+    color: var(--sl-color-black);
   }
 </style>

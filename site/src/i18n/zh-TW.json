@@ -1,4 +1,9 @@
 {
+  "consent.accept": "允許",
+  "consent.decline": "拒絕",
+  "consent.label": "分析同意",
+  "consent.text": "本站使用 Google Analytics 了解讀者從哪裡來。只有在你允許之後，才會載入 Google Analytics（它會設定 cookie）。",
+  "footer.analytics": "分析設定",
   "footer.disclaimer": "spekterm 與 spek 是獨立的開源專案，與 Anthropic 及 OpenSpec 專案沒有隸屬、背書或贊助關係。Claude 與 Claude Code 是 Anthropic, PBC 的商標。",
   "footer.license": "MIT 授權",
   "footer.notices": "第三方授權聲明",
