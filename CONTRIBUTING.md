@@ -149,7 +149,10 @@ agree on the approach (and, if appropriate, an OpenSpec change) before you inves
   must never be made by hand without it. Run the same command on the build Mac after `npm run dist:mac` to
   add the dmg to the existing release. Instead of the build Mac, the dmg can come from the `macOS dmg`
   workflow (`.github/workflows/mac.yml`), which builds and accepts it when the release is published: put the
-  dmg from a green run into `release/` of a checkout of the release commit and run the same command.
+  dmg from a green run into `release/` of a fresh worktree of the release tag (`git worktree add <dir> v<version>`)
+  and run the same command there. Not in a `release/` that still holds the AppImage: the command would upload it
+  and `latest-linux.yml` again, and replacing an asset of a published release deletes it before the upload, so
+  Linux installs checking for an update in between find no file.
   Packaging never publishes anything by itself (`--publish never`).
 
 ### Review

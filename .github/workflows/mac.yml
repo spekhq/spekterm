@@ -3,7 +3,7 @@ name: macOS dmg
 # Builds a release's Apple Silicon dmg on GitHub's macOS runner (#73), so the macOS artifact no longer
 # depends on one person's Mac being reachable. It only builds: the dmg is a workflow artifact and is never
 # attached to the release from here. Adding it stays a maintainer step, through the same command as before:
-# put the artifact's dmg into `release/` of a checkout of the release commit and run `npm run release:github`
+# put the artifact's dmg into `release/` of a fresh worktree of the release tag and run `npm run release:github`
 # (CONTRIBUTING.md → "What maintainers handle for you"), so a run cannot publish anything by itself.
 
 on:
