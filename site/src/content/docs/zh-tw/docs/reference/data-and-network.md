@@ -18,7 +18,7 @@ spekterm 沒有帳號，也沒有遙測（telemetry）。這一頁列出 spekter
 
 ## 遠端存取（預設關閉，由你開啟）
 
-打開**遠端存取**之後，spekterm 會在每一張網路介面的同一個 port（預設 47615，可以改）上**等待**連線，讓你手機上的 spekterm app 透過區域網路、Tailscale 或你轉發的 port 連過來。只有配對過的裝置能使用這條連線。每台裝置都以 TLS 連向它配對時確認過的憑證，並用裝置自己的憑證驗證身分；裝置的憑證你可以撤銷。**遠端存取自己不往外連任何地方**：它只回應你的裝置，手機也只在連線中才會收到事件。整個過程不經過任何推播服務、中繼站或本專案的伺服器。遠端存取關閉時，沒有任何東西在等待連線。見[遠端存取](/zh-tw/docs/using/remote-access/)。
+打開**遠端存取**之後，spekterm 會在每一張網路介面的同一個 port（預設 47615，可以改）上**等待**連線，讓你[手機上的 spekterm app](/zh-tw/docs/getting-started/phone/) 透過區域網路、Tailscale 或你轉發的 port 連過來。只有配對過的裝置能使用這條連線。每台裝置都以 TLS 連向它配對時確認過的憑證，並用裝置自己的憑證驗證身分；裝置的憑證你可以撤銷。**遠端存取自己不往外連任何地方**：它只回應你的裝置，手機也只在連線中才會收到事件。整個過程不經過任何推播服務、中繼站或本專案的伺服器。遠端存取關閉時，沒有任何東西在等待連線。見[遠端存取](/zh-tw/docs/using/remote-access/)。
 
 ## spekterm 啟動、會自己連網的程式
 
@@ -36,7 +36,7 @@ spekterm 會執行你安裝的程式。這些程式送出什麼由它們自己�
 
 ## 你的資料存在哪裡
 
-spekterm 保存的一切都在你的電腦上：Linux 上位於 `~/.config/Spekterm`，macOS 上位於 `~/Library/Application Support/Spekterm`。
+spekterm 保存的一切都在你的電腦上：Linux 上位於 `~/.config/Spekterm`，macOS 上位於 `~/Library/Application Support/Spekterm`（在 Linux 上，下載中的更新暫放在 `~/.cache/spekterm-updater`）。
 
 - 你的 workspace（資料夾清單、順序、置頂了哪些），以及每個資料夾的側欄位置；
 - 你的 session，以及每個 shell session 最後的畫面，重新啟動後用來重播；

@@ -3,6 +3,11 @@
   "en/handoff.png": "0ba1fc8186f2063046dee1b92ad48340d209f7059a32f3e310dc9d22b424fcf4",
   "en/hero.png": "9c75a02479cb24f054b7eee649965d0429b6aa0d62900d106a175400f4bb2299",
   "en/inbox.png": "5a70b03a064e1fc2565468baa33c29228732c1769f00876cee8ef936caee1bc6",
+  "en/phone-conversation.png": "c25a68e01141ca6b22db42e5f7903971dc1a5d9c5d1d01c9029335fa0a26fcd0",
+  "en/phone-inbox.png": "c0e40b0eccad57385094b188211674cbaea8910ca0d0212c250f473d057b5ae1",
+  "en/phone-openspec.png": "c9d315f26cea67b5d492bbf1b444737ebc347b5d43d48cc3a3205990a23786f4",
+  "en/phone-prompt.png": "6101daa60e3838d1af161f13474f6b0a687a4dbeb34eb70449740069864e7f2b",
+  "en/phone-sessions.png": "89776789fcfab75f95e6b6f0868094a0f4d5e51272dfe7c4f6b58395b391f74f",
   "en/terminal.png": "45e0a73dba168fb492a4ed67b5a157a6fdc780f7b14ccd31999d1a3ff651da52",
   "neutral/spek-change.png": "e52f60f5a94ad115e0e015bbe514f3054d6094163e8fd86cde7347240a3ff1b4",
   "neutral/spek-dashboard.png": "f3ca7e3fff055030cd47e72b28a289c7f2dc8b10fc92c02483e6bd43d766c3db",
@@ -11,5 +16,10 @@
   "zh-TW/handoff.png": "d91dfb7db25458fd2696ce98b08d90389a51055a8a619914b954fab625b8aaf4",
   "zh-TW/hero.png": "289f8ac82836b6118bf7c60d331fd0f8c843f0ae45cec9817d5b63d2cdac1ab9",
   "zh-TW/inbox.png": "dd3ff859485b19c0026eb115ab30fb4f2b077c01d0fc4035e7f66b389b4d9fe0",
+  "zh-TW/phone-conversation.png": "a7e2b3a54e8d59d97d07ed637f4e1ad9fb02149654e374a6d14ca5e9b10df762",
+  "zh-TW/phone-inbox.png": "7030569a58b3747842aa1fcfbdcd5041196ab74369b614be722e49c0c846f84e",
+  "zh-TW/phone-openspec.png": "245b196391104d3727c175a9cda98b54522c088c000feaafceda9df23f2ad8ba",
+  "zh-TW/phone-prompt.png": "40ff516cabc0d244b3e95c69653d735ea98be618cc6788c555aa1452187118c3",
+  "zh-TW/phone-sessions.png": "ea51aec8d6a741f5306d1cb79103fcb8880abae16e7a901d3db5ec5d033da3a3",
   "zh-TW/terminal.png": "b046395d188fcffe0ac9d0323c3813c7de77cb317b978efa6fc23f01858c7b61"
 }

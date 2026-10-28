@@ -20,8 +20,15 @@
  * something to relate; with two active changes the side panel does not pick one, so each shot that
  * shows the change chooses it in the Browse tree first.
  *
+ * spekterm for Android's phone screenshots are imported, not captured (`scripts/lib/phone-shots.mjs`): the five
+ * of its Google Play listing per language, read as committed at a release tag of the repository in `ANDROID_DIR`
+ * (default `../spekterm-android`) — `ANDROID_TAG`, or its highest release tag — written byte for byte as
+ * `<en|zh-TW>/phone-<name>.png`, with the tag in `ANDROID_SOURCE`. Their text is not read (no screen to read);
+ * the maintainer's review is what holds it. A full run imports them too, so it needs that repository.
+ *
  * Usage: npm run capture:screenshots
- *        node scripts/capture-screenshots.mjs --only hero   (one shot, for iterating)
+ *        node scripts/capture-screenshots.mjs --only hero    (one shot, for iterating)
+ *        node scripts/capture-screenshots.mjs --only phone   (the phone import alone: no display, no build)
  */
 import { spawn, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
@@ -38,6 +45,7 @@ import { seedLanguage } from './lib/probe-language.mjs'
 import { quitAndWait } from './lib/quit.mjs'
 import { screenVerdict } from './lib/screen-check.mjs'
 import { makeStubAgent } from './lib/stub-agent.mjs'
+import { importPhoneSet } from './lib/phone-shots.mjs'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const PORT = PROBE_PORTS.screenshots.main
@@ -52,8 +60,40 @@ const FIXTURE_NAME = 'api-server'
 
 const OUT_DIR = join(root, 'site', 'src', 'assets', 'screenshots')
 const MANIFEST = join(OUT_DIR, 'manifest.json')
+
+function writeManifest(manifest) {
+  const sorted = Object.fromEntries(Object.entries(manifest).sort(([a], [b]) => (a < b ? -1 : 1)))
+  writeFileSync(MANIFEST, `${JSON.stringify(sorted, null, 2)}\n`)
+}
 const LANGUAGES = ['en', 'zh-TW']
 const VIEWPORT = { width: 1440, height: 900 }
+
+const onlyIndex = process.argv.indexOf('--only')
+const only = onlyIndex >= 0 ? process.argv[onlyIndex + 1] : null
+
+// ── spekterm for Android ───────────────────────────────────────────────────────────────────────────
+
+const ANDROID = { dir: process.env.ANDROID_DIR ?? join(root, '..', 'spekterm-android'), tag: process.env.ANDROID_TAG }
+
+/** Import the phone screenshots into `manifest`; false (and nothing written) on a problem. */
+function importPhone(manifest) {
+  const result = importPhoneSet({ dir: ANDROID.dir, tag: ANDROID.tag, outDir: OUT_DIR, manifest })
+  if (result.problem) {
+    console.error(`  ✗ phone shots: ${result.problem}`)
+    return false
+  }
+  for (const target of result.written) console.log(`  ✓ ${relative(root, join(OUT_DIR, target))}`)
+  console.log(`    from spekterm-android ${result.tag}`)
+  return true
+}
+
+// The phone import alone needs no display, no build and no fixtures — and must not reset the fixtures.
+if (only === 'phone') {
+  const manifest = existsSync(MANIFEST) ? JSON.parse(readFileSync(MANIFEST, 'utf8')) : {}
+  if (!importPhone(manifest)) process.exit(1)
+  writeManifest(manifest)
+  process.exit(0)
+}
 
 // ── Re-run under the virtual display ───────────────────────────────────────────────────────────────
 
@@ -994,9 +1034,6 @@ async function shootSpek(manifest, only) {
 
 // ── Main ───────────────────────────────────────────────────────────────────────────────────────────
 
-const onlyIndex = process.argv.indexOf('--only')
-const only = onlyIndex >= 0 ? process.argv[onlyIndex + 1] : null
-
 prepareFixtures()
 const manifest = existsSync(MANIFEST) ? JSON.parse(readFileSync(MANIFEST, 'utf8')) : {}
 let failed = false
@@ -1025,6 +1062,8 @@ if (!only || only.startsWith('spek-')) {
   if (!(await shootSpek(manifest, only))) failed = true
 }
 
-const sorted = Object.fromEntries(Object.entries(manifest).sort(([a], [b]) => (a < b ? -1 : 1)))
-writeFileSync(MANIFEST, `${JSON.stringify(sorted, null, 2)}\n`)
+// On the same manifest object, so the one write below holds the phone hashes too.
+if (!only && !importPhone(manifest)) failed = true
+
+writeManifest(manifest)
 process.exit(failed ? 1 : 0)

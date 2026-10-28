@@ -113,7 +113,9 @@ OpenSpec 結構的側欄，讓使用者不必另外開 IDE 就能一邊駕駛 ag
   with no analytics; moving the pin is part of a spek release's site update. The docs are the authoritative user guide;
   the READMEs keep the overview and the install facts `desktop-packaging` reads them for. Its
   screenshots come only from `npm run capture:screenshots` (invented home, fixture repos, stub agent;
-  reads the on-screen text through the hygiene matcher before each capture). Its "Data and network" page
+  reads the on-screen text through the hygiene matcher before each capture) — **except the Android app's
+  phone screenshots, which it imports from the spekterm-android repository at a release tag** (`--only phone`;
+  their text is not machine-checked, so the maintainer looks at each before committing; `site/README.md`). Its "Data and network" page
   is held to the app by `scripts/network-surface.test.mjs` — **a new network API or import in
   `src/main` / `src/preload` / `src/shared` fails it until the page is revisited**. How the site is
   built, checked, and deployed: `site/README.md`, `site/DEPLOY.md`.

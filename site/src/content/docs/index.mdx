@@ -26,6 +26,10 @@ import terminal from '../../assets/screenshots/en/terminal.png'
 import inbox from '../../assets/screenshots/en/inbox.png'
 import graph from '../../assets/screenshots/en/graph.png'
 import handoff from '../../assets/screenshots/en/handoff.png'
+import PhoneScreenshots from '../../components/PhoneScreenshots.astro'
+import phoneSessions from '../../assets/screenshots/en/phone-sessions.png'
+import phoneConversation from '../../assets/screenshots/en/phone-conversation.png'
+import phonePrompt from '../../assets/screenshots/en/phone-prompt.png'
 
 <Screenshot
   wide
@@ -45,8 +49,8 @@ updates as the agent writes to disk.
 
 <CardGrid>
   <Card title="This change" icon="document">
-    The change's proposal, design, tasks, and specs in tabs, with its task progress. The panel follows
-    the session you are looking at.
+    The change's proposal, design, tasks, and specs in tabs, with its task progress. Each repository
+    remembers which change it shows.
   </Card>
   <Card title="Browse, Graph, Timeline" icon="list-format">
     Every spec and change in the repository, how they relate, and how each change unfolded over time.
@@ -79,6 +83,8 @@ updates as the agent writes to disk.
   worktrees included.
 - **They survive a restart** — `claude` sessions resume their conversation; shells come back with the
   previous screen replayed, in their last directory (on macOS, in their folder).
+- **See who needs you** — a dot on every agent session says whether it is working, waiting for you, or
+  asking for a choice, and a count above the terminal covers the whole workspace.
 - **Hibernate what you are not using** — by hand, or automatically after a day idle. A hibernated session
   ends its process and stays dormant until you wake it.
 
@@ -100,7 +106,8 @@ is always one click away.
 - **Inbox** — when someone mentions you in Slack, the mention lands in the inbox. Accept it to get a
   Claude Code session in the repository you choose, with the context already filled in.
 - **Handoffs** — an agent can hand work to another repository's agent. spekterm opens the new session,
-  and you can follow both ends of the handoff until the work is reported done.
+  and you can follow both ends of the handoff until the work is reported done. A handoff can also wait for
+  a set time, or repeat on a schedule you approve.
 
 <Screenshot
   wide
@@ -108,6 +115,31 @@ is always one click away.
   alt="A session that handed work to two others: the rail marks each one's state, and the handoff brief of the finished one shows its task and the result it reported."
   caption="Both ends of a handoff: the rail shows who handed what to whom, and the brief keeps the task and its result."
 />
+
+## Step away without missing a thing
+
+**spekterm for Android** connects straight to the spekterm on
+your computer — no account, no relay, no push service — and tells you when an agent waits for you. From the
+phone you can read its conversation and reply with photos or files attached, answer its permission prompts
+and questions, start, wake, or hibernate sessions, and handle the inbox and handoffs.
+
+It is a companion to the desktop app, not a replacement: spekterm must be running on your computer, and the
+phone must be able to reach it (the same network, Tailscale, or a forwarded port). Remote access is off
+until you turn it on.
+
+<PhoneScreenshots
+  shots={[
+    { src: phoneSessions, alt: "The phone app's session list: three folders, each agent session marked idle, working, or waiting for you, and a session handed off from another." },
+    { src: phoneConversation, alt: "An agent's conversation on the phone: a tool call that ran the tests, the agent's Markdown summary, and the reply box with an attach button." },
+    { src: phonePrompt, alt: "The phone answering an agent's question: three ways the search could match, one chosen, with Send answer and Decline." },
+  ]}
+  caption="spekterm for Android: your sessions, an agent's conversation, and an agent's question answered from the phone."
+/>
+
+<CardGrid>
+  <LinkCard title="Get it on Google Play" description="spekterm for Android: free and open source." href="https://play.google.com/store/apps/details?id=com.spekterm.android" />
+  <LinkCard title="Set up your phone" description="What you need, what the phone can do, and pairing in three steps." href="/docs/getting-started/phone/" />
+</CardGrid>
 
 ## How it works
 

@@ -1,0 +1,60 @@
+---
+title: 在手機上使用 spekterm
+description: 用 Android 版 spekterm 在手機上追蹤、回應電腦上的 agent。它直接連到你的電腦，所以電腦上的 spekterm 必須開著。
+sidebar:
+  order: 3
+---
+
+import PhoneScreenshots from '../../../../../components/PhoneScreenshots.astro'
+import phoneSessions from '../../../../../assets/screenshots/zh-TW/phone-sessions.png'
+import phoneConversation from '../../../../../assets/screenshots/zh-TW/phone-conversation.png'
+import phonePrompt from '../../../../../assets/screenshots/zh-TW/phone-prompt.png'
+import phoneInbox from '../../../../../assets/screenshots/zh-TW/phone-inbox.png'
+import phoneOpenspec from '../../../../../assets/screenshots/zh-TW/phone-openspec.png'
+
+**Android 版 spekterm** 讓你人不在電腦前，也照樣掌握電腦上的 agent：它在等你時，手機會通知你；你可以直接在手機上讀對話、回覆它、回答它的提問。
+
+> **到 [Google Play](https://play.google.com/store/apps/details?id=com.spekterm.android) 下載。** 免費，原始碼公開（[spekhq/spekterm-android](https://github.com/spekhq/spekterm-android)）。
+
+## 它是桌面版的搭檔，不能單獨使用
+
+手機 app 本身不執行任何東西。agent、終端機和 repository 都留在你的電腦上，手機只是遠端看著、操作著它們。因此：
+
+- **電腦上的 spekterm 必須開著。** spekterm 關掉了（或電腦進入睡眠），手機就連不上，也沒有東西可看。
+- **手機必須連得到你的電腦**：同一個網路、Tailscale，或 port forward 都可以。詳見[網路](/zh-tw/docs/using/remote-access/#網路)。
+- **中間沒有任何伺服器。** 不用註冊帳號，沒有中繼站，也不經推播服務：手機直接連到你的電腦，通知也走同一條連線。
+
+## 在手機上可以做什麼
+
+- **收到通知**：agent 在等你、要你做選擇或授權、交接完成，或收件匣有新項目時。
+- **一覽所有 session**：依資料夾分組，標出每個 agent 的狀態 —— 工作中、等你、閒置或休眠。
+- **讀對話、回覆**：看 agent 的訊息與工具呼叫；回覆時可以附上照片、PDF 或文字檔。
+- **回答提問**：允許或拒絕權限要求、替 agent 的問題選答案、核准它的計畫。
+- **管理 session**：在任何資料夾開新 session，也能喚醒、改名、休眠或關閉 session，而且不會打斷你在電腦上正在看、正在打字的地方。
+- **處理收件匣與交接**：接受或略過項目；排定時間的交接可以提前執行或取消。
+- **閱讀 OpenSpec**：每個資料夾的 change、proposal、design、spec 與 task，唯讀。
+
+<PhoneScreenshots
+  shots={[
+    { src: phoneSessions, alt: "手機 app 的 session 清單：三個資料夾，每個 agent session 標著閒置、工作中或等你，其中一個是從別的 session 交接過來的。" },
+    { src: phoneConversation, alt: "手機上的 agent 對話：一個跑測試的工具呼叫、agent 以 Markdown 寫的摘要，以及可以附加檔案的回覆欄。" },
+    { src: phonePrompt, alt: "手機正在回答 agent 的提問：搜尋要怎麼比對的三個選項，已選好一個，下方是送出答案與拒絕。" },
+    { src: phoneInbox, alt: "手機上的桌面收件匣：一則 Slack 提及等著處理，預定開在 weather-app，可以略過或接受。" },
+    { src: phoneOpenspec, alt: "手機上某個 OpenSpec change 的 task，唯讀：五項完成三項。" },
+  ]}
+  caption="手機上的 session 清單、對話、agent 的提問、收件匣與 OpenSpec。"
+/>
+
+## 配對
+
+1. 在電腦上打開 **設定 → 遠端存取**，開啟 **允許已配對的裝置連線**。這項功能預設是關閉的。
+2. 選 **配對裝置**，畫面上會出現一個 QR code。
+3. 在手機上安裝 app，掃描這個 QR code。
+
+QR code 只能用一次，五分鐘內有效。手機會自己保管登入用的憑證，並用 QR code 裡的指紋核對 spekterm 的憑證，所以別台電腦冒充不了你的電腦。
+
+## 打開之前先想一下
+
+配對好的手機可以對你的 session 打字，而 agent 能執行 shell 指令，所以請把這支手機看成你的鍵盤。遠端存取會在電腦所有的網路介面上等待連線：在不信任的網路上，請把它關掉。在同一個設定分類裡，你可以查看已配對的裝置、撤銷其中一台，或全部重設。
+
+完整說明請見[遠端存取](/zh-tw/docs/using/remote-access/)：配對好的手機能做和不能做的事、網路、通知，以及如何撤銷裝置。app 本身的隱私權政策在[這裡](/zh-tw/android/privacy/)。

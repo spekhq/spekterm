@@ -76,3 +76,7 @@ section is marked in the list. See [Remote access](/docs/using/remote-access/).
 ## About
 
 The version, build time, and commit of the build you are running — useful when reporting a problem.
+
+**Updates**: **Check for updates automatically**, **Check now**, when the last check ran and what it found,
+and, once a new version is ready, **Restart to update** (or **Download** where spekterm cannot install it
+itself). See [Updating](/docs/getting-started/install/#updating).

@@ -1,0 +1,75 @@
+---
+title: spekterm on your phone
+description: The spekterm app for Android follows and answers the agents running in spekterm on your computer. It connects to your computer directly and needs it running.
+sidebar:
+  order: 3
+---
+
+import PhoneScreenshots from '../../../../components/PhoneScreenshots.astro'
+import phoneSessions from '../../../../assets/screenshots/en/phone-sessions.png'
+import phoneConversation from '../../../../assets/screenshots/en/phone-conversation.png'
+import phonePrompt from '../../../../assets/screenshots/en/phone-prompt.png'
+import phoneInbox from '../../../../assets/screenshots/en/phone-inbox.png'
+import phoneOpenspec from '../../../../assets/screenshots/en/phone-openspec.png'
+
+**spekterm for Android** puts the spekterm on your computer in your pocket: you are notified when an agent
+waits for you, and you can read its conversation, reply, and answer its prompts from wherever you are.
+
+> **Get it on [Google Play](https://play.google.com/store/apps/details?id=com.spekterm.android).** It is free
+> and open source ([spekhq/spekterm-android](https://github.com/spekhq/spekterm-android)).
+
+## A companion, not a standalone app
+
+The phone app runs nothing by itself. Your agents, terminals, and repositories stay on your computer; the
+phone is a window onto them. So:
+
+- **spekterm must be running on your computer.** When it is closed (or the computer is asleep), the phone
+  cannot connect, and it has nothing to show.
+- **The phone must be able to reach your computer**: on the same network, over Tailscale, or through a port
+  you forward. See [Networks](/docs/using/remote-access/#networks).
+- **There is no server in between.** No account, no relay, no push service: the phone connects straight to
+  your computer, and notifications arrive over that same connection.
+
+## What you can do from the phone
+
+- **Get notified** when an agent waits for you, asks for a choice or a permission, finishes a handoff, or
+  when an inbox item arrives.
+- **See every session** by folder, with each agent's state: working, waiting for you, idle, or dormant.
+- **Read and reply**: an agent's messages and tool calls, with photos, PDFs, and text files attached to your
+  reply.
+- **Answer prompts**: allow or deny a permission, pick an answer to an agent's question, approve a plan.
+- **Manage sessions**: start one in any folder, wake, rename, hibernate, or close it — without taking your
+  computer's screen or keyboard focus away from you.
+- **Handle the inbox and handoffs**: accept or dismiss an item, run or cancel a scheduled handoff.
+- **Read OpenSpec**: each folder's changes, proposals, designs, specs, and tasks, read-only.
+
+<PhoneScreenshots
+  shots={[
+    { src: phoneSessions, alt: "The phone app's session list: three folders, each agent session marked idle, working, or waiting for you, and a session handed off from another." },
+    { src: phoneConversation, alt: "An agent's conversation on the phone: a tool call that ran the tests, the agent's Markdown summary, and the reply box with an attach button." },
+    { src: phonePrompt, alt: "The phone answering an agent's question: three ways the search could match, one chosen, with Send answer and Decline." },
+    { src: phoneInbox, alt: "A Slack mention waiting in the desktop's inbox on the phone, set to open in weather-app, with Dismiss and Accept." },
+    { src: phoneOpenspec, alt: "An OpenSpec change's tasks on the phone, read-only: three of five done." },
+  ]}
+  caption="Sessions, a conversation, an agent's question, the inbox, and OpenSpec on the phone."
+/>
+
+## Set it up
+
+1. On your computer, open **Settings → Remote access** and turn on **Allow paired devices to connect**. It is
+   off until you do.
+2. Choose **Pair a device**. spekterm shows a QR code.
+3. Install the app on your phone and scan the code.
+
+The code works once, for five minutes. The phone stores its own credential, and checks spekterm's
+certificate against the one in the code, so another computer cannot pose as yours.
+
+## Before you turn it on
+
+A paired phone can type into your sessions, and agents have a shell, so treat it like your keyboard.
+Remote access listens on every network interface: turn it off on networks you do not trust. You can see the
+paired devices, revoke one, or reset them all in the same Settings section.
+
+[Remote access](/docs/using/remote-access/) is the full reference: what a paired phone can and cannot do,
+networks, notifications, and revoking devices. The app's own privacy policy is
+[here](/android/privacy/).

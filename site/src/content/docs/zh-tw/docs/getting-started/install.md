@@ -110,6 +110,8 @@ spekterm 記得的一切，包括資料夾清單、session、側欄的位置、�
 - Linux 上是 `~/.config/Spekterm`；
 - macOS 上是 `~/Library/Application Support/Spekterm`。
 
+另外，在 Linux 上會自我更新的 AppImage，會把下載的新版本暫放在 `~/.cache/spekterm-updater`，這個資料夾隨時可以刪。
+
 spekterm 不會往你的 repository 裡寫任何東西。刪掉那個目錄，spekterm 就回到剛安裝的狀態，你的程式碼不受影響。
 
 ## 更新

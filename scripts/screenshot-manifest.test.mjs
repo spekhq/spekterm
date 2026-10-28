@@ -6,7 +6,9 @@
  * entry without its file means the set is incomplete. This cannot prove where the manifest came from —
  * it is a weak carrier, and the maintainer's review of every image is the other half.
  *
- * Also the verdict the script applies to the screen before each capture (`scripts/lib/screen-check.mjs`).
+ * Also the verdict the script applies to the screen before each capture (`scripts/lib/screen-check.mjs`), and
+ * that the imported phone screenshots are exactly spekterm for Android's set, with the release they came from
+ * recorded (`scripts/lib/phone-shots.mjs`; its own test covers the controls).
  */
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
@@ -14,6 +16,7 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { dirname, join, relative } from 'node:path'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
+import { committedPhoneProblems, SOURCE_FILE } from './lib/phone-shots.mjs'
 import { MAINTAINER_HOME, sha256 } from './lib/public-hygiene.mjs'
 import { screenVerdict } from './lib/screen-check.mjs'
 
@@ -43,6 +46,12 @@ test('every committed screenshot is one the capture script wrote, and none is mi
   const manifest = JSON.parse(readFileSync(join(SHOTS, 'manifest.json'), 'utf8'))
   const images = Object.fromEntries(imagesOn(SHOTS).map((file) => [relative(SHOTS, file), readFileSync(file)]))
   assert.deepEqual(manifestProblems(images, manifest), [])
+})
+
+test('the phone screenshots are exactly the imported set, and their release is recorded', () => {
+  const manifest = JSON.parse(readFileSync(join(SHOTS, 'manifest.json'), 'utf8'))
+  const source = existsSync(join(SHOTS, SOURCE_FILE)) ? readFileSync(join(SHOTS, SOURCE_FILE), 'utf8') : null
+  assert.deepEqual(committedPhoneProblems(Object.keys(manifest), source), [])
 })
 
 test('control: a replaced, an added, and a deleted screenshot, and an empty manifest, are caught', () => {

@@ -32,11 +32,18 @@ notarized by Apple, so the first launch needs one extra step, and a few features
 see [Install on macOS](/docs/getting-started/install/#install-on-macos). Windows and Intel Macs are not
 supported yet.
 
+## Is there a mobile app?
+
+Yes, for Android: [spekterm for Android](/docs/getting-started/phone/) on Google Play. It is a companion,
+not a standalone app — it connects directly to spekterm running on your computer, so the computer must be on,
+spekterm must be running, and the phone must be able to reach it. There is no iOS app.
+
 ## Is my code sent anywhere?
 
 spekterm itself does not send your code anywhere. The programs it starts for you — such as `claude` —
-connect to their own services. See [Data and network](/docs/reference/data-and-network/) for the full
-list.
+connect to their own services. If you turn on [remote access](/docs/using/remote-access/), your paired
+phone reads your sessions straight from your computer, with nothing in between. See
+[Data and network](/docs/reference/data-and-network/) for the full list.
 
 ## How is spekterm related to spek?
 

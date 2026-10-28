@@ -59,6 +59,24 @@ git clone --branch v1.19.0 ../spek /tmp/spek-release && (cd /tmp/spek-release &&
 SPEK_DIR=/tmp/spek-release npm run capture:screenshots
 ```
 
+spekterm for Android's phone screenshots (`src/assets/screenshots/<en|zh-TW>/phone-*.png`) are imported, not
+captured: the app is a native phone app this repository cannot run. The capture reads the five phone screenshots
+of its Google Play listing, per language, **as committed at a release tag** of a spekterm-android repository —
+`ANDROID_DIR` (default `../spekterm-android`) at `ANDROID_TAG` (default its highest `v<major>.<minor>.<patch>`
+tag), never its working tree — byte for byte, and records the tag in `src/assets/screenshots/ANDROID_SOURCE`. It
+imports all ten or none. Their text is not read (there is no screen to read), so **look at every one before
+committing it**: nothing on them may name a real repository, session, person, host or address. A full
+`npm run capture:screenshots` imports them too, so it needs that repository; the import alone needs no build:
+
+```bash
+node scripts/capture-screenshots.mjs --only phone
+```
+
+## When spekterm-android releases
+
+If the release retook its listing's screenshots: re-import them (`--only phone`, which picks the new tag), look
+at all ten, and commit them with the manifest and `ANDROID_SOURCE`.
+
 ## When spek releases
 
 spek's pages describe spek's code, not its README, and nothing in this repository can see that code. On a

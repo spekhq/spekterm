@@ -79,3 +79,4 @@ screen shown above a line that reads **end of previous content**. Details are in
 - [Terminals and sessions](/docs/using/terminals-and-sessions/) — restore, hibernation, worktrees.
 - [The OpenSpec side panel](/docs/using/side-panel/) — artifacts, browsing, Graph and Timeline.
 - [Keyboard shortcuts](/docs/reference/keyboard-shortcuts/) — the whole list.
+- [spekterm on your phone](/docs/getting-started/phone/) — follow and answer your agents away from the desk.

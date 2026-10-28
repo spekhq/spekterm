@@ -1,0 +1,37 @@
+## 1. The phone set module
+
+- [x] 1.1 Add `scripts/lib/phone-shots.mjs` per D1–D3: the D2 set table, `phoneSetProblems(files)` (present, PNG signature, `IHDR` at bytes 12–15, 1080 × 1920), the release-tag choice, the git reads (top-of-repository check against the real path, `refs/tags/<tag>` verified, `cat-file blob`, `LC_ALL=C`, 64 MiB `maxBuffer`, exit status and spawn error checked), and `importPhoneSet({ dir, tag, outDir, manifest })`. Verify `scripts/phone-shots.test.mjs` passes, covering: a missing file, a non-PNG, a wrong size, a wrong chunk type, a valid set; tag choice among `v0.10.0` / `v0.9.1` / `core-v1.0.0` / `v1`, and none; and, in temporary git repositories and output directories: a valid tag (ten files byte-identical to the blobs, hashes set on the given manifest, `ANDROID_SOURCE` written), a tag missing one file and a tag holding a wrong-size file (output directory and manifest object unchanged, file name in the problem), a non-release tag, an unknown tag, a branch with a release tag's name but no tag, a repository with no release tag, a subdirectory of a repository, and the directory given relative and with a trailing `/` (accepted). Tests assert on the module's own messages (file and tag names), never on git's wording.
+- [x] 1.2 Controls for 1.1, recorded here: dropping the size check, ignoring a git call's exit status, accepting `v1` as a release, and writing each file as soon as it validates each turn a named case red; restored after.
+  - **Ran**: dropping the size check turned 4 tests red; ignoring the exit status, 3; accepting `v1`, 6; writing each file as it validates, 1 ("a failed import writes nothing…"). Restored: 16/16 pass.
+
+## 2. Phone screenshot import
+
+- [x] 2.1 Wire `importPhoneSet` into `scripts/capture-screenshots.mjs` per D3 (`--only phone` before the virtual-display re-run, the build check and `prepareFixtures()`; the full run inside the child, on the main flow's manifest object; other `--only` values skip it); update the script's header comment. Verify: `node scripts/capture-screenshots.mjs --only phone` with `out/` absent and spekterm-android at `v0.4.0` writes ten files byte-identical to `git cat-file blob v0.4.0:<path>` (`cmp`), `ANDROID_SOURCE` reads `v0.4.0`, and `/tmp/spekterm-shots` is not touched; `--only hero` leaves every `phone-*` file and `ANDROID_SOURCE` untouched.
+  - **Ran**: with `out/` moved aside, `--only phone` exited 0, wrote ten files that `cmp` equal the `v0.4.0` blobs, `ANDROID_SOURCE` = `v0.4.0`, `/tmp/spekterm-shots` absent before and after. `--only hero` rewrote only `en|zh-TW/hero.png` and the manifest's hero entries; the phone files, their manifest entries and `ANDROID_SOURCE` hashed the same before and after (the hero files were then restored).
+- [x] 2.2 Verify the abort cases by hand and record them here, against a `git clone --local` of spekterm-android in the scratchpad (nothing tagged in the real repository): `ANDROID_TAG=v1`, `ANDROID_TAG=v9.9.9`, `ANDROID_DIR` at a subdirectory, and a tag on a commit that deletes one listing file and changes another's bytes. Before each, `touch` a marker and save `find site/src/assets/screenshots -type f | sort | xargs sha256sum`; after, each case exits non-zero naming the reason, `find site/src/assets/screenshots -newer <marker>` is empty, and the two file lists with hashes are identical (`diff`).
+  - **Ran** against a `git clone --local` in the scratchpad (tag `v9.0.0` on a commit deleting `en-US/04-inbox.png` and changing `zh-TW/02-conversation.png`): `ANDROID_TAG=v1` → "v1 is not a release tag"; `v9.9.9` → "no tag v9.9.9"; `ANDROID_DIR=…/play` → "is not the top of a git repository"; `ANDROID_TAG=v9.0.0` and no tag (picks `v9.0.0`) → "04-inbox.png: missing at v9.0.0". Each exit 1, nothing newer than the marker, file lists with hashes identical.
+- [x] 2.3 Review all ten imported images (both languages) for anything naming a real repository, session, person, host or address before committing them.
+  - Reviewed by the maintainer on 2026-10-28: all ten approved.
+
+## 3. The manifest test
+
+- [x] 3.1 Extend `scripts/screenshot-manifest.test.mjs` (D5): the manifest's `phone-*` keys equal the set × `en`/`zh-TW`, and `ANDROID_SOURCE` exists and is a release tag whenever any is present; controls for an extra phone image, a missing one in one language, and a missing or malformed `ANDROID_SOURCE`. Verify `npm test` passes and each control fails as named.
+  - **Ran** on the real set: an extra `en/phone-extra.png` key, a missing `zh-TW/phone-inbox.png` key, no `ANDROID_SOURCE`, and `v1` in it each turned the test red with that file named; restored green.
+
+## 4. Show them on the site
+
+- [x] 4.1 Add `site/src/components/PhoneScreenshots.astro` (side by side, ≤ 15rem each, wrapping; widths 360 / 540 / 1080; caption plus the illustrative-content note) and update `Screenshot.astro`'s comment on where screenshots come from.
+- [x] 4.2 Put sessions, conversation and prompt on both landing pages' phone section, and all five on both phone pages, with per-language alt texts; check in `npm run dev` at desktop and phone widths in both languages.
+  - Checked with headless Chrome at 1440 px (the phone page: three, then two) and 400 px (the zh-TW landing page: two, then one). Alt texts were written from the images (the third is an agent's multiple-choice question, not a permission prompt).
+
+## 5. Landing check
+
+- [x] 5.1 Add `landing.phone` to `site/src/content-plan.json` (and its `$comment`) and the check to `site/scripts/check-content.mjs` (header comment too): phone image, Play link, that language's phone page link and keyword, in main content. Add the phone elements to the self-test's passing fixture and failing fixtures for a missing phone image, the Play link only in the footer, the zh-TW landing page linking the English phone page, and a missing keyword. Verify `npm run build` in `site/` passes, and that deleting the Play card from the English landing page fails it (then restore).
+  - **Ran**: the self-test catches 26 content violations (22 before: the four new fixtures); deleting the English landing page's Google Play card failed the build with "/: no link to https://play.google.com/store/apps/details?id=com.spekterm.android"; restored, the build passes.
+
+## 6. Docs and coverage
+
+- [x] 6.1 Add a "When spekterm-android releases" section to `site/README.md` (re-import with `--only phone`, review, commit), mention the phone import beside spek's in its screenshots paragraph, and note that a full capture run needs `ANDROID_DIR`; update the root `CLAUDE.md` website bullet that says screenshots come only from `npm run capture:screenshots` to name the import.
+- [x] 6.2 Register `android-screenshots-on-the-website` in `scripts/scenario-coverage.test.mjs` and add rows for the five new scenarios (carrier, `greenIfAbsent`, mutation), each carrier a test name that exists in `phone-shots.test.mjs`, `screenshot-manifest.test.mjs` or `check-content.mjs`'s self-test — none filled from memory; verify `npm test` passes.
+- [x] 6.3 Run `npm test`, `npm run lint` and `npm run typecheck` at the root, and `npm run build` in `site/`; all pass.
+  - `npm test` 2638/2638 on the second run; the first run had one failure in `src/main/user-env.spawn.test.ts` ("agent 目標的 session 內看得到互動 rc 的變數…"), which this change does not touch: alone it failed once in five runs and passed otherwise. Lint, typecheck and the site build pass.

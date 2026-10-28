@@ -147,6 +147,9 @@ lives in one directory:
 - on Linux, `~/.config/Spekterm`;
 - on macOS, `~/Library/Application Support/Spekterm`.
 
+On Linux, a self-updating AppImage also keeps the update it downloads in `~/.cache/spekterm-updater`; that
+folder can be removed at any time.
+
 Nothing is written into your repositories. Removing that directory resets spekterm to a fresh install; it
 does not touch your code.
 

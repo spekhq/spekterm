@@ -55,3 +55,4 @@ change 還缺 artifact 時，**續寫**會請 focused 的 `claude` session 寫�
 - [終端機與 session](/zh-tw/docs/using/terminals-and-sessions/) —— 還原、休眠、worktree。
 - [OpenSpec 側欄](/zh-tw/docs/using/side-panel/) —— artifact、瀏覽、關係圖與時間軸。
 - [快捷鍵](/zh-tw/docs/reference/keyboard-shortcuts/) —— 完整清單。
+- [在手機上使用 spekterm](/zh-tw/docs/getting-started/phone/) —— 離開座位也能追蹤並回應你的 agent。

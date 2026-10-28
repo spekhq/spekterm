@@ -1,8 +1,9 @@
 {
-  "$comment": "What check-content requires of the built site (project-website). topics: documentation pages that must exist in both languages (slugs without locale prefix). landing: the hero screenshot's file name stem, and the i18n key of the platform-status sentence the landing page must show verbatim. dataAndNetworkKeywords: words the data and network page must contain per language. forbiddenPhrases: platform statements no page may make (Linux only; Linux and macOS only; macOS unsupported; a download call to action for one platform's format), matched case-insensitively and with whitespace normalised against every page. downloadFormats: file formats a download link to the latest release on a landing page or documentation home must not name alone. spek: the same for spek's pages — topics, its data and network page and keywords (matched as words), and the links spek's landing page must carry in its main content.",
+  "$comment": "What check-content requires of the built site (project-website). topics: documentation pages that must exist in both languages (slugs without locale prefix). landing: the hero screenshot's file name stem, and the i18n key of the platform-status sentence the landing page must show verbatim; landing.phone: the Android app's introduction the landing page must carry in its main content — an image whose file name starts with screenshotPrefix, the links, a link to that language's page (page, with the language's prefix), and per language the words saying spekterm must be running. dataAndNetworkKeywords: words the data and network page must contain per language. forbiddenPhrases: platform statements no page may make (Linux only; Linux and macOS only; macOS unsupported; a download call to action for one platform's format), matched case-insensitively and with whitespace normalised against every page. downloadFormats: file formats a download link to the latest release on a landing page or documentation home must not name alone. spek: the same for spek's pages — topics, its data and network page and keywords (matched as words), and the links spek's landing page must carry in its main content.",
   "topics": [
     "docs/getting-started/install",
     "docs/getting-started/first-workspace",
+    "docs/getting-started/phone",
     "docs/using/terminals-and-sessions",
     "docs/using/side-panel",
     "docs/using/conversation-view",
@@ -19,7 +20,16 @@
   "dataAndNetwork": "docs/reference/data-and-network",
   "landing": {
     "heroScreenshot": "hero",
-    "platformsString": "landing.platforms"
+    "platformsString": "landing.platforms",
+    "phone": {
+      "screenshotPrefix": "phone-",
+      "links": ["https://play.google.com/store/apps/details?id=com.spekterm.android"],
+      "page": "docs/getting-started/phone",
+      "keywords": {
+        "en": ["spekterm must be running"],
+        "zh-TW": ["必須開著"]
+      }
+    }
   },
   "dataAndNetworkKeywords": {
     "en": [

@@ -31,7 +31,7 @@ otherwise download a dictionary from a third-party server at startup.
 ## Remote access (off unless you turn it on)
 
 When you turn on **remote access**, spekterm **listens** for connections on one port (47615 unless you change
-it) on every network interface, so the spekterm app on your phone can reach it over your LAN, Tailscale, or
+it) on every network interface, so the [spekterm app on your phone](/docs/getting-started/phone/) can reach it over your LAN, Tailscale, or
 a port you forward. Only devices you paired can use the connection. Each one connects over TLS to the
 certificate it checked when pairing, and authenticates with its own credential, which you can revoke.
 **Remote access makes no connection of its own**: it only answers your devices, and your phone learns of
@@ -65,7 +65,8 @@ observe what these programs do**:
 ## Where your data is stored
 
 Everything spekterm keeps is on your machine, under `~/.config/Spekterm` on Linux and
-`~/Library/Application Support/Spekterm` on macOS:
+`~/Library/Application Support/Spekterm` on macOS (on Linux, an update being downloaded waits in
+`~/.cache/spekterm-updater`):
 
 - your workspace (the folder list, the order, what is pinned) and the side panel's position per folder;
 - your sessions, and the last screen of each shell session so it can be replayed after a restart;

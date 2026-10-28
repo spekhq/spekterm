@@ -26,6 +26,10 @@ import terminal from '../../../assets/screenshots/zh-TW/terminal.png'
 import inbox from '../../../assets/screenshots/zh-TW/inbox.png'
 import graph from '../../../assets/screenshots/zh-TW/graph.png'
 import handoff from '../../../assets/screenshots/zh-TW/handoff.png'
+import PhoneScreenshots from '../../../components/PhoneScreenshots.astro'
+import phoneSessions from '../../../assets/screenshots/zh-TW/phone-sessions.png'
+import phoneConversation from '../../../assets/screenshots/zh-TW/phone-conversation.png'
+import phonePrompt from '../../../assets/screenshots/zh-TW/phone-prompt.png'
 
 <Screenshot
   wide
@@ -42,7 +46,7 @@ import handoff from '../../../assets/screenshots/zh-TW/handoff.png'
 
 <CardGrid>
   <Card title="這個 change" icon="document">
-    以分頁呈現 change 的 proposal、design、tasks 與 specs，並附上 task 進度。側欄會跟著你正在看的 session 切換。
+    以分頁呈現 change 的 proposal、design、tasks 與 specs，並附上 task 進度。每個 repository 各自記得要顯示哪一個 change。
   </Card>
   <Card title="瀏覽、關係圖、時間軸" icon="list-format">
     repository 裡所有的 spec 與 change、它們之間的關係，以及每個 change 隨時間的進展。
@@ -73,6 +77,7 @@ import handoff from '../../../assets/screenshots/zh-TW/handoff.png'
 
 - **真正的終端機** —— `claude` 與你的 login shell 跑在真正的 pty 裡。每個 repository 可以開好幾個，也能開在 git worktree 裡。
 - **重開 app 也還在** —— `claude` session 會接續原本的對話；shell 會重播先前的畫面，並回到上次的目錄（macOS 上則回到它的資料夾）。
+- **一眼看出誰在等你** —— 每個 agent session 旁都有一個狀態點，標出它正在工作、在等你，還是要你做選擇；終端機上方還會統計整個工作區的狀況。
 - **用不到的就讓它休眠** —— 可以手動休眠，閒置一天後也會自動休眠。休眠的 session 會結束行程，直到你喚醒它。
 
 ## 讀 agent 在做什麼，不只是看終端機
@@ -89,7 +94,7 @@ import handoff from '../../../assets/screenshots/zh-TW/handoff.png'
 />
 
 - **收件匣** —— 有人在 Slack 提及你，那則提及就會進到收件匣。接受之後，spekterm 會在你選的 repository 開好一個 Claude Code session，context 也已備妥。
-- **交接** —— agent 可以把工作交給另一個 repository 的 agent。spekterm 會開好新的 session；在工作回報完成之前，交接的兩端你都看得到。
+- **交接** —— agent 可以把工作交給另一個 repository 的 agent。spekterm 會開好新的 session；在工作回報完成之前，交接的兩端你都看得到。交接也可以排定時間再開始，或在你核准後定期重複。
 
 <Screenshot
   wide
@@ -97,6 +102,26 @@ import handoff from '../../../assets/screenshots/zh-TW/handoff.png'
   alt="一個把工作交給另外兩個 session 的 session：rail 標出每個 session 的狀態，已完成那一個的交接單顯示它的任務與回報的結果。"
   caption="交接的兩端：rail 上看得出誰把什麼交給了誰，交接單留著任務與結果。"
 />
+
+## 離開座位，也不漏接
+
+**Android 版 spekterm** 直接連到你電腦上的 spekterm —— 不用註冊帳號，沒有中繼站，也不經推播服務 —— agent 一等你，手機就會通知你。在手機上，你可以讀 agent 的對話、附上照片或檔案回覆它、回答它的權限要求與提問、開新 session、喚醒或休眠 session，也能處理收件匣與交接。
+
+它是桌面版的搭檔，不能取代桌面版：電腦上的 spekterm 必須開著，手機也必須連得到它（同一個網路、Tailscale，或 port forward）。遠端存取預設是關閉的，要你自己打開。
+
+<PhoneScreenshots
+  shots={[
+    { src: phoneSessions, alt: "手機 app 的 session 清單：三個資料夾，每個 agent session 標著閒置、工作中或等你，其中一個是從別的 session 交接過來的。" },
+    { src: phoneConversation, alt: "手機上的 agent 對話：一個跑測試的工具呼叫、agent 以 Markdown 寫的摘要，以及可以附加檔案的回覆欄。" },
+    { src: phonePrompt, alt: "手機正在回答 agent 的提問：搜尋要怎麼比對的三個選項，已選好一個，下方是送出答案與拒絕。" },
+  ]}
+  caption="Android 版 spekterm：你的 session、agent 的對話，以及在手機上回答 agent 的提問。"
+/>
+
+<CardGrid>
+  <LinkCard title="從 Google Play 下載" description="Android 版 spekterm：免費，原始碼公開。" href="https://play.google.com/store/apps/details?id=com.spekterm.android" />
+  <LinkCard title="設定你的手機" description="需要準備什麼、手機能做什麼，以及三步完成配對。" href="/zh-tw/docs/getting-started/phone/" />
+</CardGrid>
 
 ## 怎麼運作
 

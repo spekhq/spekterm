@@ -13,7 +13,9 @@
  *   otherwise publish a dead link with every other check green).
  * Content part — about what specific pages say:
  *   both landing pages' required elements (read from the main content without the footer, which holds
- *   the disclaimer, and without the header, which holds the product switch); no forbidden platform
+ *   the disclaimer, and without the header, which holds the product switch) — spekterm's include the
+ *   Android app's introduction: a phone screenshot, its Google Play link, a link to that language's phone
+ *   page, and that language's wording that spekterm must be running; no forbidden platform
  *   phrase ("Linux only", "Linux and macOS only", "macOS is not supported", a one-platform download
  *   button); no download link on a landing page or documentation home that names one file format alone;
  *   spekterm's platform status on no spek page; every required topic of both products has a page; both
@@ -326,6 +328,16 @@ export function checkContent(dist, { plan, strings, versions, sources, demoPin, 
     for (const name of ['Claude Code', 'OpenSpec']) if (!page.text.includes(name)) problems.push(`${path}: does not name ${name}`)
     const platforms = strings[lang]?.[plan.landing.platformsString]
     if (!platforms || !page.text.includes(platforms)) problems.push(`${path}: does not state the platform status`)
+    const phone = plan.landing.phone
+    if (!page.images.some((name) => name.startsWith(phone.screenshotPrefix))) {
+      problems.push(`${path}: no phone screenshot (an image named ${phone.screenshotPrefix}*)`)
+    }
+    for (const href of phone.links) if (!page.links.includes(href)) problems.push(`${path}: no link to ${href}`)
+    const phonePage = `${prefix}/${phone.page}/`
+    if (!page.links.includes(phonePage)) problems.push(`${path}: no link to ${phonePage}`)
+    for (const keyword of phone.keywords[lang] ?? []) {
+      if (!page.text.includes(keyword)) problems.push(`${path}: does not say "${keyword}"`)
+    }
   }
 
   for (const path of ['/spek/', '/zh-tw/spek/']) {
@@ -365,10 +377,15 @@ export function checkContent(dist, { plan, strings, versions, sources, demoPin, 
 // ---------------------------------------------------------------------------------------------
 // Self-test: a built site that satisfies every rule, and one mutation per rule.
 
+const PLAY = 'https://play.google.com/store/apps/details?id=com.example.phone'
 const PLAN = {
   topics: ['docs/a', 'docs/net'],
   dataAndNetwork: 'docs/net',
-  landing: { heroScreenshot: 'hero', platformsString: 'landing.platforms' },
+  landing: {
+    heroScreenshot: 'hero',
+    platformsString: 'landing.platforms',
+    phone: { screenshotPrefix: 'phone-', links: [PLAY], page: 'docs/phone', keywords: { en: ['must be running'], 'zh-TW': ['必須開著'] } },
+  },
   dataAndNetworkKeywords: { en: ['Slack', 'login shell'], 'zh-TW': ['Slack', 'login shell'] },
   forbiddenPhrases: ['Linux only', '只支援 Linux', 'macOS is not supported', '尚未支援 macOS', 'Linux and macOS only', 'Download for Linux (AppImage)'],
   downloadFormats: ['AppImage', 'dmg'],
@@ -432,10 +449,11 @@ ${footer ? `<div class="site-footer"><p class="disclaimer">${disclaimer}</p>` : 
 </body></html>`
 }
 
-function landingMain(lang, { hero = true, download = true, platforms = true, spekLink = true } = {}) {
+function landingMain(lang, { hero = true, download = true, platforms = true, spekLink = true, phoneShot = true, play = true, phonePage, running = true } = {}) {
   const prefix = lang === 'en' ? '' : '/zh-tw'
+  const phone = `${phoneShot ? '<img src="/_astro/phone-sessions.Ab12.webp" alt="">' : ''}${play ? `<a href="${PLAY}">Google Play</a>` : ''}<a href="${phonePage ?? `${prefix}/docs/phone/`}">Phone</a>${running ? `<p>${lang === 'en' ? 'spekterm must be running on your computer.' : '電腦上的 spekterm 必須開著。'}</p>` : ''}`
   return `<h1>spekterm</h1><p>Claude Code next to OpenSpec.</p>${platforms ? `<p>${STRINGS[lang]['landing.platforms']}</p>` : ''}
-${hero ? '<img src="/_astro/hero.Ab12.webp" alt="">' : ''}${download ? `<a href="${LATEST_RELEASE}">Download</a>` : ''}<a href="${prefix}/docs/">Docs</a><a href="https://github.com/spekhq/spekterm">Source</a>${spekLink ? `<a href="${prefix}/spek/">spek</a>` : ''}`
+${hero ? '<img src="/_astro/hero.Ab12.webp" alt="">' : ''}${download ? `<a href="${LATEST_RELEASE}">Download</a>` : ''}<a href="${prefix}/docs/">Docs</a><a href="https://github.com/spekhq/spekterm">Source</a>${spekLink ? `<a href="${prefix}/spek/">spek</a>` : ''}${phone}`
 }
 
 function spekLandingMain(lang, { openspec = true, demo = true, spektermLink = true } = {}) {
@@ -548,6 +566,10 @@ function runSelfTest() {
       { label: 'a landing page without the download link', files: fakeSite({ 'zh-tw/index.html': fakePage('/zh-tw/', { main: landingMain('zh-TW', { download: false }) }) }), expect: '/zh-tw/: no download link' },
       { label: 'a landing page without the platform status', files: fakeSite({ 'index.html': fakePage('/', { main: landingMain('en', { platforms: false }) }) }), expect: 'platform status' },
       { label: "a landing page linking spek only from the header", files: fakeSite({ 'index.html': fakePage('/', { main: landingMain('en', { spekLink: false }) }) }), expect: "/: no link to spek's landing page" },
+      { label: 'a landing page without a phone screenshot', files: fakeSite({ 'index.html': fakePage('/', { main: landingMain('en', { phoneShot: false }) }) }), expect: '/: no phone screenshot' },
+      { label: 'a landing page linking Google Play only from its footer', files: fakeSite({ 'zh-tw/index.html': fakePage('/zh-tw/', { main: `${landingMain('zh-TW', { play: false })}<div class="site-footer"><a href="${PLAY}">Google Play</a></div>` }) }), expect: `/zh-tw/: no link to ${PLAY}` },
+      { label: "a Traditional Chinese landing page linking the English phone page", files: fakeSite({ 'zh-tw/index.html': fakePage('/zh-tw/', { main: landingMain('zh-TW', { phonePage: '/docs/phone/' }) }) }), expect: '/zh-tw/: no link to /zh-tw/docs/phone/' },
+      { label: 'a landing page not saying spekterm must be running', files: fakeSite({ 'index.html': fakePage('/', { main: landingMain('en', { running: false }) }) }), expect: '/: does not say "must be running"' },
       { label: 'a spek landing page naming OpenSpec only in the footer', files: fakeSite({ 'spek/index.html': fakePage('/spek/', { main: spekLandingMain('en', { openspec: false }) }) }), expect: '/spek/: does not name OpenSpec' },
       { label: 'a spek landing page without the demo link', files: fakeSite({ 'zh-tw/spek/index.html': fakePage('/zh-tw/spek/', { main: spekLandingMain('zh-TW', { demo: false }) }) }), expect: 'no link to /spek/demo/' },
       { label: "a build without spek's live demo", files: withoutFile(fakeSite(), DEMO_FILE), expect: "spek's live demo (/spek/demo/index.html) was not built" },

@@ -6,7 +6,7 @@ sidebar:
 ---
 
 spekterm's shortcuts work wherever the focus is: in a terminal, in the editor, or in the side panel. They
-do nothing while a dialog or a menu is open. The terminal almost always has the focus, so spekterm catches
+do nothing while a dialog or a menu is open, except the zoom keys. The terminal almost always has the focus, so spekterm catches
 these keys before the terminal does. A key spekterm uses never reaches the program running in the terminal.
 
 ## Sessions and the rail
