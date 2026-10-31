@@ -11,8 +11,9 @@ import { RemoteError } from './remote-frames'
  * keys, **never including Enter**, written one at a time. The plans rest on measurements of the real agent
  * (CLI 2.1.300, `docs/lessons/transcript.md`; re-measure after a CLI upgrade):
  *
- * - a permission prompt of `Bash`, `Edit`, `Write`, `Read` or `WebFetch` puts a one-time "Yes" first, and `1`
- *   picks it without Enter. Other tools were not measured, so they cannot be allowed from a device;
+ * - a permission prompt of `Bash`, `Edit`, `Write`, `Read`, `WebFetch`, `WebSearch`, `EnterWorktree` or an MCP tool
+ *   (`mcp__*`, one prompt for every server; CLI 2.1.314) puts a one-time "Yes" first, and `1` picks it without
+ *   Enter. Other tools were not measured, so they cannot be allowed from a device;
  * - Esc dismisses any prompt: the agent's own turn ends, and the agent stays in plan mode on a plan approval;
  * - a question's option digits pick a single-choice option and move on, or toggle a several-choice option.
  *   Tab leaves a several-choice question. With more than one question, or a several-choice one, a review
@@ -36,7 +37,14 @@ import { RemoteError } from './remote-frames'
  */
 
 /** Tools whose permission prompt was measured to put a one-time approval first. */
-export const ALLOW_ONCE_TOOLS: ReadonlySet<string> = new Set(['Bash', 'Edit', 'Write', 'Read', 'WebFetch'])
+export const ALLOW_ONCE_TOOLS: ReadonlySet<string> = new Set(['Bash', 'Edit', 'Write', 'Read', 'WebFetch', 'WebSearch', 'EnterWorktree'])
+
+/** Every MCP tool gets the same prompt, whatever its server: `1. Yes` / `2. Yes, and don't ask again…` / `3. No`. */
+const MCP_TOOL = /^mcp__[^_]/
+
+export function canAllowOnce(tool: string): boolean {
+  return ALLOW_ONCE_TOOLS.has(tool) || MCP_TOOL.test(tool)
+}
 
 export const KEY_GAP_MS = 250
 export const CONFIRM_MS = 3000
@@ -100,7 +108,7 @@ export function promptView(requests: OpenRequest[], lastKeystroke: number | null
         kind: 'permission',
         tool: request.tool,
         arg: request.arg,
-        canAllow: ALLOW_ONCE_TOOLS.has(request.tool),
+        canAllow: canAllowOnce(request.tool),
         answerable: ok,
         open,
       }
@@ -142,7 +150,7 @@ export function planKeys(request: OpenRequest, decision: AnswerDecision, selecti
   if (decision === 'deny') return { keys: [ESC] }
   if (kind === 'permission') {
     if (decision !== 'allow') throw notAnswerable(`\`${decision}\` does not answer a permission prompt`)
-    if (!ALLOW_ONCE_TOOLS.has(request.tool)) throw notAnswerable(`${request.tool} cannot be allowed from a device`)
+    if (!canAllowOnce(request.tool)) throw notAnswerable(`${request.tool} cannot be allowed from a device`)
     return { keys: ['1'] }
   }
   if (kind === 'plan') {

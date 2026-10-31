@@ -325,7 +325,8 @@ Errors: `BAD_PARAMS`, `NO_WINDOW`, `NOT_FOUND`, `PREFILL_GONE`, `PREFILL_EDITED`
 `null` when none is open:
 
 - `{ id, kind: "permission", tool, arg, canAllow, answerable, open }` — `canAllow` is true only for `Bash`,
-  `Edit`, `Write`, `Read` and `WebFetch`, whose prompt puts a one-time "Yes" first;
+  `Edit`, `Write`, `Read`, `WebFetch`, `WebSearch`, `EnterWorktree` and MCP tools (`mcp__*`), whose prompt puts a
+  one-time "Yes" first;
 - `{ id, kind: "question", questions: [{ question, header, multiSelect, options: [{ label, description }] }], answerable, open }`
   — the agent's question tool;
 - `{ id, kind: "plan", plan: string|null, choices, answerable, open }` — the plan approval. `plan` is the plan

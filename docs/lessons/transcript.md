@@ -517,9 +517,14 @@ agent, tool and input: parallel calls' starts can arrive 1.5 ms apart, before ei
 | Write, Edit | `1. Yes` / `2. Yes, and switch to accept edits…` / `3. No` |
 | WebFetch | `1. Yes` / `2. Yes, and don't ask again for <host>` / `3. No, and tell Claude…` |
 | Read outside the working directories | `1. Yes` / `2. Yes, allow reading from <dir> during this session` / `3. No` |
+| WebSearch (CLI 2.1.314) | `1. Yes` / `2. Yes, and don't ask again for Web Search commands in <dir>` / `3. No` |
+| an MCP tool, `mcp__<server>__<tool>` (CLI 2.1.314) | `1. Yes` / `2. Yes, and don't ask again for <server> — <tool> commands in <dir>` / `3. No` |
+| EnterWorktree with a `path` outside `.claude/worktrees/` (CLI 2.1.314) | "permission-root relocation to …" `1. Yes` / `2. No` |
 | plan approval (`ExitPlanMode` with `tool_input.plan`) | `1. Yes, and use auto mode` / `2. Yes, manually approve edits` / `3. Tell Claude what to change` |
 | `ExitPlanMode` with an empty `tool_input` | "Exit plan mode?" `1. Yes, and switch to default (ask each time)` / `2. No` |
 
+- **Asked nothing** in default mode (CLI 2.1.314): `EnterWorktree` with a `name` (it creates under
+  `.claude/worktrees/`), `ExitWorktree` with `keep` or `remove`, and `Skill` for a project skill.
 - A digit picks its option at once, with no Enter. Esc dismisses any prompt and reports **nothing**: the agent's
   own turn ends ("Interrupted"); a question is "declined"; a plan approval leaves the agent in plan mode.
 - After a plan answer, every event carries the mode entered (`permission_mode: "auto"` or `"default"`). That

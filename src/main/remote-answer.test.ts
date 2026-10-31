@@ -61,7 +61,9 @@ test('key plans match the measured screens, and none contains Enter', () => {
 })
 
 test('refusals: a decision that does not fit, an unmeasured tool, the plan without a plan, bad selections', () => {
-  assert.equal(code(() => planKeys(request({ tool: 'mcp__x__y' }), 'allow')), 'NOT_ANSWERABLE')
+  assert.equal(code(() => planKeys(request({ tool: 'NotebookEdit' }), 'allow')), 'NOT_ANSWERABLE')
+  assert.equal(code(() => planKeys(request({ tool: 'mcp__' }), 'allow')), 'NOT_ANSWERABLE')
+  assert.equal(code(() => planKeys(request({ tool: 'xmcp__x__y' }), 'allow')), 'NOT_ANSWERABLE')
   assert.equal(code(() => planKeys(request({ tool: 'ExitPlanMode', plan: 'p' }), 'allow')), 'NOT_ANSWERABLE')
   assert.equal(code(() => planKeys(request({ tool: 'ExitPlanMode', plan: null }), 'approve-auto')), 'NOT_ANSWERABLE')
   assert.equal(code(() => planKeys(request(), 'answer', [[0]])), 'NOT_ANSWERABLE')
@@ -74,6 +76,16 @@ test('refusals: a decision that does not fit, an unmeasured tool, the plan witho
   assert.equal(code(() => planKeys(tooMany, 'answer', [[0]])), 'NOT_ANSWERABLE')
   // Denying is always possible.
   assert.deepEqual(planKeys(tooMany, 'deny').keys, ['\x1b'])
+})
+
+test('a one-time allow for every tool measured to put it first, and only for those', () => {
+  for (const tool of ['Bash', 'Edit', 'Write', 'Read', 'WebFetch', 'WebSearch', 'EnterWorktree', 'mcp__probe__ping', 'mcp__claude_ai_Docs__read']) {
+    assert.deepEqual(planKeys(request({ tool }), 'allow').keys, ['1'], tool)
+    assert.equal((promptView([request({ tool })], null) as { canAllow: boolean }).canAllow, true, tool)
+  }
+  for (const tool of ['NotebookEdit', 'ExitWorktree', 'Skill', 'mcp__', 'mcp___x', 'Mcp__x__y']) {
+    assert.equal((promptView([request({ tool })], null) as { canAllow: boolean }).canAllow, false, tool)
+  }
 })
 
 test('the prompt a device is shown, and when it may answer', () => {
