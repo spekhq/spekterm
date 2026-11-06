@@ -81,6 +81,7 @@ const COVERED_CHANGES = [
   'team-membership',
   'teammate-handoff',
   'teammate-handoff-return',
+  'openspec-watch-skip-archive',
 ]
 
 /** change 的所在 —— 封存後它會搬到 `archive/` 之下，兩處都找。 */
@@ -3532,6 +3533,22 @@ export const TABLE = [
     'queue declined on dismiss', 'greenIfAbsent: no reporting at all passes; the same section asserts the decline that does report'],
   ['A reason over the limit cannot be sent', 'refuses a reason over 500 after normalization', false, 'measure before normalizing', 'the renderer’s disabled button is not asserted by a probe'],
   ['A lone surrogate does not make a report refused', 'a lone surrogate becomes U+FFFD, at the same length', false, 'drop toWellFormed', ''],
+
+  // ── openspec-watch-skip-archive: openspec-data-access, worktree-aggregation (MODIFIED copies) ──
+  ['agent 改動 change 後側欄資料更新', 'openspec 目錄變更後快取失效，且通知 renderer', false, 'skip #invalidate in #onChange', 'asserts one more active change after the notice'],
+  ['連續變更合併為單次通知', '連續變更合併為單次通知', false, 'send on every event instead of after the debounce', ''],
+  ['重複請求不重複掃描', "'快取命中時不重複掃描', async", false, 'skip the cache lookup in #scan', 'counts calls of the injected scan'],
+  ['linked worktree 中的變更觸發更新', 'worktree 的 openspec 變更會使快取失效並通知 renderer', false, 'drop the worktree layer of #syncWorktreeWatches', ''],
+  ['worktree 中的 change 被改動後側欄更新', 'worktree 的 openspec 變更會使快取失效並通知 renderer', false, 'drop the worktree layer of #syncWorktreeWatches', 'the "後續請求取得改動後的內容" half is the cache-invalidation carrier of the row above'],
+  ['新建的 worktree 被納入', '執行期新建的 worktree，其後的寫入也被監看', false, 'sync the worktree layer only at the first scan', 'three steps; its comment explains why the plain "new worktree notifies" assertion is a false green'],
+  ['監看事件不攜帶路徑', 'worktree 的 openspec 變更會使快取失效並通知 renderer', true, null,
+    'greenIfAbsent: the send callback is typed (folderId) => void, so a path cannot be passed; the carrier only shows the notice for a worktree outside the folder is exactly the folderId'],
+  ['Archiving a change triggers an update', 'archiving a change notifies once its directory moves into the archive', true, 'ignore changes/ in the tree watcher too',
+    'greenIfAbsent: the unchanged code sees it as well (it watched everything); what this change could break is seeing it without watching the archive'],
+  ['An archived change arriving on its own triggers an update', 'an archived change directory arriving on its own notifies', false, 'no archive watcher (run: red)', ''],
+  ['The archive directory created after the watch started is followed', 'an archive directory created after the watch started is followed', false,
+    'the tree watcher not opening the archive watcher (run: red)', 'and "removed and created again" and "a changes directory created after the watch started" (same control, red)'],
+  ['Edits inside an archived change are not watched', 'an edit inside an archived change does not notify', false, 'no ignored predicate (run: red)', ''],
 ]
 
 /**
