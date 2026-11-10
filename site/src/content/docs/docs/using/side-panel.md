@@ -39,7 +39,7 @@ sometimes jumped to the wrong change would be worse than none. You choose:
 That change is now anchored for this folder, and **This change** shows it. Each folder remembers its own
 choice across restarts. If a repository has exactly one active change, it is shown without choosing.
 
-**Browse** also lists every spec. Open a spec to see which changes touch it.
+**Browse** also lists every spec. Open a spec to see which changes touch it; the same keys scroll it.
 
 ## Continue a change
 

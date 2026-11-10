@@ -26,7 +26,9 @@ switches which one the tree shows. Each folder remembers its choice.
 
 ## Reading files
 
-Click a file to open it. Markdown is rendered; other files are shown with syntax highlighting. On an
+Click a file to open it. Markdown is rendered; other files are shown with syntax highlighting. Rendered
+Markdown scrolls with the arrow keys, `Page Up` / `Page Down`, `Home`, `End`, and `Space` as soon as it
+opens, and again after you click in it. On an
 OpenSpec file, **View in OpenSpec** takes you to the same artifact or spec in the OpenSpec identity, and
 **Back to file tree** returns.
 

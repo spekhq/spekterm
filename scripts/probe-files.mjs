@@ -27,7 +27,7 @@ import {
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
-import { check, connectToApp, pollFor, pollUntil } from './lib/cdp.mjs'
+import { check, connectToApp, pollFor, pollUntil, pressKey } from './lib/cdp.mjs'
 import { copy, copyIn } from './lib/copy.mjs'
 import { awaitMounted, describeMounted } from './lib/mounted.mjs'
 import { electronExtraArgs } from './lib/display.mjs'
@@ -64,6 +64,8 @@ const README = `# 標題
 | 欄 A | 欄 B |
 |------|------|
 | 1    | 2    |
+
+${Array.from({ length: 60 }, (_, i) => `Paragraph ${i + 1}, so the preview overflows the viewer by several keyboard pages.`).join('\n\n')}
 `
 
 function makeFixture() {
@@ -622,6 +624,38 @@ const OPEN_EXTERNAL = (url) => `(async () => {
   }
 })()`
 
+/**
+ * The element that scrolls the markdown preview: the nearest scrollable ancestor of `.markdown`.
+ * Located by structure, not by a tab index or a role — those are what the requirement adds, and a
+ * lookup by them would fail on the old code for the wrong reason (`docs/lessons/probes.md`).
+ */
+const PREVIEW_SCROLLER = `(() => {
+  let el = document.querySelector('section[aria-label="${copy('files.label')}"] .markdown')?.parentElement ?? null
+  while (el && !['auto', 'scroll'].includes(getComputedStyle(el).overflowY)) el = el.parentElement
+  return el
+})()`
+
+/** The preview's scroll state and whether it holds focus. */
+const PREVIEW_SCROLL = `(() => {
+  const el = ${PREVIEW_SCROLLER}
+  if (!el) return null
+  const active = document.activeElement
+  return {
+    scrollTop: Math.round(el.scrollTop),
+    max: Math.round(el.scrollHeight - el.clientHeight),
+    focusOnScroller: active === el,
+    focusTag: active ? active.tagName + (active.getAttribute('aria-label') ? '[' + active.getAttribute('aria-label') + ']' : '') : null,
+  }
+})()`
+
+/** Puts focus on the side panel itself — a precondition, not the behavior under test. */
+const FOCUS_SIDE_PANEL = `(() => {
+  const el = document.querySelector('section[aria-label="${copy('openspec.sidePanel')}"]')
+  if (!el) return false
+  el.focus()
+  return document.activeElement === el
+})()`
+
 const READ_FILE = (folderId, relPath) => `window.workspace.fs.readFile(${JSON.stringify(folderId)}, ${JSON.stringify(relPath)})`
 
 // ── 建置模式的完整驗收 ──────────────────────────────────────────────────────
@@ -1077,6 +1111,35 @@ async function probeBuild(fixture, profile) {
     await app.client.evaluate(CLICK_MODE(copy('viewer.preview')))
     const previewText = await pollUntil(app.client, PREVIEW_TEXT, (text) => /MDEDIT/.test(text ?? ''))
     check(results, '原始碼模式的修改反映於預覽', /MDEDIT/.test(previewText ?? ''))
+
+    // ── file-viewer: the markdown preview scrolls from the keyboard ──────────
+    // **Real mouse and real keys**: a synthetic `.click()` does not move focus, and focus is the
+    // whole subject here. Opening by a real click on the row is the path that drops focus to
+    // `<body>` (the row is replaced by the viewer) — the one the user hit.
+    console.log('\nfile-viewer: keyboard scrolling of the markdown preview')
+    await app.client.evaluate(BACK_TO_TREE)
+    await pollUntil(app.client, ROW_PATHS, (paths) => paths.includes('README.md'))
+    const readmeRow = await coordsOf(app.client, ROW_EL('README.md'))
+    check(results, '[preview-keyboard] README row found', readmeRow !== null)
+    if (readmeRow) await realMouse(app.client, readmeRow.x, readmeRow.y, 'left')
+    const opened = await pollUntil(app.client, PREVIEW_SCROLL, (v) => v !== null && v.max > 0, 8000)
+    check(results, '[preview-keyboard] precondition: the preview overflows the viewer',
+      opened !== null && opened.max > 0, JSON.stringify(opened))
+    await pressKey(app.client, 'ArrowDown')
+    const arrowed = await pollUntil(app.client, PREVIEW_SCROLL, (v) => v?.scrollTop > 0, 3000)
+    check(results, '[preview-keyboard] opening a markdown file, then ArrowDown scrolls the preview',
+      arrowed?.scrollTop > 0, `${JSON.stringify(opened)} → ${JSON.stringify(arrowed)}`)
+
+    const unfocused = await app.client.evaluate(FOCUS_SIDE_PANEL)
+    const beforeClick = await app.client.evaluate(PREVIEW_SCROLL)
+    check(results, '[preview-keyboard] precondition: focus is off the preview before the click',
+      unfocused === true && beforeClick?.focusOnScroller === false, JSON.stringify(beforeClick))
+    const inPreview = await coordsOf(app.client, PREVIEW_SCROLLER)
+    if (inPreview) await realMouse(app.client, inPreview.x + 40, inPreview.y, 'left')
+    await pressKey(app.client, 'PageDown')
+    const paged = await pollUntil(app.client, PREVIEW_SCROLL, (v) => v?.scrollTop > (beforeClick?.scrollTop ?? 0), 3000)
+    check(results, '[preview-keyboard] click in the preview, then PageDown scrolls it',
+      paged?.scrollTop > (beforeClick?.scrollTop ?? 0), `${JSON.stringify(beforeClick)} → ${JSON.stringify(paged)}`)
 
     // ── workspace-app-shell：導航防護 ───────────────────────────────────────
     console.log('\n導航防護（preload 白名單不得落入遠端頁面）')

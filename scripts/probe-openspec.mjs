@@ -156,6 +156,16 @@ const OAUTH_PROPOSAL = `# 加入 OAuth
 ${Array.from({ length: 60 }, (_, i) => `Paragraph ${i + 1} of the reason this change exists.`).join('\n\n')}
 `
 
+/**
+ * The `billing` spec of `repo-many` is long on purpose: `runSpecDetailKeyboard` needs a spec that
+ * overflows the content area by more than one keyboard page. Its padding is plain paragraphs under
+ * Purpose, so it adds no requirement, scenario or heading to the trees and the graph.
+ */
+const BILLING_SPEC = SPEC('billing').replace(
+  'billing 的用途。',
+  Array.from({ length: 60 }, (_, i) => `Paragraph ${i + 1} of what billing is for.`).join('\n\n'),
+)
+
 const TASKS_DONE = TASKS.replace('- [ ] 1.2', '- [x] 1.2')
 /** 全部勾完 —— reload 之後再改一次，證明新 renderer 的訂閱是活的。 */
 const TASKS_ALL_DONE = TASKS_DONE.replace('- [ ] 2.1', '- [x] 2.1')
@@ -182,7 +192,7 @@ function makeFixture() {
   const many = join(base, 'repo-many')
   writeFile(join(many, 'openspec/config.yaml'), 'schema: spec-driven\n')
   writeFile(join(many, 'openspec/specs/auth/spec.md'), SPEC('auth'))
-  writeFile(join(many, 'openspec/specs/billing/spec.md'), SPEC('billing'))
+  writeFile(join(many, 'openspec/specs/billing/spec.md'), BILLING_SPEC)
   changeMeta(join(many, 'openspec/changes/add-oauth'), '2026-05-01')
   writeFile(join(many, 'openspec/changes/add-oauth/proposal.md'), OAUTH_PROPOSAL)
   writeFile(join(many, 'openspec/changes/add-oauth/tasks.md'), TASKS)
@@ -4328,6 +4338,114 @@ async function runChangeViewKeyboard(label, config, { app, many }) {
   }
 }
 
+// ── Browse: a spec's content scrolls from the keyboard ─────────────────────
+
+/**
+ * The element that scrolls an opened spec: the nearest scrollable ancestor of its `.markdown`.
+ * Located by structure (both the old and the new code have it), not by the tab index the
+ * requirement adds — see "The red run must fail on behavior" in `docs/lessons/probes.md`.
+ */
+const SPEC_SCROLLER = `(() => {
+  let el = document.querySelector('section[aria-label="${copy('openspec.label')}"] .markdown')?.parentElement ?? null
+  while (el && !['auto', 'scroll'].includes(getComputedStyle(el).overflowY)) el = el.parentElement
+  return el
+})()`
+
+const SPEC_SCROLL = `(() => {
+  const el = ${SPEC_SCROLLER}
+  if (!el) return null
+  const active = document.activeElement
+  return {
+    text: el.innerText.slice(0, 40),
+    scrollTop: Math.round(el.scrollTop),
+    max: Math.round(el.scrollHeight - el.clientHeight),
+    focusOnScroller: active === el,
+    focusTag: active ? active.tagName + (active.getAttribute('aria-label') ? '[' + active.getAttribute('aria-label') + ']' : '') : null,
+  }
+})()`
+
+const SPEC_SCROLLER_RECT = `(() => {
+  const el = ${SPEC_SCROLLER}
+  if (!el) return null
+  const r = el.getBoundingClientRect()
+  return { x: r.x, y: r.y, width: r.width, height: r.height }
+})()`
+
+/** The "open" button of a spec topic's row in the Specs tree (the row's last button). */
+const SPEC_OPEN_RECT = (topic) => `(() => {
+  const row = [...document.querySelectorAll('section[aria-label="${copy('openspec.specs')}"] [role="treeitem"][aria-level="2"]')]
+    .find((r) => r.getAttribute('title') === ${JSON.stringify(topic)})
+  const buttons = row ? [...row.querySelectorAll('button')] : []
+  const open = buttons[buttons.length - 1]
+  if (!open) return null
+  const r = open.getBoundingClientRect()
+  return { x: r.x, y: r.y, width: r.width, height: r.height }
+})()`
+
+const CLICK_SPEC_BACK = `(() => {
+  const btn = [...document.querySelectorAll('section[aria-label="${copy('openspec.label')}"] button')]
+    .find((b) => b.textContent.trim() === '${copy('common.back')}')
+  if (!btn) return false
+  btn.click()
+  return true
+})()`
+
+/**
+ * `spec-detail-keyboard`: a spec opened in Browse scrolls from the keyboard — right after it is
+ * opened by a real click on its tree row (the row is replaced, so focus would otherwise fall to
+ * `<body>`), and after a click inside its content.
+ *
+ * **Real mouse and real keys**: a synthetic `.click()` does not move focus, and focus is the subject.
+ * The state it needs (repo-many, OpenSpec identity, Browse) is set here, not inherited.
+ */
+async function runSpecDetailKeyboard(label, config, { app }) {
+  console.log('\nBrowse: keyboard scrolling of an opened spec')
+  const client = app.client
+  const picked = await pollUntil(client, SELECT_FOLDER('repo-many'), (ok) => ok === true, 8000)
+  check(results, '[spec-detail-keyboard] repo-many selected', picked === true)
+  if ((await client.evaluate(IDENTITY)) !== 'openspec') await client.evaluate(CLICK_IDENTITY('◈'))
+  const sourceLabel = await pollUntil(client, PANEL_SOURCE_LABEL, (v) => String(v).includes('repo-many'), 8000)
+  check(results, '[spec-detail-keyboard] the side panel reads repo-many', String(sourceLabel).includes('repo-many'),
+    String(sourceLabel))
+  await client.evaluate(CLICK_SPEC_BACK) // a spec left open by an earlier section; no-op on the tree
+  await client.evaluate(CLICK_VIEW(copy('openspec.tabBrowse')))
+  const topics = await pollUntil(client, SPEC_TREE_TOPICS, (list) => list.some((t) => t.topic === 'billing'), 8000)
+  check(results, '[spec-detail-keyboard] the Specs tree lists billing', topics.some((t) => t.topic === 'billing'),
+    topics.map((t) => t.topic).join(', '))
+
+  await client.send('Emulation.setDeviceMetricsOverride', { width: 1000, height: 420, deviceScaleFactor: 0, mobile: false })
+  await sleep(600)
+  try {
+    // ── Opening a spec lets the keyboard scroll it right away ──
+    const rect = await stableRect(client, SPEC_OPEN_RECT('billing'))
+    check(results, '[spec-detail-keyboard] click target found: billing open button', rect !== null)
+    if (rect) await realClick(client, rect)
+    const opened = await pollUntil(client, SPEC_SCROLL, (v) => v !== null && v.text.includes('billing') && v.max > 0, 8000)
+    check(results, '[spec-detail-keyboard] precondition: the billing spec overflows the content area',
+      opened !== null && opened.text.includes('billing') && opened.max > 420, JSON.stringify(opened))
+    await pressKey(client, 'ArrowDown')
+    const arrowed = await pollUntil(client, SPEC_SCROLL, (v) => v?.scrollTop > 0, 3000)
+    check(results, '[spec-detail-keyboard] opening a spec, then ArrowDown scrolls it',
+      arrowed?.scrollTop > 0, `${JSON.stringify(opened)} → ${JSON.stringify(arrowed)}`)
+
+    // ── Clicking the spec's content lets the keyboard scroll it ──
+    const unfocused = await client.evaluate(FOCUS_SIDE_PANEL)
+    const before = await client.evaluate(SPEC_SCROLL)
+    check(results, '[spec-detail-keyboard] precondition: focus is off the content before the click',
+      unfocused === true && before?.focusOnScroller === false, JSON.stringify(before))
+    const content = await stableRect(client, SPEC_SCROLLER_RECT)
+    if (content) await realClick(client, content)
+    await pressKey(client, 'PageDown')
+    const paged = await pollUntil(client, SPEC_SCROLL, (v) => v?.scrollTop > (before?.scrollTop ?? 0), 3000)
+    check(results, '[spec-detail-keyboard] click in the spec, then PageDown scrolls it',
+      paged?.scrollTop > (before?.scrollTop ?? 0), `${JSON.stringify(before)} → ${JSON.stringify(paged)}`)
+  } finally {
+    await client.evaluate(CLICK_SPEC_BACK)
+    await client.send('Emulation.clearDeviceMetricsOverride', {})
+    await sleep(300)
+  }
+}
+
 /**
  * **依賴鏈是線性的** —— **後五段**共用 `runPanelBasics` 建立的那一個 app 與它累積下來的狀態
  * （選中的 folder、開著的 artifact 分頁、側欄座標）。這與 `probe:terminal`／`probe:keyboard`
@@ -4691,6 +4809,7 @@ const SECTIONS = [
   { name: 'runQuickOpenSection', run: runQuickOpenSection, deps: ['runWorktreeAggregation'], onTimeout: killStrays },
   { name: 'runChangeViewKeyboard', run: runChangeViewKeyboard, deps: ['runQuickOpenSection'], onTimeout: killStrays },
   { name: 'runMaximize', run: runMaximize, deps: ['runChangeViewKeyboard'], onTimeout: killStrays },
+  { name: 'runSpecDetailKeyboard', run: runSpecDetailKeyboard, deps: ['runPanelBasics'], onTimeout: killStrays },
 ]
 
 const outcome = await runSections({

@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { t } from '@shared/i18n'
 import { CodeEditor } from '../../editor'
 import type { FsFailure, FsResult, FileContent } from '../types'
+import { KeyboardScroller } from './KeyboardScroller'
 import { MarkdownView } from './MarkdownView'
 import { useDirtyBuffers } from './dirty-buffers'
 import { baseNameOf, isMarkdown } from './paths'
@@ -282,10 +283,10 @@ export function FileViewer({ folderId, relPath }: FileViewerProps): React.JSX.El
       {/* markdown 需要外層捲動；編輯器自己捲動，包上 overflow-auto 會讓它量不到高度 */}
       <div className="min-h-0 flex-1">
         {markdown && mode === 'preview' ? (
-          <div className="h-full overflow-auto">
+          <KeyboardScroller className="h-full">
             {/* 渲染 buffer 的內容而非磁碟的內容 —— 切到預覽不該看見自己剛打的字消失 */}
             <MarkdownView text={text} />
-          </div>
+          </KeyboardScroller>
         ) : (
           <CodeEditor
             value={text}

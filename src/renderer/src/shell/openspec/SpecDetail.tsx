@@ -1,3 +1,4 @@
+import { KeyboardScroller } from '../files/KeyboardScroller'
 import { MarkdownView } from '../files/MarkdownView'
 import { useSpec } from './data'
 import { ErrorNote, Loading } from './ui'
@@ -50,7 +51,7 @@ export function SpecDetail({
         )}
       </div>
 
-      <div className="min-h-0 flex-1 overflow-auto px-3 pb-4">
+      <KeyboardScroller className="min-h-0 flex-1 px-3 pb-4">
         {error ? (
           <ErrorNote message={error} />
         ) : loading || !data ? (
@@ -83,7 +84,7 @@ export function SpecDetail({
             )}
           </>
         )}
-      </div>
+      </KeyboardScroller>
     </div>
   )
 }

@@ -128,3 +128,25 @@ markdown 檔案的檢視 SHALL 提供「預覽」與「原始碼」兩種模式�
 - **WHEN** 使用者於原始碼模式修改內容之後切換至預覽模式
 - **THEN** 預覽呈現修改後的內容，且該修改未被捨棄
 
+### Requirement: The markdown preview can be scrolled from the keyboard
+
+The markdown preview SHALL be able to hold focus, and while it holds focus the standard scrolling
+keys (arrow keys, `PageUp` / `PageDown`, `Home` / `End`, `Space`) SHALL scroll it. Clicking inside
+the preview SHALL give it focus.
+
+When the preview appears and keyboard focus is nowhere (for example because the tree row that was
+clicked to open the file has been replaced by the viewer), the preview SHALL take focus, so the next
+scrolling key scrolls it. The preview appearing SHALL NOT take focus from anywhere else (a terminal,
+an editor, the preview / source switch).
+
+#### Scenario: Opening a markdown file lets the keyboard scroll it right away
+
+- **WHEN** the user clicks a markdown file in the file tree whose preview is taller than the viewer,
+  and then presses `ArrowDown`
+- **THEN** the preview scrolls down
+
+#### Scenario: Clicking the preview lets the keyboard scroll it
+
+- **WHEN** focus is elsewhere in the side panel, the user clicks inside the preview and presses
+  `PageDown`
+- **THEN** the preview scrolls down

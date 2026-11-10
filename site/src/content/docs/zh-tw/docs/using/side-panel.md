@@ -28,7 +28,7 @@ spekterm 不會從 agent 的輸出去猜 session 在處理哪個 change。偶爾
 
 這個 change 就成了這個資料夾錨定的 change，**這個 change** 會顯示它。每個資料夾各自記得自己的選擇，重啟後仍然保留。repository 若剛好只有一個進行中的 change，不必挑就會直接顯示。
 
-**瀏覽** 也列出所有 spec。打開一個 spec，就能看到哪些 change 動到它。
+**瀏覽** 也列出所有 spec。打開一個 spec，就能看到哪些 change 動到它；同樣的按鍵也能捲動它。
 
 ## 續寫 change
 

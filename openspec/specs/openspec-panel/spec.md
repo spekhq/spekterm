@@ -633,6 +633,28 @@ the view SHALL NOT move focus and SHALL NOT change the scroll position.
 - **WHEN** the user has scrolled an artifact down and the change's tasks file is modified on disk
 - **THEN** after the view shows the new task progress, the scroll position and the focus are unchanged
 
+### Requirement: A spec's content in the Browse view can be scrolled from the keyboard
+
+The content area showing a spec opened in the **Browse** view SHALL be able to hold focus, and while
+it holds focus the standard scrolling keys (arrow keys, `PageUp` / `PageDown`, `Home` / `End`,
+`Space`) SHALL scroll it. Clicking inside the content SHALL give it focus.
+
+When a spec is opened and keyboard focus is nowhere (for example because the tree row that was
+clicked has been replaced by the spec), the content area SHALL take focus, so the next scrolling key
+scrolls the spec. Opening a spec SHALL NOT take focus from anywhere else (a terminal, an editor).
+
+#### Scenario: Opening a spec lets the keyboard scroll it right away
+
+- **WHEN** the user clicks a spec in the Browse view's tree whose content is taller than the content
+  area, and then presses `ArrowDown`
+- **THEN** the spec's content scrolls down
+
+#### Scenario: Clicking the spec's content lets the keyboard scroll it
+
+- **WHEN** focus is elsewhere in the side panel, the user clicks inside the spec's content and
+  presses `PageDown`
+- **THEN** the content scrolls down
+
 ### Requirement: `Ctrl+Tab` switches artifacts while focus is in the change view
 
 While focus is anywhere inside the **this change** view, `Ctrl+Tab` SHALL select the next

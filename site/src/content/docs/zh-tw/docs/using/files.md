@@ -20,7 +20,7 @@ repository 若有不只一個 git worktree，檔案樹頂端的 **變更工作�
 
 ## 閱讀檔案
 
-點一個檔案就會打開它。Markdown 會渲染成排版後的樣子，其他檔案則以語法高亮顯示。在 OpenSpec 的檔案上按 **在 OpenSpec 中檢視**，會在 OpenSpec 身分打開同一個 artifact 或 spec；按 **回到檔案樹** 就回來。
+點一個檔案就會打開它。Markdown 會渲染成排版後的樣子，其他檔案則以語法高亮顯示。渲染後的 Markdown 一打開就能用方向鍵、`Page Up` / `Page Down`、`Home`、`End` 與 `Space` 捲動，點一下內容之後也可以。在 OpenSpec 的檔案上按 **在 OpenSpec 中檢視**，會在 OpenSpec 身分打開同一個 artifact 或 spec；按 **回到檔案樹** 就回來。
 
 repository 裡的 Markdown 一律視為不受信任的內容。原始 HTML 以純文字顯示，script 絕不執行；`http` / `https` 連結會在你的瀏覽器開啟，而不是在 spekterm 裡（其他連結無法點擊）。放在 `https:` 位址上的圖片會載入；見[資料與網路](/zh-tw/docs/reference/data-and-network/)。
 
