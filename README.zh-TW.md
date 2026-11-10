@@ -149,6 +149,12 @@ spek 的成果上：
 歡迎貢獻 —— 請見 [CONTRIBUTING.md](CONTRIBUTING.md)（英文）。資安問題請依 [SECURITY.md](SECURITY.md)
 私下回報。
 
+### 感謝
+
+- [MnHung](https://github.com/MnHung) —— 找出並修正 OpenSpec 面板逐一監看每個已封存 change 的檔案：
+  工作區一大，macOS 上的 app 會卡住，接著連 `git` 都啟動不了
+  （[#102](https://github.com/spekhq/spekterm/pull/102)）。
+
 ## 授權
 
 [MIT](./LICENSE)。打包出的產物另附 `THIRD_PARTY_LICENSES.txt`，列出被打包進 app 的每一個第三方套件

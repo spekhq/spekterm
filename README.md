@@ -167,6 +167,12 @@ beside them. They read the same files, and neither needs the other. spek's websi
 Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md). Please report security issues
 privately as described in [SECURITY.md](SECURITY.md).
 
+### Thanks
+
+- [MnHung](https://github.com/MnHung) — found and fixed the OpenSpec panel watching every archived change file by
+  file, which on a large workspace stalled the app on macOS and stopped it from starting `git`
+  ([#102](https://github.com/spekhq/spekterm/pull/102)).
+
 ## License
 
 [MIT](./LICENSE). Packaged builds also include `THIRD_PARTY_LICENSES.txt`, which lists every
