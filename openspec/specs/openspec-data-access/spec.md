@@ -2,7 +2,9 @@
 
 ## Purpose
 TBD - created by archiving change openspec-side-panel. Update Purpose after archive.
+
 ## Requirements
+
 ### Requirement: 主行程為每個 workspace folder 供應 OpenSpec 結構
 
 主行程 SHALL 以 `@spekjs/core` 為**每個 workspace folder** 供應其 OpenSpec 結構，並經 IPC 送達 renderer。
@@ -131,9 +133,21 @@ folder 的快取失效，並 SHALL 通知 renderer 該 folder 的 OpenSpec 結�
 
 這個 app 的前提是旁邊有 agent 一直在寫檔 —— 側欄 SHALL NOT 是啟動時的快照。
 
+**Within each watched `openspec/`, the contents of an archived change SHALL NOT be watched** — nothing under
+`changes/archive/<name>/`. Archived changes only accumulate, so watching them makes the cost grow with a
+repository's history times its worktrees, and an archived change is not edited. The main process SHALL still
+treat as a file change of the `openspec/` it belongs to:
+
+- a change directory leaving `changes/` (which is how archiving one looks);
+- an archived change directory added to or removed from `changes/archive/`, including when `changes/archive/`
+  itself did not exist before and when it is removed and created again.
+
+An edit inside an existing archived change SHALL NOT be required to invalidate the cache: it is seen at the next
+scan that something else causes. This gap is accepted, not overlooked.
+
 #### Scenario: agent 改動 change 後側欄資料更新
 
-- **WHEN** 某個 folder 的 `openspec/changes/` 下有檔案被外部程式改動
+- **WHEN** 某個 folder 的 `openspec/changes/` 下有檔案被外部程式改動 (outside an archived change)
 - **THEN** renderer 收到該 folder 的 OpenSpec 結構已變更的通知，且後續請求取得的是改動後的內容
 
 #### Scenario: 連續變更合併為單次通知
@@ -148,8 +162,30 @@ folder 的快取失效，並 SHALL 通知 renderer 該 folder 的 OpenSpec 結�
 
 #### Scenario: linked worktree 中的變更觸發更新
 
-- **WHEN** 某個 linked worktree 的 `openspec/` 下有檔案被外部程式改動
+- **WHEN** 某個 linked worktree 的 `openspec/` 下有檔案被外部程式改動 (outside an archived change)
 - **THEN** renderer 收到該 folder 的 OpenSpec 結構已變更的通知
+
+#### Scenario: Archiving a change triggers an update
+
+- **WHEN** an active change's directory is moved from `changes/` into `changes/archive/`
+- **THEN** renderer receives the notification that the folder's OpenSpec structure changed
+
+#### Scenario: An archived change arriving on its own triggers an update
+
+- **WHEN** a new directory appears under `changes/archive/` while no active change leaves `changes/` (for example
+  after a pull)
+- **THEN** renderer receives the notification that the folder's OpenSpec structure changed
+
+#### Scenario: The archive directory created after the watch started is followed
+
+- **WHEN** `changes/archive/` does not exist when the folder's watch starts, is created later, and afterwards a
+  further archived change directory is added to it
+- **THEN** renderer receives a notification for the later addition as well
+
+#### Scenario: Edits inside an archived change are not watched
+
+- **WHEN** a file inside an existing archived change directory is changed, and nothing else in `openspec/` is
+- **THEN** renderer receives no notification
 
 ### Requirement: OpenSpec 的資源以擁有者的生命週期釋放
 
@@ -307,4 +343,3 @@ HEAD 識別（供分支缺席時呈現）、它是否為該 repo 的主工作目
 - **WHEN** 一個 workspace folder 本身是某個 repo 的 linked worktree
 - **THEN** 清單中代表 folder 自身的那一筆其 folder-relative 根為空字串，且其「是否為主工作目錄」
   為否
-

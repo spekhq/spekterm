@@ -2,7 +2,9 @@
 
 ## Purpose
 TBD - created by syncing change openspec-worktree-aggregation. Update Purpose after archive.
+
 ## Requirements
+
 ### Requirement: 側欄的 OpenSpec 資料涵蓋 folder 所屬 repo 的全部 git worktree
 
 主行程為一個 workspace folder 供應 OpenSpec 結構時，其涵蓋範圍 SHALL 為**該 folder 所屬 repo 的
@@ -203,9 +205,12 @@ SHALL 持續有效。
 對象是**不受信任的 symlink 展開**，而工作目錄是版控系統列舉出的已知位置；由監看推送給 renderer
 的 SHALL 僅為「該 folder 的 OpenSpec 結構已變更」，SHALL NOT 包含任何路徑。
 
+Which part of each `openspec/` is watched — not the contents of an archived change — is stated once, in
+`openspec-data-access` (the cache-and-watch requirement); it applies to every working tree alike.
+
 #### Scenario: worktree 中的 change 被改動後側欄更新
 
-- **WHEN** 外部程式改動了某個 linked worktree 的 `openspec/` 底下的檔案
+- **WHEN** 外部程式改動了某個 linked worktree 的 `openspec/` 底下的檔案 (outside an archived change)
 - **THEN** renderer 收到該 folder 的 OpenSpec 結構已變更的通知
 - **AND** 後續請求取得的是改動後的內容
 
