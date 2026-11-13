@@ -148,10 +148,19 @@ panel is limited.
 ## The status bar
 
 The status bar along the bottom shows the selected repository, the focused session's working directory
-and branch, how many sessions are open, and the task progress of the anchored change. Turn on **Show
-agent status in the status bar** under **Settings → Agents & sessions**, and `claude` also reports its
-model, context usage, and cost there. The setting applies to sessions started after you change it, and
-your own Claude Code status line keeps working.
+and branch, how many sessions are open, the task progress of the anchored change, how many specs and
+active changes the repository has, and how many files have unsaved changes. Turn on **Show agent status in
+the status bar** under **Settings → Agents & sessions**, and `claude` also reports there:
+
+- its model and effort, with ✻ while thinking is on;
+- how much of its context is used (`ctx 42%`);
+- the lines it added and removed in this session;
+- the session's cost so far;
+- your usage limits for the 5-hour and 7-day windows (`5h 30%`, `7d 12%`), each with the time it resets,
+  when Claude Code reports them.
+
+The setting applies to sessions started after you change it, and your own Claude Code status line keeps
+working.
 
 On macOS, the status bar does not show the focused session's working directory or its git state (branch,
 uncommitted changes, worktree).

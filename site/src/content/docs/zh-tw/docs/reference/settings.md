@@ -34,7 +34,7 @@ sidebar:
 
 ## Agent 與 session
 
-- **在狀態列顯示 agent 狀態** —— 請 `claude` 把它的模型、context 用量與花費回報給 spekterm，顯示在狀態列上。你自己的 Claude Code status line 照常運作。這項設定只對變更之後建立的 session 生效。
+- **在狀態列顯示 agent 狀態** —— 請 `claude` 把它的模型與 effort、context 用量、增刪的行數、花費與用量上限回報給 spekterm，顯示在狀態列上（見[狀態列](/zh-tw/docs/using/terminals-and-sessions/#狀態列)）。你自己的 Claude Code status line 照常運作。這項設定只對變更之後建立的 session 生效。
 - **讓閒置的 session 休眠** —— session 閒置超過選定的時間，就結束它的行程，但 session 仍留在 workspace 裡，之後可以喚醒。可選關閉、4 小時、24 小時（預設）、3 天或 7 天。畫面上正在顯示的 session、正在工作的 agent，以及正在跑工作的 shell，都不會休眠。在 macOS 上，閒置的 shell 永遠不會自動休眠。見[終端機與 session](/zh-tw/docs/using/terminals-and-sessions/)。
 - **Agent session 顯示** —— 所有 agent session 要顯示終端機還是對話檢視。這和 agent session 分頁旁的切換鈕是同一個設定。見[對話檢視](/zh-tw/docs/using/conversation-view/)。
 

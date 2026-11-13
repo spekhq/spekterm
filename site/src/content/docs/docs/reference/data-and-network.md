@@ -64,8 +64,8 @@ spekterm runs programs you installed. What they send is up to them, and **spekte
 observe what these programs do**:
 
 - **`claude`** (Claude Code) — every agent session runs the real `claude` CLI with your own login, and
-  `claude` talks to Anthropic's service. The conversation report ("Reading") also runs your `claude`, only
-  when you ask for one. Before it does, it shows exactly what will be sent and asks you.
+  `claude` talks to Anthropic's service. A [reading of your conversations](/docs/using/insights/#reading) also runs your
+  `claude`, only when you ask for one. Before it does, it shows exactly what will be sent and asks you.
 - **`openspec`** — the side panel runs the OpenSpec CLI to read your changes. The OpenSpec CLI sends
   anonymous usage statistics unless you turn them off. To turn them off in a way that works however
   spekterm is started, run:
@@ -92,8 +92,8 @@ Everything spekterm keeps is on your machine — except what a team server you j
 - your sessions, and the last screen of each shell session so it can be replayed after a restart;
 - your preferences;
 - the inbox and handoff files;
-- a copy of your Claude Code conversations for the conversation numbers and readings, and the readings
-  you generated;
+- a copy of your Claude Code conversations for [Conversation metrics](/docs/using/insights/), and the
+  readings you generated;
 - your Slack credentials, in a file of their own that only your user account can read or write. The file
   is not encrypted: anyone who can read files as your user account can read it;
 - your team membership (`team.json`: the server, the team, your handle and device name, the members), and your
@@ -106,7 +106,7 @@ Everything spekterm keeps is on your machine — except what a team server you j
   30 days.
 
 spekterm also **reads** Claude Code's own transcripts under `~/.claude/projects` to show the conversation
-view. It never writes there.
+view and Conversation metrics. It never writes there.
 
 ## When spekterm runs without a window (macOS)
 

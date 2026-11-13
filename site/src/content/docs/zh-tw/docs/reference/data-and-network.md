@@ -30,7 +30,7 @@ spekterm 沒有帳號，也沒有遙測（telemetry）。這一頁列出 spekter
 
 spekterm 會執行你安裝的程式。這些程式送出什麼由它們自己決定，而且 **spekterm 自己的檢查看不到這些程式做了什麼**：
 
-- **`claude`**（Claude Code）—— 每個 agent session 都用你自己的登入，執行真正的 `claude` CLI，而 `claude` 會連到 Anthropic 的服務。對話讀後感（「讀後感」）也是執行你的 `claude`，而且只在你要求時才執行。執行之前，它會先列出要送出的確切內容並徵求你的同意。
+- **`claude`**（Claude Code）—— 每個 agent session 都用你自己的登入，執行真正的 `claude` CLI，而 `claude` 會連到 Anthropic 的服務。[對話讀後感](/zh-tw/docs/using/insights/#讀後感)也是執行你的 `claude`，而且只在你要求時才執行。執行之前，它會先列出要送出的確切內容並徵求你的同意。
 - **`openspec`** —— 側欄會執行 OpenSpec CLI 來讀取你的 change。除非你關掉，OpenSpec CLI 會送出匿名的使用統計。不論 spekterm 是怎麼啟動的，下面這個做法都能關掉它：
 
   ```bash
@@ -48,13 +48,13 @@ spekterm 保存的一切都在你的電腦上（你加入的團隊 server 所保
 - 你的 session，以及每個 shell session 最後的畫面，重新啟動後用來重播；
 - 你的偏好設定；
 - 收件匣與交接的檔案；
-- 一份 Claude Code 對話的副本，供對話計量與讀後感使用，以及你產生過的讀後感；
+- 一份 Claude Code 對話的副本，供[對話計量](/zh-tw/docs/using/insights/)使用，以及你產生過的讀後感；
 - 你的 Slack 憑證，單獨存在一個只有你的使用者帳號能讀寫的檔案裡。這個檔案沒有加密：任何能以你的使用者帳號讀取檔案的人都讀得到它；
 - 你的團隊成員資格（`team.json`：server、團隊、你的 handle 與裝置名稱、成員清單），以及你這台裝置的團隊憑證（和 Slack 憑證存在同一個檔案裡）；
 - 遠端存取的設定、憑證與已配對的裝置（`remote.json`，只有你的使用者帳號讀得到；每台裝置的憑證只存雜湊，不存憑證本身），以及憑證的私鑰（和 Slack 憑證存在同一個檔案裡）；
 - 你從手機附加到訊息裡的檔案（`remote-attachments`，每個 session 一個資料夾，只有你的使用者帳號讀得到）。關閉 session 時刪除；沒送出的一天後刪除；任何檔案最晚 30 天後刪除。
 
-spekterm 也會**讀取** Claude Code 自己在 `~/.claude/projects` 的對話紀錄，用來呈現對話檢視。它從不寫入那裡。
+spekterm 也會**讀取** Claude Code 自己在 `~/.claude/projects` 的對話紀錄，用來呈現對話檢視與對話計量。它從不寫入那裡。
 
 ## spekterm 在沒有視窗的狀態下執行時（macOS）
 

@@ -109,6 +109,9 @@ is always one click away.
 - **Handoffs** — an agent can hand work to another repository's agent. spekterm opens the new session,
   and you can follow both ends of the handoff until the work is reported done. A handoff can also wait for
   a set time, or repeat on a schedule you approve.
+- **Teammates** — on a team that runs its own [spekterm-server](https://github.com/spekhq/spekterm-server), an
+  agent can hand work to a person too. Nothing is sent until you press Send, and a teammate's handoff waits in
+  your inbox for you to read and accept. You follow what you sent until their agent reports it done.
 
 <Screenshot
   wide
@@ -120,12 +123,13 @@ is always one click away.
 ## Step away without missing a thing
 
 **spekterm for Android** connects straight to the spekterm on
-your computer — no account, no relay, no push service — and tells you when an agent waits for you. From the
+your computer — no account, no push service — and tells you when an agent waits for you. From the
 phone you can read its conversation and reply with photos or files attached, answer its permission prompts
 and questions, start, wake, or hibernate sessions, and handle the inbox and handoffs.
 
 It is a companion to the desktop app, not a replacement: spekterm must be running on your computer, and the
-phone must be able to reach it (the same network, Tailscale, or a forwarded port). Remote access is off
+phone must be able to reach it: the same network, Tailscale, a forwarded port, or, on a team, your team's
+own server, which carries the encrypted connection without being able to read it. Remote access is off
 until you turn it on.
 
 <PhoneScreenshots

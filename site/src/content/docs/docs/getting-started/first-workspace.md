@@ -56,6 +56,9 @@ next one. See [The OpenSpec side panel](/docs/using/side-panel/) for everything 
 ## Arrange the rail
 
 - Drag folders to reorder them, or select one and press `Shift+↑` / `Shift+↓`.
+- Each folder lists its sessions beneath it, with a dot for each; click one to switch to it. **▾** / **▸**
+  beside the folder's name collapses or expands the list, and a collapsed folder's own dot still shows its
+  most urgent session.
 - Hover a folder and pin it to keep it at the top. Pinned folders stay visible while the rest of the rail
   scrolls.
 - `Ctrl+↑` / `Ctrl+↓` move the selection between rail items from the keyboard. On macOS, Mission Control

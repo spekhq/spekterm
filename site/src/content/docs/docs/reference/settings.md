@@ -50,8 +50,9 @@ section back to its defaults. It does not change the other sections or the langu
 
 ## Agents & sessions
 
-- **Show agent status in the status bar** — asks `claude` to report its model, context usage, and cost to
-  spekterm, which shows them in the status bar. Your own Claude Code status line keeps working. The setting
+- **Show agent status in the status bar** — asks `claude` to report its model and effort, context usage,
+  lines changed, cost, and usage limits to spekterm, which shows them in the status bar (see
+  [The status bar](/docs/using/terminals-and-sessions/#the-status-bar)). Your own Claude Code status line keeps working. The setting
   applies to sessions started after you change it.
 - **Hibernate idle sessions** — when a session has been idle for the chosen time, ends its process and keeps
   the session in the workspace so you can wake it later. The choices are Off, 4 hours, 24 hours (the

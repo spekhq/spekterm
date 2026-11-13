@@ -95,6 +95,14 @@ repository 若有 linked git worktree，側欄會顯示所有 worktree 裡的 ch
 
 ## 狀態列
 
-視窗底部的狀態列顯示選中的 repository、focused session 的工作目錄與分支、開了幾個 session，以及錨定 change 的 task 進度。在 **設定 → Agent 與 session** 打開 **在狀態列顯示 agent 狀態**，`claude` 還會在狀態列回報它的模型、context 用量與花費。這個設定只套用到改動之後才開的 session，你自己的 Claude Code status line 也照常運作。
+視窗底部的狀態列顯示選中的 repository、focused session 的工作目錄與分支、開了幾個 session、錨定 change 的 task 進度、這個 repository 有幾個 spec 與進行中的 change，以及有幾個檔案還沒存檔。在 **設定 → Agent 與 session** 打開 **在狀態列顯示 agent 狀態**，`claude` 還會在狀態列回報：
+
+- 它的模型與 effort，thinking 開著時加上 ✻；
+- context 用了多少（`ctx 42%`）；
+- 這個 session 新增與刪除了幾行；
+- 這個 session 到目前為止的花費；
+- 5 小時與 7 天兩個區間的用量上限（`5h 30%`、`7d 12%`），各附重置的時間 —— 前提是 Claude Code 有回報這兩項。
+
+這個設定只套用到改動之後才開的 session，你自己的 Claude Code status line 也照常運作。
 
 在 macOS 上，狀態列不顯示 focused session 的工作目錄與 git 狀態（分支、未提交的變更、worktree）。

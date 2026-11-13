@@ -73,6 +73,9 @@ find any file by name; see [Files and quick open](/docs/using/files/).
 
 ## Maximize, Graph, and Timeline
 
+To give the terminal the whole width instead, **▤ Collapse** in the header above the terminal hides the side
+panel; **▤ Expand** brings it back.
+
 `Ctrl+Shift+M` maximizes the side panel over the session tabs and the terminal, which keep running
 underneath. Press it again, or **Restore**, to go back. The rail stays visible.
 
@@ -80,7 +83,9 @@ The OpenSpec identity has two more views, shown only while the panel is maximize
 the panel for you):
 
 - **Graph**: how specs and changes relate (which changes touch which specs).
-- **Timeline**: the life cycle of each change on a time axis.
+- **Timeline**: the life cycle of each change on a time axis. **Group by topic** groups the changes by the
+  specs they touch, and **Hide active** / **Hide archived** leave one kind out. Changes with no creation date
+  are listed apart, below the axis.
 
 Click a change in either view to open it in **This change**. Click a spec in Graph to open it in
 **Browse**. When you restore the panel, you are back in the view you had before, at the same artifact and

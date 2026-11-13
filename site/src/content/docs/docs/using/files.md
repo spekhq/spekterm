@@ -26,7 +26,9 @@ switches which one the tree shows. Each folder remembers its choice.
 
 ## Reading files
 
-Click a file to open it. Markdown is rendered; other files are shown with syntax highlighting. Rendered
+Click a file to open it. Markdown is rendered; **Preview** and **Source** switch between the rendered page
+and its text. Other files are shown with syntax highlighting. A file over 2 MB, or one that is not text, is
+not opened, and the viewer says why. Rendered
 Markdown scrolls with the arrow keys, `Page Up` / `Page Down`, `Home`, `End`, and `Space` as soon as it
 opens, and again after you click in it. On an
 OpenSpec file, **View in OpenSpec** takes you to the same artifact or spec in the OpenSpec identity, and
@@ -43,8 +45,12 @@ Opened files are editable.
 - `Ctrl+S` saves.
 - A file with unsaved changes is marked in the tree and in the status bar. Unsaved changes survive
   switching files and switching folders.
-- If the file has changed on disk since you opened it, saving does not overwrite it: spekterm asks what
-  to do.
+- If the open file changes on disk, a bar says **The file changed on disk**; **Reload** shows the new
+  content (and discards your unsaved changes, which the bar warns about).
+- If you save after the file has changed on disk, spekterm does not overwrite it. It says the file was
+  changed outside the app and offers **Overwrite with mine** or **Discard mine and reload**. Your changes
+  stay until you choose.
+- If the open file is deleted on disk, the viewer says so, and whether you still have unsaved changes.
 - If you close spekterm with unsaved changes, it asks whether to **Save All and Quit** or **Quit Without
   Saving**.
 

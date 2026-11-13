@@ -95,6 +95,7 @@ import phonePrompt from '../../../assets/screenshots/zh-TW/phone-prompt.png'
 
 - **收件匣** —— 有人在 Slack 提及你，那則提及就會進到收件匣。接受之後，spekterm 會在你選的 repository 開好一個 Claude Code session，context 也已備妥。
 - **交接** —— agent 可以把工作交給另一個 repository 的 agent。spekterm 會開好新的 session；在工作回報完成之前，交接的兩端你都看得到。交接也可以排定時間再開始，或在你核准後定期重複。
+- **隊友** —— 團隊自己架一台 [spekterm-server](https://github.com/spekhq/spekterm-server) 之後，agent 也能把工作交給一個人。你按下送出之前什麼都不會寄出；隊友交給你的工作會在收件匣等你讀過、接受。你寄出去的交接，一路看得到進度，直到對方的 agent 回報完成。
 
 <Screenshot
   wide
@@ -105,9 +106,9 @@ import phonePrompt from '../../../assets/screenshots/zh-TW/phone-prompt.png'
 
 ## 離開座位，也不漏接
 
-**Android 版 spekterm** 直接連到你電腦上的 spekterm —— 不用註冊帳號，沒有中繼站，也不經推播服務 —— agent 一等你，手機就會通知你。在手機上，你可以讀 agent 的對話、附上照片或檔案回覆它、回答它的權限要求與提問、開新 session、喚醒或休眠 session，也能處理收件匣與交接。
+**Android 版 spekterm** 直接連到你電腦上的 spekterm —— 不用註冊帳號，也不經推播服務 —— agent 一等你，手機就會通知你。在手機上，你可以讀 agent 的對話、附上照片或檔案回覆它、回答它的權限要求與提問、開新 session、喚醒或休眠 session，也能處理收件匣與交接。
 
-它是桌面版的搭檔，不能取代桌面版：電腦上的 spekterm 必須開著，手機也必須連得到它（同一個網路、Tailscale，或 port forward）。遠端存取預設是關閉的，要你自己打開。
+它是桌面版的搭檔，不能取代桌面版：電腦上的 spekterm 必須開著，手機也必須連得到它：同一個網路、Tailscale、port forward，或者在團隊裡，經由團隊自己的 server —— 它只轉送加密過的連線，讀不到內容。遠端存取預設是關閉的，要你自己打開。
 
 <PhoneScreenshots
   shots={[
