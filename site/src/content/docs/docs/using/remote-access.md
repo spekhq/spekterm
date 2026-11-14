@@ -68,8 +68,17 @@ When an agent asks permission or asks you a question, the phone shows it and can
 
 spekterm presses the keys you would press, one at a time, and never sends text or Enter into a prompt.
 Before each key, it checks that the same prompt is still open. The phone cannot answer when more than one
-prompt is waiting, or after you have typed into that session on your computer. Answer those on the
-computer.
+prompt is waiting. Answer those on the computer.
+
+If you typed into that session on your computer since the prompt appeared, the phone says so:
+
+- **You only moved** (arrow keys, Tab, letters or Space): a phone app that supports this warns you and can
+  still answer once you confirm. Your keys may have moved the prompt, so the answer may not take (if the cursor
+  was left in a "Type something" or feedback field, the keys become text there and nothing is sent), or may pick
+  the wrong options (if you switched to another question). The phone tells you when the answer could not be
+  confirmed; check the computer.
+- **You pressed anything else** (a number, Enter, Esc, a paste…): the prompt may already be answered or
+  dismissed on the computer, so the phone does not answer it. Check the computer.
 
 ### Sending an inbox item's prompt from the phone
 

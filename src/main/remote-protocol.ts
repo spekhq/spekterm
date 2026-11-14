@@ -129,6 +129,8 @@ export interface RemoteHost {
     promptId: string,
     decision: AnswerDecision,
     selections: unknown,
+    /** Moving keystrokes written before the call arrived do not withhold it (`remote-answer-despite-typed`). */
+    despiteTyped: boolean,
   ): Promise<AnswerOutcome>
   watchTerminal(
     sessionId: string,
@@ -359,12 +361,16 @@ export const OPERATIONS: Record<string, Operation> = {
     if (typeof decision !== 'string' || !(DECISIONS as readonly string[]).includes(decision)) {
       throw new RemoteError('BAD_PARAMS', `\`decision\` must be one of ${DECISIONS.join(', ')}`)
     }
+    if (p.despiteTyped !== undefined && typeof p.despiteTyped !== 'boolean') {
+      throw new RemoteError('BAD_PARAMS', '`despiteTyped` must be true or false')
+    }
     const outcome = await state.host.answer(
       state.conversation?.sessionId ?? null,
       str(p, 'sessionId'),
       str(p, 'promptId'),
       decision as AnswerDecision,
       p.selections,
+      p.despiteTyped === true,
     )
     return { outcome }
   },

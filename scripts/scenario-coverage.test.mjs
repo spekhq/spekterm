@@ -86,6 +86,7 @@ const COVERED_CHANGES = [
   'agent-session-wake',
   'intro-layered-rules',
   'openspec-watch-skip-archive',
+  'remote-answer-despite-typed',
 ]
 
 /** change 的所在 —— 封存後它會搬到 `archive/` 之下，兩處都找。 */
@@ -2317,7 +2318,7 @@ export const TABLE = [
   ['Two open requests are not answerable', 'two open requests are stated with the first and the count, not answerable', false,
     'drop the open-count check', '**Ran** (unit): red'],
   ['A prompt the desktop typed into is not answerable', 'a prompt typed into is no longer answerable', false,
-    'no push on a keystroke', 'probe:remote types through terminal.input, the same TerminalService.write path as the desktop keyboard; unit: conversation-follow push on a poke'],
+    'no push on a keystroke; state no reason (remote-answer-despite-typed: the check requires blockedBy "typed")', 'probe:remote types a letter through terminal.input, the same TerminalService.write path as the desktop keyboard; unit: conversation-follow push on a poke'],
   ['Allowing a command from a device', 'an allow writes one key, marks the request answered', false,
     'write "1\\r"', 'Unit level; the probe covers deny, question and plan keys end to end'],
   ['An answer to a prompt that was replaced is refused', 'an answer to a prompt that was replaced is refused as gone', false,
@@ -2326,7 +2327,7 @@ export const TABLE = [
     'drop the keystroke check', '**Ran** (unit): red'],
   ['A second answer to the same prompt is refused', 'an allow writes one key, marks the request answered, and a second answer is refused', false,
     'drop the answered check', '**Ran** (unit): red'],
-  ['An answer while two requests are open is refused', 'not answerable, and an answer is refused', false,
+  ['An answer while two requests are open is refused', 'not answerable because two are open, and an answer is refused', false,
     'drop the open-count check', '**Ran** (unit): red. probe:remote too'],
   ['A question is answered with the option keys', 'answer reaches the agent as the option keys, one write each, no submit key', false,
     'write every key in one write', 'probe:remote checks one block per key'],
@@ -3740,6 +3741,23 @@ export const TABLE = [
   ['The archive directory created after the watch started is followed', 'an archive directory created after the watch started is followed', false,
     'the tree watcher not opening the archive watcher (run: red)', 'and "removed and created again" and "a changes directory created after the watch started" (same control, red)'],
   ['Edits inside an archived change are not watched', 'an edit inside an archived change does not notify', false, 'no ignored predicate (run: red)', ''],
+  // ── remote-answer-despite-typed: remote-protocol (MODIFIED copies; the unchanged names keep their rows above) ──
+  ['Another reason is stated before the keystroke', 'why a device may not answer: the first block that holds, typing last', false,
+    'put typed before the other blocks (**Ran**: red)', 'unit: remote-answer.test.ts (blockOf with two open and a keystroke); the probe states open for two requests without typing'],
+  ['A deciding key is stated as its own reason', 'an arrow states typing, a digit after it states a deciding key', false,
+    'record the deciding time after the listeners (**Ran**, unit: red); classify digits as moving (**Ran**, unit: red)', 'probe:remote runAnswer; unit: pty-input.test.ts, remote-answer.test.ts'],
+  ['An answerable prompt states no reason', 'the view carries the reason only when a device may not answer', true,
+    'always send a blockedBy key', 'green if absent (no reason anywhere); probe:remote also checks no blockedBy key on the first command prompt'],
+  ['An answer despite earlier typing is written', 'an answer despite earlier moving keys is written', false,
+    'ignore despiteTyped in remote-protocol.ts (**Ran**, probe: red)', 'probe:remote runAnswer; unit: remote-answer.test.ts, remote-host.test.ts'],
+  ['Typing after an answer despite earlier typing arrived withholds the rest', 'despite earlier typing, a keystroke after the answer arrived withholds the next key', false,
+    'check the baseline before the first key only (**Ran**: red)', 'unit: remote-answer.test.ts'],
+  ['Typing while the answer waits behind another write withholds it', 'the baseline is read when the answer arrives', false,
+    'read the count inside runQueued (**Ran**: red)', 'unit: remote-host.test.ts with a request seeded open and a moving key typed while the answer is queued'],
+  ['Despite earlier typing does not lift a deciding key', 'despite earlier typing does not lift a deciding key or any other block', false,
+    'drop the deciding check (**Ran**: red)', 'unit: remote-answer.test.ts (Esc before the call, answered with deny); probe:remote runAnswer (a digit, then deny)'],
+  ['Despite earlier typing does not lift another reason', 'despite earlier typing does not lift a deciding key or any other block', false,
+    'let the flag skip the other checks', 'unit: remote-answer.test.ts (two open, another id, stirred, answered; size is NOT_ANSWERABLE)'],
 ]
 
 /**

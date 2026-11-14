@@ -1978,8 +1978,9 @@ async function runAnswer(_mode, _config, context) {
   const command = await cmd
   check(
     results,
-    'a permission prompt is stated with its identity, its tool and argument, allow once, and as answerable',
-    command?.d.prompt.canAllow === true && command.d.prompt.answerable === true && command.d.prompt.arg === 'echo hi' && Boolean(command.d.prompt.id),
+    'a permission prompt is stated with its identity, its tool and argument, allow once, and as answerable, with no reason',
+    command?.d.prompt.canAllow === true && command.d.prompt.answerable === true && command.d.prompt.arg === 'echo hi' && Boolean(command.d.prompt.id) &&
+      !('blockedBy' in command.d.prompt),
     JSON.stringify(command?.d.prompt),
   )
   const deniedFrom = client.events.length
@@ -2052,10 +2053,44 @@ async function runAnswer(_mode, _config, context) {
   const afterKey = await call(client, 'conversation.answer', { sessionId, promptId: replacing?.d.prompt.id, decision: 'allow' })
   check(
     results,
-    'a prompt typed into is no longer answerable, and an answer to it is refused as gone',
-    Boolean(unanswerable) && afterKey.e?.code === 'PROMPT_GONE',
-    JSON.stringify(afterKey.e),
+    'a prompt typed into is no longer answerable because of the keystroke only, and an answer to it is refused as gone',
+    unanswerable?.d.prompt.blockedBy === 'typed' && afterKey.e?.code === 'PROMPT_GONE',
+    JSON.stringify({ prompt: unanswerable?.d.prompt, e: afterKey.e }),
   )
+
+  // The same answer despite earlier typing (`remote-answer-despite-typed`): a letter is a moving key, so it is written.
+  const beforeDespite = (await settledReceived(stub, conv)).length
+  const despite = await call(client, 'conversation.answer', { sessionId, promptId: replacing?.d.prompt.id, decision: 'allow', despiteTyped: true })
+  await settledReceived(stub, conv, beforeDespite + 1)
+  check(
+    results,
+    'an answer despite earlier moving keys is written: the prompt\'s first-option key and no submit key',
+    despite.r?.outcome === 'sent' && received(stub, conv).slice(beforeDespite) === '1',
+    JSON.stringify({ answer: despite.r ?? despite.e, keys: received(stub, conv).slice(beforeDespite) }),
+  )
+  fireEvent(profile, sessionId, { hook_event_name: 'PostToolUse', tool_name: 'Write', tool_use_id: 'w1' })
+  fireEvent(profile, sessionId, { hook_event_name: 'Stop' })
+
+  // A moving key, then a deciding one: the reason changes with no agent event, and the override cannot lift it.
+  const dp = promptWhere((p) => p.tool === 'Bash' && p.arg === 'deciding', 'the deciding prompt')
+  ask('Bash', 'b5', { command: 'deciding' })
+  const deciding = await dp
+  const arrowFrom = client.events.length
+  await call(client, 'terminal.input', { sessionId, data: '\x1b[B' })
+  const moved = await client.waitEvent('conversation.wait', { from: arrowFrom, match: (d) => d.prompt?.blockedBy === 'typed', timeoutMs: 10_000, label: 'typed after an arrow' })
+  const digitFrom = client.events.length
+  await call(client, 'terminal.input', { sessionId, data: '5' })
+  const decided = await client.waitEvent('conversation.wait', { from: digitFrom, match: (d) => d.prompt?.blockedBy === 'decisive', timeoutMs: 10_000, label: 'decisive after a digit' })
+  const beforeDecided = (await settledReceived(stub, conv)).length
+  const overDecided = await call(client, 'conversation.answer', { sessionId, promptId: deciding?.d.prompt.id, decision: 'deny', despiteTyped: true })
+  check(
+    results,
+    'an arrow states typing, a digit after it states a deciding key, and an answer despite typing is then refused as gone with nothing written',
+    Boolean(moved) && decided?.d.prompt.answerable === false && overDecided.e?.code === 'PROMPT_GONE' &&
+      (await settledReceived(stub, conv)).length === beforeDecided,
+    JSON.stringify({ moved: moved?.d.prompt.blockedBy, decided: decided?.d.prompt.blockedBy, e: overDecided.e }),
+  )
+  fireEvent(profile, sessionId, { hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_use_id: 'b5' })
   fireEvent(profile, sessionId, { hook_event_name: 'Stop' })
 
   // Two open requests: stated with the count, not answerable, refused.
@@ -2066,8 +2101,8 @@ async function runAnswer(_mode, _config, context) {
   const bothAnswer = await call(client, 'conversation.answer', { sessionId, promptId: both?.d.prompt.id, decision: 'deny' })
   check(
     results,
-    'two open requests are stated with the first and the count, not answerable, and an answer is refused',
-    both?.d.prompt.arg === '/h/a' && both.d.prompt.answerable === false && bothAnswer.e?.code === 'PROMPT_GONE',
+    'two open requests are stated with the first and the count, not answerable because two are open, and an answer is refused',
+    both?.d.prompt.arg === '/h/a' && both.d.prompt.answerable === false && both.d.prompt.blockedBy === 'open' && bothAnswer.e?.code === 'PROMPT_GONE',
     JSON.stringify({ prompt: both?.d.prompt, e: bothAnswer.e }),
   )
   fireEvent(profile, sessionId, { hook_event_name: 'Stop' })

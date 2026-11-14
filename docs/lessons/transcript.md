@@ -591,6 +591,38 @@ agent, tool and input: parallel calls' starts can arrive 1.5 ms apart, before ei
 - Keys written where no prompt is: `1` sits in the input box, → and Tab show nothing, Esc does nothing in an
   empty box ("Esc again to clear" with text in it). Nothing is submitted.
 
+### After the desktop typed into a prompt (`remote-answer-despite-typed`, CLI 2.1.325, 2026-11-14)
+
+Measured in tmux (`--setting-sources project --permission-mode default`), each row once, a device's keys 300 ms
+apart. `pty-input.ts`'s split into **moving** and **deciding** keys and `blockedBy` rest on these rows; re-measure
+after a CLI upgrade.
+
+- **Moving keys answered and dismissed nothing**, on questions (single, several-choice, two questions), Bash, Write
+  and WebFetch permission prompts and a plan approval: ↑ ↓ ← →, Tab, ASCII letters and Space on an option row. That
+  set is exactly the moving class; nothing else is in it.
+- But they change where a device's keys land:
+  - **a text row swallows digits**: a question's "Type something" (with or without text in it), a plan's "Tell
+    Claude what to change", and a Bash prompt's amend field (Tab: "Tab to amend", option 1 then reads `Yes, 1`).
+    Nothing is submitted; the prompt stays open. Moving back with ↑ to an option, the digit picks it, and the text
+    left in the row is not sent;
+  - **→ on a two-question prompt** moved to the second question; a device's `2` `3` `1` then answered the second,
+    and the review's `1` **submitted** with the first unanswered. ← on the first question did nothing;
+  - **an option toggled with Enter** on a several-choice question stays toggled: the device's choice is added to it
+    and submitted (`Banana, Apple`). With the cursor on "Type something", a several-choice question's `1` became
+    checked text, Tab moved to Submit and the last `1` did nothing;
+  - on a WebFetch prompt, "No, and tell Claude what to do differently (esc)" is not a text row: `1` still allowed.
+- **Esc dismissed the prompt in every state above**, text in a field included (question "declined", Bash
+  "Interrupted", plan "User rejected Claude's plan").
+- **After the desktop's `1` allowed a 20 s foreground command, a device's Esc interrupted it**, and no event followed:
+  the request stays open. A device's `1` instead stayed in the agent's input box for the next reply. Hence a deciding
+  key is a block no override lifts. (`sleep 25` cannot be used for such a row: the CLI moved it to the background.)
+- Not measured: Edit, Read, WebSearch, EnterWorktree and MCP prompts after a key; → or Tab on a single several-choice
+  question; modified arrows, punctuation (`?` may open a help screen), non-ASCII text outside a text row; screens a
+  key opens; mouse clicks on a prompt (a mouse report is not a keystroke, so a prompt answered with the mouse is not
+  `decisive`).
+- **The agent turns bracketed paste on** (`BRACKETED_PASTE`, mode 2004, in the CLI's executable), so every paste
+  reaches the pty wrapped in `ESC [ 200~ … ESC [ 201~` and is deciding, whatever it holds.
+
 ### Attachments
 
 - Reading a file outside the working directories raises a permission prompt. `permissions.allow:

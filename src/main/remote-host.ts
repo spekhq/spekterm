@@ -14,7 +14,7 @@ import {
 } from './agent-wait'
 import type { FinishedCall, WaitState } from './agent-events'
 import { busyReason } from './hibernation-policy'
-import { lastKeystrokeAt } from './pty-input'
+import { keystrokeSeq, lastDecisiveAt, lastKeystrokeAt } from './pty-input'
 import { promptView, writeAnswer } from './remote-answer'
 import { startFollow } from './conversation-follow'
 import { readBriefFor } from './handoff-brief'
@@ -284,7 +284,7 @@ export function createRemoteHost(deps: HostDeps): RemoteHost {
       let alive = true
       const follow = startFollow(sessionId, source, {
         update: sink.update,
-        wait: (state, pending, requests) => sink.wait(state, pending, promptView(requests, lastKeystrokeAt(sessionId))),
+        wait: (state, pending, requests) => sink.wait(state, pending, promptView(requests, lastKeystrokeAt(sessionId), lastDecisiveAt(sessionId))),
         alive: () => alive,
         skills: (list) => sink.skills(list),
       })
@@ -406,10 +406,12 @@ export function createRemoteHost(deps: HostDeps): RemoteHost {
       })
     },
 
-    answer(watching, sessionId, promptId, decision, selections) {
+    answer(watching, sessionId, promptId, decision, selections, despiteTyped) {
       if (watching !== sessionId) {
         return Promise.reject(new RemoteError('NOT_WATCHING', 'answer only the conversation this connection watches'))
       }
+      // On arrival, before the queue: a keystroke while the answer waits behind another write is new typing (D2).
+      const typedThrough = despiteTyped ? keystrokeSeq(sessionId) : undefined
       return runQueued(sessionId, () =>
         writeAnswer(
           {
@@ -418,6 +420,8 @@ export function createRemoteHost(deps: HostDeps): RemoteHost {
               return openRequestsOf(id)
             },
             lastKeystrokeAt,
+            lastDecisiveAt,
+            keystrokeSeq,
             write: (id, key) => {
               const terminal = service()
               if (!terminal || terminal.sizeOf(id) === null) return false
@@ -447,6 +451,7 @@ export function createRemoteHost(deps: HostDeps): RemoteHost {
           promptId,
           decision,
           selections,
+          typedThrough,
         ),
       )
     },

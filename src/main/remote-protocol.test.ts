@@ -152,6 +152,22 @@ test('conversation.answer checks the decision and refuses a conversation that is
   assert.equal(unwatched.e?.code, 'NOT_WATCHING')
 })
 
+test('conversation.answer passes despiteTyped on as a yes or no, and refuses any other value (remote-answer-despite-typed D3)', async () => {
+  const conn = connection()
+  const base = noWindowHost()
+  const seen: unknown[] = []
+  const session = openRemoteSession({ ...base, answer: async (...args) => (seen.push(args[5]), 'sent') }, conn)
+  for (const value of ['yes', 1, null, {}]) {
+    const bad = await call(session, conn, 'conversation.answer', { sessionId: 's1', promptId: 'r1', decision: 'deny', despiteTyped: value })
+    assert.equal(bad.e?.code, 'BAD_PARAMS', JSON.stringify(value))
+  }
+  assert.deepEqual(seen, [], 'nothing reaches the host')
+  for (const value of [undefined, false, true]) {
+    await call(session, conn, 'conversation.answer', { sessionId: 's1', promptId: 'r1', decision: 'deny', despiteTyped: value })
+  }
+  assert.deepEqual(seen, [false, false, true])
+})
+
 test('sessions.rename cleans the name, allows an empty one, and is refused with no window', async () => {
   const { cleanName } = await import('./remote-protocol')
   assert.equal(cleanName('fix\nthe\tlogin\x07'), 'fixthelogin')

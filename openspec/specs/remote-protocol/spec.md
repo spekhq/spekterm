@@ -629,11 +629,21 @@ The update SHALL also say whether a device may answer. It may only when:
 - no device answer was written to it yet;
 - for a question, there are one to four questions, each with one to eight options.
 
-A keystroke is any write to the session except a device answer's own keys and the terminal's focus and mouse
-reports: the keyboard, a client's terminal input, a reply, and the desktop's own prefills.
+When a device may not answer, the update SHALL also state why: the first of these that holds, in this order —
+more than one request is open; the question is outside the size above; a device answer was written to it; its
+agent reported other tool activity; a deciding keystroke was written since the request's tool call started; a
+keystroke was written since then. When the reason is the last one, it is therefore the only one, and every
+keystroke since the request's tool call started was a moving one. When a device may answer, the update SHALL state no reason.
 
-The update SHALL be sent whenever the prompt, the number of open requests or whether a device may answer
-changes, also when no agent event caused the change.
+A keystroke is any write to the session except a device answer's own keys and the terminal's focus and mouse
+reports: the keyboard, a client's terminal input, a reply, and the desktop's own prefills. A keystroke is
+**moving** when the write holds only the four arrow keys without a modifier, Tab, the ASCII letters `a`–`z` and
+`A`–`Z`, and Space. Every other keystroke is **deciding**, among them: an ASCII digit `0`–`9`, Enter, Esc, Shift+Tab,
+any other control character, an arrow with a modifier, any other escape sequence, punctuation, any non-ASCII
+character, and any paste (a paste is bracketed by escape sequences).
+
+The update SHALL be sent whenever the prompt, the number of open requests, whether a device may answer or the
+reason it may not changes, also when no agent event caused the change.
 
 When no request is open, the update SHALL carry no prompt. The existing pending request (tool and argument)
 SHALL be sent as before.
@@ -673,8 +683,23 @@ The answer is also checked against the agent's record where one exists.
 
 #### Scenario: A prompt the desktop typed into is not answerable
 
-- **WHEN** a permission request is open, the agent reports nothing more, and a key is typed into the session on the desktop
-- **THEN** the client receives a wait update that says the prompt is not answerable
+- **WHEN** a permission request is open, the agent reports nothing more, and a letter key is typed into the session on the desktop
+- **THEN** the client receives a wait update that says the prompt is not answerable, because of a keystroke and nothing else
+
+#### Scenario: Another reason is stated before the keystroke
+
+- **WHEN** two permission requests are open and a key is typed into the session on the desktop
+- **THEN** the prompt the client receives is not answerable because more than one request is open, and the keystroke is not stated
+
+#### Scenario: A deciding key is stated as its own reason
+
+- **WHEN** a permission request is open, the agent reports nothing more, and an arrow key and then an option's digit are typed into the session on the desktop
+- **THEN** the prompt the client receives is not answerable because of a deciding keystroke
+
+#### Scenario: An answerable prompt states no reason
+
+- **WHEN** a client watches an agent that asks permission to run a command, and nothing is typed
+- **THEN** the prompt the client receives is answerable and states no reason
 
 ### Requirement: A device's answer reaches only the prompt it was given and never submits text
 
@@ -699,6 +724,15 @@ key only while:
 - the request's agent reported no other tool start or finish since then;
 - no other answer was written to it.
 
+A client MAY send an answer **despite earlier typing**, for any decision. For that answer, the keystroke
+condition SHALL instead be: no deciding keystroke was written to the session since that request's tool call
+started, and no keystroke of any kind since the desktop received the answer. Moving keystrokes written before it
+SHALL NOT withhold any of its keys; keystrokes written after it, including while
+it waits behind another write to the same session, SHALL. Every other condition SHALL apply unchanged, so an
+answer withheld for any other reason SHALL be refused or reported partial exactly as without it. An answer
+despite earlier typing SHALL be confirmed or reported as differing exactly as any other. A value other than yes
+or no for it SHALL be refused as a bad parameter, and nothing SHALL be written.
+
 Then:
 
 - When the first key is withheld, the answer SHALL be refused with an error stating the prompt is gone.
@@ -713,6 +747,19 @@ No answer SHALL include the submit key. Answers and replies to one session SHALL
 
 **Reason**: text and the submit key typed into an open prompt approve it (`companion-test-fixes`), so an
 answer must not be text.
+
+The desktop cannot see what a keystroke did to a prompt, because that is only on the screen. Measured (CLI
+2.1.325):
+
+- after a deciding key answered the prompt on the desktop, a device's dismiss key interrupted the tool the desktop
+  had allowed, and its option key stayed in the agent's input box for the next reply. So a deciding key stays a
+  block that no client can lift;
+- after moving keys, a device's keys landed right, were typed as text into a field and submitted nothing, or
+  submitted choices the user did not make. So the desktop does not decide that moving keys were harmless, and the
+  user, warned by the client, does.
+
+The protocol document SHALL state these outcomes, and that the reason and the answer despite earlier typing are
+offered together.
 
 - The agent waits for its tool-start event before showing any prompt. It reports each queued request before
   that request's own prompt is shown, and shows queued prompts in the order reported (measured, CLI 2.1.300).
@@ -737,6 +784,31 @@ answer must not be text.
 #### Scenario: An answer after the desktop typed is refused
 
 - **WHEN** a permission request is open, a key is typed into the session on the desktop, and a client answers that request
+- **THEN** the answer is refused as gone, and nothing is written to the session
+
+#### Scenario: An answer despite earlier typing is written
+
+- **WHEN** a permission request is open, an arrow key is typed into the session on the desktop, and a client allows it once despite earlier typing
+- **THEN** the session receives that prompt's first-option key and no submit key, and the answer is reported as sent
+
+#### Scenario: Typing after an answer despite earlier typing arrived withholds the rest
+
+- **WHEN** a client answers a two-question prompt despite earlier typing and, before its last key, a key is typed into the session on the desktop
+- **THEN** the remaining keys are not written, and the answer is reported as partial
+
+#### Scenario: Typing while the answer waits behind another write withholds it
+
+- **WHEN** a client's answer despite earlier typing arrives while another write to the same session is being carried out, and a key is typed into the session before the answer's first key
+- **THEN** the answer is refused as gone, and nothing of it is written
+
+#### Scenario: Despite earlier typing does not lift a deciding key
+
+- **WHEN** a permission request is open, the dismiss key is typed into the session on the desktop, and a client denies it despite earlier typing
+- **THEN** the answer is refused as gone, and nothing is written to the session
+
+#### Scenario: Despite earlier typing does not lift another reason
+
+- **WHEN** two permission requests are open, a key was typed, and a client answers the first one's identity despite earlier typing
 - **THEN** the answer is refused as gone, and nothing is written to the session
 
 #### Scenario: A second answer to the same prompt is refused

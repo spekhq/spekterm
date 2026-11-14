@@ -2,9 +2,16 @@
  * When something last typed into each session (`remote-protocol`, D3 of `remote-prompts-attachments-rename`).
  *
  * A device may answer an open permission prompt only while nothing was typed into the session since the
- * prompt's tool call started. A prompt answered, dismissed or half-answered on the desktop reports nothing
+ * prompt's tool call started, or, when its user confirmed a warning, while only moving keys were
+ * (`remote-answer-despite-typed`). A prompt answered, dismissed or half-answered on the desktop reports nothing
  * until its tool ends, or nothing at all, but it always took a key. Every pty write goes through
  * `TerminalService.write`, which reports here.
+ *
+ * **A keystroke is moving or deciding** (`remote-answer-despite-typed` D4). Moving: a write of only unmodified
+ * arrows, Tab, ASCII letters and Space, the keys measured (CLI 2.1.325, `docs/lessons/transcript.md`) to answer and
+ * dismiss no prompt. Deciding: every other write — a digit, Enter or Esc may have answered or dismissed it, and a key
+ * not measured counts as one too (the cost is only the device's override). A paste is always deciding: the agent
+ * turns bracketed paste on, so xterm.js wraps it in escape sequences.
  *
  * **A keystroke is any write except two kinds:**
  * - a device answer's own keys (`origin: 'answer'`): the answer must not make its own prompt unanswerable;
@@ -16,6 +23,8 @@
  */
 
 const lastKeystroke = new Map<string, number>()
+/** When a deciding keystroke was last written into each session. */
+const lastDecisive = new Map<string, number>()
 /**
  * How many keystrokes each session received (`remote-prefill-send` D4). A count, not a time: a key in the same
  * millisecond as the desktop's own write is still told apart, and no clock step can hide one.
@@ -45,10 +54,20 @@ export function isTerminalReport(data: string): boolean {
   return REPORT.test(data)
 }
 
+// eslint-disable-next-line no-control-regex
+const MOVING = /^(?:\x1b\[[A-D]|\x1bO[A-D]|[\tA-Za-z ])+$/
+
+/** Whether a keystroke can only have moved within a prompt (`remote-answer-despite-typed` D4). */
+export function isMovingKey(data: string): boolean {
+  return MOVING.test(data)
+}
+
 /** Called by `TerminalService.write` for every write. */
 export function noteWrite(sessionId: string, data: string, origin?: WriteOrigin, now: number = Date.now()): void {
   if (origin === 'answer' || data === '' || isTerminalReport(data)) return
+  // Both times before the listeners: one pokes the follow, which reads the prompt view at once (D4).
   lastKeystroke.set(sessionId, now)
+  if (!isMovingKey(data)) lastDecisive.set(sessionId, now)
   keystrokeCount.set(sessionId, (keystrokeCount.get(sessionId) ?? 0) + 1)
   for (const listener of listeners) {
     try {
@@ -64,6 +83,11 @@ export function lastKeystrokeAt(sessionId: string): number | null {
   return lastKeystroke.get(sessionId) ?? null
 }
 
+/** The wall-clock ms of the session's last deciding keystroke, or `null`. */
+export function lastDecisiveAt(sessionId: string): number | null {
+  return lastDecisive.get(sessionId) ?? null
+}
+
 /** How many keystrokes the session received so far; only differences between two reads mean anything. */
 export function keystrokeSeq(sessionId: string): number {
   return keystrokeCount.get(sessionId) ?? 0
@@ -77,5 +101,6 @@ export function onKeystroke(listener: (sessionId: string) => void): () => void {
 
 export function forgetInput(sessionId: string): void {
   lastKeystroke.delete(sessionId)
+  lastDecisive.delete(sessionId)
   keystrokeCount.delete(sessionId)
 }

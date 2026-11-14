@@ -370,6 +370,25 @@ while exactly one request is open, nothing was typed into the session since it w
 no other tool activity since, and no answer was written to it yet; for a question, also when it has one to four
 questions of one to eight options. Show the question, option and plan text as plain text: it is the agent's
 own, and may contain paths.
+
+`blockedBy` is present only when `answerable` is `false`, and says why: the first of these that holds.
+
+| `blockedBy` | Why |
+|---|---|
+| `open` | more than one request is open (`open` > 1) |
+| `size` | a question outside one to four questions of one to eight options |
+| `answered` | a device's answer was written to it (yours too: the first key marks it) |
+| `stirred` | its agent reported other tool activity since it was raised |
+| `decisive` | a **deciding** key was typed into the session since its tool call started: it may have answered or dismissed the prompt on the desktop |
+| `typed` | only **moving** keys were typed since then, and nothing else blocks: the one reason `despiteTyped` lifts (`conversation.answer`) |
+
+A **moving** key is an arrow without a modifier, Tab, an ASCII letter or Space; every other key is deciding (a digit,
+Enter, Esc, Shift+Tab, a control character, a modified arrow, punctuation, non-ASCII text, any paste). The split
+follows what was measured (CLI 2.1.325): no moving key answered or dismissed any prompt, while a digit, Enter or Esc
+may have, and an override then acts on something else (see `conversation.answer`). Treat an unknown `blockedBy`
+value as a block you cannot lift. **`blockedBy` and `despiteTyped` come together**: a desktop that sends
+`blockedBy` honors `despiteTyped`, and one that does not send it ignores the flag, so a client may read the field's
+presence as support for the flag.
 - `conversation.status`: `{ sessionId, model?, effort?, context?: { percent?, size? }, costUsd?, rateLimits?: {
   fiveHour?: { percent, resetsAt? }, sevenDay?: { percent, resetsAt? } } }` — the model and usage the session's agent
   last reported to the desktop's status bar. Sent once when the watch starts (with `sessionId` alone when nothing was
@@ -538,7 +557,7 @@ reply — the same conditions and errors as `conversation.send` (`NOT_WATCHING`,
 
 ### `conversation.answer`
 
-`p`: `{ "sessionId", "promptId", "decision", "selections"? }` → `r`: `{ "outcome": "sent" | "partial" | "confirmed" | "mismatch" }`
+`p`: `{ "sessionId", "promptId", "decision", "selections"?, "despiteTyped"? }` → `r`: `{ "outcome": "sent" | "partial" | "confirmed" | "mismatch" }`
 
 Answers the watched conversation's open prompt (`NOT_WATCHING` otherwise). `promptId` is `Prompt.id`.
 
@@ -557,6 +576,25 @@ Answers the watched conversation's open prompt (`NOT_WATCHING` otherwise). `prom
   the desktop reads the agent's events again and writes the key only while the prompt is still answerable (see
   `Prompt.answerable`). If the first key is withheld, the answer is refused `PROMPT_GONE`; if a later one is,
   the rest are withheld and the outcome is `partial`.
+- **`despiteTyped`** (`true` or `false`; anything else is `BAD_PARAMS`): with `true`, keys typed into the session
+  before the desktop received the call do not withhold this answer, and any key typed after it does (also while the
+  answer waits behind another write to the session). It lifts only `blockedBy: "typed"`: a deciding key and every
+  other block refuse it as without the flag. It applies to every decision, and the outcomes are checked as for any
+  answer. **Send it only after warning the user** (section 9). What the keys did on the desktop is not known to it;
+  measured (CLI 2.1.325, Claude Code's own prompts), a device's keys after moving keys on the desktop:
+  - **land right** when the cursor stayed on a listed option (↑/↓ between options, → or Tab on a single
+    single-choice question, ← on the first question, letters or Space on an option row);
+  - **do not take** when the cursor was left on a text row — a question's "Type something", a plan approval's "Tell
+    Claude what to change", a command prompt's amend field (Tab): the keys become text there, nothing is submitted,
+    the prompt stays open, and the outcome is `sent`;
+  - **submit wrong choices** when the desktop moved to another question of a several-question prompt (or toggled a
+    several-choice option): the outcome is `mismatch` when the agent records it within 3 seconds;
+  - the dismiss key (`deny`) closed the prompt in every state measured, text in a field included.
+
+  After a deciding key the prompt may already be answered: a device's Esc then interrupted the tool the desktop had
+  allowed, and its `1` stayed in the agent's input box, for the next reply. That is why `decisive` is not lifted.
+  Not measured: other tools' prompts after a key (only command, file write and web fetch ones), → or Tab on a single
+  several-choice question, screens a key opens (help, the external editor), and mouse clicks on a prompt.
 - **Outcomes**: `sent` — every key was written, and that is all it says. `confirmed` / `mismatch` — for a
   question, the answers the agent recorded, and for a plan approval, the permission mode it entered next, match
   or differ from the choice (checked for up to 3 seconds; otherwise `sent`). `partial` — see above.
@@ -653,7 +691,8 @@ Reads an image a tool result holds. `toolUseId` is a `result` entry's `id`, `ind
 
 `p`: `{ "sessionId", "data" }` → `r`: `{}`. Written to the session's terminal as typed (`"\r"` is Enter). At most
 64 KiB per call. Error: `NOT_FOUND` (no running process). Prefer `conversation.answer` for a prompt: typed
-input makes the open prompt unanswerable from a device, and text with Enter typed into a prompt approves it.
+input makes the open prompt unanswerable from a device (`blockedBy: "typed"` for moving keys, `"decisive"` for any
+other), and text with Enter typed into a prompt approves it.
 
 ### `inbox.list`
 
@@ -933,3 +972,6 @@ open (on Android, a foreground service), and reconnect with backoff when the net
 21. **Keep a relay grant only as the desktop last stated it.** Store `relay` in protected storage; discard it when a
     `hello` answer has none or `relay.changed` says `null`; replace it when either carries another. Never pair through
     the relay, and use a grant only with the credential of the device it was given to.
+22. **Warn the user before `conversation.answer` with `despiteTyped`**, and send it only on their confirmation: keys
+    were typed into that session on the computer, and the answer may then not take, or submit choices they did not
+    make (section 5). After a `sent` outcome, say it could not be confirmed. Offer it only for `blockedBy: "typed"`.

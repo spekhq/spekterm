@@ -161,7 +161,11 @@ OpenSpec 結構的側欄，讓使用者不必另外開 IDE 就能一邊駕駛 ag
     client parses an older desktop's pass-through answers too; `openspec.watch` in `operations` tells them apart.
   - **A device answers a prompt with keys, never text or Enter** (`remote-answer.ts`), re-checked before every
     key: only while exactly one permission request is open, nothing was typed since it appeared, and it was not
-    answered yet. Every open request is tracked (`agent-events.ts`): a background subagent's prompt keeps the
+    answered yet. **Typing is two classes** (`pty-input.ts`, `remote-answer-despite-typed`): moving keys (unmodified
+    arrows, Tab, ASCII letters, Space — measured to answer nothing) can be overridden by an answer sent `despiteTyped`
+    after the phone warns its user (`blockedBy: "typed"`); every other key is deciding (`"decisive"`), a block no
+    override lifts, because the desktop's digit or Esc may already have answered the prompt and a device's Esc then
+    interrupts the allowed tool. A key not measured goes to the deciding class. Every open request is tracked (`agent-events.ts`): a background subagent's prompt keeps the
     state on awaiting-choice through the agent's own `Stop`. Attachments go only into
     `<userData>/remote-attachments` under desktop-chosen names; agents read it through an injected `Read` rule.
     The key plans and event orders are measured (`docs/lessons/transcript.md`): re-measure on a CLI upgrade.

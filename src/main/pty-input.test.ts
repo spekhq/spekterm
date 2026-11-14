@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { forgetInput, isTerminalReport, keystrokeSeq, lastKeystrokeAt, noteWrite, onKeystroke } from './pty-input'
+import { forgetInput, isMovingKey, isTerminalReport, keystrokeSeq, lastDecisiveAt, lastKeystrokeAt, noteWrite, onKeystroke } from './pty-input'
 
 test('keys, pastes and replies are keystrokes', () => {
   forgetInput('s')
@@ -56,4 +56,40 @@ test('keystrokes are counted, also two in the same millisecond, and reports and 
   noteWrite('c', '1', 'answer', 8)
   noteWrite('c', '', undefined, 8)
   assert.equal(keystrokeSeq('c'), 2)
+})
+
+test('moving keys are only the measured ones; every other keystroke is deciding (remote-answer-despite-typed D4)', () => {
+  const moving = ['\x1b[A', '\x1b[B', '\x1b[C', '\x1b[D', '\x1bOA', '\x1bOB', '\x1bOC', '\x1bOD', '\t', 'a', 'Z', ' ']
+  for (const key of moving) {
+    forgetInput('m')
+    noteWrite('m', key, undefined, 10)
+    assert.equal(lastKeystrokeAt('m'), 10, JSON.stringify(key))
+    assert.equal(lastDecisiveAt('m'), null, JSON.stringify(key))
+  }
+  const deciding = [
+    '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '\r', '\x1b', '\x1b[Z', '\x03', '\x7f', '\x1b[1;3A', '\x1ba',
+    '\x1bOP', '\x1b[15~', '?', '中文', '\uff11', '\x1b[200~abc\x1b[201~', 'ab1',
+  ]
+  for (const key of deciding) {
+    forgetInput('d')
+    noteWrite('d', key, undefined, 20)
+    assert.equal(lastDecisiveAt('d'), 20, JSON.stringify(key))
+    assert.equal(isMovingKey(key), false, JSON.stringify(key))
+  }
+  forgetInput('e')
+  noteWrite('e', '1', 'answer', 30)
+  noteWrite('e', '\x1b[I', undefined, 30)
+  assert.equal(lastDecisiveAt('e'), null, "an answer's own key and a terminal report are neither")
+  noteWrite('e', '\r', undefined, 40)
+  forgetInput('e')
+  assert.equal(lastDecisiveAt('e'), null, 'forgotten')
+})
+
+test('a deciding keystroke is recorded before the listeners hear it', () => {
+  forgetInput('l')
+  const seen: (number | null)[] = []
+  const off = onKeystroke((id) => seen.push(lastDecisiveAt(id)))
+  noteWrite('l', '1', undefined, 50)
+  off()
+  assert.deepEqual(seen, [50])
 })

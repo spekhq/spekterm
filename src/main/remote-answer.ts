@@ -22,15 +22,20 @@ import { RemoteError } from './remote-frames'
  *   without a plan, `1. Yes, and switch to default`;
  * - every key in one write answered wrongly; 100 ms and 250 ms gaps both answered right.
  *
- * ## Before every key, five checks
+ * ## Before every key, six checks
  *
  * The open requests are read again (`refreshWait`), and the key is written only if:
  * 1. exactly one request is open (queued prompts: only the first is on screen);
  * 2. it is the one answered;
- * 3. nothing was typed into the session since its tool call started (the desktop answered, dismissed or
- *    half-answered it: none of that reports an event before the tool ends, or at all);
- * 4. its agent reported no other tool start or finish since then (`OpenRequest.stirred`);
- * 5. no earlier answer was written to it (an allowed tool runs for minutes before it closes).
+ * 3. no deciding keystroke (`pty-input.ts`) was typed into the session since its tool call started: a digit,
+ *    Enter or Esc may have answered or dismissed it, which reports no event before the tool ends, or at all.
+ *    Measured (CLI 2.1.325): after the desktop allowed a command, a device's Esc interrupted it and its `1` stayed
+ *    in the input box;
+ * 4. nothing else was typed since then either, unless the device sent `despiteTyped`: then nothing since the
+ *    desktop received the answer (a keystroke count read on arrival, `remote-answer-despite-typed` D2). Moving keys
+ *    can leave the cursor on a text row or another question, so the client warns its user first;
+ * 5. its agent reported no other tool start or finish since then (`OpenRequest.stirred`);
+ * 6. no earlier answer was written to it (an allowed tool runs for minutes before it closes).
  *
  * The agent waits for its tool-start hook before it shows a prompt, so a prompt that replaced the answered one
  * is known before the next key.
@@ -57,10 +62,18 @@ export const DECISIONS: readonly AnswerDecision[] = ['allow', 'deny', 'answer', 
 
 export type AnswerOutcome = 'sent' | 'partial' | 'confirmed' | 'mismatch'
 
+/**
+ * Why a device may not answer: the first that holds, in this order (`remote-answer-despite-typed` D1). `typed` is
+ * last, so it means "only moving keys were typed, and nothing else blocks": the one a client may override.
+ */
+export type BlockedBy = 'open' | 'size' | 'answered' | 'stirred' | 'decisive' | 'typed'
+
+type Answerability = { answerable: boolean; blockedBy?: BlockedBy }
+
 export type PromptView =
-  | { id: string; kind: 'permission'; tool: string; arg: string | null; canAllow: boolean; answerable: boolean; open: number }
-  | { id: string; kind: 'question'; questions: Question[]; answerable: boolean; open: number }
-  | { id: string; kind: 'plan'; plan: string | null; choices: AnswerDecision[]; answerable: boolean; open: number }
+  | ({ id: string; kind: 'permission'; tool: string; arg: string | null; canAllow: boolean; open: number } & Answerability)
+  | ({ id: string; kind: 'question'; questions: Question[]; open: number } & Answerability)
+  | ({ id: string; kind: 'plan'; plan: string | null; choices: AnswerDecision[]; open: number } & Answerability)
 
 type Kind = PromptView['kind']
 
@@ -76,30 +89,37 @@ export function questionsAnswerable(questions: Question[] | null): questions is 
   return questions.every((question) => question.options.length >= 1 && question.options.length <= 8)
 }
 
-/** Checks 1, 3, 4 and 5 for the first open request (check 2 is the caller's id). */
-function clear(requests: OpenRequest[], lastKeystroke: number | null): boolean {
-  if (requests.length !== 1) return false
+const after = (time: number | null, at: number): boolean => time !== null && time > at
+
+/** The first block of the first open request, or `null` when a device may answer it (check 2 is the caller's id). */
+export function blockOf(requests: OpenRequest[], lastKeystroke: number | null, lastDecisive: number | null): BlockedBy | null {
   const request = requests[0]
-  if (lastKeystroke !== null && lastKeystroke > request.at) return false
-  return !request.stirred && request.answeredAt === null
+  if (requests.length !== 1) return 'open'
+  if (kindOf(request) === 'question' && !questionsAnswerable(request.questions)) return 'size'
+  if (request.answeredAt !== null) return 'answered'
+  if (request.stirred) return 'stirred'
+  if (after(lastDecisive, request.at)) return 'decisive'
+  if (after(lastKeystroke, request.at)) return 'typed'
+  return null
 }
 
 /** What a device is told about the open prompt (`conversation.wait`'s `prompt`), or `null`. */
-export function promptView(requests: OpenRequest[], lastKeystroke: number | null): PromptView | null {
+export function promptView(requests: OpenRequest[], lastKeystroke: number | null, lastDecisive: number | null): PromptView | null {
   const request = requests[0]
   if (!request) return null
-  const ok = clear(requests, lastKeystroke)
+  const block = blockOf(requests, lastKeystroke, lastDecisive)
+  const answerability: Answerability = block === null ? { answerable: true } : { answerable: false, blockedBy: block }
   const open = requests.length
   switch (kindOf(request)) {
     case 'question':
-      return { id: request.id, kind: 'question', questions: request.questions ?? [], answerable: ok && questionsAnswerable(request.questions), open }
+      return { id: request.id, kind: 'question', questions: request.questions ?? [], ...answerability, open }
     case 'plan':
       return {
         id: request.id,
         kind: 'plan',
         plan: request.plan,
         choices: request.plan === null ? ['approve', 'deny'] : ['approve', 'approve-auto', 'deny'],
-        answerable: ok,
+        ...answerability,
         open,
       }
     default:
@@ -109,7 +129,7 @@ export function promptView(requests: OpenRequest[], lastKeystroke: number | null
         tool: request.tool,
         arg: request.arg,
         canAllow: canAllowOnce(request.tool),
-        answerable: ok,
+        ...answerability,
         open,
       }
   }
@@ -181,6 +201,9 @@ export interface AnswerDeps {
   /** Reads the session's events now and returns its open requests (`refreshWait` + `openRequestsOf`). */
   refresh(sessionId: string): OpenRequest[]
   lastKeystrokeAt(sessionId: string): number | null
+  lastDecisiveAt(sessionId: string): number | null
+  /** How many keystrokes the session received so far (`pty-input.ts` `keystrokeSeq`). */
+  keystrokeSeq(sessionId: string): number
   /** Writes one key as an answer's own (`origin: 'answer'`); `false` when the session has no pty. */
   write(sessionId: string, key: string): boolean
   markAnswered(sessionId: string, requestId: string, at: number): void
@@ -200,6 +223,9 @@ function matches(expect: NonNullable<KeyPlan['expect']>, finished: FinishedCall)
 /**
  * Writes a device's answer. Call it inside the session's queue (`runQueued`). Throws `PROMPT_GONE` when the
  * first key is withheld, and the refusals of `planKeys`.
+ *
+ * `typedThrough` is the session's keystroke count when the desktop received an answer sent `despiteTyped`, read
+ * before the queue: moving keystrokes up to it do not withhold a key, and any keystroke after it does.
  */
 export async function writeAnswer(
   deps: AnswerDeps,
@@ -207,6 +233,7 @@ export async function writeAnswer(
   promptId: string,
   decision: AnswerDecision,
   selections?: unknown,
+  typedThrough?: number,
 ): Promise<AnswerOutcome> {
   const first = deps.refresh(sessionId)
   const request = first.find((candidate) => candidate.id === promptId)
@@ -217,11 +244,16 @@ export async function writeAnswer(
     const requests = index === 0 ? first : deps.refresh(sessionId)
     const current = requests[0]
     const ours = index > 0 && current?.id === promptId
+    const typed =
+      typedThrough === undefined
+        ? after(deps.lastKeystrokeAt(sessionId), current?.at ?? Infinity)
+        : deps.keystrokeSeq(sessionId) !== typedThrough
     const ok =
       current?.id === promptId &&
       requests.length === 1 &&
       !current.stirred &&
-      !((deps.lastKeystrokeAt(sessionId) ?? -Infinity) > current.at) &&
+      !after(deps.lastDecisiveAt(sessionId), current.at) &&
+      !typed &&
       (current.answeredAt === null || ours)
     if (!ok) {
       if (index === 0) throw new RemoteError('PROMPT_GONE', 'that prompt cannot be answered from a device now', { open: requests.length })

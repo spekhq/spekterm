@@ -3,6 +3,7 @@ import test from 'node:test'
 import { heldWait } from './agent-events'
 import { clearWait, foldDrain } from './agent-wait'
 import type { PrefillView } from './intake-prefill'
+import { forgetInput, noteWrite } from './pty-input'
 import { runQueued } from './remote-conversation'
 import { createRemoteHost, type HostDeps } from './remote-host'
 import { seenMarks } from './wait-seen'
@@ -657,4 +658,38 @@ test('a model switch is written like a reply and armed right before the key, als
   plain.setFill(null)
   await plain.host.reply('a', 'a', 'hello', [])
   assert.deepEqual(plain.writes, ['hello', '<arm a>', '\r'], 'other text arms no switch')
+})
+
+// ── remote-answer-despite-typed D2 ──
+
+function openPrompt(sessionId: string): void {
+  const request = { id: 'r1', toolUseId: 't1', agentId: null, tool: 'Bash', arg: 'ls', questions: null, plan: null, at: 1000, answeredAt: null, stirred: false }
+  foldDrain(sessionId, { held: { ...heldWait('busy'), requests: [request] }, transcriptPath: null, count: 0, turnEnded: false, sessionStarted: false, choicesRaised: [], finished: [] } as never)
+  forgetInput(sessionId)
+}
+
+test('an answer despite earlier typing is written over moving keys typed before it arrived', async () => {
+  const { host: h, writes } = host()
+  openPrompt('a')
+  noteWrite('a', '\x1b[B', undefined, 2000)
+  await assert.rejects(h.answer('a', 'a', 'r1', 'allow', undefined, false), { code: 'PROMPT_GONE' })
+  assert.equal(await h.answer('a', 'a', 'r1', 'allow', undefined, true), 'sent')
+  assert.deepEqual(writes, ['1'])
+  clearWait('a')
+})
+
+test('the baseline is read when the answer arrives: a keystroke while it waits in the queue withholds it', async () => {
+  const { host: h, writes } = host()
+  openPrompt('a')
+  noteWrite('a', 'x', undefined, 2000)
+  let release!: () => void
+  const gate = new Promise<void>((resolve) => (release = resolve))
+  void runQueued('a', () => gate)
+  const answered = h.answer('a', 'a', 'r1', 'allow', undefined, true)
+  // A moving key: only the baseline can withhold the answer, the deciding check cannot.
+  noteWrite('a', 'y', undefined, 2100)
+  release()
+  await assert.rejects(answered, { code: 'PROMPT_GONE' })
+  assert.deepEqual(writes, [])
+  clearWait('a')
 })

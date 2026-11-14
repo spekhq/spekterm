@@ -92,3 +92,30 @@ test('the protocol document states the relay field and event', () => {
 test('control: a document without the relay statements fails each check', () => {
   assert.deepEqual(Object.values(relayStatements('# nothing about the relay')), [false, false, false, false, false])
 })
+
+/**
+ * The prompt's reason and the answer despite typing (`remote-answer-despite-typed`): the Android app reads
+ * `blockedBy` as support for `despiteTyped`, so the document must say they come together.
+ */
+export function despiteTypedStatements(doc) {
+  const values = ['open', 'size', 'answered', 'stirred', 'decisive', 'typed']
+  return {
+    field: /`blockedBy` is present only when `answerable` is `false`/.test(doc),
+    values: values.every((value) => new RegExp(`^\\| \`${value}\` \\|`, 'm').test(doc)),
+    param: /"despiteTyped"\?/.test(doc) && /\*\*`despiteTyped`\*\* \(`true` or `false`; anything else is `BAD_PARAMS`\)/.test(doc),
+    together: /\*\*`blockedBy` and `despiteTyped` come together\*\*/.test(doc),
+    obligation: /\*\*Warn the user before `conversation\.answer` with `despiteTyped`\*\*/.test(doc),
+  }
+}
+
+test('the protocol document states the prompt reason, the despiteTyped flag, and that they come together', () => {
+  const statements = despiteTypedStatements(readFileSync(DOC, 'utf8'))
+  assert.deepEqual(Object.entries(statements).filter(([, ok]) => !ok).map(([name]) => name), [])
+})
+
+test('control: a document without those statements fails each check', () => {
+  assert.deepEqual(Object.values(despiteTypedStatements('# nothing about them')), [false, false, false, false, false])
+  const doc = readFileSync(DOC, 'utf8')
+  assert.equal(despiteTypedStatements(doc.replace('| `decisive` |', '| `deciding` |')).values, false, 'a value renamed')
+  assert.equal(despiteTypedStatements(doc.replace('**`blockedBy` and `despiteTyped` come together**', 'they come together')).together, false)
+})
