@@ -69,6 +69,7 @@ const PROJECTION_RULES = [
             'setAgentView',
       'setGpuAcceleration',
       'setAutoHibernate',
+      'setQuickReplies',
     ],
   },
   {

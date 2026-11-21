@@ -396,7 +396,20 @@
     "agentView": "Agent session 顯示",
     "agentViewTerminal": "終端",
     "agentViewConversation": "對話",
-    "agentViewHint": "與 agent session 分頁旁的切換鈕是同一個設定，套用於所有 agent session。"
+    "agentViewHint": "與 agent session 分頁旁的切換鈕是同一個設定，套用於所有 agent session。",
+    "quickReplies": "快速回覆",
+    "quickRepliesHint": "常送的句子。在 agent session 底下點一下，就當作你的回覆送出。",
+    "quickReplyField": "快速回覆 {{index}}",
+    "quickReplyNew": "新的快速回覆",
+    "quickReplyAdd": "新增快速回覆",
+    "quickReplyRemove": "移除：{{sentence}}",
+    "quickReplyUp": "上移：{{sentence}}",
+    "quickReplyDown": "下移：{{sentence}}",
+    "quickReplyEmpty": "請輸入句子，或移除這一列。",
+    "quickReplyTooLong": "最多 200 個字元。",
+    "quickReplyControl": "只能一行，不能含控制字元。",
+    "quickReplyDuplicate": "清單裡已經有這句了。",
+    "quickReplyFull": "最多 12 則快速回覆。"
   },
   "statusBar": {
     "label": "狀態列",
@@ -1175,5 +1188,27 @@
       "CREDENTIAL_UNAVAILABLE": "在這台電腦上找不到團隊憑證。",
       "REVOKED": "這台裝置已被移出團隊。"
     }
+  },
+  "quickReplies": {
+    "default": {
+      "close": "這個 session 可以關了嗎？",
+      "risk": "會有什麼風險或我要特別決策的嗎？",
+      "remaining": "這個 session 還有什麼要做的嗎？"
+    },
+    "toolbar": "快速回覆",
+    "edit": "編輯快速回覆",
+    "sendAnyway": "仍要送出",
+    "dismiss": "關閉",
+    "refused": {
+      "typed": "你在上一次送出之後在這個 session 打過字，可能還留在 agent 的輸入框裡。清掉之後再按「仍要送出」。",
+      "choice": "agent 可能正在終端裡等你選擇。",
+      "unknown": "spekterm 無法判斷 agent 現在能不能接收訊息。",
+      "busy": "agent 現在無法接收訊息。",
+      "prefill": "這個 session 有一則填好但尚未送出的 prompt，請先送出或清掉。",
+      "notFound": "這個 session 沒有執行中的 agent。",
+      "badParams": "這則快速回覆無法送出。"
+    },
+    "notSent": "快速回覆已在 agent 的輸入框裡，但沒有送出（除非你在這期間按了 Enter）。",
+    "dormant": "喚醒 session 才能送出快速回覆。"
   }
 }

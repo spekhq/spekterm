@@ -32,6 +32,41 @@ const lastDecisive = new Map<string, number>()
 const keystrokeCount = new Map<string, number>()
 const listeners = new Set<(sessionId: string) => void>()
 
+/**
+ * **What may still be in the agent's input box** (`quick-replies` D2). The desktop cannot see the box; it can tell
+ * which keystrokes were submitted. Text typed during a turn stays in the box after `Stop` and after a permission
+ * prompt answered with Enter, and a finished background task's notice is reported as a submission that no keystroke
+ * preceded (measured CLI 2.1.330, `docs/lessons/transcript.md`). So the box is judged by counts, not by events alone:
+ *
+ * - `enters`: the last few **submitting Enters** — a write ending with `\r` whose `\r` does not follow ESC (Alt+Enter,
+ *   a line break) and is not inside a bracketed paste (xterm turns a pasted line break into `\r`), written while no
+ *   own request of the agent is open (an Enter then answers the prompt).
+ * - `submitted`: the keystroke count up to which everything typed was submitted. It moves only when an own
+ *   submission is drained with a submitting Enter at or before its time (`confirmSubmit`), when a reply's submit key
+ *   was written (`noteSubmitted`), and at a spawn (`noteSubmitted`: a new agent's box is empty).
+ *
+ * Every exclusion errs toward "the box may hold something", which costs a quick reply one more click.
+ */
+const ENTER_HISTORY = 8
+const enters = new Map<string, { seq: number; at: number }[]>()
+const submitted = new Map<string, number>()
+let ownRequestOpen: (sessionId: string) => boolean = () => false
+
+/** Set once by `agent-wait.ts`, which holds the open requests (an import the other way would be a cycle). */
+export function setOwnRequestSource(source: (sessionId: string) => boolean): void {
+  ownRequestOpen = source
+}
+
+const PASTE_START = '\x1b[200~'
+const PASTE_END = '\x1b[201~'
+
+/** Whether a write submits the agent's box when nothing else is open (see `enters`). */
+export function isSubmittingEnter(data: string): boolean {
+  if (!data.endsWith('\r')) return false
+  if (data.length >= 2 && data[data.length - 2] === '\x1b') return false
+  return data.lastIndexOf(PASTE_START) <= data.lastIndexOf(PASTE_END)
+}
+
 export type WriteOrigin = 'answer'
 
 /**
@@ -68,7 +103,14 @@ export function noteWrite(sessionId: string, data: string, origin?: WriteOrigin,
   // Both times before the listeners: one pokes the follow, which reads the prompt view at once (D4).
   lastKeystroke.set(sessionId, now)
   if (!isMovingKey(data)) lastDecisive.set(sessionId, now)
-  keystrokeCount.set(sessionId, (keystrokeCount.get(sessionId) ?? 0) + 1)
+  const seq = (keystrokeCount.get(sessionId) ?? 0) + 1
+  keystrokeCount.set(sessionId, seq)
+  if (isSubmittingEnter(data) && !ownRequestOpen(sessionId)) {
+    const list = enters.get(sessionId) ?? []
+    list.push({ seq, at: now })
+    if (list.length > ENTER_HISTORY) list.shift()
+    enters.set(sessionId, list)
+  }
   for (const listener of listeners) {
     try {
       listener(sessionId)
@@ -99,8 +141,32 @@ export function onKeystroke(listener: (sessionId: string) => void): () => void {
   return () => listeners.delete(listener)
 }
 
+/**
+ * An own submission was reported at `eventAt` (not a notice): the last submitting Enter at or before it is what was
+ * submitted. The hook's timestamp is taken after the Enter (57 ms after, measured), never before it.
+ */
+export function confirmSubmit(sessionId: string, eventAt: number): void {
+  const list = enters.get(sessionId)
+  if (!list) return
+  let enter: { seq: number; at: number } | null = null
+  for (const candidate of list) if (candidate.at <= eventAt) enter = candidate
+  if (enter && enter.seq > (submitted.get(sessionId) ?? 0)) submitted.set(sessionId, enter.seq)
+}
+
+/** Everything typed so far is submitted, or gone: a reply's submit key was just written, or a new process started. */
+export function noteSubmitted(sessionId: string): void {
+  submitted.set(sessionId, keystrokeCount.get(sessionId) ?? 0)
+}
+
+/** The keystroke count up to which everything typed was submitted. */
+export function submittedSeqOf(sessionId: string): number {
+  return submitted.get(sessionId) ?? 0
+}
+
 export function forgetInput(sessionId: string): void {
   lastKeystroke.delete(sessionId)
   lastDecisive.delete(sessionId)
   keystrokeCount.delete(sessionId)
+  enters.delete(sessionId)
+  submitted.delete(sessionId)
 }

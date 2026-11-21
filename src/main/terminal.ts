@@ -6,7 +6,7 @@ import { clearAgentStatus, prepareInjection } from './agent-status'
 import { clearModelSwitch, prepareModelSwitchInjection } from './agent-model-switch'
 import { clearOrigin, prepareOriginInjection } from './agent-origin'
 import { clearAgentEvents, prepareEventInjection } from './agent-events'
-import { noteWrite, type WriteOrigin } from './pty-input'
+import { noteSubmitted, noteWrite, type WriteOrigin } from './pty-input'
 import { noteProcessEnd, noteProcessStart } from './session-runs'
 import { prepareAttachmentAccess } from './remote-attachments'
 import { type Injection, type InjectionContribution, composeInjection } from './agent-injection'
@@ -632,6 +632,8 @@ export class TerminalService {
 
     this.sink.spawned?.(sessionId)
     noteProcessStart(sessionId)
+    // A new process's input box is empty: nothing typed into an earlier one can join a reply (`quick-replies` D2).
+    noteSubmitted(sessionId)
 
     let exited!: () => void
     lastExit.set(sessionId, new Promise<void>((resolve) => { exited = resolve }))

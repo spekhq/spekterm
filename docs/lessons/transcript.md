@@ -638,6 +638,34 @@ after a CLI upgrade.
   conversation projection does not show. Inside a sentence, in backticks, the path stays text and the agent
   uses Read, which is why the attachment sentence is written that way.
 
+## What is in the agent's input box, from outside (`quick-replies`, CLI 2.1.330, 2026-11-21)
+
+A quick reply is written into the agent's box without the user's keyboard, so the desktop must know whether the
+box may already hold the user's words. It cannot see the box (no screen reading); measured with a real agent in a
+pty, the hooks injected as the product injects them, a Haiku model:
+
+- **Text typed during a turn stays in the box after `Stop`.** Typed while the agent answered, not submitted, then
+  Enter after the `Stop`: the next `UserPromptSubmit`'s prompt was exactly that text.
+- **It also survives a permission prompt answered with Enter**: typed before the prompt opened, the prompt approved
+  with Enter, the turn ended; the next Enter submitted the typed text. The Enter that answered reported no
+  `UserPromptSubmit`.
+- **A background task's notice is an own `UserPromptSubmit` that no keystroke preceded**: `agent_id` absent, the
+  prompt starts with `<task-notification>`; after a prompt approved with Enter, it came 2.7 s after the turn's `Stop`,
+  followed by another `Stop`.
+- **A prompt submitted mid-turn reports `UserPromptSubmit` at once** (13 ms after the Enter's write, before the
+  running tool's `PostToolUse`); a prompt submitted while ready, 57 ms after. The hook's timestamp is taken after
+  the Enter, never before it, so "the last Enter at or before a submit's time" finds the Enter that caused it.
+- Not measured: whether a message from another session reports `UserPromptSubmit`. The gate does not depend on it:
+  a submit that no submitting Enter preceded moves nothing.
+
+Hence the gate counts keystrokes against the last Enter a submit confirmed (`pty-input.ts`). Not every `\r` is an
+Enter that submits: xterm sends Alt+Enter (a line break in the box) as `ESC CR`, turns a pasted line break into `\r`
+inside the bracketed paste, and an Enter written while a prompt is open answers it — none of them may be confirmed by a
+later submit, or a notice arriving after them would make the box look empty. And the quick reply's
+own writes count as keystrokes like any other (`inTurnOf`, `session-control.ts` and `wait-seen.ts` read them);
+its gate looks past them by moving the baseline itself right after it writes the submit key. Re-measure on a CLI
+upgrade.
+
 ## Turn boundaries (`agent-session-control`, CLI 2.1.301, 2026-10-16)
 
 Measured with a real `claude` (`--model haiku`, `--setting-sources project`) driven through a pty, every hook

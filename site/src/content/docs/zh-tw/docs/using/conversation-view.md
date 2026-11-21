@@ -34,6 +34,8 @@ spekterm 絕不讀取終端機畫面來組成這個檢視。畫面輸出是給�
 
 你送出的內容以純文字交給 agent，絕不會被當成終端機控制序列解讀。
 
+輸入框下方那排[快速回覆](/zh-tw/docs/using/terminals-and-sessions/#快速回覆)，一點就能送出你存下的句子。
+
 你送出的 slash command（例如 `/simplify`，或帶參數的 skill）會照你打的那一行顯示。
 
 agent 收到、但不是你打的訊息，會標示來源：**來自** 加上送出它的 session 名稱、**來自 subagent** 加上它的類型、背景通知標示 **背景工作**，其他的（例如 skill 的指示）標示 **脈絡**。另一個 session 傳來的訊息會照那個 session 寫的原樣顯示。agent 工作中收到的其他 session 訊息與背景工作通知也會出現，位置在 agent 收下它的地方。

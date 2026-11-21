@@ -3,8 +3,9 @@ import { t as translate } from '@shared/i18n'
 import { AUTO_HIBERNATE_PRESETS, DEFAULT_AUTO_HIBERNATE_SECONDS } from '@shared/hibernation/settings'
 import { usePreferences } from '../../PreferencesProvider'
 import { FieldError, HINT_CLASS, INPUT_CLASS, LABEL_CLASS, RestoreDefaults, useWrite } from '../fields'
+import { QuickRepliesEditor } from '../QuickRepliesEditor'
 
-/** Agents & sessions: agent status reporting, automatic hibernation, and the agent session view. */
+/** Agents & sessions: agent status reporting, automatic hibernation, the agent session view, and the quick replies. */
 export function AgentsSection(): React.JSX.Element {
   const { t } = useTranslation()
   const {
@@ -14,6 +15,7 @@ export function AgentsSection(): React.JSX.Element {
     updateAutoHibernate,
     agentView,
     updateAgentView,
+    updateQuickReplies,
   } = usePreferences()
   const status = useWrite()
   const hibernate = useWrite()
@@ -89,11 +91,14 @@ export function AgentsSection(): React.JSX.Element {
       <p className={HINT_CLASS}>{t('settings.agentViewHint')}</p>
       <FieldError message={view.failure} />
 
+      <QuickRepliesEditor />
+
       <RestoreDefaults
         onRestore={() =>
           updateAgentStatus(null)
             .then(() => updateAutoHibernate(null))
             .then(() => updateAgentView(null))
+            .then(() => updateQuickReplies(null))
         }
       />
     </>

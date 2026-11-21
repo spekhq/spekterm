@@ -1,4 +1,11 @@
-## ADDED Requirements
+# quick-replies Specification
+
+## Purpose
+Sentences the user sends to agents often, kept in the preferences and sent to an agent session with one click from a
+row under its terminal or conversation view, under the gates of a typed reply and one more: nothing the user typed may
+still be in the agent's input box.
+
+## Requirements
 
 ### Requirement: The user keeps a list of quick replies
 
@@ -51,7 +58,7 @@ over the result of the ones before.
 ### Requirement: Quick replies show under an agent session
 
 While an agent session is shown and the list is not empty, a row of quick replies SHALL show under the session's
-view — under the terminal in the terminal view, above the composer in the conversation view — one button per
+view — under the terminal in the terminal view, under the composer in the conversation view — one button per
 sentence in the list's order, each named by its full sentence, then a control that opens Settings at Agents &
 sessions. The row SHALL keep to one line, scrolling sideways when it does not fit, and SHALL keep one height: a
 refusal or a notice SHALL take the buttons' place in the row, not add a line, so that the terminal is not resized by

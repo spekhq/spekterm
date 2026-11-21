@@ -13,6 +13,7 @@ export const SETTINGS_CHANNELS = {
   setAgentStatus: 'workspace:settings:setAgentStatus',
     setAgentView: 'workspace:settings:setAgentView',
   setAutoHibernate: 'workspace:settings:setAutoHibernate',
+  setQuickReplies: 'workspace:settings:setQuickReplies',
   setLanguage: 'workspace:settings:setLanguage',
   setAutoUpdateCheck: 'workspace:settings:setAutoUpdateCheck',
   setTheme: 'workspace:settings:setTheme',
@@ -145,6 +146,13 @@ export function registerSettingsHandlers(
     SETTINGS_CHANNELS.setAutoHibernate,
     (_event, seconds: unknown): ProjectedPreferences =>
       projectPreferences(store.setAutoHibernate(typeof seconds === 'number' ? seconds : null), store.ui(), store.updates()),
+  )
+
+  // `quick-replies` D4: the list's rules live in the store (a list breaking any of them, or `null`, unsets it).
+  ipcMain.handle(
+    SETTINGS_CHANNELS.setQuickReplies,
+    (_event, list: unknown): ProjectedPreferences =>
+      projectPreferences(store.setQuickReplies(Array.isArray(list) ? (list as string[]) : null), store.ui(), store.updates()),
   )
 
   // `app-update`: on is stored as the default (`null`), off as `false`; anything else is the default.

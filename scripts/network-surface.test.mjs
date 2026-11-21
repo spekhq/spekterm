@@ -64,6 +64,8 @@ const MODULE_ALLOW = new Set([
   '@shared/insights/cue-rules.json',
   // The Schedules tab's predicates (`handoff-cancel`): the cancel and the schedules file judge by the tab's own rules.
   '@shared/intake/scheduled',
+  // The quick reply's sentence and list rules (`quick-replies` D4): pure checks, no I/O.
+  '@shared/quick-replies/rules',
   'child_process',
   'crypto',
   'fs',

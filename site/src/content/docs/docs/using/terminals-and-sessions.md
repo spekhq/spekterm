@@ -40,6 +40,27 @@ chosen, is on the [Keyboard shortcuts](/docs/reference/keyboard-shortcuts/) page
 The terminal's font, size, line height, and GPU drawing are under **Settings → Terminal**; see
 [Settings](/docs/reference/settings/).
 
+## Quick replies
+
+Under an agent session, in the terminal view and the conversation view, a row of buttons holds your **quick
+replies**: sentences you send to agents often. Click one and it is sent as your reply at once, with no second
+key. Keyboard focus stays where it was. The defaults are *Can this session be closed now?*, *Is there any risk,
+or anything I need to decide?* and *Is there anything left to do in this session?*; change them with the pencil
+button at the end of the row, or under **Settings → Agents & sessions**.
+
+A quick reply is sent only when a typed reply could be: while the agent waits for you or is working. While it
+asks for a choice, or its state is unknown, the buttons are disabled. A dormant session shows the row disabled
+until you wake it.
+
+Because the click does not go through your keyboard, spekterm also checks the agent's input box. If you typed
+anything in the session after your last sent prompt, it may still be in the box, and the sentence would be sent
+together with it. spekterm cannot see the box, so it refuses and says so; clear the box, then click **Send
+anyway**. This also happens after you answered a permission prompt with keys in the terminal, after typing and
+deleting, or after a `!` command you typed. **Send anyway** sends only if you typed nothing since the warning.
+
+If the agent's state changes in the half second between writing the sentence and pressing Enter, or you press a
+key in that moment, the sentence is left in the agent's input box, not sent, and the row says so.
+
 ## What the dots say
 
 The dot beside each session, on its tab and on the rail, tells you whether a `claude` session needs you

@@ -202,6 +202,9 @@ const PROBE_EXPRESSION = `(async () => {
           'setAgentView',
                     'setLanguage',
           'setAutoHibernate',
+          // setQuickReplies (quick-replies, terminal-preferences): a list of sentences the store cleans by the
+          // list's rules (anything else unsets it); no path vocabulary.
+          'setQuickReplies',
           // setAutoUpdateCheck (auto-update, app-update): a boolean the store takes as off or the default; no
           // path vocabulary.
           'setAutoUpdateCheck',
@@ -268,7 +271,8 @@ const PROBE_EXPRESSION = `(async () => {
     // **刻意不掛在 terminal 之下**：那個 namespace 的每一個成員都對應一顆 pty，而這裡一個位元組
     // 都不寫進 pty；混在一起會讓 terminal-sessions 那條逐一列舉的 scenario 失去意義。
     surplusConversationKeys: Object.keys(api?.conversation ?? {}).filter(
-      (key) => !['watch', 'onUpdate', 'onWait', 'send'].includes(key),
+      // quickReply (quick-replies): a sessionId and the sentence; the main process gates it as it gates send.
+      (key) => !['watch', 'onUpdate', 'onWait', 'send', 'quickReply'].includes(key),
     ),
     surplusPanelKeys: Object.keys(api?.panel ?? {}).filter((key) => !['get', 'persist'].includes(key)),
     // handoff 於 handoff-session-lifecycle 引入（handoff-brief 規格）：以 session 識別碼查詢交接單，

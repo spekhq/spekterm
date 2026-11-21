@@ -2,6 +2,8 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { DEFAULT_LANGUAGE, i18n, type Language, setLanguage } from '@shared/i18n'
 import { effectiveHibernateSeconds } from '@shared/hibernation/settings'
 import { DEFAULT_ZOOM, type Theme } from '@shared/appearance/zoom'
+import { applyQuickReplyEdit, type QuickReplyEdit } from '@shared/quick-replies/edits'
+import { effectiveQuickReplies } from '@shared/quick-replies/rules'
 import { createPreferencesQueue } from './preferences-queue'
 import type { TerminalPreferences } from './types'
 
@@ -66,6 +68,13 @@ export interface PreferencesApi {
   updateAutoHibernate: (seconds: number | null) => Promise<void>
   /** The threshold in effect, in seconds — **unset is 24 hours**, `0` is off (one place decides that). */
   autoHibernateSeconds: number
+  /**
+   * Applies one edit of the quick replies (`quick-replies` D4) to the list in effect **when the queue runs it**, not
+   * when it was made; `null` restores the defaults. An edit that no longer applies writes nothing.
+   */
+  updateQuickReplies: (edit: QuickReplyEdit | null) => Promise<void>
+  /** The quick replies in effect: the stored list, or the defaults in the UI language. */
+  quickReplies: string[]
   /**
    * The theme choice (`ui-appearance`); `null` = the default (System). Main applies it before answering.
    * **Colors are never decided from this value** — they follow `prefers-color-scheme` (`useColorScheme`).
@@ -170,6 +179,16 @@ export function PreferencesProvider({ children }: { children: React.ReactNode })
     [enqueue],
   )
 
+  const updateQuickReplies = useCallback(
+    (edit: QuickReplyEdit | null) =>
+      enqueue((applied) => {
+        if (edit === null) return window.workspace.settings.setQuickReplies(null)
+        const next = applyQuickReplyEdit(effectiveQuickReplies(applied.quickReplies, (key) => i18n.t(key)), edit)
+        return next === null ? Promise.resolve(applied) : window.workspace.settings.setQuickReplies(next)
+      }).then(() => undefined),
+    [enqueue],
+  )
+
   const updateTheme = useCallback(
     (theme: Theme | null) => enqueue(() => window.workspace.settings.setTheme(theme)).then(() => undefined),
     [enqueue],
@@ -207,9 +226,11 @@ export function PreferencesProvider({ children }: { children: React.ReactNode })
       updateLanguage,
       updateAutoHibernate,
       updateAutoUpdateCheck,
+      updateQuickReplies,
       updateTheme,
       updateZoom,
       stepZoom,
+      quickReplies: effectiveQuickReplies(terminal.quickReplies, (key) => i18n.t(key)),
       theme: terminal.theme ?? 'system',
       zoom: terminal.zoom ?? DEFAULT_ZOOM,
       autoUpdateCheck: terminal.autoUpdateCheck !== false,
@@ -230,6 +251,7 @@ export function PreferencesProvider({ children }: { children: React.ReactNode })
       updateLanguage,
       updateAutoHibernate,
       updateAutoUpdateCheck,
+      updateQuickReplies,
       updateTheme,
       updateZoom,
       stepZoom,

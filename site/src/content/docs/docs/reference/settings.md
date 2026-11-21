@@ -61,6 +61,11 @@ section back to its defaults. It does not change the other sections or the langu
   [Terminals and sessions](/docs/using/terminals-and-sessions/).
 - **Agent sessions show** — whether every agent session shows the terminal or the conversation view. It is
   the same choice as the switch beside an agent session's tabs. See [Conversation view](/docs/using/conversation-view/).
+- **Quick replies** — the sentences the row under an agent session sends with one click. Edit a sentence and
+  press Enter, or leave the field; `Esc` puts it back. Move one up or down, remove it, or add one. A sentence is
+  one line of at most 200 characters, the list holds at most 12, and the same sentence cannot be there twice.
+  Until you change the list, it is three defaults in the interface language. See
+  [Terminals and sessions](/docs/using/terminals-and-sessions/#quick-replies).
 
 ## Integrations
 

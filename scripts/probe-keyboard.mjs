@@ -286,7 +286,7 @@ const TAB_RECT = (index) => `(() => {
  * 它們照樣是綠的，而它們自稱在測的東西一個字都沒測到。
  */
 const TERMINAL_TEXT = `(() => {
-  const host = [...document.querySelectorAll('section[aria-label="${copy('stage.terminal')}"] > div')]
+  const host = [...document.querySelectorAll('section[aria-label="${copy('stage.terminal')}"] > div > div')]
     .find((d) => !d.classList.contains('hidden'))
   if (!host) throw new Error('TERMINAL_TEXT: 找不到顯示中的終端容器（沒有 session？還是版面變了？）')
   const rows = host.querySelector('.xterm-rows')

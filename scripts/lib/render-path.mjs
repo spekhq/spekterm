@@ -16,7 +16,7 @@ import { copy } from './copy.mjs'
  * 之間遷移，把它當成「該終端持有資源」的證據會在兩個方向上都錯（該 requirement 明文）。
  */
 export const RENDER_PATH_PRELUDE = `
-  const hostsOf = () => [...document.querySelectorAll('section[aria-label="${copy('stage.terminal')}"] > div')]
+  const hostsOf = () => [...document.querySelectorAll('section[aria-label="${copy('stage.terminal')}"] > div > div')]
   const renderPathOf = (host) => {
     const link = !!host.querySelector('canvas.xterm-link-layer')
     const rows = !!host.querySelector('.xterm-rows')

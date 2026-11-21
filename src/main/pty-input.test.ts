@@ -1,7 +1,21 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { forgetInput, isMovingKey, isTerminalReport, keystrokeSeq, lastDecisiveAt, lastKeystrokeAt, noteWrite, onKeystroke } from './pty-input'
+import {
+  confirmSubmit,
+  forgetInput,
+  isMovingKey,
+  isSubmittingEnter,
+  isTerminalReport,
+  keystrokeSeq,
+  lastDecisiveAt,
+  lastKeystrokeAt,
+  noteSubmitted,
+  noteWrite,
+  onKeystroke,
+  setOwnRequestSource,
+  submittedSeqOf,
+} from './pty-input'
 
 test('keys, pastes and replies are keystrokes', () => {
   forgetInput('s')
@@ -92,4 +106,84 @@ test('a deciding keystroke is recorded before the listeners hear it', () => {
   noteWrite('l', '1', undefined, 50)
   off()
   assert.deepEqual(seen, [50])
+})
+
+// `quick-replies` D2: what may still be in the agent's input box.
+
+test('a submitting Enter ends with CR, not after ESC, not inside a paste', () => {
+  for (const data of ['\r', 'hello\r', 'two\nlines\r', '\x1b[200~pasted\x1b[201~\r']) {
+    assert.equal(isSubmittingEnter(data), true, JSON.stringify(data))
+  }
+  // Alt+Enter (a line break), a bracketed paste holding a line break, a paste cut mid-way, no CR.
+  for (const data of ['\x1b\r', 'text\x1b\r', '\x1b[200~line1\rline2\x1b[201~', '\x1b[200~line1\r', 'hello', '\r\n']) {
+    assert.equal(isSubmittingEnter(data), false, JSON.stringify(data))
+  }
+})
+
+test('an own submission confirms the last submitting Enter at or before it', () => {
+  forgetInput('b1')
+  setOwnRequestSource(() => false)
+  noteSubmitted('b1')
+  noteWrite('b1', 'fix the', undefined, 100)
+  assert.equal(submittedSeqOf('b1'), 0)
+  noteWrite('b1', '\r', undefined, 200)
+  noteWrite('b1', 'x', undefined, 300)
+  confirmSubmit('b1', 257)
+  assert.equal(submittedSeqOf('b1'), 2, 'the Enter is submitted; the key after it is not')
+  assert.ok(keystrokeSeq('b1') > submittedSeqOf('b1'))
+})
+
+test('a submission with no submitting Enter since the baseline moves nothing (a notice)', () => {
+  forgetInput('b2')
+  setOwnRequestSource(() => false)
+  noteWrite('b2', '\r', undefined, 50)
+  confirmSubmit('b2', 60)
+  noteWrite('b2', 'fix the', undefined, 100)
+  const before = submittedSeqOf('b2')
+  confirmSubmit('b2', 5000)
+  assert.equal(submittedSeqOf('b2'), before)
+  assert.ok(keystrokeSeq('b2') > submittedSeqOf('b2'))
+})
+
+test('a submission earlier than the only Enter moves nothing', () => {
+  forgetInput('b3')
+  setOwnRequestSource(() => false)
+  noteWrite('b3', 'a\r', undefined, 500)
+  confirmSubmit('b3', 400)
+  assert.equal(submittedSeqOf('b3'), 0)
+})
+
+test('a later Enter does not hide the one a submission confirms', () => {
+  forgetInput('b4')
+  setOwnRequestSource(() => false)
+  noteWrite('b4', 'one\r', undefined, 100)
+  noteWrite('b4', '\r', undefined, 300)
+  confirmSubmit('b4', 157)
+  assert.equal(submittedSeqOf('b4'), 1)
+})
+
+test('Alt+Enter, a paste with a line break and an Enter answering an open request are not submitting Enters', () => {
+  forgetInput('b5')
+  setOwnRequestSource(() => false)
+  noteWrite('b5', 'draft', undefined, 10)
+  noteWrite('b5', '\x1b\r', undefined, 20)
+  confirmSubmit('b5', 30)
+  noteWrite('b5', '\x1b[200~a\rb\x1b[201~', undefined, 40)
+  confirmSubmit('b5', 50)
+  assert.equal(submittedSeqOf('b5'), 0, 'neither a line break nor a paste submits')
+  setOwnRequestSource((id) => id === 'b5')
+  noteWrite('b5', '\r', undefined, 60)
+  setOwnRequestSource(() => false)
+  confirmSubmit('b5', 70)
+  assert.equal(submittedSeqOf('b5'), 0, 'the Enter answered the prompt')
+})
+
+test('noteSubmitted takes the current count; an answer\'s keys are not typing', () => {
+  forgetInput('b6')
+  noteWrite('b6', 'abc', undefined, 10)
+  noteWrite('b6', '\r', undefined, 20)
+  noteSubmitted('b6')
+  assert.equal(submittedSeqOf('b6'), keystrokeSeq('b6'))
+  noteWrite('b6', '1', 'answer', 30)
+  assert.equal(submittedSeqOf('b6'), keystrokeSeq('b6'))
 })

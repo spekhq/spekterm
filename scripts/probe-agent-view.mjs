@@ -32,15 +32,16 @@ import {
   readFileSync,
   readdirSync,
   realpathSync,
+  renameSync,
   rmSync,
   writeFileSync,
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { check, connectToApp, pollFor, pressKey } from './lib/cdp.mjs'
-import { copy, label, prefixOf } from './lib/copy.mjs'
+import { check, connectToApp, pollFor, pressKey, retryAction } from './lib/cdp.mjs'
+import { copy, copyIn, label, labelIn, prefixOf } from './lib/copy.mjs'
 import { makeStubAgent } from './lib/stub-agent.mjs'
-import { awaitApplied, clickSelector, closeSettings, inSettings, openSettings } from './lib/settings.mjs'
+import { awaitApplied, clickSelector, closeSettings, inSettings, openSettings, setField } from './lib/settings.mjs'
 import { awaitMounted } from './lib/mounted.mjs'
 import { electronExtraArgs } from './lib/display.mjs'
 import { runSections } from './lib/sections.mjs'
@@ -2637,6 +2638,882 @@ async function runSummary(_mode, _config, context) {
   )
 }
 
+// ── quick-replies ──────────────────────────────────────────────────────────
+
+const QR_DEFAULTS = ['close', 'risk', 'remaining'].map((key) => copy(`quickReplies.default.${key}`))
+const QR_DEFAULTS_ZH = ['close', 'risk', 'remaining'].map((key) => copyIn('zh-TW', `quickReplies.default.${key}`))
+
+/** The quick reply row of the shown agent session, by its toolbar name in `language`. */
+const qrToolbar = (language = 'en') =>
+  `section${labelIn(language, 'stage.terminal')} [role="toolbar"]${labelIn(language, 'quickReplies.toolbar')}`
+
+/**
+ * The row as the user sees it: its sentences (the buttons named by a sentence), every button, the line that takes the
+ * buttons' place, and its box. `null` when there is no row.
+ */
+function qrState(language = 'en') {
+  return `(() => {
+    const bar = document.querySelector(${JSON.stringify(qrToolbar(language))})
+    if (!bar) return null
+    const r = bar.getBoundingClientRect()
+    const buttons = [...bar.querySelectorAll('button')].map((b) => ({
+      label: b.getAttribute('aria-label'), text: b.textContent, disabled: b.disabled, title: b.getAttribute('title'),
+    }))
+    return {
+      top: Math.round(r.top),
+      height: Math.round(r.height),
+      shown: r.width > 0 && r.height > 0,
+      sentences: buttons.filter((b) => b.label !== null && b.label !== ${JSON.stringify(copyIn(language, 'quickReplies.edit'))}).map((b) => b.label),
+      buttons,
+      status: bar.querySelector('[role="status"]')?.textContent ?? null,
+    }
+  })()`
+}
+
+/**
+ * The shown terminal's box, measured as `FitAddon.proposeDimensions()` measures it: the host's computed content size,
+ * the `.xterm` element's padding, and the rendered screen (whose size is the cell size times the terminal's own
+ * columns and rows). Hidden hosts have no box.
+ */
+const QR_TERMINAL_BOX = `(() => {
+  const stage = document.querySelector('section[aria-label="${copy('stage.terminal')}"]')
+  const host = [...(stage?.querySelectorAll('.xterm') ?? [])].map((x) => x.parentElement)
+    .find((h) => h && !h.classList.contains('hidden') && h.clientHeight > 0)
+  if (!host) return null
+  const xterm = host.querySelector('.xterm')
+  const screen = host.querySelector('.xterm-screen')
+  if (!screen) return null
+  const px = (v) => parseInt(v, 10) || 0
+  const hs = getComputedStyle(host)
+  const xs = getComputedStyle(xterm)
+  const s = screen.getBoundingClientRect()
+  const h = host.getBoundingClientRect()
+  return {
+    hostW: px(hs.width), hostH: px(hs.height), hostBottom: Math.round(h.bottom),
+    padH: px(xs.paddingLeft) + px(xs.paddingRight), padV: px(xs.paddingTop) + px(xs.paddingBottom),
+    screenW: s.width, screenH: s.height,
+    center: { x: Math.round(s.x + s.width / 2), y: Math.round(s.y + s.height / 2) },
+  }
+})()`
+
+/** The scrollbar width `proposeDimensions()` subtracts (the app keeps xterm's default scrollbar and a scrollback). */
+const QR_SCROLLBAR = 14
+
+/**
+ * The pty's size (the stub's own `stty size`, every change logged) against the terminal's fitted size (what fit would
+ * propose for the box the terminal has now). The cell size comes from the screen: its width is the cell width times
+ * the terminal's columns, which equal the pty's while the two agree. **A covered terminal's screen does not give it**
+ * (measured: under the conversation view the screen is wider than its columns' cells), so a covered measurement
+ * passes the cell measured while the terminal was shown.
+ */
+async function qrSize(app, stub, conversation, knownCell = null) {
+  const box = await app.client.evaluate(QR_TERMINAL_BOX)
+  const sizes = stub.sessionSizes(conversation)
+  const pty = sizes.at(-1) ?? null
+  const cell = knownCell ?? (box && pty && pty.cols > 0 && pty.rows > 0 ? { w: box.screenW / pty.cols, h: box.screenH / pty.rows } : null)
+  const fitted =
+    box && cell
+      ? {
+          cols: Math.floor((box.hostW - box.padH - QR_SCROLLBAR) / cell.w),
+          rows: Math.floor((box.hostH - box.padV) / cell.h),
+        }
+      : null
+  return {
+    pty,
+    fitted,
+    cell,
+    logged: sizes.length,
+    hostH: box?.hostH ?? null,
+    hostBottom: box?.hostBottom ?? null,
+    center: box?.center ?? null,
+    equal: Boolean(pty && fitted && pty.cols === fitted.cols && pty.rows === fitted.rows),
+  }
+}
+
+const qrSizeText = (size) =>
+  `pty=${size.pty ? `${size.pty.cols}x${size.pty.rows}` : null} fitted=${size.fitted ? `${size.fitted.cols}x${size.fitted.rows}` : null} logged=${size.logged} hostH=${size.hostH}`
+
+/** Focus sits in the shown terminal's input (xterm's helper textarea). */
+const QR_TERMINAL_FOCUSED = `(() => {
+  const el = document.activeElement
+  const host = el?.closest?.('.xterm')?.parentElement
+  return Boolean(el && el.classList.contains('xterm-helper-textarea') && host && !host.classList.contains('hidden'))
+})()`
+
+/** The center of a visible button whose text is `text`, inside `scope`; `null` when there is none. */
+function qrButtonAt(scope, text) {
+  return `(() => {
+    // Hidden sessions' views are mounted too: only a button with a box counts.
+    const button = [...document.querySelectorAll(${JSON.stringify(`${scope} button`)})]
+      .find((b) => b.textContent.trim() === ${JSON.stringify(text)} && b.getClientRects().length > 0)
+    if (!button) return null
+    button.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+    const r = button.getBoundingClientRect()
+    return r.width > 0 && r.height > 0 ? { x: r.x + r.width / 2, y: r.y + r.height / 2 } : null
+  })()`
+}
+
+/** A real click on the button of `scope` whose text is `text`. Throws when it never shows. */
+async function qrClickText(app, scope, text) {
+  const at = await pollFor({
+    read: () => app.client.evaluate(qrButtonAt(scope, text)),
+    settled: (value) => value !== null,
+    timeoutMs: 8_000,
+    label: `the button ${JSON.stringify(text)}`,
+  })
+  if (!at) throw new Error(`no button ${JSON.stringify(text)} in ${scope}`)
+  await clickAt(app, at)
+}
+
+/** A real click on the quick reply named `sentence`. */
+const qrClick = (app, sentence, language = 'en') =>
+  clickSelector(app.client, `${qrToolbar(language)} button[aria-label=${JSON.stringify(sentence)}]`, `the quick reply ${JSON.stringify(sentence)}`)
+
+let qrEventNs = 0n
+/**
+ * An agent event written into the session's events directory, as the injected hook writes one (`probe-remote.mjs`'s
+ * `fireEvent`): the probe chooses the payload (a notice's `prompt`) and the moment, which the stub's own events cannot.
+ */
+function qrFireEvent(profile, sessionId, body) {
+  const dir = join(profile, 'agent-events', sessionId)
+  mkdirSync(dir, { recursive: true })
+  const wall = BigInt(Date.now()) * 1_000_000n
+  qrEventNs = wall > qrEventNs ? wall : qrEventNs + 1n
+  const file = join(dir, `${qrEventNs}-probe.json`)
+  writeFileSync(`${file}.tmp`, JSON.stringify(body))
+  renameSync(`${file}.tmp`, file)
+}
+
+/** The submit key as the stub reads it: the tty's line discipline turns the written CR into LF (`icrnl`). */
+const QR_SUBMIT = /^[\r\n]$/
+
+/**
+ * Writes agent events and waits until the main process has read them (the events directory is empty again).
+ *
+ * **Not a tidy-up — a precondition.** A reply's first check of the agent's state happens before its queued refresh
+ * (`deliverReply`), so a click within one drain tick (400 ms) of an event reads the state from before it (found while
+ * writing this section: a Stop written right before the click was refused as "waiting for a choice").
+ */
+async function qrFire(profile, sessionId, ...bodies) {
+  for (const body of bodies) qrFireEvent(profile, sessionId, body)
+  const dir = join(profile, 'agent-events', sessionId)
+  return pollFor({
+    read: () => {
+      try {
+        return readdirSync(dir).filter((name) => name.endsWith('-probe.json')).length
+      } catch {
+        return 0
+      }
+    },
+    settled: (left) => left === 0,
+    timeoutMs: 5_000,
+    label: 'the main process read the events',
+  })
+}
+
+const QR_NOTICE = { hook_event_name: 'UserPromptSubmit', prompt: '<task-notification><task-id>qr-probe</task-id><status>completed</status></task-notification>' }
+
+/** The renderer's id of the session whose agent got `conversation` (the events directory is keyed by it). */
+function qrSessionId(profile, conversation) {
+  return pollFor({
+    read: () => {
+      try {
+        return JSON.parse(readFileSync(join(profile, 'sessions.json'), 'utf8')).sessions.find((s) => s.claudeSessionId === conversation)?.id ?? null
+      } catch {
+        return null
+      }
+    },
+    settled: Boolean,
+    timeoutMs: 15_000,
+    label: 'the session id of the agent',
+  })
+}
+
+/** Creates an agent session through the spawn menu and returns its conversation id. */
+async function qrCreateAgent(app, stub, repoName) {
+  const before = stub.peerNames().length
+  await createAgentSession(app, repoName)
+  const names = await pollFor({ read: () => stub.peerNames(), settled: (list) => list.length > before, timeoutMs: 25_000, label: 'the new agent starts' })
+  return names.at(-1)?.conversation ?? null
+}
+
+/** A real click in the shown terminal's screen, then waits for focus to be in it. */
+async function qrFocusTerminal(app) {
+  const box = await pollFor({ read: () => app.client.evaluate(QR_TERMINAL_BOX), settled: (b) => b !== null, timeoutMs: 10_000, label: 'the shown terminal' })
+  if (box) await clickAt(app, box.center)
+  return pollFor({ read: () => app.client.evaluate(QR_TERMINAL_FOCUSED), settled: (v) => v === true, timeoutMs: 5_000, label: 'focus in the terminal' })
+}
+
+const QR_TAB_TITLE = `document.querySelector('[role="tablist"][aria-label="${copy('sessions.tabs')}"] [role="tab"][aria-selected="true"]')?.getAttribute('title') ?? ''`
+
+/**
+ * Waits until the shown session's tab says the agent works: the stub's `UserPromptSubmit` for the last line was read.
+ * The stub reports it after logging the line, so a turn end written by the probe right after seeing the line could
+ * sort before it and leave the agent "working".
+ */
+const qrAwaitWorking = (app) =>
+  pollFor({ read: () => app.client.evaluate(QR_TAB_TITLE), settled: (title) => title.includes(WORKING), timeoutMs: 10_000, label: 'the agent works on the line' })
+
+/**
+ * Waits until the stub has written its report for every line it received. The stub reports a line after logging it,
+ * so an event the probe writes right after seeing the line could sort before the stub's `UserPromptSubmit` and leave
+ * the agent working.
+ */
+const qrAwaitReported = (stub, conversation) =>
+  pollFor({
+    read: () => ({ reported: stub.reported(conversation), lines: qrInput(stub, conversation).lines.length }),
+    settled: (n) => n.reported === n.lines,
+    timeoutMs: 8_000,
+    label: 'the stub reported every line',
+  })
+
+/** Dismisses whatever line took the buttons' place. */
+const qrDismiss = (app) => qrClickText(app, qrToolbar(), copy('quickReplies.dismiss'))
+
+/**
+ * After a step whose expected refusal did not come (a control group): end the agent's turn and bring the buttons back,
+ * so the steps after it run on the state they expect instead of throwing.
+ */
+async function qrRecover(app, stop) {
+  await stop()
+  const row = await app.client.evaluate(qrState())
+  if (row?.status != null) await qrDismiss(app)
+  await qrAwaitButtons(app)
+}
+
+/** Clicks a quick reply and waits until the agent receives it as its last line, or a line takes the buttons' place. */
+async function qrClickAndSee(app, stub, conversation, sentence) {
+  await qrClick(app, sentence)
+  return pollFor({
+    read: async () => ({ line: qrInput(stub, conversation).lines.at(-1) ?? null, status: (await app.client.evaluate(qrState()))?.status ?? null }),
+    settled: (seen) => seen.line === sentence || seen.status !== null,
+    timeoutMs: 8_000,
+    label: 'the quick reply is sent or refused',
+  })
+}
+
+/** What the stub's session received: its lines and its bytes. */
+const qrInput = (stub, conversation) => stub.sessionInputs()[conversation] ?? { lines: [], bytes: '' }
+
+/**
+ * Waits until the row's buttons are enabled (the window knows the agent can take a reply) and no line has taken
+ * their place.
+ */
+const qrAwaitButtons = (app, language = 'en') =>
+  pollFor({
+    read: () => app.client.evaluate(qrState(language)),
+    settled: (state) => state !== null && state.status === null && state.sentences.length > 0 && state.buttons.every((b) => !b.disabled),
+    timeoutMs: 15_000,
+    label: 'the quick reply buttons are enabled',
+  })
+
+/**
+ * "Send anyway" on a typing refusal, then the agent's turn for it ends: the next step starts with the box submitted.
+ * Returns the stub's last line.
+ */
+async function qrSendAnyway(app, stub, conversation, profile, sessionId, expectedLine) {
+  await qrClickText(app, qrToolbar(), copy('quickReplies.sendAnyway'))
+  const lines = await pollFor({
+    read: () => qrInput(stub, conversation).lines,
+    settled: (list) => list.at(-1) === expectedLine,
+    timeoutMs: 10_000,
+    label: 'send anyway reaches the agent',
+  })
+  await qrAwaitReported(stub, conversation)
+  await qrFire(profile, sessionId, { hook_event_name: 'Stop' })
+  await qrAwaitButtons(app)
+  return lines.at(-1) ?? null
+}
+
+/**
+ * **A quick reply sends at once, and is refused while the user's typing may be in the agent's box** (`quick-replies`).
+ *
+ * The stub ends no turn by itself (`manualTurns`): the probe orders "a prompt submitted", "typed while busy" and the
+ * turn's end. The pty size is the stub's own `stty size` (logged on every change), compared with the size fit would
+ * propose for the terminal's box: a line added under the row would shrink the box and resize the pty.
+ *
+ * Control groups (tasks.md 5.1), each run by hand on this section and recorded in the coverage table:
+ * - the turn-end baseline (the gate refuses when anything was typed since the last turn end or a turn is in progress):
+ *   7 red — both sends while the agent works, and every typing refusal that follows a turn end;
+ * - no TYPED gate: 8 red — every typing refusal, its "writes nothing" and send anyway;
+ * - the refusal as an extra line under the row (inside the toolbar, so it fails on behavior, not on a selector): 2 red —
+ *   "in place of the buttons" and "does not resize the terminal" (the pty went from 34 to 32 rows);
+ * - the notice not excluded from the confirmed submissions (`drainEvents`): 1 red — "a notice does not confirm an
+ *   unreported Enter".
+ */
+async function runQuickReplies(_mode, _config, context) {
+  if (context.app) await context.app.close()
+  const repo = mkTemp('spekterm-agentview-repoQR-')
+  const configDir = mkTemp('spekterm-agentview-configQR-')
+  const stub = makeStubAgent(mkTemp, configDir, { manualTurns: true, silentAnswers: true, sizeLog: true })
+  const profile = seedProfile(repo)
+  const app = await launch({ profile, configDir, stub, port: PORT })
+  context.app = app
+  const repoName = repo.split('/').pop()
+
+  const conversation = await qrCreateAgent(app, stub, repoName)
+  const sessionId = await qrSessionId(profile, conversation)
+  check(results, '[quick-replies] precondition: an agent session with a known id', Boolean(conversation && sessionId), JSON.stringify({ conversation, sessionId }))
+  const stop = async () => {
+    await qrAwaitReported(stub, conversation)
+    await qrFire(profile, sessionId, { hook_event_name: 'Stop' })
+  }
+
+  // ── The row under the terminal ──
+  const row = await qrAwaitButtons(app)
+  const firstFit = await pollFor({ read: () => qrSize(app, stub, conversation), settled: (s) => s.equal, timeoutMs: 15_000, label: 'the pty takes the fitted size' })
+  check(
+    results,
+    '[quick-replies] three quick replies named by the default sentences show under the terminal',
+    JSON.stringify(row?.sentences) === JSON.stringify(QR_DEFAULTS) && row.top >= (firstFit.hostBottom ?? Infinity) - 1,
+    `sentences=${JSON.stringify(row?.sentences)} rowTop=${row?.top} terminalBottom=${firstFit.hostBottom}`,
+  )
+  check(results, '[quick-replies] precondition: the pty has the terminal\'s fitted size', firstFit.equal, qrSizeText(firstFit))
+
+  // ── Ready, terminal view: the sentence, then a separate submit key; focus and size unchanged ──
+  await qrFocusTerminal(app)
+  const beforeA = await qrSize(app, stub, conversation)
+  const blocksA = stub.sessionBlocks(conversation).length
+  await qrClick(app, QR_DEFAULTS[0])
+  const sentA = await pollFor({
+    read: () => stub.sessionBlocks(conversation).slice(blocksA),
+    settled: (list) => list.some((b) => QR_SUBMIT.test(b.text)),
+    timeoutMs: 10_000,
+    label: 'the quick reply reaches the agent',
+  })
+  const gapA = sentA.length >= 2 ? Math.round(sentA[1].atMs - sentA[0].atMs) : null
+  check(
+    results,
+    '[quick-replies] a click in the terminal view writes the sentence, then the submit key as a separate later write',
+    sentA.length === 2 && sentA[0].text === QR_DEFAULTS[0] && QR_SUBMIT.test(sentA[1].text) && gapA >= 300,
+    `blocks=${JSON.stringify(sentA.map((b) => b.text))} gap=${gapA}ms`,
+  )
+  check(results, '[quick-replies] the agent receives the sentence as one prompt', qrInput(stub, conversation).lines.at(-1) === QR_DEFAULTS[0], `last line=${JSON.stringify(qrInput(stub, conversation).lines.at(-1))}`)
+  const focusA = await app.client.evaluate(QR_TERMINAL_FOCUSED)
+  check(results, '[quick-replies] the terminal keeps keyboard focus through the click', focusA === true, `activeElement=${await app.client.evaluate('document.activeElement?.className ?? null')}`)
+  await new Promise((resolve) => setTimeout(resolve, 700))
+  const afterA = await qrSize(app, stub, conversation)
+  check(
+    results,
+    '[quick-replies] the pty keeps the terminal\'s fitted size through a click (terminal view)',
+    beforeA.equal && afterA.equal && afterA.logged === beforeA.logged,
+    `before ${qrSizeText(beforeA)} / after ${qrSizeText(afterA)}`,
+  )
+  await stop()
+  await qrAwaitButtons(app)
+
+  // ── The same from the conversation view, focus in the composer ──
+  await app.client.evaluate(TOGGLE_VIEW)
+  await pollFor({ read: () => app.client.evaluate(VIEW_STATE), settled: (state) => state.hasComposer, timeoutMs: 15_000, label: 'the conversation view' })
+  const COMPOSER_FOCUSED = `Boolean(document.activeElement?.matches('${label('conversation.composer')}'))`
+  // The view's layout settles after it mounts (the composer was measured at one place and found at another once):
+  // measure and click again until focus is in it.
+  await retryAction({
+    act: async () => {
+      const at = await app.client.evaluate(`(() => { const r = ${COMPOSER}?.getBoundingClientRect(); return r && r.height > 0 ? { x: r.x + r.width / 2, y: r.y + r.height / 2 } : null })()`)
+      if (at) await clickAt(app, at)
+    },
+    read: () => app.client.evaluate(COMPOSER_FOCUSED),
+    settled: (v) => v === true,
+    attemptWindowMs: 1_500,
+    timeoutMs: 10_000,
+    label: 'focus in the composer',
+  })
+  const rowB = await qrAwaitButtons(app)
+  const beforeB = await qrSize(app, stub, conversation, beforeA.cell)
+  const blocksB = stub.sessionBlocks(conversation).length
+  await qrClick(app, QR_DEFAULTS[1])
+  const sentB = await pollFor({
+    read: () => stub.sessionBlocks(conversation).slice(blocksB),
+    settled: (list) => list.some((b) => QR_SUBMIT.test(b.text)),
+    timeoutMs: 10_000,
+    label: 'the quick reply from the conversation view reaches the agent',
+  })
+  const gapB = sentB.length >= 2 ? Math.round(sentB[1].atMs - sentB[0].atMs) : null
+  check(
+    results,
+    '[quick-replies] a click in the conversation view writes the sentence, then the submit key as a separate later write',
+    rowB !== null && sentB.length === 2 && sentB[0].text === QR_DEFAULTS[1] && QR_SUBMIT.test(sentB[1].text) && gapB >= 300,
+    `row=${rowB !== null} blocks=${JSON.stringify(sentB.map((b) => b.text))} gap=${gapB}ms`,
+  )
+  const focusB = await app.client.evaluate(COMPOSER_FOCUSED)
+  check(results, '[quick-replies] the composer keeps keyboard focus through the click', focusB === true, `activeElement=${await app.client.evaluate('document.activeElement?.tagName ?? null')}`)
+  await new Promise((resolve) => setTimeout(resolve, 700))
+  const afterB = await qrSize(app, stub, conversation, beforeA.cell)
+  check(
+    results,
+    '[quick-replies] the pty keeps the terminal\'s fitted size through a click (conversation view)',
+    beforeB.equal && afterB.equal && afterB.logged === beforeB.logged,
+    `before ${qrSizeText(beforeB)} / after ${qrSizeText(afterB)}`,
+  )
+  await stop()
+  await qrAwaitButtons(app)
+  await app.client.evaluate(TOGGLE_VIEW)
+  await pollFor({ read: () => app.client.evaluate(VIEW_STATE), settled: (state) => !state.hasComposer, timeoutMs: 15_000, label: 'back to the terminal view' })
+
+  // ── A held permission request: buttons disabled, and the main process refuses a direct call ──
+  stub.command(conversation, 'fire PermissionRequest')
+  const choice = await pollFor({
+    read: () => app.client.evaluate(qrState()),
+    settled: (state) => state !== null && state.sentences.length > 0 && state.buttons.filter((b) => state.sentences.includes(b.label)).every((b) => b.disabled),
+    timeoutMs: 15_000,
+    label: 'the buttons are disabled while the agent asks for a choice',
+  })
+  const sentenceButtons = choice?.buttons.filter((b) => choice.sentences.includes(b.label)) ?? []
+  check(
+    results,
+    '[quick-replies] while the agent asks for a choice the buttons are disabled, with the reason',
+    sentenceButtons.length === 3 && sentenceButtons.every((b) => b.disabled && b.title === copy('quickReplies.refused.choice')),
+    JSON.stringify(sentenceButtons.map((b) => ({ disabled: b.disabled, title: b.title }))),
+  )
+  const bytesC = qrInput(stub, conversation).bytes
+  const direct = await app.client.evaluate(`window.workspace.conversation.quickReply(${JSON.stringify(sessionId)}, ${JSON.stringify(QR_DEFAULTS[2])})`)
+  await new Promise((resolve) => setTimeout(resolve, 900))
+  check(
+    results,
+    '[quick-replies] a quick reply sent straight to the main process while the agent asks for a choice is refused and writes nothing',
+    direct?.ok === false && direct.code === 'WAIT_STATE' && direct.state === 'awaiting-choice' && qrInput(stub, conversation).bytes === bytesC,
+    `result=${JSON.stringify(direct)} wrote=${JSON.stringify(qrInput(stub, conversation).bytes.slice(bytesC.length))}`,
+  )
+  await stop()
+  await qrAwaitButtons(app)
+  // A request written but not yet drained by the window's tick: the main process reads it before deciding.
+  const bytesC2 = qrInput(stub, conversation).bytes
+  qrFireEvent(profile, sessionId, { hook_event_name: 'PermissionRequest', tool_name: 'Bash', tool_input: { command: 'rm x' } })
+  const undrained = await app.client.evaluate(`window.workspace.conversation.quickReply(${JSON.stringify(sessionId)}, ${JSON.stringify(QR_DEFAULTS[2])})`)
+  await new Promise((resolve) => setTimeout(resolve, 900))
+  check(
+    results,
+    '[quick-replies] a permission request reported just before the call is read before anything is written',
+    undrained?.ok === false && undrained.code === 'WAIT_STATE' && qrInput(stub, conversation).bytes === bytesC2,
+    `result=${JSON.stringify(undrained)} wrote=${JSON.stringify(qrInput(stub, conversation).bytes.slice(bytesC2.length))}`,
+  )
+  await stop()
+  await qrAwaitButtons(app)
+
+  // ── A letter typed after the last submit: refused in place of the buttons; send anyway sends ──
+  await qrFocusTerminal(app)
+  const rowD = await qrAwaitButtons(app)
+  const beforeD = await qrSize(app, stub, conversation)
+  await app.client.send('Input.insertText', { text: 'q' })
+  await pollFor({ read: () => qrInput(stub, conversation).bytes, settled: (b) => b.endsWith('q'), timeoutMs: 5_000, label: 'the letter reaches the pty' })
+  const bytesD = qrInput(stub, conversation).bytes
+  await qrClick(app, QR_DEFAULTS[2])
+  const refusedD = await pollFor({
+    read: () => app.client.evaluate(qrState()),
+    settled: (state) => state?.status === copy('quickReplies.refused.typed'),
+    timeoutMs: 8_000,
+    label: 'the typing refusal shows',
+  })
+  check(
+    results,
+    '[quick-replies] a letter typed after the last submit: the click is refused in place of the buttons, offering send anyway',
+    refusedD?.status === copy('quickReplies.refused.typed') && refusedD.sentences.length === 0 &&
+      refusedD.buttons.some((b) => b.text === copy('quickReplies.sendAnyway')) && refusedD.height === rowD?.height,
+    `status=${JSON.stringify(refusedD?.status)} buttons=${JSON.stringify(refusedD?.buttons.map((b) => b.text))} height ${rowD?.height} → ${refusedD?.height}`,
+  )
+  await new Promise((resolve) => setTimeout(resolve, 900))
+  const afterD = await qrSize(app, stub, conversation)
+  check(results, '[quick-replies] the refused click writes nothing', qrInput(stub, conversation).bytes === bytesD, `wrote=${JSON.stringify(qrInput(stub, conversation).bytes.slice(bytesD.length))}`)
+  check(
+    results,
+    '[quick-replies] the refusal does not resize the terminal',
+    beforeD.equal && afterD.equal && afterD.logged === beforeD.logged && afterD.hostH === beforeD.hostH,
+    `before ${qrSizeText(beforeD)} / after ${qrSizeText(afterD)}`,
+  )
+  const anywayD = refusedD?.status === copy('quickReplies.refused.typed')
+    ? await qrSendAnyway(app, stub, conversation, profile, sessionId, `q${QR_DEFAULTS[2]}`)
+    : null
+  check(results, '[quick-replies] send anyway, with nothing typed since the warning, sends the sentence', anywayD === `q${QR_DEFAULTS[2]}`, `last line=${JSON.stringify(anywayD)}`)
+  if (anywayD === null) await qrRecover(app, stop)
+
+  // ── The user's own prompt, then busy: a click is sent; a second click while busy is sent too ──
+  await qrFocusTerminal(app)
+  await app.client.send('Input.insertText', { text: 'QR-OWN-PROMPT' })
+  await pressKey(app.client, 'Enter')
+  await pollFor({ read: () => qrInput(stub, conversation).lines, settled: (l) => l.at(-1) === 'QR-OWN-PROMPT', timeoutMs: 8_000, label: 'the typed prompt is submitted' })
+  const working = await pollFor({
+    read: () => app.client.evaluate(QR_TAB_TITLE),
+    settled: (title) => title.includes(WORKING),
+    timeoutMs: 10_000,
+    label: 'the agent works on the typed prompt',
+  })
+  const firstBusy = await qrClickAndSee(app, stub, conversation, QR_DEFAULTS[0])
+  if (firstBusy.status !== null) await qrDismiss(app)
+  await qrAwaitButtons(app)
+  const secondBusy = await qrClickAndSee(app, stub, conversation, QR_DEFAULTS[1])
+  if (secondBusy.status !== null) await qrDismiss(app)
+  check(
+    results,
+    '[quick-replies] while the agent works on a prompt the user typed and submitted, a quick reply is sent',
+    working.includes(WORKING) && firstBusy.line === QR_DEFAULTS[0] && firstBusy.status === null,
+    `tab=${JSON.stringify(working)} last line=${JSON.stringify(firstBusy.line)} status=${JSON.stringify(firstBusy.status)}`,
+  )
+  check(
+    results,
+    '[quick-replies] a second quick reply while the agent works on the first is sent too',
+    secondBusy.line === QR_DEFAULTS[1] && secondBusy.status === null,
+    `last line=${JSON.stringify(secondBusy.line)} status=${JSON.stringify(secondBusy.status)}`,
+  )
+  await stop()
+  await qrAwaitButtons(app)
+
+  // ── A letter typed while busy, then the turn ends: refused ──
+  await app.client.send('Input.insertText', { text: 'QR-BUSY' })
+  await pressKey(app.client, 'Enter')
+  await pollFor({ read: () => qrInput(stub, conversation).lines, settled: (l) => l.at(-1) === 'QR-BUSY', timeoutMs: 8_000, label: 'a prompt makes the agent busy' })
+  await qrAwaitWorking(app)
+  await app.client.send('Input.insertText', { text: 'w' })
+  await pollFor({ read: () => qrInput(stub, conversation).bytes, settled: (b) => b.endsWith('w'), timeoutMs: 5_000, label: 'the letter typed while busy reaches the pty' })
+  await stop()
+  await pollFor({
+    read: () => app.client.evaluate(QR_TAB_TITLE),
+    settled: (title) => !title.includes(WORKING) && (title.includes(WAITING) || title.includes(IDLE)),
+    timeoutMs: 10_000,
+    label: 'the turn has ended',
+  })
+  await qrClick(app, QR_DEFAULTS[2])
+  const refusedF = await pollFor({ read: () => app.client.evaluate(qrState()), settled: (s) => s?.status !== null, timeoutMs: 8_000, label: 'a line takes the buttons\' place' })
+  check(
+    results,
+    '[quick-replies] a letter typed while the agent worked, then the turn ended: the click is refused',
+    refusedF?.status === copy('quickReplies.refused.typed'),
+    `status=${JSON.stringify(refusedF?.status)} last line=${JSON.stringify(qrInput(stub, conversation).lines.at(-1))}`,
+  )
+  if (refusedF?.status === copy('quickReplies.refused.typed')) await qrSendAnyway(app, stub, conversation, profile, sessionId, `w${QR_DEFAULTS[2]}`)
+  else await qrRecover(app, stop)
+
+  // ── A letter typed, then a background task's notice: refused ──
+  await app.client.send('Input.insertText', { text: 'e' })
+  await pollFor({ read: () => qrInput(stub, conversation).bytes, settled: (b) => b.endsWith('e'), timeoutMs: 5_000, label: 'the letter reaches the pty' })
+  await qrAwaitReported(stub, conversation)
+  await qrFire(profile, sessionId, QR_NOTICE, { hook_event_name: 'Stop' })
+  await qrClick(app, QR_DEFAULTS[0])
+  const refusedG = await pollFor({ read: () => app.client.evaluate(qrState()), settled: (s) => s?.status !== null, timeoutMs: 8_000, label: 'a line takes the buttons\' place' })
+  check(
+    results,
+    '[quick-replies] a letter typed, then a background task notice reported as a submission: the click is refused',
+    refusedG?.status === copy('quickReplies.refused.typed'),
+    `status=${JSON.stringify(refusedG?.status)}`,
+  )
+  if (refusedG?.status === copy('quickReplies.refused.typed')) await qrSendAnyway(app, stub, conversation, profile, sessionId, `e${QR_DEFAULTS[0]}`)
+  else await qrRecover(app, stop)
+
+  // The notice must not confirm an Enter either: a letter and an Enter the agent reported no submission for (as for a
+  // typed `!cmd`), then a notice. Counting the notice as a submission would take that Enter as submitted.
+  stub.command(conversation, stub.silentLine())
+  await pollFor({ read: () => stub.held(conversation), settled: (v) => v === true, timeoutMs: 5_000, label: 'the stub will not report the next line' })
+  await app.client.send('Input.insertText', { text: 'n' })
+  await pressKey(app.client, 'Enter')
+  await pollFor({ read: () => stub.held(conversation), settled: (v) => v === false, timeoutMs: 5_000, label: 'the unreported line arrived' })
+  await qrAwaitReported(stub, conversation)
+  await qrFire(profile, sessionId, QR_NOTICE, { hook_event_name: 'Stop' })
+  await qrClick(app, QR_DEFAULTS[1])
+  const refusedG2 = await pollFor({ read: () => app.client.evaluate(qrState()), settled: (s) => s?.status !== null, timeoutMs: 8_000, label: 'a line takes the buttons\' place' })
+  check(
+    results,
+    '[quick-replies] a notice does not confirm an unreported Enter: the click is refused',
+    refusedG2?.status === copy('quickReplies.refused.typed'),
+    `status=${JSON.stringify(refusedG2?.status)}`,
+  )
+  if (refusedG2?.status === copy('quickReplies.refused.typed')) await qrSendAnyway(app, stub, conversation, profile, sessionId, QR_DEFAULTS[1])
+  else await qrRecover(app, stop)
+
+  // ── A permission request answered with a digit (no Enter), then the turn ends: refused, with send anyway ──
+  stub.command(conversation, 'fire PermissionRequest')
+  await pollFor({
+    read: () => app.client.evaluate(qrState()),
+    settled: (state) => state !== null && state.sentences.length > 0 && state.buttons.filter((b) => state.sentences.includes(b.label)).every((b) => b.disabled),
+    timeoutMs: 15_000,
+    label: 'the agent asks for a choice',
+  })
+  await app.client.send('Input.insertText', { text: '1' })
+  await pollFor({ read: () => qrInput(stub, conversation).bytes, settled: (b) => b.endsWith('1'), timeoutMs: 5_000, label: 'the digit reaches the pty' })
+  await stop()
+  await qrAwaitButtons(app)
+  await qrClick(app, QR_DEFAULTS[2])
+  const refusedH = await pollFor({ read: () => app.client.evaluate(qrState()), settled: (s) => s?.status !== null, timeoutMs: 8_000, label: 'a line takes the buttons\' place' })
+  check(
+    results,
+    '[quick-replies] a prompt answered with a key in the terminal, then the turn ended: the click is refused, offering send anyway',
+    refusedH?.status === copy('quickReplies.refused.typed') && refusedH.buttons.some((b) => b.text === copy('quickReplies.sendAnyway')),
+    `status=${JSON.stringify(refusedH?.status)} buttons=${JSON.stringify(refusedH?.buttons.map((b) => b.text))}`,
+  )
+  if (refusedH?.status === copy('quickReplies.refused.typed')) await qrSendAnyway(app, stub, conversation, profile, sessionId, `1${QR_DEFAULTS[2]}`)
+  else await qrRecover(app, stop)
+
+  // ── A letter typed, the request answered with Enter (no submission reported), then a notice: refused ──
+  await app.client.send('Input.insertText', { text: 'r' })
+  await pollFor({ read: () => qrInput(stub, conversation).bytes, settled: (b) => b.endsWith('r'), timeoutMs: 5_000, label: 'the letter reaches the pty' })
+  stub.command(conversation, stub.heldPermission())
+  await pollFor({
+    read: () => app.client.evaluate(qrState()),
+    settled: (state) => state !== null && state.sentences.length > 0 && state.buttons.filter((b) => state.sentences.includes(b.label)).every((b) => b.disabled),
+    timeoutMs: 15_000,
+    label: 'the agent asks for a choice (the window has drained it)',
+  })
+  await pressKey(app.client, 'Enter')
+  const answered = await pollFor({ read: () => stub.held(conversation), settled: (v) => v === false, timeoutMs: 5_000, label: 'the Enter answered the request' })
+  await qrAwaitReported(stub, conversation)
+  await qrFire(profile, sessionId, QR_NOTICE, { hook_event_name: 'Stop' })
+  await qrAwaitButtons(app)
+  await qrClick(app, QR_DEFAULTS[0])
+  const refusedI = await pollFor({ read: () => app.client.evaluate(qrState()), settled: (s) => s?.status !== null, timeoutMs: 8_000, label: 'a line takes the buttons\' place' })
+  check(
+    results,
+    '[quick-replies] a letter typed, the prompt answered with Enter, then a notice: the click is refused',
+    answered === false && refusedI?.status === copy('quickReplies.refused.typed'),
+    `answered=${answered === false} status=${JSON.stringify(refusedI?.status)} last line=${JSON.stringify(qrInput(stub, conversation).lines.at(-1))}`,
+  )
+  if (refusedI?.status === copy('quickReplies.refused.typed')) await qrSendAnyway(app, stub, conversation, profile, sessionId, QR_DEFAULTS[0])
+  else await qrRecover(app, stop)
+
+  // ── A key typed within the half second after the text: the submit key is withheld, and the row says so ──
+  await qrFocusTerminal(app)
+  await qrAwaitButtons(app)
+  const blocksJ = stub.sessionBlocks(conversation).length
+  await qrClick(app, QR_DEFAULTS[1])
+  const textArrived = await pollFor({
+    read: () => stub.sessionBlocks(conversation).slice(blocksJ),
+    settled: (list) => list.some((b) => b.text === QR_DEFAULTS[1]),
+    timeoutMs: 8_000,
+    interval: 10,
+    label: 'the stub receives the text',
+  })
+  await app.client.send('Input.insertText', { text: 'z' })
+  const typedAfterMs = Math.round(Date.now() - (textArrived.find((b) => b.text === QR_DEFAULTS[1])?.atMs ?? 0))
+  const notSent = await pollFor({ read: () => app.client.evaluate(qrState()), settled: (s) => s?.status === copy('quickReplies.notSent'), timeoutMs: 8_000, label: 'the not-sent notice shows' })
+  await new Promise((resolve) => setTimeout(resolve, 1000))
+  const afterText = stub.sessionBlocks(conversation).slice(blocksJ).map((b) => b.text)
+  check(results, '[quick-replies] precondition: the key was typed within the half second after the text arrived', typedAfterMs < 400, `typed ${typedAfterMs}ms after the text arrived`)
+  check(
+    results,
+    '[quick-replies] a key typed between the text and the submit key withholds the submit key',
+    afterText.join('') === `${QR_DEFAULTS[1]}z` && !afterText.some((t) => /[\r\n]/.test(t)),
+    `blocks=${JSON.stringify(afterText)}`,
+  )
+  check(results, '[quick-replies] the row says the sentence is in the input box, not sent', notSent?.status === copy('quickReplies.notSent'), `status=${JSON.stringify(notSent?.status)}`)
+}
+
+/**
+ * **The row's place and the list in Settings** (`quick-replies`): a shell session shows no row; the defaults follow the
+ * UI language while the list is not set and are kept as set once it is; the Edit button opens Settings at Agents &
+ * sessions; the list survives a restart, empty included; the section's restore brings the defaults back and leaves the
+ * terminal font; a dormant session shows the row disabled, so waking it does not resize its pty.
+ */
+async function runQuickReplySettings(_mode, _config, context) {
+  if (context.app) await context.app.close()
+  const repo = mkTemp('spekterm-agentview-repoQS-')
+  const configDir = mkTemp('spekterm-agentview-configQS-')
+  const stub = makeStubAgent(mkTemp, configDir, { sizeLog: true })
+  const profile = seedProfile(repo)
+  // A terminal font size the section's restore must leave alone.
+  writeFileSync(join(profile, 'preferences.json'), JSON.stringify({ version: 1, terminal: { fontSize: 15 }, ui: { language: 'en', theme: 'dark' } }))
+  const repoName = repo.split('/').pop()
+  let port = PORT
+  context.app = await launch({ profile, configDir, stub, port })
+  const prefs = () => {
+    try {
+      return JSON.parse(readFileSync(join(profile, 'preferences.json'), 'utf8'))
+    } catch {
+      return null
+    }
+  }
+  const sentencesOf = (language = 'en') => context.app.client.evaluate(qrState(language)).then((state) => state?.sentences ?? null)
+  const awaitSentences = (expected, what, language = 'en') =>
+    pollFor({ read: () => sentencesOf(language), settled: (list) => JSON.stringify(list) === JSON.stringify(expected), timeoutMs: 10_000, label: what })
+  const restart = async () => {
+    await context.app.close()
+    port = port === PORT ? RESTORE_PORT : PORT
+    context.app = await launch({ profile, configDir, stub, port })
+    await pollFor({ read: () => context.app.client.evaluate(selectRepoExpression(repoName)), settled: (ok) => ok === true, timeoutMs: 15_000, label: 'select the repo after the restart' })
+    // The first tab is the first agent session (created first).
+    await pollFor({ read: () => context.app.client.evaluate(focusTabExpression(0)), settled: (ok) => ok === true, timeoutMs: 15_000, label: 'show the first session' })
+    return pollFor({ read: () => context.app.client.evaluate(VIEW_STATE), settled: (state) => state.hasToggle, timeoutMs: 20_000, label: 'an agent session is shown after the restart' })
+  }
+  const switchLanguage = async (from, to) => {
+    const client = context.app.client
+    await clickSelector(client, `nav${labelIn(from, 'activityBar.label')} button${labelIn(from, 'activityBar.settings')}`, 'the Settings entry')
+    await clickSelector(client, '[role="dialog"] [role="tab"][id="settings-tab-general"]', 'the General section')
+    await pollFor({
+      read: () => client.evaluate(`document.querySelector('[role="dialog"] [role="tab"][id="settings-tab-general"]')?.getAttribute('aria-selected') === 'true'`),
+      settled: Boolean,
+      timeoutMs: 5_000,
+      label: 'General is shown',
+    })
+    await client.evaluate(`(() => {
+      const select = document.querySelector('[role="dialog"] select${labelIn(from, 'settings.language')}')
+      const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set
+      setter.call(select, ${JSON.stringify(to)})
+      select.dispatchEvent(new Event('change', { bubbles: true }))
+    })()`)
+    await pollFor({ read: () => client.evaluate('document.documentElement.lang'), settled: (lang) => lang === to, timeoutMs: 8_000, label: `the UI language is ${to}` })
+    await clickSelector(client, `[role="dialog"] button${labelIn(to, 'common.close')}`, 'the Settings close control')
+    await pollFor({ read: () => client.evaluate(`document.querySelector('[role="dialog"]') === null`), settled: Boolean, timeoutMs: 5_000, label: 'Settings is closed' })
+  }
+
+  const conversation = await qrCreateAgent(context.app, stub, repoName)
+  await awaitSentences(QR_DEFAULTS, 'the default quick replies show')
+
+  // ── A shell session shows no row ──
+  await createSessionOf(context.app, repoName, 'shell')
+  const shellShown = await pollFor({
+    read: () => context.app.client.evaluate(`({ tabs: document.querySelectorAll('[role="tablist"][aria-label="${copy('sessions.tabs')}"] [role="tab"]').length, toggle: ${VIEW_STATE}.hasToggle, row: ${qrState()} })`),
+    settled: (state) => state.tabs === 2 && state.toggle === false,
+    timeoutMs: 15_000,
+    label: 'the shell session is shown',
+  })
+  await new Promise((resolve) => setTimeout(resolve, 800))
+  const shellRow = await context.app.client.evaluate(qrState())
+  check(
+    results,
+    '[quick-replies] a shell session shows no quick reply row',
+    shellShown.tabs === 2 && shellShown.toggle === false && shellRow === null,
+    `tabs=${shellShown.tabs} agent toggle=${shellShown.toggle} row=${JSON.stringify(shellRow)}`,
+  )
+  await context.app.client.evaluate(focusTabExpression(0))
+  await awaitSentences(QR_DEFAULTS, 'back on the agent session')
+
+  // ── The list unset: the defaults follow the UI language ──
+  await switchLanguage('en', 'zh-TW')
+  const zhDefaults = await awaitSentences(QR_DEFAULTS_ZH, 'the Chinese defaults', 'zh-TW')
+  check(results, '[quick-replies] with the list unset, switching to Traditional Chinese shows the Chinese defaults', JSON.stringify(zhDefaults) === JSON.stringify(QR_DEFAULTS_ZH), JSON.stringify(zhDefaults))
+  await switchLanguage('zh-TW', 'en')
+  await awaitSentences(QR_DEFAULTS, 'the English defaults again')
+
+  // ── The Edit button opens Settings at Agents & sessions (Settings was last on General) ──
+  await clickSelector(context.app.client, `${qrToolbar()} button${label('quickReplies.edit')}`, 'the Edit button')
+  const atAgents = await pollFor({
+    read: () => context.app.client.evaluate(`document.querySelector('[role="dialog"] [role="tab"][id="settings-tab-agents"]')?.getAttribute('aria-selected') ?? null`),
+    settled: (v) => v === 'true',
+    timeoutMs: 5_000,
+    label: 'Settings shows Agents & sessions',
+  })
+  const firstField = await context.app.client.evaluate(`document.querySelector(${JSON.stringify(inSettings(`input${label('settings.quickReplyField', { index: 1 })}`))})?.value ?? null`)
+  check(
+    results,
+    '[quick-replies] the Edit button opens Settings at Agents & sessions, listing the quick replies',
+    atAgents === 'true' && firstField === QR_DEFAULTS[0],
+    `agents selected=${atAgents} first field=${JSON.stringify(firstField)}`,
+  )
+
+  // ── Add one, remove one → the row's order ──
+  const ADDED = 'Go ahead if there is no risk'
+  await qrClickText(context.app, '[role="dialog"]', copy('settings.quickReplyAdd'))
+  await pollFor({ read: () => context.app.client.evaluate(`Boolean(document.querySelector(${JSON.stringify(inSettings(`input${label('settings.quickReplyNew')}`))}))`), settled: Boolean, timeoutMs: 5_000, label: 'the new row' })
+  await setField(context.app.client, 'settings.quickReplyNew', ADDED)
+  const added = await awaitSentences([...QR_DEFAULTS, ADDED], 'the added sentence on the row')
+  await clickSelector(context.app.client, inSettings(`button${label('settings.quickReplyRemove', { sentence: QR_DEFAULTS[1] })}`), 'remove the second default')
+  const edited = [QR_DEFAULTS[0], QR_DEFAULTS[2], ADDED]
+  const afterRemove = await awaitSentences(edited, 'the removed sentence leaves the row')
+  await closeSettings(context.app.client)
+  check(
+    results,
+    '[quick-replies] adding a sentence and removing one changes the row, in the order of the list',
+    JSON.stringify(added) === JSON.stringify([...QR_DEFAULTS, ADDED]) && JSON.stringify(afterRemove) === JSON.stringify(edited) &&
+      JSON.stringify(prefs()?.terminal?.quickReplies) === JSON.stringify(edited),
+    `after add=${JSON.stringify(added)} after remove=${JSON.stringify(afterRemove)} stored=${JSON.stringify(prefs()?.terminal?.quickReplies)}`,
+  )
+
+  // ── The list set: a language switch leaves it ──
+  await switchLanguage('en', 'zh-TW')
+  await new Promise((resolve) => setTimeout(resolve, 600))
+  const zhEdited = await sentencesOf('zh-TW')
+  await switchLanguage('zh-TW', 'en')
+  check(results, '[quick-replies] with the list set, switching the UI language leaves the row as set', JSON.stringify(zhEdited) === JSON.stringify(edited), JSON.stringify(zhEdited))
+
+  // ── Kept after a restart ──
+  await restart()
+  const kept = await awaitSentences(edited, 'the edited list after a restart')
+  check(results, '[quick-replies] the edited list is kept after a restart', JSON.stringify(kept) === JSON.stringify(edited), JSON.stringify(kept))
+
+  // ── Restore the section's defaults: two defaults removed, one added → the three defaults; the font stays ──
+  await openSettings(context.app.client, 'agents')
+  await clickSelector(context.app.client, inSettings(`button${label('settings.quickReplyRemove', { sentence: QR_DEFAULTS[2] })}`), 'remove another default')
+  await awaitSentences([QR_DEFAULTS[0], ADDED], 'two defaults removed, one added')
+  await qrClickText(context.app, '[role="dialog"]', copy('settings.restoreDefaults'))
+  await qrClickText(context.app, '[role="dialog"]', copy('settings.restore'))
+  const restored = await awaitSentences(QR_DEFAULTS, 'the defaults after the restore')
+  await closeSettings(context.app.client)
+  const storedAfterRestore = prefs()?.terminal ?? null
+  check(
+    results,
+    '[quick-replies] restoring Agents & sessions brings back the three defaults and leaves the terminal font',
+    JSON.stringify(restored) === JSON.stringify(QR_DEFAULTS) && storedAfterRestore !== null && !('quickReplies' in storedAfterRestore) && storedAfterRestore.fontSize === 15,
+    `row=${JSON.stringify(restored)} stored terminal=${JSON.stringify(storedAfterRestore)}`,
+  )
+
+  // ── A dormant agent session: the row shows, disabled, so waking it does not resize its pty ──
+  await qrFocusTerminal(context.app)
+  const running = await pollFor({ read: () => qrSize(context.app, stub, conversation), settled: (s) => s.equal, timeoutMs: 15_000, label: 'the pty has the fitted size' })
+  for (const type of ['rawKeyDown', 'keyUp']) {
+    await context.app.client.send('Input.dispatchKeyEvent', { type, key: 'H', code: 'KeyH', windowsVirtualKeyCode: 72, nativeVirtualKeyCode: 72, modifiers: 2 | 8 })
+  }
+  await pollFor({ read: () => context.app.client.evaluate(WAKE_IN_STAGE), settled: (v) => v === true, timeoutMs: 10_000, label: 'the agent session is dormant' })
+  await pollFor({ read: () => agentAlive(conversation), settled: (alive) => alive === false, timeoutMs: 10_000, label: 'the agent process ended' })
+  const dormantRow = await context.app.client.evaluate(qrState())
+  const dormantBox = await context.app.client.evaluate(QR_TERMINAL_BOX)
+  const dormantButtons = dormantRow?.buttons.filter((b) => dormantRow.sentences.includes(b.label)) ?? []
+  check(
+    results,
+    '[quick-replies] a dormant agent session shows the row with its buttons disabled',
+    dormantButtons.length === 3 && dormantButtons.every((b) => b.disabled && b.title === copy('quickReplies.dormant')),
+    JSON.stringify(dormantButtons.map((b) => ({ disabled: b.disabled, title: b.title }))),
+  )
+  check(results, '[quick-replies] the dormant session\'s terminal keeps the box it had while running', dormantBox?.hostH === running.hostH, `running hostH=${running.hostH} dormant hostH=${dormantBox?.hostH}`)
+  const loggedBeforeWake = stub.sessionSizes(conversation).length
+  await qrClickText(context.app, `section[aria-label="${copy('stage.terminal')}"]`, copy('sessions.wake'))
+  await pollFor({ read: () => agentAlive(conversation), settled: (alive) => alive === true, timeoutMs: 15_000, label: 'the agent process runs again' })
+  const woken = await pollFor({
+    read: () => qrSize(context.app, stub, conversation),
+    settled: (s) => s.equal && s.logged > loggedBeforeWake,
+    timeoutMs: 15_000,
+    label: 'the woken pty reports its size',
+  })
+  await new Promise((resolve) => setTimeout(resolve, 1500))
+  const wokenSizes = stub.sessionSizes(conversation).slice(loggedBeforeWake)
+  // The pty is spawned at 80 columns before the first resize reaches it; every size after that is the fitted one.
+  const fittedSizes = wokenSizes.filter((s) => !(s.cols === 80 && s.rows === 24))
+  check(
+    results,
+    '[quick-replies] waking a dormant agent session leaves its pty at its first fitted size',
+    fittedSizes.length >= 1 && fittedSizes.every((s) => s.cols === running.pty?.cols && s.rows === running.pty?.rows) && woken.equal,
+    `before ${qrSizeText(running)} / woken sizes=${JSON.stringify(wokenSizes)} / now ${qrSizeText(woken)}`,
+  )
+
+  // ── Remove every sentence: no row on any session, kept empty after a restart ──
+  await openSettings(context.app.client, 'agents')
+  for (const sentence of QR_DEFAULTS) {
+    await clickSelector(context.app.client, inSettings(`button${label('settings.quickReplyRemove', { sentence })}`), `remove ${sentence}`)
+    await pollFor({ read: () => sentencesOf(), settled: (list) => list === null || !list.includes(sentence), timeoutMs: 5_000, label: `${sentence} removed` })
+  }
+  await closeSettings(context.app.client)
+  const second = await qrCreateAgent(context.app, stub, repoName)
+  const noRow = []
+  for (const index of [0, 2]) {
+    await context.app.client.evaluate(focusTabExpression(index))
+    const shown = await pollFor({ read: () => context.app.client.evaluate(VIEW_STATE), settled: (state) => state.hasToggle, timeoutMs: 10_000, label: 'an agent session is shown' })
+    await new Promise((resolve) => setTimeout(resolve, 500))
+    noRow.push({ index, agent: shown.hasToggle, row: await context.app.client.evaluate(qrState()) })
+  }
+  check(
+    results,
+    '[quick-replies] with every sentence removed, no agent session shows a row',
+    Boolean(second) && noRow.every((entry) => entry.agent && entry.row === null) && JSON.stringify(prefs()?.terminal?.quickReplies) === '[]',
+    `second agent=${Boolean(second)} ${JSON.stringify(noRow)} stored=${JSON.stringify(prefs()?.terminal?.quickReplies)}`,
+  )
+  const afterRestart = await restart()
+  await new Promise((resolve) => setTimeout(resolve, 1500))
+  const emptyRow = await context.app.client.evaluate(qrState())
+  check(
+    results,
+    '[quick-replies] the emptied list stays empty after a restart',
+    afterRestart.hasToggle && emptyRow === null && JSON.stringify(prefs()?.terminal?.quickReplies) === '[]',
+    `agent shown=${afterRestart.hasToggle} row=${JSON.stringify(emptyRow)} stored=${JSON.stringify(prefs()?.terminal?.quickReplies)}`,
+  )
+}
+
+
 const SECTIONS = [
   { name: 'runViewAndSend', run: runViewAndSend },
   { name: 'runRebuiltWidth', run: runRebuiltWidth, requires: ['runViewAndSend'] },
@@ -2662,6 +3539,8 @@ const SECTIONS = [
   { name: 'runAttention', run: runAttention },
   { name: 'runAttentionUnreported', run: runAttentionUnreported },
   { name: 'runSummary', run: runSummary },
+  { name: 'runQuickReplies', run: runQuickReplies },
+  { name: 'runQuickReplySettings', run: runQuickReplySettings },
 ]
 
 const outcome = await runSections({

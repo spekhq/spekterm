@@ -276,6 +276,57 @@ describe('PreferencesStore：讀寫與持久化', () => {
     }
   })
 
+  it('quickReplies is kept across load(), trimmed, and [] stays []; null unsets it (quick-replies D4)', () => {
+    const first = new PreferencesStore(configPath)
+    first.load()
+    assert.equal(first.get().quickReplies, undefined, 'unset at first: the defaults')
+    first.setQuickReplies([' Can this session be closed now? ', 'Any risk?'])
+    const second = new PreferencesStore(configPath)
+    second.load()
+    assert.deepEqual(second.get().quickReplies, ['Can this session be closed now?', 'Any risk?'])
+    second.setQuickReplies([])
+    const third = new PreferencesStore(configPath)
+    third.load()
+    assert.deepEqual(third.get().quickReplies, [], 'an emptied list is kept empty, not the defaults')
+    third.setQuickReplies(null)
+    assert.equal(third.get().quickReplies, undefined)
+  })
+
+  it('a stored quick reply list breaking any rule is unset, and the other fields are read as before', () => {
+    const bads: unknown[] = [
+      'a',
+      { a: 1 },
+      [1],
+      ['   '],
+      ['line\nbreak'],
+      ['tab\there'],
+      ['x'.repeat(201)],
+      Array.from({ length: 13 }, (_, i) => `s${i}`),
+      ['same', ' same '],
+    ]
+    for (const bad of bads) {
+      fs.writeFileSync(configPath, JSON.stringify({ version: PREFERENCES_VERSION, terminal: { quickReplies: bad, fontFamily: 'Fira Code' } }))
+      const store = new PreferencesStore(configPath)
+      store.load()
+      assert.equal(store.get().quickReplies, undefined, `bad: ${JSON.stringify(bad)}`)
+      assert.equal(store.get().fontFamily, 'Fira Code')
+    }
+    fs.writeFileSync(configPath, JSON.stringify({ version: PREFERENCES_VERSION, terminal: { quickReplies: ['x'.repeat(200)] } }))
+    const store = new PreferencesStore(configPath)
+    store.load()
+    assert.deepEqual(store.get().quickReplies, ['x'.repeat(200)], 'control: 200 characters is accepted')
+  })
+
+  it('changing the font keeps the quick replies, and get() hands out a copy of the list', () => {
+    const store = new PreferencesStore(configPath)
+    store.load()
+    store.setQuickReplies(['a', 'b'])
+    store.setTerminalFont('Fira Code', 14, null)
+    assert.deepEqual(store.get().quickReplies, ['a', 'b'])
+    store.get().quickReplies!.push('c')
+    assert.deepEqual(store.get().quickReplies, ['a', 'b'], 'mutating the returned array does not change the store')
+  })
+
   it('改字型不該動到 agentView', () => {
     const store = new PreferencesStore(configPath)
     store.load()

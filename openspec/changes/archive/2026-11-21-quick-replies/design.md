@@ -166,7 +166,7 @@ the result of the ones before it").
 ### D5. The strip
 
 A fixed-height row under the session's view (in the terminal view a sibling of the xterm host, which becomes `flex-1
-min-h-0`; in the conversation view above the composer), for an agent session (`target === 'claude'`) when the list
+min-h-0`; in the conversation view under the composer: one row in `MainStage` below both views, whose area becomes `relative min-h-0 flex-1`), for an agent session (`target === 'claude'`) when the list
 is non-empty — **a dormant one too, its buttons disabled**, so waking it does not resize the pty right after its spawn.
 Without agent events the state is always unknown and the buttons stay disabled (the renderer cannot read the
 `agentEvents` preference, `toRenderer: false`, and it applies per spawn anyway). It holds one button per sentence, truncated to one line with the full

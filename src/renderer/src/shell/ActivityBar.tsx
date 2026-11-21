@@ -4,6 +4,7 @@ import { InsightsOverlay } from './insights/InsightsOverlay'
 import { IntakeOverlay, type IntakeTab } from './intake/IntakeOverlay'
 import { useIntake } from './intake/intake-state'
 import { SettingsDialog, type SettingsSection } from './settings/SettingsDialog'
+import { onOpenSettings } from './settings/settings-opener'
 import { useRemoteState } from './remote/useRemoteState'
 
 const ICON_PROPS = {
@@ -157,6 +158,15 @@ export function ActivityBar(): React.JSX.Element {
       setIntakeOpener(null)
       setInsightsOpener(null)
       setSettings({ section: 'about' })
+    })
+  }, [])
+
+  // The quick reply row's Edit button (`quick-replies` D5): Settings at a section, the inbox and the metrics closing first.
+  useEffect(() => {
+    return onOpenSettings((section) => {
+      setIntakeOpener(null)
+      setInsightsOpener(null)
+      setSettings({ section })
     })
   }, [])
 

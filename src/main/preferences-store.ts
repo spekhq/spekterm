@@ -3,6 +3,7 @@ import path from 'node:path'
 
 import { type Language, isSupportedLanguage } from '@shared/i18n/languages'
 import { DEFAULT_ZOOM, type Theme, isTheme, snapZoom, stepZoom as stepZoomFrom } from '@shared/appearance/zoom'
+import { cleanQuickReplies } from '@shared/quick-replies/rules'
 
 /**
  * 偏好設定檔的結構版本。從第一天就寫入 —— 沒有版本欄位的舊檔日後無法安全遷移。
@@ -59,6 +60,12 @@ export interface TerminalPreferences {
    * seed a threshold of seconds without a test branch in product code.
    */
   autoHibernateSeconds?: number
+  /**
+   * The quick replies (`quick-replies` D4), stored trimmed. **Unset = the three defaults in the UI language**, resolved
+   * by the renderer; set — even to `[]` — = exactly this list. A list on disk that breaks any rule is unset, never
+   * repaired in part (`cleanQuickReplies`).
+   */
+  quickReplies?: string[]
 }
 
 /**
@@ -246,6 +253,7 @@ const PREFERENCE_FIELDS = {
   agentEvents: { sanitize: sanitizeBoolean, group: 'other', toRenderer: false },
     agentView: { sanitize: sanitizeAgentView, group: 'other', toRenderer: true },
   autoHibernateSeconds: { sanitize: sanitizeHibernateSeconds, group: 'other', toRenderer: true },
+  quickReplies: { sanitize: cleanQuickReplies, group: 'other', toRenderer: true },
 } satisfies {
   [K in keyof Required<TerminalPreferences>]: TerminalFieldSpec<Required<TerminalPreferences>[K]>
 }
@@ -587,7 +595,10 @@ export class PreferencesStore {
 
   /** 當前的終端偏好（複本）。 */
   get(): TerminalPreferences {
-    return { ...this.preferences }
+    const copy = { ...this.preferences }
+    // The only array field: a shallow copy would hand out the stored array itself.
+    if (copy.quickReplies) copy.quickReplies = [...copy.quickReplies]
+    return copy
   }
 
   /**
@@ -674,6 +685,17 @@ export class PreferencesStore {
     const sanitized = seconds === null ? undefined : sanitizeHibernateSeconds(seconds)
     if (sanitized === undefined) delete next.autoHibernateSeconds
     else next.autoHibernateSeconds = sanitized
+
+    this.commit({ terminal: next })
+    return this.get()
+  }
+
+  /** The quick replies (`quick-replies` D4). `null`, or a list breaking a rule, = unset (the defaults). */
+  setQuickReplies(list: string[] | null): TerminalPreferences {
+    const next: TerminalPreferences = { ...this.preferences }
+    const sanitized = list === null ? undefined : cleanQuickReplies(list)
+    if (sanitized === undefined) delete next.quickReplies
+    else next.quickReplies = sanitized
 
     this.commit({ terminal: next })
     return this.get()

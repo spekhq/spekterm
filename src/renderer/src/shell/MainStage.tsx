@@ -19,6 +19,7 @@ import { SidePanel } from './side-panel/SidePanel'
 import { SessionSummary } from './SessionSummary'
 import { SessionTabs } from './terminal/SessionTabs'
 import { ConversationView } from './terminal/ConversationView'
+import { QuickReplyRow } from './terminal/QuickReplyRow'
 import { TerminalView } from './terminal/TerminalView'
 import { useSessions } from './terminal/sessions'
 import { folderSelection } from './types'
@@ -561,7 +562,13 @@ export function MainStage({ selection, folders }: MainStageProps): React.JSX.Ele
           caused by nothing the user did (`workspace-layout`: maximizing SHALL NOT resize it).
         */}
         <Panel minSize="240px" style={{ overflow: 'hidden' }}>
-          <section aria-label={t('stage.terminal')} className="relative h-full bg-shell">
+          <section aria-label={t('stage.terminal')} className="flex h-full flex-col bg-shell">
+            {/*
+              The views, above the quick reply row (`quick-replies` D5). **`relative min-h-0 flex-1`**: the terminals and
+              the conversation view fill what the row leaves, and the row showing or hiding refits the terminal like any
+              layout change.
+            */}
+            <div className="relative min-h-0 flex-1">
             {/*
               **掛載所有 folder 的所有 session**，只讓當前 folder 的 focused 那一個顯示。
               若只掛載當前 folder 的，切走再切回時 xterm 實例已被卸載，scrollback 就沒了
@@ -633,6 +640,12 @@ export function MainStage({ selection, folders }: MainStageProps): React.JSX.Ele
                 {selection ? t('stage.noSession') : t('stage.noRepo')}
               </div>
             )}
+            </div>
+            {folderSessions
+              .filter((session) => session.id === focusedId && session.spawnTarget === 'claude')
+              .map((session) => (
+                <QuickReplyRow key={session.id} sessionId={session.id} dormant={session.status === 'dormant'} />
+              ))}
           </section>
         </Panel>
 

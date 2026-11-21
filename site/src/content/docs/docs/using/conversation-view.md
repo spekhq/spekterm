@@ -52,6 +52,9 @@ Type in **Message the agent** and press **Send**. Whether you can send depends o
 
 What you send reaches the agent as plain text. It is never interpreted as terminal control sequences.
 
+Under the box, the row of [quick replies](/docs/using/terminals-and-sessions/#quick-replies) sends a sentence you
+keep with one click.
+
 A slash command you send, such as `/simplify` or a skill with arguments, appears as the line you typed.
 
 Messages the agent received that you did not type are labeled with where they came from: **From** and the

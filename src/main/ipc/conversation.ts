@@ -1,7 +1,10 @@
 import { type WebContents, ipcMain } from 'electron'
 
 import { encodeInput } from '../agent-events'
-import { waitStateOf } from '../agent-wait'
+import { refreshWait, waitStateOf } from '../agent-wait'
+import { prefillOf, SUBMIT_KEY_DELAY_MS } from '../intake-prefill'
+import { keystrokeSeq, noteSubmitted, submittedSeqOf } from '../pty-input'
+import { sendQuickReply } from '../quick-reply'
 import { type Follow, startFollow } from '../conversation-follow'
 import { existingTerminalService } from './terminal'
 
@@ -34,6 +37,8 @@ export const CONVERSATION_CHANNELS = {
   wait: 'workspace:conversation:wait',
   /** renderer → main：送出一則訊息。**閘在主行程**。 */
   send: 'workspace:conversation:send',
+  /** renderer → main: a quick reply (`quick-replies`), bound to no watched conversation. **The gate is here.** */
+  quickReply: 'workspace:conversation:quickReply',
 } as const
 
 /**
@@ -105,5 +110,36 @@ export function registerConversationHandlers(): void {
     if (!service) return { ok: false, reason: 'unknown' }
     service.write(sessionId, encodeInput(text))
     return { ok: true }
+  })
+
+  /*
+   * A quick reply (`quick-replies` D3): the main process validates and gates it; the renderer only passes the text.
+   * The writes go through `TerminalService.write` with no origin, so they count as keystrokes (D2).
+   */
+  ipcMain.handle(CONVERSATION_CHANNELS.quickReply, (event, sessionId: unknown, text: unknown, typedSeq: unknown) => {
+    const service = existingTerminalService(event.sender.id)
+    return sendQuickReply(
+      {
+        isRunningAgent: (id) => service?.idleFactsOf(id)?.target === 'claude',
+        write: (id, data) => {
+          if (!service || service.sizeOf(id) === null) return false
+          service.write(id, data)
+          return true
+        },
+        waitStateOf,
+        refresh: (id) => {
+          refreshWait(id)
+        },
+        prefillPending: (id) => prefillOf(id) !== null,
+        keystrokeSeq,
+        submittedSeqOf,
+        noteSubmitted,
+        delay: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+        submitDelayMs: SUBMIT_KEY_DELAY_MS,
+      },
+      sessionId,
+      text,
+      typedSeq,
+    )
   })
 }

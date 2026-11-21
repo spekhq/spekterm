@@ -136,6 +136,24 @@ export function makeStubAgent(
      * skips its box on `allow` is dogfood's to certify. **Off by default.**
      */
     modelSwitch = false,
+    /**
+     * End no turn by itself: a line reports `UserPromptSubmit` and the agent stays busy until the probe reports the
+     * turn's end (`command(id, 'fire Stop')`). `quick-replies` needs "the user's own prompt is running" and "typed while
+     * busy, then `Stop`" in the order the probe chooses; a fixed `busySeconds` would decide that order by a clock.
+     */
+    manualTurns = false,
+    /**
+     * A line received while a permission request is held (`heldPermission()`) reports **no** `UserPromptSubmit`: the
+     * Enter answered the prompt. The real CLI behaves so (measured CLI 2.1.330, `docs/lessons/transcript.md`, "What
+     * is in the agent's input box"); without it the stub's own submission would confirm that Enter, and "a notice
+     * after answering a prompt with Enter" could not be shown.
+     */
+    silentAnswers = false,
+    /**
+     * Log every size this session's pty takes, polled every 100 ms, one line per change (`sessionSizes`). The shared
+     * `stty-size` receipt is one file for every running stub, and a second session overwrites the first's size.
+     */
+    sizeLog = false,
   } = {},
 ) {
   const home = mkTemp('spekterm-agentview-stub-')
@@ -211,6 +229,9 @@ export function makeStubAgent(
     `dir="${configDir}/projects/$slug"`,
     'mkdir -p "$dir"',
     'tp="$dir/$sid.jsonl"',
+    sizeLog
+      ? `(last=""; while :; do s=$(stty size < /dev/tty 2>/dev/null || echo "0 0"); if [ "$s" != "$last" ]; then printf '%s\\n' "$s" >> "${perSessionDir}/$sid.sizes"; last="$s"; fi; sleep 0.1; done) &`
+      : '',
     // 觸發注入的 hook。**照著設定檔裡真正的命令跑** —— 只看 argv 證明不了它能用。
     // `firej <event> <json>`: run the event's hook commands with this exact payload (a probe's command can
     // report a tool's input, a subagent's id or a turn's background tasks). `fire` is it with the base payload.
@@ -268,9 +289,15 @@ export function makeStubAgent(
     dropFirstSubmit ? `    if [ ! -e "${perSessionDir}/$sid.dropped" ]; then : > "${perSessionDir}/$sid.dropped"; continue; fi` : '',
     `    printf '%s\\n' "$line" >> "${inputLog}"`,
     `    printf '%s\\n' "$line" >> "${perSessionDir}/$sid.lines"`,
+    silentAnswers
+      ? `    if [ -e "${perSessionDir}/$sid.held" ]; then rm -f "${perSessionDir}/$sid.held"; printf s >> "${perSessionDir}/$sid.reported"; line=""; continue; fi`
+      : '',
     // The real agent reports every submitted prompt at once, before any record is written (measured,
     // CLI 2.1.300). Not an option: a probe that never sees it cannot show it was injected.
     '    fire UserPromptSubmit',
+    // One mark per line once its report is written (`reported`): a probe that orders its own events after the
+    // stub's submission waits for it.
+    `    printf u >> "${perSessionDir}/$sid.reported"`,
     modelSwitch
       ? [
           '    case "$line" in "/model "*)',
@@ -317,7 +344,7 @@ export function makeStubAgent(
     relocateAfterInput ? '  fire SessionStart' : '',
     // `holdPermission`：收到輸入後提出一個許可請求並**停在那裡**（不送 Stop）——
     // 模擬「agent 正在等使用者於終端回答」。
-    holdPermission ? '  fire PermissionRequest' : '  fire Stop',
+    holdPermission ? '  fire PermissionRequest' : manualTurns ? '' : '  fire Stop',
     '    line=""',
     '    done',
     '  done',
@@ -538,6 +565,42 @@ export function makeStubAgent(
           }
         })
     },
+    /**
+     * The sizes one session's pty took, in order (`sizeLog`): `{ rows, cols }`. A woken session keeps its conversation
+     * id, so its sizes follow the previous process's in the same list.
+     */
+    sessionSizes: (conversationId) => {
+      let raw
+      try {
+        raw = readFileSync(join(perSessionDir, `${conversationId}.sizes`), 'utf8')
+      } catch {
+        return []
+      }
+      return raw
+        .split('\n')
+        .filter(Boolean)
+        .map((line) => {
+          const [rows, cols] = line.trim().split(/\s+/).map(Number)
+          return { rows, cols }
+        })
+    },
+    /** A probe command raising a permission request that the next line answers silently (`silentAnswers`). */
+    heldPermission: () => `: > "${perSessionDir}/$sid.held"\nfire PermissionRequest`,
+    /** A probe command making the next line report nothing, with no request raised (`silentAnswers`): a typed `!cmd`. */
+    silentLine: () => `: > "${perSessionDir}/$sid.held"`,
+    /**
+     * How many of that session's lines the stub has finished reporting (`UserPromptSubmit` written, or nothing for a
+     * silent line). Equal to the number of lines once every report is on disk.
+     */
+    reported: (conversationId) => {
+      try {
+        return readFileSync(join(perSessionDir, `${conversationId}.reported`), 'utf8').length
+      } catch {
+        return 0
+      }
+    },
+    /** Whether the next line of that session will report nothing (`heldPermission` / `silentLine` not yet answered). */
+    held: (conversationId) => existsSync(join(perSessionDir, `${conversationId}.held`)),
     /** A probe command appending a later `skill_listing` record (`command(conversationId, …)`). */
     skillListing: (names, isInitial = false) => listingLine(names, isInitial),
     /**

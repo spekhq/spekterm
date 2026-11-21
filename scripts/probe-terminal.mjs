@@ -961,7 +961,7 @@ async function pressCtrlTab(client, shift = false) {
  * `.xterm-screen` 在 DOM 與 GPU 兩種 renderer 下都存在（實測）。
  */
 const SCREEN_RECT = `(() => {
-  const host = [...document.querySelectorAll('section[aria-label="${copy('stage.terminal')}"] > div')]
+  const host = [...document.querySelectorAll('section[aria-label="${copy('stage.terminal')}"] > div > div')]
     .find((d) => !d.classList.contains('hidden'))
   if (!host) throw new Error('SCREEN_RECT: 找不到顯示中的終端容器')
   const el = host.querySelector('.xterm-screen')

@@ -9,6 +9,7 @@ import type { PanelSnapshot } from '../main/panel-store'
 import type { FollowUpdate as ConversationUpdate } from '../main/transcript-follow-service'
 import type { DrainResult, WaitState } from '../main/agent-events'
 import type { SessionLineage } from '../shared/lineage/types'
+import type { QuickReplyResult } from '../shared/quick-replies/rules'
 import type {
   ApproveResult,
   DeclineResult,
@@ -317,6 +318,9 @@ const workspaceApi = {
     /** Automatic hibernation threshold in seconds; `0` = off, `null` = back to the default (24 hours). */
     setAutoHibernate: (seconds: number | null): Promise<ProjectedPreferences> =>
       ipcRenderer.invoke('workspace:settings:setAutoHibernate', seconds),
+    /** The quick replies (`quick-replies`); `null` = the defaults. The store applies the list's rules. */
+    setQuickReplies: (list: string[] | null): Promise<ProjectedPreferences> =>
+      ipcRenderer.invoke('workspace:settings:setQuickReplies', list),
     /** The automatic update check (`app-update`). `null` = the default (on); `false` = off. */
     setAutoUpdateCheck: (enabled: false | null): Promise<ProjectedPreferences> =>
       ipcRenderer.invoke('workspace:settings:setAutoUpdateCheck', enabled),
@@ -394,6 +398,12 @@ const workspaceApi = {
      */
     send: (sessionId: string, text: string): Promise<{ ok: boolean; reason?: WaitState }> =>
       ipcRenderer.invoke('workspace:conversation:send', sessionId, text),
+    /**
+     * Sends a quick reply (`quick-replies`) to an agent session, in either view. **The gate is in the main process.**
+     * `typedSeq` is "send anyway": the count a `TYPED` refusal gave.
+     */
+    quickReply: (sessionId: string, text: string, typedSeq?: number): Promise<QuickReplyResult> =>
+      ipcRenderer.invoke('workspace:conversation:quickReply', sessionId, text, typedSeq),
   },
   terminal: {
     /**

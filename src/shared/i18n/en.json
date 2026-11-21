@@ -406,7 +406,20 @@
     "agentView": "Agent sessions show",
     "agentViewTerminal": "Terminal",
     "agentViewConversation": "Conversation",
-    "agentViewHint": "The same choice as the switch beside an agent session's tabs. It applies to every agent session."
+    "agentViewHint": "The same choice as the switch beside an agent session's tabs. It applies to every agent session.",
+    "quickReplies": "Quick replies",
+    "quickRepliesHint": "Sentences you send often. One click under an agent session sends one as your reply.",
+    "quickReplyField": "Quick reply {{index}}",
+    "quickReplyNew": "New quick reply",
+    "quickReplyAdd": "Add a quick reply",
+    "quickReplyRemove": "Remove: {{sentence}}",
+    "quickReplyUp": "Move up: {{sentence}}",
+    "quickReplyDown": "Move down: {{sentence}}",
+    "quickReplyEmpty": "Write a sentence, or remove the row.",
+    "quickReplyTooLong": "At most 200 characters.",
+    "quickReplyControl": "One line, without control characters.",
+    "quickReplyDuplicate": "This sentence is already in the list.",
+    "quickReplyFull": "At most 12 quick replies."
   },
   "statusBar": {
     "label": "Status bar",
@@ -1203,5 +1216,27 @@
       "CREDENTIAL_UNAVAILABLE": "This computer's team credential cannot be found.",
       "REVOKED": "This device was removed from the team."
     }
+  },
+  "quickReplies": {
+    "default": {
+      "close": "Can this session be closed now?",
+      "risk": "Is there any risk, or anything I need to decide?",
+      "remaining": "Is there anything left to do in this session?"
+    },
+    "toolbar": "Quick replies",
+    "edit": "Edit quick replies",
+    "sendAnyway": "Send anyway",
+    "dismiss": "Dismiss",
+    "refused": {
+      "typed": "You typed in this session after your last sent prompt; it may still be in the agent's input. Clear it, then send anyway.",
+      "choice": "The agent may be waiting for a choice in the terminal.",
+      "unknown": "spekterm cannot tell whether the agent can take a message now.",
+      "busy": "The agent cannot take a message now.",
+      "prefill": "A filled-in prompt waits unsent in this session. Send or clear it first.",
+      "notFound": "This session has no running agent.",
+      "badParams": "This quick reply cannot be sent."
+    },
+    "notSent": "The quick reply is in the agent's input but was not sent (unless you pressed Enter meanwhile).",
+    "dormant": "Wake the session to send a quick reply."
   }
 }

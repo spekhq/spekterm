@@ -12,7 +12,7 @@ import {
   stateOf,
   type WaitState,
 } from './agent-events'
-import { lastKeystrokeAt } from './pty-input'
+import { confirmSubmit, lastKeystrokeAt, setOwnRequestSource } from './pty-input'
 
 /**
  * 等待狀態的求值 —— **per session、訂閱式，而且只有一個 drainer**。
@@ -39,6 +39,10 @@ import { lastKeystrokeAt } from './pty-input'
  * 比對：它比對的是 HTTP 伺服器那兩個慣用名，而且**連註解一起吃**。
  * （所以這一段也不能把那兩個字面寫出來 —— 寫警告的時候特別容易踩到自己警告的那件事。）
  */
+
+// An Enter written while any request is open answers the prompt the terminal shows, so it submits nothing
+// (`quick-replies` D2). The state read is the last drained one, up to one tick old.
+setOwnRequestSource((sessionId) => heldOf(sessionId).requests.length > 0)
 
 /** 輪詢間隔。與狀態列的 tick 同量級 —— 事件是落盤的，沒有推送可訂閱。 */
 const WAIT_TICK_MS = 400
@@ -166,6 +170,7 @@ function snapshotOf(sessionId: string, extra: Partial<WaitSnapshot> = {}): WaitS
 /** 讓測試與其他消費者共用同一個折疊結果。 */
 export function foldDrain(sessionId: string, result: DrainResult): WaitSnapshot {
   helds.set(sessionId, result.held)
+  for (const at of result.ownSubmitsAt) confirmSubmit(sessionId, at)
   if (result.transcriptPath) transcriptPaths.set(sessionId, result.transcriptPath)
   return snapshotOf(sessionId, {
     transcriptPath: result.transcriptPath,

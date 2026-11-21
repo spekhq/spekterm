@@ -134,8 +134,8 @@ The interface SHALL be organized in sections, listed beside the content, with on
 - **General**: the UI language, the theme and the interface zoom (see `ui-appearance`).
 - **Terminal**: font family, font size and line height, with the preview directly after them, and GPU
   acceleration.
-- **Agents & sessions**: agent status reporting, automatic hibernation, and the agent session view (see
-  `agent-conversation-view`).
+- **Agents & sessions**: agent status reporting, automatic hibernation, the agent session view (see
+  `agent-conversation-view`), and the quick replies (see `quick-replies`).
 - **Integrations**: the Slack connection (see `slack-intake-source`).
 - **Team**: being on a spekterm-server team (see `team-membership`).
 - **Remote access**: see "Settings holds the remote access controls".
@@ -573,7 +573,8 @@ The Terminal section and the Agents & sessions section SHALL each offer to resto
 their defaults:
 
 - Terminal: font family, font size, line height and GPU acceleration.
-- Agents & sessions: agent status reporting, automatic hibernation and the agent session view.
+- Agents & sessions: agent status reporting, automatic hibernation, the agent session view and the quick replies
+  (back to the defaults in the UI language, `quick-replies`).
 
 Restoring SHALL first ask for confirmation in place, and SHALL change nothing if the user declines or presses
 Esc. It SHALL
@@ -603,3 +604,9 @@ automatic update check, is a single switch whose default is shown beside it. Int
 
 - **WHEN** the user shows the About section in a build that shows the update controls
 - **THEN** it offers no control that restores defaults
+
+#### Scenario: Restoring Agents & sessions restores the quick replies
+
+- **WHEN** the user has removed two of the default quick replies and added one, then restores the Agents & sessions
+  section's defaults and confirms
+- **THEN** the quick replies are the three defaults again, and the terminal font is unchanged

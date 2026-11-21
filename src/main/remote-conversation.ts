@@ -90,6 +90,39 @@ export interface ReplyDeps {
    * after every re-check. Its failure is no permission: the confirmation box opens as it would.
    */
   armModel?: (sessionId: string, name: string) => void
+  /**
+   * Called right after a submit key is written: everything in the agent's box went with it (`pty-input.ts`
+   * `noteSubmitted`, `quick-replies` D2 rule 2). Every caller passes it; optional only for tests.
+   */
+  noteSubmitted?: (sessionId: string) => void
+  /** The session's keystroke count (`pty-input.ts`); read after the text write for `holdSubmit`. */
+  keystrokeSeq?: (sessionId: string) => number
+  /**
+   * The quick reply's only (`quick-replies` D2 "Order"): reads the agent's events now, before each read of the wait
+   * state in the queue, so a permission request that arrived but was not drained is seen before anything is written.
+   */
+  refresh?: (sessionId: string) => void
+  /** The quick reply's only: runs in the queue after the state and prefill checks; may throw `QuickReplyRefusal`. */
+  gate?: (sessionId: string) => void
+  /**
+   * The quick reply's only: `true` withholds the submit key (`filled-not-submitted`). Given the keystroke count read
+   * right after the text write.
+   */
+  holdSubmit?: (sessionId: string, afterText: number) => boolean
+}
+
+/**
+ * A quick reply refused for a reason of the desktop's own (`quick-replies` D2): **not** a `RemoteError`, whose codes
+ * are the remote protocol's vocabulary (`remote-frames.ts`), which this change leaves as it is.
+ */
+export class QuickReplyRefusal extends Error {
+  constructor(
+    readonly code: 'TYPED',
+    readonly seq: number,
+  ) {
+    super('the agent\'s input box may hold what the user typed')
+    this.name = 'QuickReplyRefusal'
+  }
 }
 
 function prefillRefusal(pending: { prefillId?: string; edited: boolean }): RemoteError {
@@ -136,8 +169,23 @@ export function sendReply(
   if (watching !== sessionId) {
     return Promise.reject(new RemoteError('NOT_WATCHING', 'reply only to the conversation this connection watches'))
   }
+  return deliverReply(deps, sessionId, text, takeAttachments)
+}
+
+/**
+ * The gate and the writes of a reply, shared by a device's reply (`sendReply`) and the desktop's quick reply
+ * (`quick-reply.ts`), which is bound to no watched conversation (`quick-replies` D1).
+ */
+export function deliverReply(
+  deps: ReplyDeps,
+  sessionId: string,
+  text: string,
+  takeAttachments?: () => ReplyAttachments,
+): Promise<{ outcome: ReplyOutcome; text: string }> {
   const cleaned = slashForm(cleanReply(text))
   if (cleaned.trim() === '' && !takeAttachments) return Promise.reject(new RemoteError('BAD_PARAMS', 'the reply is empty'))
+  // Read fresh before the first check too: a state that just became sendable is not refused for a stale one.
+  deps.refresh?.(sessionId)
   const state = deps.waitStateOf(sessionId)
   if (!SENDABLE.includes(state)) {
     return Promise.reject(new RemoteError('WAIT_STATE', `the agent cannot take a reply now (${state}); answer a prompt with conversation.answer`, { state }))
@@ -154,6 +202,7 @@ export function sendReply(
   const full = cleaned.trim() === '' ? sentence : sentence ? `${cleaned}\n\n${sentence}` : cleaned
 
   return runQueued(sessionId, async () => {
+    deps.refresh?.(sessionId)
     // The state may have moved while an earlier reply was being written.
     const now = deps.waitStateOf(sessionId)
     if (!SENDABLE.includes(now)) {
@@ -166,15 +215,25 @@ export function sendReply(
       attachments?.release()
       throw prefillRefusal(filledMeanwhile)
     }
+    try {
+      deps.gate?.(sessionId)
+    } catch (error) {
+      attachments?.release()
+      throw error
+    }
     if (!deps.write(sessionId, full)) {
       attachments?.release()
       throw new RemoteError('NOT_FOUND', 'the session has no running process')
     }
+    const afterText = deps.keystrokeSeq?.(sessionId) ?? 0
     attachments?.commit()
     await deps.delay(deps.submitDelayMs)
+    deps.refresh?.(sessionId)
     if (!SENDABLE.includes(deps.waitStateOf(sessionId))) return { outcome: 'filled-not-submitted' as const, text: full }
     // A prompt filled in during the delay sits in the box with the reply: the key would submit both.
     if (deps.prefillPending?.(sessionId)) return { outcome: 'filled-not-submitted' as const, text: full }
+    // A key typed during the delay is in the box with the reply (`quick-replies` D2).
+    if (deps.holdSubmit?.(sessionId, afterText)) return { outcome: 'filled-not-submitted' as const, text: full }
     // The text is already in the input box: a failure to arm must not fail the reply.
     try {
       deps.armOrigin?.(sessionId)
@@ -191,6 +250,7 @@ export function sendReply(
       }
     }
     deps.write(sessionId, '\r')
+    deps.noteSubmitted?.(sessionId)
     return { outcome: 'submitted' as const, text: full }
   })
 }
