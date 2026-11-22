@@ -108,6 +108,16 @@ asks for the switch, spekterm lets exactly that switch go through without the qu
 switch you start at the computer still asks. Switching makes the agent re-read the whole conversation on your
 next message, and the agent keeps the choice as its default for new sessions.
 
+### Quick replies on the phone
+
+Above the reply field, a row of sentences holds your quick replies. Tap one and it is sent to the agent as
+your reply; what you typed and attached in the field stays there. Edit the list in the phone's **Settings →
+Quick replies**: up to 12 sentences, each one line of at most 200 characters. The list is kept on the phone,
+and the desktop keeps its own ([Quick replies](/docs/using/terminals-and-sessions/#quick-replies)). Until you
+change it, it is *Can this session be closed now?*, *Is there any risk, or anything I need to decide?* and
+*Is there anything left to do in this session?*. Quick replies need the Android app 0.9.0 or later, and work
+with any version of spekterm on the computer.
+
 ### What the agent did, and who wrote to it
 
 The phone shows what each tool call did, not only its name: the command an agent ran, the change it made to
