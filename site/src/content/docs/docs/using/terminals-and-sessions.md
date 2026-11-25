@@ -52,11 +52,8 @@ A quick reply is sent only when a typed reply could be: while the agent waits fo
 asks for a choice, or its state is unknown, the buttons are disabled. A dormant session shows the row disabled
 until you wake it.
 
-Because the click does not go through your keyboard, spekterm also checks the agent's input box. If you typed
-anything in the session after your last sent prompt, it may still be in the box, and the sentence would be sent
-together with it. spekterm cannot see the box, so it refuses and says so; clear the box, then click **Send
-anyway**. This also happens after you answered a permission prompt with keys in the terminal, after typing and
-deleting, or after a `!` command you typed. **Send anyway** sends only if you typed nothing since the warning.
+The click does not go through your keyboard, and spekterm cannot see the agent's input box: if you left something
+half-typed there, the sentence is added after it and both are sent together.
 
 If the agent's state changes in the half second between writing the sentence and pressing Enter, or you press a
 key in that moment, the sentence is left in the agent's input box, not sent, and the row says so.

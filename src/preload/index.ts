@@ -400,10 +400,9 @@ const workspaceApi = {
       ipcRenderer.invoke('workspace:conversation:send', sessionId, text),
     /**
      * Sends a quick reply (`quick-replies`) to an agent session, in either view. **The gate is in the main process.**
-     * `typedSeq` is "send anyway": the count a `TYPED` refusal gave.
      */
-    quickReply: (sessionId: string, text: string, typedSeq?: number): Promise<QuickReplyResult> =>
-      ipcRenderer.invoke('workspace:conversation:quickReply', sessionId, text, typedSeq),
+    quickReply: (sessionId: string, text: string): Promise<QuickReplyResult> =>
+      ipcRenderer.invoke('workspace:conversation:quickReply', sessionId, text),
   },
   terminal: {
     /**

@@ -1225,10 +1225,8 @@
     },
     "toolbar": "Quick replies",
     "edit": "Edit quick replies",
-    "sendAnyway": "Send anyway",
     "dismiss": "Dismiss",
     "refused": {
-      "typed": "You typed in this session after your last sent prompt; it may still be in the agent's input. Clear it, then send anyway.",
       "choice": "The agent may be waiting for a choice in the terminal.",
       "unknown": "spekterm cannot tell whether the agent can take a message now.",
       "busy": "The agent cannot take a message now.",

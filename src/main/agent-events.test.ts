@@ -43,7 +43,6 @@ const ev = (name: string, extra: Partial<AgentEvent> = {}): AgentEvent => ({
   backgroundAgentRunning: false,
   backgroundTasks: null,
   trigger: null,
-  notice: false,
   ...extra,
 })
 
@@ -90,7 +89,7 @@ test('payload 以白名單取欄位，絕對路徑不外流（transcript_path �
   })
   assert.ok(parsed)
   assert.deepEqual(Object.keys(parsed).sort(), [
-    'agentId', 'answers', 'backgroundAgentRunning', 'backgroundTasks', 'inputHash', 'name', 'notice', 'notificationType', 'permissionMode', 'plan',
+    'agentId', 'answers', 'backgroundAgentRunning', 'backgroundTasks', 'inputHash', 'name', 'notificationType', 'permissionMode', 'plan',
     'questions', 'runningAgents', 'source', 'toolArg', 'toolName', 'toolUseId', 'transcriptPath', 'trigger',
   ])
   // `toolArg` 是**單一辨識參數**，其值本身可能是路徑 —— 那是刻意的（使用者要看得出 agent 在動
@@ -864,19 +863,4 @@ test('backgroundChanged reports a change of the list or its order, not an identi
   assert.equal(r.drain().backgroundChanged, true, 'the order changed')
   r.fire({ hook_event_name: 'Stop', background_tasks: [COPIER, { ...SLEEP, description: 'renamed' }] })
   assert.equal(r.drain().backgroundChanged, true, 'a label changed')
-})
-
-test('own submissions are listed with their times; a notice and a subagent\'s are not (quick-replies D2)', () => {
-  const root = tmp()
-  configureAgentEvents(root)
-  const dir = prepareEventInjection('s1', true)!.env.SPEKTERM_EVENT_DIR
-  fs.writeFileSync(path.join(dir, '1000000000000000-1.json'), '{"hook_event_name":"UserPromptSubmit","prompt":"fix it"}')
-  fs.writeFileSync(path.join(dir, '2000000000000000-1.json'), '{"hook_event_name":"UserPromptSubmit","prompt":"<task-notification>\\n<task-id>b1</task-id>"}')
-  fs.writeFileSync(path.join(dir, '3000000000000000-1.json'), '{"hook_event_name":"UserPromptSubmit","prompt":"sub","agent_id":"a1"}')
-  fs.writeFileSync(path.join(dir, '4000000000000000-1.json'), '{"hook_event_name":"Stop"}')
-  const result = drainEvents('s1', heldWait('ready'))
-  assert.deepEqual(result.ownSubmitsAt, [1_000_000_000])
-  assert.equal(parseEvent({ hook_event_name: 'UserPromptSubmit', prompt: '<task-notification>x' })?.notice, true)
-  assert.equal(parseEvent({ hook_event_name: 'UserPromptSubmit', prompt: 'about <task-notification>' })?.notice, false)
-  assert.equal(parseEvent({ hook_event_name: 'Stop', prompt: '<task-notification>' })?.notice, false)
 })

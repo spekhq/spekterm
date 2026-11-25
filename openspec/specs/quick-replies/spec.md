@@ -2,8 +2,7 @@
 
 ## Purpose
 Sentences the user sends to agents often, kept in the preferences and sent to an agent session with one click from a
-row under its terminal or conversation view, under the gates of a typed reply and one more: nothing the user typed may
-still be in the agent's input box.
+row under its terminal or conversation view, under the gates of a typed reply.
 
 ## Requirements
 
@@ -98,24 +97,16 @@ agent's input box but not sent.
 - **WHEN** the agent is working and the user clicks a quick reply
 - **THEN** the sentence is sent, as a typed reply would be while the agent works
 
-### Requirement: A quick reply is refused when a typed reply would be, or when the user's typing may be in the box
+### Requirement: A quick reply is refused when a typed reply would be
 
 The main process SHALL refuse a quick reply, writing nothing, when the agent asks for a choice or its state is
-unknown, when a filled-in prompt is waiting unsent in the session, when the session has no running process, or when
-anything was typed into the session after the last Enter the agent confirmed as a submitted prompt, after the last
-reply sent through a quick reply or a paired device whose submit key was written, and after the session's process
-started, whichever is latest. A submission the agent reports that no submitting Enter preceded — a finished
-background task's notice — SHALL NOT count as one; an Enter that answered a prompt, made a line break, or was part
-of a paste SHALL NOT count as a submitting Enter. The main process SHALL read the agent's latest reported state
-before deciding, and again before the submit key. The row SHALL say why, in one line. A refusal because of typing SHALL stay
-until the user sends anyway or dismisses it; a refusal because of the agent's state, and the notice of a sentence
-not sent, SHALL go when the agent's state next changes or the user dismisses it. Buttons SHALL be disabled, with the reason, while the window already knows the agent asks for a
-choice or its state is unknown; the main process SHALL decide regardless.
-
-For a refusal because of typing, the row SHALL offer to send anyway; sending anyway SHALL be accepted only if
-nothing was typed into the session since that refusal, or the box is found empty as for any quick reply, and every
-other reason SHALL still refuse it. A key typed
-during the half second before the submit key SHALL withhold the submit key.
+unknown, when a filled-in prompt is waiting unsent in the session, or when the session has no running process. It
+SHALL NOT refuse a quick reply because something was typed into the session: the desktop cannot see the agent's input
+box, so the sentence joins whatever the box holds. The main process SHALL read the agent's latest reported state
+before deciding, and again before the submit key. The row SHALL say why, in one line; a refusal, and the notice of a
+sentence not sent, SHALL go when the agent's state next changes or the user dismisses it. Buttons SHALL be disabled,
+with the reason, while the window already knows the agent asks for a choice or its state is unknown; the main process
+SHALL decide regardless. A key typed during the half second before the submit key SHALL withhold the submit key.
 
 #### Scenario: Asking for a choice
 
@@ -123,23 +114,17 @@ during the half second before the submit key SHALL withhold the submit key.
   process (the button being disabled)
 - **THEN** nothing is written to the session and the reason names the waiting choice
 
-#### Scenario: Something typed in the terminal
+#### Scenario: Typed earlier, not sent
 
 - **WHEN** the agent's turn ended, the user typed "fix the" in the terminal without sending it, and clicks a quick
   reply
-- **THEN** nothing is written, the row says the agent's input box may hold what they typed, and offers to send
-  anyway
+- **THEN** the sentence is written and submitted, joining "fix the", with no warning
 
-#### Scenario: Send anyway after typing
+#### Scenario: After answering a prompt in the terminal
 
-- **WHEN** after the refusal the user chose to send anyway without typing again
-- **THEN** the sentence is sent
-
-#### Scenario: Typed during the turn, not sent
-
-- **WHEN** the user typed "and also" into the terminal while the agent worked, did not send it, the agent's turn
-  ended, and the user clicks a quick reply
-- **THEN** nothing is written and the row offers to send anyway
+- **WHEN** the user answered the agent's permission prompt with keys in the terminal, the agent finished its turn,
+  and the user clicks a quick reply
+- **THEN** the sentence is sent, with no warning
 
 #### Scenario: The user's own prompt is running
 
@@ -151,30 +136,12 @@ during the half second before the submit key SHALL withhold the submit key.
 - **WHEN** the agent's own close of its session waits for its turn to end and the user clicks a quick reply
 - **THEN** the close is dropped, as it is when the user types into the session
 
-#### Scenario: A background task's notice is not a submission
+#### Scenario: A key typed before the submit key
 
-- **WHEN** the user typed "fix the" into the terminal without sending it, a background task of the agent finished
-  and its notice reached the agent, and the user clicks a quick reply
-- **THEN** nothing is written and the row offers to send anyway
-
-#### Scenario: A notice after answering a prompt with Enter
-
-- **WHEN** the user typed "fix the" into the terminal while the agent worked, answered its permission prompt with
-  Enter, a background task's notice then reached the agent, and the user clicks a quick reply
-- **THEN** nothing is written and the row offers to send anyway
-
-#### Scenario: After answering a prompt in the terminal
-
-- **WHEN** the user answered the agent's permission prompt with keys in the terminal, the agent finished its turn,
-  and the user clicks a quick reply
-- **THEN** nothing is written and the row offers to send anyway, since keys typed in the terminal are not told apart
-
-#### Scenario: Typed again after the warning
-
-- **WHEN** the user chose to send anyway after typing another key since the warning
-- **THEN** nothing is written and the warning is shown again
+- **WHEN** the user presses a key in the terminal in the half second between the sentence and the submit key
+- **THEN** the submit key is not written and the row says the sentence is in the agent's input box, not sent
 
 #### Scenario: Two quick replies in a row
 
 - **WHEN** the user sends one quick reply and, while the agent works on it, clicks another
-- **THEN** the second is sent too, not refused for the first one's text
+- **THEN** the second is sent too

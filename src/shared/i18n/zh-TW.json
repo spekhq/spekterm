@@ -1197,10 +1197,8 @@
     },
     "toolbar": "快速回覆",
     "edit": "編輯快速回覆",
-    "sendAnyway": "仍要送出",
     "dismiss": "關閉",
     "refused": {
-      "typed": "你在上一次送出之後在這個 session 打過字，可能還留在 agent 的輸入框裡。清掉之後再按「仍要送出」。",
       "choice": "agent 可能正在終端裡等你選擇。",
       "unknown": "spekterm 無法判斷 agent 現在能不能接收訊息。",
       "busy": "agent 現在無法接收訊息。",

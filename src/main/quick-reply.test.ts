@@ -3,18 +3,15 @@ import test from 'node:test'
 
 import type { WaitState } from './agent-events'
 import { SUBMIT_KEY_DELAY_MS } from './intake-prefill'
-import { confirmSubmit, forgetInput, keystrokeSeq, noteSubmitted, noteWrite, setOwnRequestSource, submittedSeqOf } from './pty-input'
+import { forgetInput, keystrokeSeq, noteWrite } from './pty-input'
 import { type QuickReplyDeps, sendQuickReply } from './quick-reply'
-import { deliverReply, QuickReplyRefusal, sendReply } from './remote-conversation'
-import { RemoteError } from './remote-frames'
+import { deliverReply, sendReply } from './remote-conversation'
 
 let clock = 1000
 
 /** A hand-driven rig whose pty writes go through the real keystroke record, as `TerminalService.write` does. */
 function rig(id: string, initial: WaitState = 'ready') {
   forgetInput(id)
-  setOwnRequestSource(() => false)
-  noteSubmitted(id) // the process started
   const timers: { resolve: () => void }[] = []
   const writes: string[] = []
   let state: WaitState = initial
@@ -33,8 +30,6 @@ function rig(id: string, initial: WaitState = 'ready') {
     },
     prefillPending: () => prefill,
     keystrokeSeq,
-    submittedSeqOf,
-    noteSubmitted,
     delay: () => new Promise<void>((resolve) => timers.push({ resolve })),
     submitDelayMs: SUBMIT_KEY_DELAY_MS,
   }
@@ -51,8 +46,6 @@ function rig(id: string, initial: WaitState = 'ready') {
     refreshes: () => refreshes,
     /** The user types into the terminal. */
     type: (data: string) => noteWrite(id, data, undefined, (clock += 10)),
-    /** The agent reports an own submission now. */
-    submit: () => confirmSubmit(id, (clock += 60)),
     /** Lets the half-second delay pass. */
     elapse: async () => {
       await flush()
@@ -62,8 +55,8 @@ function rig(id: string, initial: WaitState = 'ready') {
   }
 }
 
-async function send(r: ReturnType<typeof rig>, id: string, text: string, typedSeq?: number) {
-  const pending = sendQuickReply(r.deps, id, text, typedSeq)
+async function send(r: ReturnType<typeof rig>, id: string, text: string) {
+  const pending = sendQuickReply(r.deps, id, text)
   await r.elapse()
   return pending
 }
@@ -76,33 +69,13 @@ test('a quick reply is the text, then the submit key after the delay', async () 
   assert.ok(r.refreshes() >= 2, 'the state is read fresh before the text and before the key')
 })
 
-test('typed after the baseline: refused TYPED with the count, nothing written', async () => {
+test('typed earlier and not sent: not refused — the sentence joins whatever the box holds', async () => {
   const r = rig('q2')
   r.type('f')
   r.type('ix the')
   const result = await send(r, 'q2', 'Any risk?')
-  assert.deepEqual(result, { ok: false, code: 'TYPED', seq: keystrokeSeq('q2') })
-  assert.deepEqual(r.writes, [])
-})
-
-test('typed then submitted with Enter, the submission confirmed: sent (the user\'s own prompt is running)', async () => {
-  const r = rig('q3', 'busy')
-  r.type('fix the bug')
-  r.type('\r')
-  r.submit()
-  const result = await send(r, 'q3', 'Any risk?')
-  assert.equal(result.ok, true)
-})
-
-test('typed during the turn, then a background task\'s notice (no Enter): refused', async () => {
-  const r = rig('q4')
-  r.type('\r')
-  r.submit()
-  r.type('and also')
-  r.submit() // a notice reaching pty-input would find no Enter after the baseline; the drain does not even list it
-  const result = await send(r, 'q4', 'Any risk?')
-  assert.equal(result.ok, false)
-  assert.equal(result.ok === false && result.code, 'TYPED')
+  assert.deepEqual(result, { ok: true, outcome: 'submitted' })
+  assert.deepEqual(r.writes, ['Any risk?', '\r'])
 })
 
 test('two quick replies in a row, no submission drained in between: both sent', async () => {
@@ -114,56 +87,27 @@ test('two quick replies in a row, no submission drained in between: both sent', 
   assert.deepEqual(r.writes, ['first', '\r', 'second', '\r'])
 })
 
-test('a reply whose submit key was withheld leaves its text in the box: the next click is refused', async () => {
+test('a key typed between the text and the submit key withholds the key; the next click is sent', async () => {
   const r = rig('q6')
-  const pending = sendQuickReply(r.deps, 'q6', 'first', undefined)
+  const pending = sendQuickReply(r.deps, 'q6', 'first')
   await new Promise<void>((resolve) => setImmediate(resolve))
   r.type('x') // a key during the half second
   await r.elapse()
   assert.deepEqual(await pending, { ok: true, outcome: 'filled-not-submitted' })
   assert.deepEqual(r.writes, ['first'], 'no submit key')
-  const next = await send(r, 'q6', 'second')
-  assert.equal(next.ok === false && next.code, 'TYPED')
+  assert.deepEqual(await send(r, 'q6', 'second'), { ok: true, outcome: 'submitted' })
+  assert.deepEqual(r.writes, ['first', 'second', '\r'])
 })
 
-test('a phone reply submitted, then a quick reply: sent', async () => {
-  const r = rig('q7')
-  r.type('half')
-  const phone = sendReply({ ...r.deps, prefillPending: () => null, noteSubmitted }, 'q7', 'q7', 'from the phone')
-  await r.elapse()
-  assert.equal((await phone).outcome, 'submitted')
-  assert.equal((await send(r, 'q7', 'Any risk?')).ok, true)
-})
-
-test('a previous process\'s keystrokes are ignored after a spawn', async () => {
-  const r = rig('q8')
-  r.type('old typing')
-  noteSubmitted('q8') // the next spawn
-  assert.equal((await send(r, 'q8', 'Any risk?')).ok, true)
-})
-
-test('send anyway: accepted while the count is unchanged, refused with the new count otherwise', async () => {
-  const r = rig('q9')
-  r.type('x')
-  const refused = await send(r, 'q9', 'Any risk?')
-  assert.ok(refused.ok === false && refused.code === 'TYPED')
-  const seq = refused.ok === false ? refused.seq! : -1
-  r.type('y')
-  const again = await send(r, 'q9', 'Any risk?', seq)
-  assert.deepEqual(again, { ok: false, code: 'TYPED', seq: seq + 1 })
-  const anyway = await send(r, 'q9', 'Any risk?', seq + 1)
-  assert.deepEqual(anyway, { ok: true, outcome: 'submitted' })
-})
-
-test('send anyway does not lift the other gates', async () => {
+test('the wait state and a pending fill refuse, writing nothing', async () => {
   const r = rig('q10')
-  r.type('x')
-  const seq = keystrokeSeq('q10')
   r.setState('awaiting-choice')
-  assert.deepEqual(await send(r, 'q10', 'Any risk?', seq), { ok: false, code: 'WAIT_STATE', state: 'awaiting-choice' })
+  assert.deepEqual(await send(r, 'q10', 'Any risk?'), { ok: false, code: 'WAIT_STATE', state: 'awaiting-choice' })
+  r.setState('unknown')
+  assert.deepEqual(await send(r, 'q10', 'Any risk?'), { ok: false, code: 'WAIT_STATE', state: 'unknown' })
   r.setState('ready')
   r.setPrefill(true)
-  assert.deepEqual(await send(r, 'q10', 'Any risk?', seq), { ok: false, code: 'PREFILL_PENDING' })
+  assert.deepEqual(await send(r, 'q10', 'Any risk?'), { ok: false, code: 'PREFILL_PENDING' })
   assert.deepEqual(r.writes, [])
 })
 
@@ -176,23 +120,20 @@ test('the state is read after a refresh: a request drained only then refuses bef
 
 test('bad parameters and a session that is not a running agent write nothing', async () => {
   const r = rig('q12')
-  for (const [id, text, seq] of [
-    [1, 'x', undefined],
-    ['q12', 2, undefined],
-    ['q12', '', undefined],
-    ['q12', 'a'.repeat(201), undefined],
-    ['q12', 'two\nlines', undefined],
-    ['q12', 'x', -1],
-    ['q12', 'x', 1.5],
+  for (const [id, text] of [
+    [1, 'x'],
+    ['q12', 2],
+    ['q12', ''],
+    ['q12', 'a'.repeat(201)],
+    ['q12', 'two\nlines'],
   ] as const) {
-    assert.deepEqual(await send(r, id as string, text as string, seq as number | undefined), { ok: false, code: 'BAD_PARAMS' }, JSON.stringify([id, text, seq]))
+    assert.deepEqual(await send(r, id as string, text as string), { ok: false, code: 'BAD_PARAMS' }, JSON.stringify([id, text]))
   }
   assert.deepEqual(await send(r, 'other', 'x'), { ok: false, code: 'NOT_FOUND' })
   assert.equal((await send(r, 'q12', 'a'.repeat(200))).ok, true)
 })
 
-test('a refusal of the desktop\'s own is not a RemoteError, and deliverReply arms no phone origin', async () => {
-  assert.equal(new QuickReplyRefusal('TYPED', 3) instanceof RemoteError, false)
+test('deliverReply arms no phone origin', async () => {
   const r = rig('q13')
   let armed = 0
   const pending = deliverReply({ ...r.deps, prefillPending: () => null }, 'q13', 'hi')

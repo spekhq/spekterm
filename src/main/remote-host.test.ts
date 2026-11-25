@@ -312,7 +312,7 @@ test('the list carries background tasks only for a running agent session with so
     { id: 't1', kind: 'agent', label: null },
   ] as const
   const hold = (id: string, background: readonly { id: string; kind: string; label: string | null }[]): void => {
-    foldDrain(id, { held: { ...heldWait('ready'), background: background.map((t) => ({ ...t })) }, transcriptPath: null, count: 0, turnEnded: false, sessionStarted: false, choicesRaised: [], finished: [], ownSubmitsAt: [], backgroundChanged: false } as never)
+    foldDrain(id, { held: { ...heldWait('ready'), background: background.map((t) => ({ ...t })) }, transcriptPath: null, count: 0, turnEnded: false, sessionStarted: false, choicesRaised: [], finished: [], backgroundChanged: false } as never)
   }
   try {
     for (const id of ['a', 'b', 'c']) hold(id, tasks)
@@ -329,7 +329,7 @@ test('the list carries background tasks only for a running agent session with so
 
 test('seen is listed exactly while an agent session is ready (session-wait-indicator)', () => {
   const ready = (id: string): void => {
-    foldDrain(id, { held: heldWait('ready'), transcriptPath: null, count: 0, turnEnded: false, sessionStarted: false, choicesRaised: [], finished: [], ownSubmitsAt: [] } as never)
+    foldDrain(id, { held: heldWait('ready'), transcriptPath: null, count: 0, turnEnded: false, sessionStarted: false, choicesRaised: [], finished: [] } as never)
   }
   const turnEnd = { state: 'ready', inTurn: false, turnEnded: true, sessionStarted: false, poke: false } as const
   try {
@@ -339,7 +339,7 @@ test('seen is listed exactly while an agent session is ready (session-wait-indic
     assert.equal(host().host.sessionList().sessions.find((s) => s.id === 'a')?.seen, false, 'an unseen turn end')
     seenMarks.lookedAt('a')
     assert.equal(host().host.sessionList().sessions.find((s) => s.id === 'a')?.seen, true, 'looked at')
-    foldDrain('a', { held: heldWait('busy'), transcriptPath: null, count: 0, turnEnded: false, sessionStarted: false, choicesRaised: [], finished: [], ownSubmitsAt: [] } as never)
+    foldDrain('a', { held: heldWait('busy'), transcriptPath: null, count: 0, turnEnded: false, sessionStarted: false, choicesRaised: [], finished: [] } as never)
     const list = host().host.sessionList().sessions
     assert.equal('seen' in list.find((s) => s.id === 'a')!, false, 'absent while busy')
     assert.equal('seen' in list.find((s) => s.id === 'b')!, false, 'absent for a shell')
@@ -664,7 +664,7 @@ test('a model switch is written like a reply and armed right before the key, als
 
 function openPrompt(sessionId: string): void {
   const request = { id: 'r1', toolUseId: 't1', agentId: null, tool: 'Bash', arg: 'ls', questions: null, plan: null, at: 1000, answeredAt: null, stirred: false }
-  foldDrain(sessionId, { held: { ...heldWait('busy'), requests: [request] }, transcriptPath: null, count: 0, turnEnded: false, sessionStarted: false, choicesRaised: [], finished: [], ownSubmitsAt: [] } as never)
+  foldDrain(sessionId, { held: { ...heldWait('busy'), requests: [request] }, transcriptPath: null, count: 0, turnEnded: false, sessionStarted: false, choicesRaised: [], finished: [] } as never)
   forgetInput(sessionId)
 }
 

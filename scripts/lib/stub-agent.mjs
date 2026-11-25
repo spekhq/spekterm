@@ -143,13 +143,6 @@ export function makeStubAgent(
      */
     manualTurns = false,
     /**
-     * A line received while a permission request is held (`heldPermission()`) reports **no** `UserPromptSubmit`: the
-     * Enter answered the prompt. The real CLI behaves so (measured CLI 2.1.330, `docs/lessons/transcript.md`, "What
-     * is in the agent's input box"); without it the stub's own submission would confirm that Enter, and "a notice
-     * after answering a prompt with Enter" could not be shown.
-     */
-    silentAnswers = false,
-    /**
      * Log every size this session's pty takes, polled every 100 ms, one line per change (`sessionSizes`). The shared
      * `stty-size` receipt is one file for every running stub, and a second session overwrites the first's size.
      */
@@ -289,9 +282,6 @@ export function makeStubAgent(
     dropFirstSubmit ? `    if [ ! -e "${perSessionDir}/$sid.dropped" ]; then : > "${perSessionDir}/$sid.dropped"; continue; fi` : '',
     `    printf '%s\\n' "$line" >> "${inputLog}"`,
     `    printf '%s\\n' "$line" >> "${perSessionDir}/$sid.lines"`,
-    silentAnswers
-      ? `    if [ -e "${perSessionDir}/$sid.held" ]; then rm -f "${perSessionDir}/$sid.held"; printf s >> "${perSessionDir}/$sid.reported"; line=""; continue; fi`
-      : '',
     // The real agent reports every submitted prompt at once, before any record is written (measured,
     // CLI 2.1.300). Not an option: a probe that never sees it cannot show it was injected.
     '    fire UserPromptSubmit',
@@ -584,13 +574,9 @@ export function makeStubAgent(
           return { rows, cols }
         })
     },
-    /** A probe command raising a permission request that the next line answers silently (`silentAnswers`). */
-    heldPermission: () => `: > "${perSessionDir}/$sid.held"\nfire PermissionRequest`,
-    /** A probe command making the next line report nothing, with no request raised (`silentAnswers`): a typed `!cmd`. */
-    silentLine: () => `: > "${perSessionDir}/$sid.held"`,
     /**
-     * How many of that session's lines the stub has finished reporting (`UserPromptSubmit` written, or nothing for a
-     * silent line). Equal to the number of lines once every report is on disk.
+     * How many of that session's lines the stub has finished reporting (`UserPromptSubmit` written). Equal to the
+     * number of lines once every report is on disk.
      */
     reported: (conversationId) => {
       try {
@@ -599,8 +585,6 @@ export function makeStubAgent(
         return 0
       }
     },
-    /** Whether the next line of that session will report nothing (`heldPermission` / `silentLine` not yet answered). */
-    held: (conversationId) => existsSync(join(perSessionDir, `${conversationId}.held`)),
     /** A probe command appending a later `skill_listing` record (`command(conversationId, …)`). */
     skillListing: (names, isInitial = false) => listingLine(names, isInitial),
     /**

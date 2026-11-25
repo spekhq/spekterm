@@ -638,33 +638,41 @@ after a CLI upgrade.
   conversation projection does not show. Inside a sentence, in backticks, the path stays text and the agent
   uses Read, which is why the attachment sentence is written that way.
 
-## What is in the agent's input box, from outside (`quick-replies`, CLI 2.1.330, 2026-11-21)
+## What is in the agent's input box, from outside (`quick-replies`, CLI 2.1.330–2.1.332, 2026-11-21 / 11-25)
 
-A quick reply is written into the agent's box without the user's keyboard, so the desktop must know whether the
-box may already hold the user's words. It cannot see the box (no screen reading); measured with a real agent in a
-pty, the hooks injected as the product injects them, a Haiku model:
+A quick reply is written into the agent's box without the user's keyboard, and the desktop cannot see the box (no
+screen reading). **The quick reply does not try to know**: the sentence joins whatever the box holds. Two attempts
+failed, and the next person tempted to "protect the draft" should know why.
 
-- **Text typed during a turn stays in the box after `Stop`.** Typed while the agent answered, not submitted, then
-  Enter after the `Stop`: the next `UserPromptSubmit`'s prompt was exactly that text.
-- **It also survives a permission prompt answered with Enter**: typed before the prompt opened, the prompt approved
-  with Enter, the turn ended; the next Enter submitted the typed text. The Enter that answered reported no
-  `UserPromptSubmit`.
-- **A background task's notice is an own `UserPromptSubmit` that no keystroke preceded**: `agent_id` absent, the
-  prompt starts with `<task-notification>`; after a prompt approved with Enter, it came 2.7 s after the turn's `Stop`,
-  followed by another `Stop`.
-- **A prompt submitted mid-turn reports `UserPromptSubmit` at once** (13 ms after the Enter's write, before the
-  running tool's `PostToolUse`); a prompt submitted while ready, 57 ms after. The hook's timestamp is taken after
-  the Enter, never before it, so "the last Enter at or before a submit's time" finds the Enter that caused it.
-- Not measured: whether a message from another session reports `UserPromptSubmit`. The gate does not depend on it:
-  a submit that no submitting Enter preceded moves nothing.
+**A typing gate refused nearly every click** (shipped 2026-11-21, removed 2026-11-25). It refused while any key had
+reached the session since the last Enter an own `UserPromptSubmit` confirmed, with a "Send anyway" override. In use the
+warning showed almost every time: the keys that answer a permission prompt, Esc, Shift+Tab, a typed slash command or
+`!cmd` all count as keystrokes and confirm no submission, and none of them leaves text in the box. Telling them apart
+needs the box's contents. What was measured for it (CLI 2.1.330, real agent, Haiku, the hooks injected as the product
+does) is still true:
 
-Hence the gate counts keystrokes against the last Enter a submit confirmed (`pty-input.ts`). Not every `\r` is an
-Enter that submits: xterm sends Alt+Enter (a line break in the box) as `ESC CR`, turns a pasted line break into `\r`
-inside the bracketed paste, and an Enter written while a prompt is open answers it — none of them may be confirmed by a
-later submit, or a notice arriving after them would make the box look empty. And the quick reply's
-own writes count as keystrokes like any other (`inTurnOf`, `session-control.ts` and `wait-seen.ts` read them);
-its gate looks past them by moving the baseline itself right after it writes the submit key. Re-measure on a CLI
-upgrade.
+- Text typed during a turn stays in the box after `Stop`, and after a permission prompt answered with Enter; the
+  Enter that answered reports no `UserPromptSubmit`.
+- A background task's notice is an own `UserPromptSubmit` that no keystroke preceded (`agent_id` absent, the prompt
+  starts with `<task-notification>`).
+- A prompt submitted mid-turn reports `UserPromptSubmit` at once (13 ms after the Enter's write); while ready, 57 ms
+  after. The hook's timestamp is always taken after the Enter.
+
+**No key reliably empties the box** (CLI 2.1.332, a draft written into the box, then the key, then a sentence and
+Enter; the box read back as the next `user` record's text):
+
+| Key | Result |
+|---|---|
+| Ctrl+U (`\x15`) | clears only the cursor's line, up to the cursor (`line1\n` and the text after the cursor stay) |
+| Ctrl+L (`\x0c`, `chat:clearInput`'s listed default) | nothing at all (the maintainer's keybindings file binds no Ctrl+L) |
+| Ctrl+K (`\x0b`) | kills to the end of the line; at the end it joins the next line. 40 of them in one write killed nothing |
+| Ctrl+Home / Ctrl+End | the cursor does not move |
+| Esc, Ctrl+C | not tried: a quick reply is allowed while the agent works, and both interrupt it; Esc on an empty box opens rewind |
+| **Ctrl+S (`\x13`, `chat:stash`)** | **sets the whole box aside** (several lines, cursor anywhere, a `/` command with its menu open, during a turn) and puts it back after the next submission — **but it is a toggle**: on an empty box with a stash held it brings the stash back |
+
+The stash was the nearest to "replace the draft", but deciding when a stash is already held needs a model of the
+box the desktop cannot verify; the maintainer chose to join the draft instead (a half-typed draft at the moment of a
+click is rare). Re-measure before building on any of this after a CLI upgrade.
 
 ## Turn boundaries (`agent-session-control`, CLI 2.1.301, 2026-10-16)
 

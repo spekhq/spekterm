@@ -3,7 +3,7 @@ import { type WebContents, ipcMain } from 'electron'
 import { encodeInput } from '../agent-events'
 import { refreshWait, waitStateOf } from '../agent-wait'
 import { prefillOf, SUBMIT_KEY_DELAY_MS } from '../intake-prefill'
-import { keystrokeSeq, noteSubmitted, submittedSeqOf } from '../pty-input'
+import { keystrokeSeq } from '../pty-input'
 import { sendQuickReply } from '../quick-reply'
 import { type Follow, startFollow } from '../conversation-follow'
 import { existingTerminalService } from './terminal'
@@ -116,7 +116,7 @@ export function registerConversationHandlers(): void {
    * A quick reply (`quick-replies` D3): the main process validates and gates it; the renderer only passes the text.
    * The writes go through `TerminalService.write` with no origin, so they count as keystrokes (D2).
    */
-  ipcMain.handle(CONVERSATION_CHANNELS.quickReply, (event, sessionId: unknown, text: unknown, typedSeq: unknown) => {
+  ipcMain.handle(CONVERSATION_CHANNELS.quickReply, (event, sessionId: unknown, text: unknown) => {
     const service = existingTerminalService(event.sender.id)
     return sendQuickReply(
       {
@@ -132,14 +132,11 @@ export function registerConversationHandlers(): void {
         },
         prefillPending: (id) => prefillOf(id) !== null,
         keystrokeSeq,
-        submittedSeqOf,
-        noteSubmitted,
         delay: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
         submitDelayMs: SUBMIT_KEY_DELAY_MS,
       },
       sessionId,
       text,
-      typedSeq,
     )
   })
 }

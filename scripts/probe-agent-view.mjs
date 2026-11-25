@@ -2811,8 +2811,6 @@ async function qrFire(profile, sessionId, ...bodies) {
   })
 }
 
-const QR_NOTICE = { hook_event_name: 'UserPromptSubmit', prompt: '<task-notification><task-id>qr-probe</task-id><status>completed</status></task-notification>' }
-
 /** The renderer's id of the session whose agent got `conversation` (the events directory is keyed by it). */
 function qrSessionId(profile, conversation) {
   return pollFor({
@@ -2847,14 +2845,6 @@ async function qrFocusTerminal(app) {
 const QR_TAB_TITLE = `document.querySelector('[role="tablist"][aria-label="${copy('sessions.tabs')}"] [role="tab"][aria-selected="true"]')?.getAttribute('title') ?? ''`
 
 /**
- * Waits until the shown session's tab says the agent works: the stub's `UserPromptSubmit` for the last line was read.
- * The stub reports it after logging the line, so a turn end written by the probe right after seeing the line could
- * sort before it and leave the agent "working".
- */
-const qrAwaitWorking = (app) =>
-  pollFor({ read: () => app.client.evaluate(QR_TAB_TITLE), settled: (title) => title.includes(WORKING), timeoutMs: 10_000, label: 'the agent works on the line' })
-
-/**
  * Waits until the stub has written its report for every line it received. The stub reports a line after logging it,
  * so an event the probe writes right after seeing the line could sort before the stub's `UserPromptSubmit` and leave
  * the agent working.
@@ -2871,22 +2861,14 @@ const qrAwaitReported = (stub, conversation) =>
 const qrDismiss = (app) => qrClickText(app, qrToolbar(), copy('quickReplies.dismiss'))
 
 /**
- * After a step whose expected refusal did not come (a control group): end the agent's turn and bring the buttons back,
- * so the steps after it run on the state they expect instead of throwing.
+ * Clicks a quick reply and waits until the agent receives `line` (the sentence, or what the box held joined by it) as
+ * its last line, or a line takes the buttons' place.
  */
-async function qrRecover(app, stop) {
-  await stop()
-  const row = await app.client.evaluate(qrState())
-  if (row?.status != null) await qrDismiss(app)
-  await qrAwaitButtons(app)
-}
-
-/** Clicks a quick reply and waits until the agent receives it as its last line, or a line takes the buttons' place. */
-async function qrClickAndSee(app, stub, conversation, sentence) {
+async function qrClickAndSee(app, stub, conversation, sentence, line = sentence) {
   await qrClick(app, sentence)
   return pollFor({
     read: async () => ({ line: qrInput(stub, conversation).lines.at(-1) ?? null, status: (await app.client.evaluate(qrState()))?.status ?? null }),
-    settled: (seen) => seen.line === sentence || seen.status !== null,
+    settled: (seen) => seen.line === line || seen.status !== null,
     timeoutMs: 8_000,
     label: 'the quick reply is sent or refused',
   })
@@ -2908,44 +2890,18 @@ const qrAwaitButtons = (app, language = 'en') =>
   })
 
 /**
- * "Send anyway" on a typing refusal, then the agent's turn for it ends: the next step starts with the box submitted.
- * Returns the stub's last line.
- */
-async function qrSendAnyway(app, stub, conversation, profile, sessionId, expectedLine) {
-  await qrClickText(app, qrToolbar(), copy('quickReplies.sendAnyway'))
-  const lines = await pollFor({
-    read: () => qrInput(stub, conversation).lines,
-    settled: (list) => list.at(-1) === expectedLine,
-    timeoutMs: 10_000,
-    label: 'send anyway reaches the agent',
-  })
-  await qrAwaitReported(stub, conversation)
-  await qrFire(profile, sessionId, { hook_event_name: 'Stop' })
-  await qrAwaitButtons(app)
-  return lines.at(-1) ?? null
-}
-
-/**
- * **A quick reply sends at once, and is refused while the user's typing may be in the agent's box** (`quick-replies`).
+ * **A quick reply sends at once** (`quick-replies`), whatever was typed into the session before it: the sentence
+ * joins what the agent's box holds (the stub keeps typed bytes in its line, so the joined line is what it records).
  *
- * The stub ends no turn by itself (`manualTurns`): the probe orders "a prompt submitted", "typed while busy" and the
- * turn's end. The pty size is the stub's own `stty size` (logged on every change), compared with the size fit would
- * propose for the terminal's box: a line added under the row would shrink the box and resize the pty.
- *
- * Control groups (tasks.md 5.1), each run by hand on this section and recorded in the coverage table:
- * - the turn-end baseline (the gate refuses when anything was typed since the last turn end or a turn is in progress):
- *   7 red — both sends while the agent works, and every typing refusal that follows a turn end;
- * - no TYPED gate: 8 red — every typing refusal, its "writes nothing" and send anyway;
- * - the refusal as an extra line under the row (inside the toolbar, so it fails on behavior, not on a selector): 2 red —
- *   "in place of the buttons" and "does not resize the terminal" (the pty went from 34 to 32 rows);
- * - the notice not excluded from the confirmed submissions (`drainEvents`): 1 red — "a notice does not confirm an
- *   unreported Enter".
+ * The stub ends no turn by itself (`manualTurns`): the probe orders "a prompt submitted" and the turn's end. The pty
+ * size is the stub's own `stty size` (logged on every change), compared with the size fit would propose for the
+ * terminal's box: a line added under the row would shrink the box and resize the pty.
  */
 async function runQuickReplies(_mode, _config, context) {
   if (context.app) await context.app.close()
   const repo = mkTemp('spekterm-agentview-repoQR-')
   const configDir = mkTemp('spekterm-agentview-configQR-')
-  const stub = makeStubAgent(mkTemp, configDir, { manualTurns: true, silentAnswers: true, sizeLog: true })
+  const stub = makeStubAgent(mkTemp, configDir, { manualTurns: true, sizeLog: true })
   const profile = seedProfile(repo)
   const app = await launch({ profile, configDir, stub, port: PORT })
   context.app = app
@@ -3091,41 +3047,29 @@ async function runQuickReplies(_mode, _config, context) {
   await stop()
   await qrAwaitButtons(app)
 
-  // ── A letter typed after the last submit: refused in place of the buttons; send anyway sends ──
+  // ── A letter typed after the last submit: not refused — the sentence joins what the box holds ──
   await qrFocusTerminal(app)
-  const rowD = await qrAwaitButtons(app)
+  await qrAwaitButtons(app)
   const beforeD = await qrSize(app, stub, conversation)
   await app.client.send('Input.insertText', { text: 'q' })
   await pollFor({ read: () => qrInput(stub, conversation).bytes, settled: (b) => b.endsWith('q'), timeoutMs: 5_000, label: 'the letter reaches the pty' })
-  const bytesD = qrInput(stub, conversation).bytes
-  await qrClick(app, QR_DEFAULTS[2])
-  const refusedD = await pollFor({
-    read: () => app.client.evaluate(qrState()),
-    settled: (state) => state?.status === copy('quickReplies.refused.typed'),
-    timeoutMs: 8_000,
-    label: 'the typing refusal shows',
-  })
-  check(
-    results,
-    '[quick-replies] a letter typed after the last submit: the click is refused in place of the buttons, offering send anyway',
-    refusedD?.status === copy('quickReplies.refused.typed') && refusedD.sentences.length === 0 &&
-      refusedD.buttons.some((b) => b.text === copy('quickReplies.sendAnyway')) && refusedD.height === rowD?.height,
-    `status=${JSON.stringify(refusedD?.status)} buttons=${JSON.stringify(refusedD?.buttons.map((b) => b.text))} height ${rowD?.height} → ${refusedD?.height}`,
-  )
-  await new Promise((resolve) => setTimeout(resolve, 900))
+  const joinedD = await qrClickAndSee(app, stub, conversation, QR_DEFAULTS[2], `q${QR_DEFAULTS[2]}`)
   const afterD = await qrSize(app, stub, conversation)
-  check(results, '[quick-replies] the refused click writes nothing', qrInput(stub, conversation).bytes === bytesD, `wrote=${JSON.stringify(qrInput(stub, conversation).bytes.slice(bytesD.length))}`)
   check(
     results,
-    '[quick-replies] the refusal does not resize the terminal',
+    '[quick-replies] a letter typed after the last submit: the click is sent, joining it, with no line in place of the buttons',
+    joinedD.line === `q${QR_DEFAULTS[2]}` && joinedD.status === null,
+    `last line=${JSON.stringify(joinedD.line)} status=${JSON.stringify(joinedD.status)}`,
+  )
+  check(
+    results,
+    '[quick-replies] the click after typing does not resize the terminal',
     beforeD.equal && afterD.equal && afterD.logged === beforeD.logged && afterD.hostH === beforeD.hostH,
     `before ${qrSizeText(beforeD)} / after ${qrSizeText(afterD)}`,
   )
-  const anywayD = refusedD?.status === copy('quickReplies.refused.typed')
-    ? await qrSendAnyway(app, stub, conversation, profile, sessionId, `q${QR_DEFAULTS[2]}`)
-    : null
-  check(results, '[quick-replies] send anyway, with nothing typed since the warning, sends the sentence', anywayD === `q${QR_DEFAULTS[2]}`, `last line=${JSON.stringify(anywayD)}`)
-  if (anywayD === null) await qrRecover(app, stop)
+  if (joinedD.status !== null) await qrDismiss(app)
+  await stop()
+  await qrAwaitButtons(app)
 
   // ── The user's own prompt, then busy: a click is sent; a second click while busy is sent too ──
   await qrFocusTerminal(app)
@@ -3158,68 +3102,8 @@ async function runQuickReplies(_mode, _config, context) {
   await stop()
   await qrAwaitButtons(app)
 
-  // ── A letter typed while busy, then the turn ends: refused ──
-  await app.client.send('Input.insertText', { text: 'QR-BUSY' })
-  await pressKey(app.client, 'Enter')
-  await pollFor({ read: () => qrInput(stub, conversation).lines, settled: (l) => l.at(-1) === 'QR-BUSY', timeoutMs: 8_000, label: 'a prompt makes the agent busy' })
-  await qrAwaitWorking(app)
-  await app.client.send('Input.insertText', { text: 'w' })
-  await pollFor({ read: () => qrInput(stub, conversation).bytes, settled: (b) => b.endsWith('w'), timeoutMs: 5_000, label: 'the letter typed while busy reaches the pty' })
-  await stop()
-  await pollFor({
-    read: () => app.client.evaluate(QR_TAB_TITLE),
-    settled: (title) => !title.includes(WORKING) && (title.includes(WAITING) || title.includes(IDLE)),
-    timeoutMs: 10_000,
-    label: 'the turn has ended',
-  })
-  await qrClick(app, QR_DEFAULTS[2])
-  const refusedF = await pollFor({ read: () => app.client.evaluate(qrState()), settled: (s) => s?.status !== null, timeoutMs: 8_000, label: 'a line takes the buttons\' place' })
-  check(
-    results,
-    '[quick-replies] a letter typed while the agent worked, then the turn ended: the click is refused',
-    refusedF?.status === copy('quickReplies.refused.typed'),
-    `status=${JSON.stringify(refusedF?.status)} last line=${JSON.stringify(qrInput(stub, conversation).lines.at(-1))}`,
-  )
-  if (refusedF?.status === copy('quickReplies.refused.typed')) await qrSendAnyway(app, stub, conversation, profile, sessionId, `w${QR_DEFAULTS[2]}`)
-  else await qrRecover(app, stop)
-
-  // ── A letter typed, then a background task's notice: refused ──
-  await app.client.send('Input.insertText', { text: 'e' })
-  await pollFor({ read: () => qrInput(stub, conversation).bytes, settled: (b) => b.endsWith('e'), timeoutMs: 5_000, label: 'the letter reaches the pty' })
-  await qrAwaitReported(stub, conversation)
-  await qrFire(profile, sessionId, QR_NOTICE, { hook_event_name: 'Stop' })
-  await qrClick(app, QR_DEFAULTS[0])
-  const refusedG = await pollFor({ read: () => app.client.evaluate(qrState()), settled: (s) => s?.status !== null, timeoutMs: 8_000, label: 'a line takes the buttons\' place' })
-  check(
-    results,
-    '[quick-replies] a letter typed, then a background task notice reported as a submission: the click is refused',
-    refusedG?.status === copy('quickReplies.refused.typed'),
-    `status=${JSON.stringify(refusedG?.status)}`,
-  )
-  if (refusedG?.status === copy('quickReplies.refused.typed')) await qrSendAnyway(app, stub, conversation, profile, sessionId, `e${QR_DEFAULTS[0]}`)
-  else await qrRecover(app, stop)
-
-  // The notice must not confirm an Enter either: a letter and an Enter the agent reported no submission for (as for a
-  // typed `!cmd`), then a notice. Counting the notice as a submission would take that Enter as submitted.
-  stub.command(conversation, stub.silentLine())
-  await pollFor({ read: () => stub.held(conversation), settled: (v) => v === true, timeoutMs: 5_000, label: 'the stub will not report the next line' })
-  await app.client.send('Input.insertText', { text: 'n' })
-  await pressKey(app.client, 'Enter')
-  await pollFor({ read: () => stub.held(conversation), settled: (v) => v === false, timeoutMs: 5_000, label: 'the unreported line arrived' })
-  await qrAwaitReported(stub, conversation)
-  await qrFire(profile, sessionId, QR_NOTICE, { hook_event_name: 'Stop' })
-  await qrClick(app, QR_DEFAULTS[1])
-  const refusedG2 = await pollFor({ read: () => app.client.evaluate(qrState()), settled: (s) => s?.status !== null, timeoutMs: 8_000, label: 'a line takes the buttons\' place' })
-  check(
-    results,
-    '[quick-replies] a notice does not confirm an unreported Enter: the click is refused',
-    refusedG2?.status === copy('quickReplies.refused.typed'),
-    `status=${JSON.stringify(refusedG2?.status)}`,
-  )
-  if (refusedG2?.status === copy('quickReplies.refused.typed')) await qrSendAnyway(app, stub, conversation, profile, sessionId, QR_DEFAULTS[1])
-  else await qrRecover(app, stop)
-
-  // ── A permission request answered with a digit (no Enter), then the turn ends: refused, with send anyway ──
+  // ── A permission request answered with a digit (no Enter), then the turn ends: sent, with no warning ──
+  // The stub keeps the digit in its line (the real agent's prompt takes it); the click is what is checked.
   stub.command(conversation, 'fire PermissionRequest')
   await pollFor({
     read: () => app.client.evaluate(qrState()),
@@ -3229,44 +3113,17 @@ async function runQuickReplies(_mode, _config, context) {
   })
   await app.client.send('Input.insertText', { text: '1' })
   await pollFor({ read: () => qrInput(stub, conversation).bytes, settled: (b) => b.endsWith('1'), timeoutMs: 5_000, label: 'the digit reaches the pty' })
+  await qrFire(profile, sessionId, { hook_event_name: 'Stop' })
+  await qrAwaitButtons(app)
+  const sentH = await qrClickAndSee(app, stub, conversation, QR_DEFAULTS[2], `1${QR_DEFAULTS[2]}`)
+  check(
+    results,
+    '[quick-replies] a prompt answered with a key in the terminal, then the turn ended: the click is sent, with no warning',
+    sentH.line === `1${QR_DEFAULTS[2]}` && sentH.status === null,
+    `last line=${JSON.stringify(sentH.line)} status=${JSON.stringify(sentH.status)}`,
+  )
+  if (sentH.status !== null) await qrDismiss(app)
   await stop()
-  await qrAwaitButtons(app)
-  await qrClick(app, QR_DEFAULTS[2])
-  const refusedH = await pollFor({ read: () => app.client.evaluate(qrState()), settled: (s) => s?.status !== null, timeoutMs: 8_000, label: 'a line takes the buttons\' place' })
-  check(
-    results,
-    '[quick-replies] a prompt answered with a key in the terminal, then the turn ended: the click is refused, offering send anyway',
-    refusedH?.status === copy('quickReplies.refused.typed') && refusedH.buttons.some((b) => b.text === copy('quickReplies.sendAnyway')),
-    `status=${JSON.stringify(refusedH?.status)} buttons=${JSON.stringify(refusedH?.buttons.map((b) => b.text))}`,
-  )
-  if (refusedH?.status === copy('quickReplies.refused.typed')) await qrSendAnyway(app, stub, conversation, profile, sessionId, `1${QR_DEFAULTS[2]}`)
-  else await qrRecover(app, stop)
-
-  // ── A letter typed, the request answered with Enter (no submission reported), then a notice: refused ──
-  await app.client.send('Input.insertText', { text: 'r' })
-  await pollFor({ read: () => qrInput(stub, conversation).bytes, settled: (b) => b.endsWith('r'), timeoutMs: 5_000, label: 'the letter reaches the pty' })
-  stub.command(conversation, stub.heldPermission())
-  await pollFor({
-    read: () => app.client.evaluate(qrState()),
-    settled: (state) => state !== null && state.sentences.length > 0 && state.buttons.filter((b) => state.sentences.includes(b.label)).every((b) => b.disabled),
-    timeoutMs: 15_000,
-    label: 'the agent asks for a choice (the window has drained it)',
-  })
-  await pressKey(app.client, 'Enter')
-  const answered = await pollFor({ read: () => stub.held(conversation), settled: (v) => v === false, timeoutMs: 5_000, label: 'the Enter answered the request' })
-  await qrAwaitReported(stub, conversation)
-  await qrFire(profile, sessionId, QR_NOTICE, { hook_event_name: 'Stop' })
-  await qrAwaitButtons(app)
-  await qrClick(app, QR_DEFAULTS[0])
-  const refusedI = await pollFor({ read: () => app.client.evaluate(qrState()), settled: (s) => s?.status !== null, timeoutMs: 8_000, label: 'a line takes the buttons\' place' })
-  check(
-    results,
-    '[quick-replies] a letter typed, the prompt answered with Enter, then a notice: the click is refused',
-    answered === false && refusedI?.status === copy('quickReplies.refused.typed'),
-    `answered=${answered === false} status=${JSON.stringify(refusedI?.status)} last line=${JSON.stringify(qrInput(stub, conversation).lines.at(-1))}`,
-  )
-  if (refusedI?.status === copy('quickReplies.refused.typed')) await qrSendAnyway(app, stub, conversation, profile, sessionId, QR_DEFAULTS[0])
-  else await qrRecover(app, stop)
 
   // ── A key typed within the half second after the text: the submit key is withheld, and the row says so ──
   await qrFocusTerminal(app)

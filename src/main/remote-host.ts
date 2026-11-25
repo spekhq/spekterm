@@ -14,7 +14,7 @@ import {
 } from './agent-wait'
 import type { FinishedCall, WaitState } from './agent-events'
 import { busyReason } from './hibernation-policy'
-import { keystrokeSeq, lastDecisiveAt, lastKeystrokeAt, noteSubmitted } from './pty-input'
+import { keystrokeSeq, lastDecisiveAt, lastKeystrokeAt } from './pty-input'
 import { promptView, writeAnswer } from './remote-answer'
 import { startFollow } from './conversation-follow'
 import { readBriefFor } from './handoff-brief'
@@ -352,8 +352,6 @@ export function createRemoteHost(deps: HostDeps): RemoteHost {
           delay,
           submitDelayMs: SUBMIT_KEY_DELAY_MS,
           armOrigin: (id) => (deps.armOrigin ?? armOrigin)(id),
-          // Rule 2 of `quick-replies` D2: a phone's submitted reply empties the box too.
-          noteSubmitted,
           armModel: (id, name) => (deps.armModel ?? armModelSwitch)(id, name),
           // Any unconfirmed fill, listed or not, edited or not (`remote-prefill-send` D5).
           prefillPending: (id) => {

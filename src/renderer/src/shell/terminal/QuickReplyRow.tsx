@@ -9,7 +9,6 @@ import { useAttention } from './wait'
 
 /** What takes the buttons' place in the row: a refusal or the not-sent notice (`quick-replies` D5). */
 type Notice =
-  | { kind: 'typed'; sentence: string; seq: number }
   | { kind: 'reason'; text: string; attention: Attention | undefined }
   | { kind: 'notSent'; attention: Attention | undefined }
 
@@ -30,9 +29,8 @@ export function QuickReplyRow({ sessionId, dormant }: { sessionId: string; dorma
   const [pending, setPending] = useState<string | null>(null)
   const [notice, setNotice] = useState<Notice | null>(null)
 
-  // A refusal for the agent's state and the not-sent notice go when the state next changes; a typing refusal stays
-  // until the user sends anyway or dismisses it. Adjusted during render, not in an effect.
-  if (notice && notice.kind !== 'typed' && notice.attention !== attention) setNotice(null)
+  // A refusal and the not-sent notice go when the agent's state next changes. Adjusted during render, not in an effect.
+  if (notice && notice.attention !== attention) setNotice(null)
 
   if (quickReplies.length === 0) return null
 
@@ -44,13 +42,13 @@ export function QuickReplyRow({ sessionId, dormant }: { sessionId: string; dorma
         ? t('quickReplies.refused.unknown')
         : null
 
-  const send = (sentence: string, typedSeq?: number): void => {
+  const send = (sentence: string): void => {
     if (pending !== null) return
     setPending(sentence)
     setNotice(null)
     void window.workspace.conversation
-      .quickReply(sessionId, sentence, typedSeq)
-      .then((result) => setNotice(noticeOf(result, sentence, attention, t)))
+      .quickReply(sessionId, sentence)
+      .then((result) => setNotice(noticeOf(result, attention, t)))
       .catch(() => setNotice({ kind: 'reason', text: t('quickReplies.refused.badParams'), attention }))
       .finally(() => setPending(null))
   }
@@ -66,13 +64,8 @@ export function QuickReplyRow({ sessionId, dormant }: { sessionId: string; dorma
       {notice ? (
         <>
           <span role="status" className="min-w-0 truncate text-xs text-ink-faint">
-            {notice.kind === 'typed' ? t('quickReplies.refused.typed') : notice.kind === 'notSent' ? t('quickReplies.notSent') : notice.text}
+            {notice.kind === 'notSent' ? t('quickReplies.notSent') : notice.text}
           </span>
-          {notice.kind === 'typed' && (
-            <button type="button" className={BUTTON} onMouseDown={keepFocus} onClick={() => send(notice.sentence, notice.seq)}>
-              {t('quickReplies.sendAnyway')}
-            </button>
-          )}
           <button type="button" className={BUTTON} onMouseDown={keepFocus} onClick={() => setNotice(null)}>
             {t('quickReplies.dismiss')}
           </button>
@@ -109,11 +102,9 @@ export function QuickReplyRow({ sessionId, dormant }: { sessionId: string; dorma
   )
 }
 
-function noticeOf(result: QuickReplyResult, sentence: string, attention: Attention | undefined, t: TFunction): Notice | null {
+function noticeOf(result: QuickReplyResult, attention: Attention | undefined, t: TFunction): Notice | null {
   if (result.ok) return result.outcome === 'submitted' ? null : { kind: 'notSent', attention }
   switch (result.code) {
-    case 'TYPED':
-      return { kind: 'typed', sentence, seq: result.seq ?? 0 }
     case 'WAIT_STATE':
       return {
         kind: 'reason',

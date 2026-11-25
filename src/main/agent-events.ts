@@ -241,12 +241,6 @@ export interface AgentEvent {
   backgroundTasks: BackgroundTask[] | null
   /** `PreCompact`'s `trigger` (`manual` for the user's `/compact`, `auto`). */
   trigger: string | null
-  /**
-   * A `UserPromptSubmit` whose prompt starts with `<task-notification>`: a finished background task's notice, which the
-   * CLI reports as a submission though nothing was typed (measured CLI 2.1.330, `docs/lessons/transcript.md`). Only this
-   * fact of the prompt is kept, not the prompt (`quick-replies` D2).
-   */
-  notice: boolean
 }
 
 function str(value: unknown): string | null {
@@ -407,7 +401,6 @@ export function parseEvent(raw: unknown): AgentEvent | null {
     backgroundAgentRunning: name === 'Stop' && backgroundAgentRunning(o.background_tasks),
     backgroundTasks: name === 'Stop' || name === 'SubagentStop' ? backgroundTasks(o.background_tasks) : null,
     trigger: name === 'PreCompact' ? str(o.trigger) : null,
-    notice: name === 'UserPromptSubmit' && typeof o.prompt === 'string' && o.prompt.startsWith('<task-notification>'),
   }
 }
 
@@ -603,11 +596,6 @@ export interface DrainResult {
   /** Tool calls that ended in the batch. */
   finished: FinishedCall[]
   /**
-   * The event times of the agent's own `UserPromptSubmit`s in the batch that are not a background task's notice, in
-   * order: what may confirm an Enter as a submission (`pty-input.ts` `confirmSubmit`, `quick-replies` D2).
-   */
-  ownSubmitsAt: number[]
-  /**
    * The held background tasks differ after the batch, order included (`remote-background-tasks` D6). **Not derivable
    * from `state`**: a `SubagentStop` moves no wait state.
    */
@@ -791,7 +779,6 @@ export function drainEvents(sessionId: string, held: HeldWait = heldWait(), opti
   const result = {
     choicesRaised: [] as DrainResult['choicesRaised'],
     finished: [] as FinishedCall[],
-    ownSubmitsAt: [] as number[],
   }
   const backgroundBefore = JSON.stringify(next.background)
   const finish = (transcriptPath: string | null, count: number, turnEnded: boolean, sessionStarted = false): DrainResult => ({
@@ -803,7 +790,6 @@ export function drainEvents(sessionId: string, held: HeldWait = heldWait(), opti
     sessionStarted,
     choicesRaised: result.choicesRaised,
     finished: result.finished,
-    ownSubmitsAt: result.ownSubmitsAt,
     backgroundChanged: JSON.stringify(next.background) !== backgroundBefore,
     held: next,
   })
@@ -838,9 +824,7 @@ export function drainEvents(sessionId: string, held: HeldWait = heldWait(), opti
     }
     if (!event) continue
     count += 1
-    const at = fileTimeOf(name) ?? Date.now()
-    apply(next, event, at, newId, result)
-    if (event.name === 'UserPromptSubmit' && event.agentId === null && !event.notice) result.ownSubmitsAt.push(at)
+    apply(next, event, fileTimeOf(name) ?? Date.now(), newId, result)
     if (event.name === 'Stop') turnEnded = true
     if (event.name === 'SessionStart' && event.source !== 'compact') sessionStarted = true
     if (event.transcriptPath) transcriptPath = event.transcriptPath

@@ -6,12 +6,12 @@
  * break or other control character. A list: valid sentences, at most 12, no two equal after trimming.
  */
 
-export type QuickReplyCode = 'WAIT_STATE' | 'PREFILL_PENDING' | 'TYPED' | 'NOT_FOUND' | 'BAD_PARAMS'
+export type QuickReplyCode = 'WAIT_STATE' | 'PREFILL_PENDING' | 'NOT_FOUND' | 'BAD_PARAMS'
 
-/** What the main process answers a quick reply (`quick-replies` D3). `state` is a wait state; `seq` a keystroke count. */
+/** What the main process answers a quick reply (`quick-replies` D3). `state` is a wait state. */
 export type QuickReplyResult =
   | { ok: true; outcome: 'submitted' | 'filled-not-submitted' }
-  | { ok: false; code: QuickReplyCode; state?: 'ready' | 'busy' | 'awaiting-choice' | 'unknown'; seq?: number }
+  | { ok: false; code: QuickReplyCode; state?: 'ready' | 'busy' | 'awaiting-choice' | 'unknown' }
 
 export const QUICK_REPLY_MAX_LENGTH = 200
 export const QUICK_REPLY_MAX_COUNT = 12
