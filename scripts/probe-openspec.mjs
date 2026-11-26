@@ -40,6 +40,7 @@ import { quitAndWait } from './lib/quit.mjs'
 import { runSections } from './lib/sections.mjs'
 import { PROBE_PORTS } from './lib/ports.mjs'
 import { seedLanguage } from './lib/probe-language.mjs'
+import { startRendererDevServer } from './lib/renderer-dev-server.mjs'
 
 const BUILD_PORT = PROBE_PORTS.openspec.build
 const DEV_PORT = PROBE_PORTS.openspec.dev
@@ -402,34 +403,6 @@ function seedProfile(folders, panel) {
 }
 
 // ── app 啟動 ────────────────────────────────────────────────────────────────
-
-const ANSI_PATTERN = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, 'g')
-const stripAnsi = (text) => text.replace(ANSI_PATTERN, '')
-
-async function startRendererDevServer() {
-  const child = spawn('npx', ['electron-vite', 'dev', '--rendererOnly'], {
-    stdio: ['ignore', 'pipe', 'pipe'],
-    env: process.env,
-    detached: true,
-  })
-
-  const url = await new Promise((resolve, reject) => {
-    let output = ''
-    const timer = setTimeout(() => reject(new Error('renderer dev server 未就緒')), 90_000)
-    const onData = (chunk) => {
-      output += stripAnsi(String(chunk))
-      const match = output.match(/Local:\s+(http:\/\/[^\s/]+\/?)/)
-      if (match) {
-        clearTimeout(timer)
-        resolve(match[1].replace(/\/$/, ''))
-      }
-    }
-    child.stdout.on('data', onData)
-    child.stderr.on('data', onData)
-  })
-
-  return { child, url }
-}
 
 async function launch({ port, profileDir, rendererUrl, stub }) {
   // 被測 app 的語言是**被指定的**：全新的 profile 會觸發首次啟動的語言偵測，

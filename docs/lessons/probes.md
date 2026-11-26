@@ -32,6 +32,17 @@
 - **`probe:files` 自己起 renderer dev server（`--rendererOnly`）再自己 spawn electron** ——
   `electron-vite dev` 產生的 electron 是孫行程，殺 `npx` 殺不到（留下佔 port 的殭屍），且它轉發 CLI
   參數的 `ELECTRON_CLI_ARGS` 實測未生效，探針會讀到你真實的 workspace 設定。
+- **`--rendererOnly` does not stop electron-vite from starting an Electron of its own.** It only
+  skips building main and preload; electron-vite 5 then calls `startElectron()` anyway. That
+  Electron has no `--user-data-dir`, so for the whole of a probe's dev mode it ran the previous
+  build **on the maintainer's real profile**: it restored the real workspace, started every session
+  marked running with the real `claude --resume` (a second live process per conversation, writing
+  the same transcripts, seen in `ListAgents` as same-named copies during a `test:e2e`), and read
+  the real drop points and team connection. The probe's own Electron was isolated, so nothing
+  turned red. **A probe starts the dev server only through `scripts/lib/renderer-dev-server.mjs`**
+  (`scripts/renderer-dev-server-source.test.mjs`): it points `ELECTRON_EXEC_PATH` / `ELECTRON_ENTRY`
+  at Node and a holder script that only waits, and hands out no dev server until the holder's line
+  arrives — if a later electron-vite ignores those variables, the probe fails there instead.
 - **`probe:workspace` 以 `--user-data-dir` 指向暫存 profile**，因此可反覆重啟、餵它損毀的設定檔。
 - **`scripts/probe-*.mjs` 一律透過 CDP 或真 Electron 主行程驗收，不在產品程式碼裡塞測試分支** ——
   要驗的正是被出貨的那份。撰寫 Electron ESM 主行程時**不可 top-level `await app.whenReady()`**

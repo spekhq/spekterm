@@ -34,6 +34,7 @@ import { electronExtraArgs } from './lib/display.mjs'
 import { quitAndWait } from './lib/quit.mjs'
 import { PROBE_PORTS } from './lib/ports.mjs'
 import { seedLanguage } from './lib/probe-language.mjs'
+import { startRendererDevServer } from './lib/renderer-dev-server.mjs'
 import { showSection } from './lib/settings.mjs'
 
 const BUILD_PORT = PROBE_PORTS.files.build
@@ -126,49 +127,6 @@ function seedProfile(folders) {
 }
 
 // ── app 啟動 ────────────────────────────────────────────────────────────────
-
-// vite 的輸出帶顏色。以 fromCharCode 組出 ESC，避免在 regex 字面量裡放控制字元。
-const ANSI_PATTERN = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, 'g')
-const stripAnsi = (text) => text.replace(ANSI_PATTERN, '')
-
-/**
- * 開發模式只起 renderer 的 dev server，electron 由探針自己 spawn。
- *
- * 不用 `electron-vite dev` 直接把 electron 拉起來：它產生的 electron 是**孫行程**，
- * 殺掉 `npx` 殺不到它（實測留下殭屍行程佔著 debugging port）；而它轉發 CLI 參數的管道
- * （`ELECTRON_CLI_ARGS`）在本機實測未生效 —— `--user-data-dir` 沒進到 electron 的 argv，
- * 探針因此會讀到開發者真實的 workspace 設定。
- *
- * 自己 spawn 則兩者皆可控，且驗的仍是真正的開發模式載入路徑：主行程看到
- * `ELECTRON_RENDERER_URL` 就會 `loadURL(http://…)`，worker 走 dev server 而非 `file://`。
- */
-async function startRendererDevServer() {
-  // `detached: true` 讓 npx 成為新的 process group leader —— `npx` 會 spawn `node`、
-  // `node` 再 spawn vite，殺 npx（SIGTERM）殺不到底下的 vite（同 `.bin/electron` 的孫行程
-  // 問題）。整組同一個 pgid 之後，收尾時 `process.kill(-pid)` 就能連根拔除。
-  const child = spawn('npx', ['electron-vite', 'dev', '--rendererOnly'], {
-    stdio: ['ignore', 'pipe', 'pipe'],
-    env: process.env,
-    detached: true,
-  })
-
-  const url = await new Promise((resolve, reject) => {
-    let output = ''
-    const timer = setTimeout(() => reject(new Error('renderer dev server 未就緒')), 90_000)
-    const onData = (chunk) => {
-      output += stripAnsi(String(chunk))
-      const match = output.match(/Local:\s+(http:\/\/[^\s/]+\/?)/)
-      if (match) {
-        clearTimeout(timer)
-        resolve(match[1].replace(/\/$/, ''))
-      }
-    }
-    child.stdout.on('data', onData)
-    child.stderr.on('data', onData)
-  })
-
-  return { child, url }
-}
 
 async function launch({ port, profileDir, rendererUrl }) {
   // 被測 app 的語言是**被指定的**：全新的 profile 會觸發首次啟動的語言偵測，
