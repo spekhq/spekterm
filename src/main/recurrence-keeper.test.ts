@@ -319,6 +319,33 @@ describe('occurrences (D2)', () => {
     assert.deepEqual(times(r.upcoming()), [local(2026, 10, 23, 9)])
   })
 
+  it('an occurrence held for the agent service across three hourly times opens once, and the next is after now (handoff-waits-for-network)', async () => {
+    const w = world()
+    const proposal = await w.propose({ repeat: '0 * * * *' })
+    w.keeper.approve(HANDOFF_ADAPTER, proposal.id, 'f2')
+    const answer = { reachable: false }
+    const opened: string[] = []
+    // The keeper asks the world's opener what it requested; this opener's requests count as live tickets instead.
+    const opener = testOpener(w.service, () => w.folders, (_a, id) => (opened.push(id), w.live.add(id)), {
+      now: () => w.clock.now,
+      keeper: w.keeper,
+      reachable: async () => answer.reachable,
+    })
+    opener.tick() // the start look: nothing due yet
+    for (let hour = 1; hour <= 3; hour += 1) {
+      w.clock.now = MONDAY + hour * HOUR + MINUTE
+      opener.tick()
+      await opener.settled()
+    }
+    assert.deepEqual(opened, [])
+    assert.equal(w.upcoming().length, 1, 'no occurrence piles up behind the held one')
+    answer.reachable = true
+    opener.tick()
+    await opener.settled()
+    assert.equal(opened.length, 1)
+    assert.deepEqual(times(w.upcoming()), [MONDAY + 4 * HOUR])
+  })
+
   it('Run now on Tuesday for Wednesday leaves the Wednesday after', async () => {
     const w = world()
     await weekly(w)

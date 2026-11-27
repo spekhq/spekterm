@@ -32,6 +32,7 @@ import { helloRemote, openRemote, pairRemote, parsePairingLink } from './lib/rem
 import { runSections } from './lib/sections.mjs'
 import { showSection } from './lib/settings.mjs'
 import { makeStubAgent } from './lib/stub-agent.mjs'
+import { startStubAgentService, withStubAgentService } from './lib/stub-agent-service.mjs'
 
 const PORT = PROBE_PORTS.remote.main
 const RESTART_PORT = PROBE_PORTS.remote.restart
@@ -83,17 +84,24 @@ function seedProfile(repos, { remote, preferences, extraFolders = [] } = {}) {
   return profile
 }
 
+/** The stand-in for the agent's service (`handoff-waits-for-network`), started with the first launch. */
+let agentService = null
+
 async function launch({ profile, stub, configDir, port = PORT }) {
   seedLanguage(profile)
   const child = spawn('electron', [`--remote-debugging-port=${port}`, `--user-data-dir=${profile}`, ...electronExtraArgs(), '.'], {
     stdio: ['ignore', 'pipe', 'pipe'],
-    env: {
-      ...process.env,
-      SHELL: '/bin/sh',
-      CLAUDE_CONFIG_DIR: configDir,
-      HOME: stub.home,
-      PATH: `${stub.bin}:${process.env.PATH}`,
-    },
+    // The handoff opener checks the agent's service before opening (`handoff-waits-for-network`): a local stand-in.
+    env: withStubAgentService(
+      {
+        ...process.env,
+        SHELL: '/bin/sh',
+        CLAUDE_CONFIG_DIR: configDir,
+        HOME: stub.home,
+        PATH: `${stub.bin}:${process.env.PATH}`,
+      },
+      (agentService ??= await startStubAgentService()),
+    ),
   })
   let output = ''
   let closing = false

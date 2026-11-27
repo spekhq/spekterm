@@ -34,8 +34,11 @@ export interface PreferencesApi {
    * 設定介面必須說明，否則使用者會以為這個開關壞了。
    */
   updateAgentStatus: (enabled: boolean | null) => Promise<void>
+  updateHandoffNetworkCheck: (enabled: boolean | null) => Promise<void>
   /** 狀態橋接當下是否**應該**啟用 —— 未設定即為啟用（同 `gpuEnabled`）。 */
   agentStatusEnabled: boolean
+  /** Automatic handoff openings wait for the agent's service (`handoff-waits-for-network`). Unset = on. */
+  handoffNetworkCheck: boolean
   /** The automatic update check (`app-update`). `null` = the default (on), `false` = off. Callers await it. */
   updateAutoUpdateCheck: (enabled: false | null) => Promise<void>
   /** Whether the update check runs on its own — **unset is on**, the same rule as `gpuEnabled`. */
@@ -161,6 +164,12 @@ export function PreferencesProvider({ children }: { children: React.ReactNode })
     [enqueue],
   )
 
+  const updateHandoffNetworkCheck = useCallback(
+    (enabled: boolean | null) =>
+      enqueue(() => window.workspace.settings.setHandoffNetworkCheck(enabled)).then(() => undefined),
+    [enqueue],
+  )
+
   const updateAutoUpdateCheck = useCallback(
     (enabled: false | null) =>
       enqueue(() => window.workspace.settings.setAutoUpdateCheck(enabled)).then(() => undefined),
@@ -222,6 +231,7 @@ export function PreferencesProvider({ children }: { children: React.ReactNode })
       updateTerminalFont,
       updateGpuAcceleration,
       updateAgentStatus,
+      updateHandoffNetworkCheck,
             updateAgentView,
       updateLanguage,
       updateAutoHibernate,
@@ -239,6 +249,7 @@ export function PreferencesProvider({ children }: { children: React.ReactNode })
       gpuEnabled: terminal.gpuAcceleration ?? true,
       // 未設定＝啟用（與 GPU 加速同一條規則）。
       agentStatusEnabled: terminal.agentStatus !== false,
+      handoffNetworkCheck: terminal.handoffNetworkCheck !== false,
       // 未設定＝終端（同一條規則，見上方的欄位說明）。
       agentView: terminal.agentView ?? 'terminal',
     }),
@@ -247,6 +258,7 @@ export function PreferencesProvider({ children }: { children: React.ReactNode })
       updateTerminalFont,
       updateGpuAcceleration,
       updateAgentStatus,
+      updateHandoffNetworkCheck,
             updateAgentView,
       updateLanguage,
       updateAutoHibernate,

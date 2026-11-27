@@ -199,6 +199,9 @@ const PROBE_EXPRESSION = `(async () => {
           'setTerminalFont',
           'setGpuAcceleration',
           'setAgentStatus',
+          // setHandoffNetworkCheck (handoff-waits-for-network, terminal-preferences): a boolean the store takes as
+          // off or the default; no path vocabulary.
+          'setHandoffNetworkCheck',
           'setAgentView',
                     'setLanguage',
           'setAutoHibernate',

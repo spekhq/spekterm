@@ -39,6 +39,12 @@ export interface TerminalPreferences {
    */
   agentEvents?: boolean
   /**
+   * Whether automatic handoff openings first check that the agent's service can be reached
+   * (`handoff-waits-for-network`). **Unset = on**, as the switches above. Off is the way out for setups spekterm
+   * cannot see — a provider chosen in Claude Code's own settings files, a proxy set only in the shell.
+   */
+  handoffNetworkCheck?: boolean
+  /**
    * agent session 以哪一種 view 呈現（`agent-conversation-view`）。**未設定＝終端**。
    *
    * **它是全域的，不是 per-session** —— 使用者同時開著數個 agent session 時從不希望它們不一樣，
@@ -251,6 +257,7 @@ const PREFERENCE_FIELDS = {
   gpuAcceleration: { sanitize: sanitizeBoolean, group: 'other', toRenderer: true },
   agentStatus: { sanitize: sanitizeBoolean, group: 'other', toRenderer: true },
   agentEvents: { sanitize: sanitizeBoolean, group: 'other', toRenderer: false },
+  handoffNetworkCheck: { sanitize: sanitizeBoolean, group: 'other', toRenderer: true },
     agentView: { sanitize: sanitizeAgentView, group: 'other', toRenderer: true },
   autoHibernateSeconds: { sanitize: sanitizeHibernateSeconds, group: 'other', toRenderer: true },
   quickReplies: { sanitize: cleanQuickReplies, group: 'other', toRenderer: true },
@@ -660,6 +667,16 @@ export class PreferencesStore {
     const next: TerminalPreferences = { ...this.preferences }
     if (enabled === null) delete next.agentStatus
     else next.agentStatus = enabled
+
+    this.commit({ terminal: next })
+    return this.get()
+  }
+
+  /** The handoff network check (`handoff-waits-for-network`). `null` = clear (back to the default, on). */
+  setHandoffNetworkCheck(enabled: boolean | null): TerminalPreferences {
+    const next: TerminalPreferences = { ...this.preferences }
+    if (enabled === null) delete next.handoffNetworkCheck
+    else next.handoffNetworkCheck = enabled
 
     this.commit({ terminal: next })
     return this.get()

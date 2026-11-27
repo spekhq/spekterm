@@ -1218,7 +1218,8 @@ label as plain text and never as a link.
 
 The inbox list SHALL carry, for a scheduled handoff that has not been opened yet, the time it is scheduled for
 (`scheduledAt`, in the list's time unit). An item without that field is not scheduled. The time can be in the
-past: the handoff is due and opens as soon as a window on the desktop can receive it. A client SHALL be able
+past: the handoff is due and opens as soon as a window on the desktop can receive it and the desktop can reach
+the agent's service (`scheduled-handoff`); while it cannot, the item stays as it is, with its time in the past. A client SHALL be able
 to tell scheduled handoffs from items waiting for the user from the list alone.
 
 Accepting a scheduled handoff from a device SHALL open it at once: it follows the desktop's accept ("Inbox

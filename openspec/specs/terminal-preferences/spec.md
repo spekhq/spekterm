@@ -135,7 +135,8 @@ The interface SHALL be organized in sections, listed beside the content, with on
 - **Terminal**: font family, font size and line height, with the preview directly after them, and GPU
   acceleration.
 - **Agents & sessions**: agent status reporting, automatic hibernation, the agent session view (see
-  `agent-conversation-view`), and the quick replies (see `quick-replies`).
+  `agent-conversation-view`), the quick replies (see `quick-replies`), and whether automatic handoff openings wait
+  until the agent's service can be reached (see `scheduled-handoff`).
 - **Integrations**: the Slack connection (see `slack-intake-source`).
 - **Team**: being on a spekterm-server team (see `team-membership`).
 - **Remote access**: see "Settings holds the remote access controls".
@@ -573,8 +574,8 @@ The Terminal section and the Agents & sessions section SHALL each offer to resto
 their defaults:
 
 - Terminal: font family, font size, line height and GPU acceleration.
-- Agents & sessions: agent status reporting, automatic hibernation, the agent session view and the quick replies
-  (back to the defaults in the UI language, `quick-replies`).
+- Agents & sessions: agent status reporting, automatic hibernation, the agent session view, the quick replies
+  (back to the defaults in the UI language, `quick-replies`) and the handoff network check (back to on).
 
 Restoring SHALL first ask for confirmation in place, and SHALL change nothing if the user declines or presses
 Esc. It SHALL

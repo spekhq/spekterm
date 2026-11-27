@@ -753,3 +753,38 @@ recorded "1 萬字, then a file and a 2,000 preview" all along. The reviewer rep
   content's digest, and the dismissed record stays). The schedules file's rules say so; the fix is a changed title.
 - **The schedules file is written only after `configureHandoff`**: before it, `schedulesFile()` is empty, and a
   write that never throws would do nothing without a word. It logs an empty path.
+
+## 20. Waiting for the agent's service: what fails silently here (`handoff-waits-for-network`)
+
+- **The system's online flag is not the question.** A VPN keeps its interface up and addressed while the uplink is
+  gone (`tailscale0` on the maintainer's machine), and `net.isOnline()` answered `true` at every one of 110 readings,
+  5 s apart, taken across a dogfood run with Wi-Fi off (2026-11-27). In that run a handoff due at 10:04:29 stayed
+  pending and unfired until the network was back and opened then, at 10:11:14. The check is
+  a request to the origin the agent itself calls (`agentOrigin` over `ptyEnv()`), and **any HTTP status counts as
+  reachable**: a 404 or 401 proves DNS, routing and TLS work, which an offline laptop lacks.
+- **`net.fetch` with `redirect: 'manual'` rejects on a redirect** ("Redirect was cancelled", Electron 43.8.4): a
+  gateway whose root redirects would read as unreachable and hold its user's handoffs for good. The check uses
+  `net.request`, whose `redirect` event is an answer. A unit test with an injected function cannot see this; only the
+  probe's 302 step carries it.
+- **`close` is not an outcome of `net.request`.** A `HEAD` emits `close` *before* `response` (and before `error`):
+  the first version settled "unreachable" on `close` and failed every check, held every handoff for good — and the
+  unit tests, with an injected request, stayed green. `probe:intake runHeldForNetwork` found it (nothing opened once
+  the stand-in listened again). A refused connection or a name that does not resolve emits `error`; a dropped packet
+  emits nothing, which only the check's own timer catches (measured on Electron 43.8.4).
+- **Read what is due again after the check.** The check is asynchronous; during it the user may cancel, accept or run
+  a handoff. Firing the list read before the check opens a cancelled one (control group in `handoff-opener.test.ts`).
+- **An answer to a check sent before a sleep decides nothing** (`resumed()` bumps a generation): it may have been
+  answered by the network as it was before the lid closed — the very bug being fixed.
+- **Schedule the next release; do not wait for the tick.** Both `now` and `lastReleasedAt` are taken after a request
+  of varying latency, and the ticks are 30 s apart, so "the spacing has passed" read at ticks makes 15 s into 30 or
+  60 s.
+- **`changed()` only when the state's kind changes.** A field that moved every 30 s (a "last tried" time) would
+  re-list the inbox to every paired device, rewrite the schedules file and re-send the sessions at each look.
+  `waitingState()` is computed when the snapshot asks, so a cancel during a release updates the count without one.
+- **The probes stand in through `ANTHROPIC_BASE_URL`** (`scripts/lib/stub-agent-service.mjs`), the product's own
+  path; without it, every probe that opens a handoff would call the real API and fail offline. The launches drop
+  `CLAUDE_CODE_USE_*`, which would turn the check off. `--host-resolver-rules` cannot stand in: TLS to
+  `api.anthropic.com` then fails on the certificate, which is "unreachable".
+- **The introduction is unchanged**, so its "a time not later than now opens at once" holds only while the service
+  can be reached. An agent that writes a handoff cannot act on the network rule, and the introduction's budget is
+  tight (§16).

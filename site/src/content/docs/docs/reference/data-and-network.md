@@ -25,6 +25,15 @@ update check, and the programs it starts that make connections of their own.
   trustworthy as the GitHub release it comes from: the checksum it is verified against is published in the
   same release. See [Install → Updating](/docs/getting-started/install/#updating).
 
+- **Your agent's service, before a handoff opens by itself** — only while a handoff is due to open
+  automatically, spekterm sends one `HEAD` request to the service your agent uses: the address in
+  `ANTHROPIC_BASE_URL` if you set one, otherwise Anthropic's API. It carries no credentials, cookies or body,
+  only what any request from spekterm's browser engine carries (its name and version, your operating system,
+  your language). Any answer counts: spekterm only needs to know the network gets there. When your agent is set
+  to use Bedrock, Vertex or Foundry, there is no request. Turn it off with **Settings → Agents & sessions →
+  Wait for the agent's service before opening handoffs**. See
+  [Handoffs](/docs/using/handoffs/#handing-work-off-to-a-later-time).
+
 Nothing else. In particular, spekterm turns off the spell checker built into its browser engine, which would
 otherwise download a dictionary from a third-party server at startup.
 

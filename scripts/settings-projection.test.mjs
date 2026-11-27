@@ -66,6 +66,7 @@ const PROJECTION_RULES = [
       'get',
       'setTerminalFont',
       'setAgentStatus',
+      'setHandoffNetworkCheck',
             'setAgentView',
       'setGpuAcceleration',
       'setAutoHibernate',

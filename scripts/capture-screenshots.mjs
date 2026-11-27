@@ -46,6 +46,7 @@ import { quitAndWait } from './lib/quit.mjs'
 import { screenVerdict } from './lib/screen-check.mjs'
 import { makeStubAgent } from './lib/stub-agent.mjs'
 import { importPhoneSet } from './lib/phone-shots.mjs'
+import { startStubAgentService, withStubAgentService } from './lib/stub-agent-service.mjs'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const PORT = PROBE_PORTS.screenshots.main
@@ -626,6 +627,9 @@ async function awaitNewOutbox(profile, known, label) {
 
 // ── The app ────────────────────────────────────────────────────────────────────────────────────────
 
+/** The stand-in for the agent's service, started with the first launch. */
+let agentService = null
+
 async function launch(profile, stub, language) {
   const child = spawn(
     join(root, 'node_modules', '.bin', 'electron'),
@@ -635,7 +639,9 @@ async function launch(profile, stub, language) {
       ...electronExtraArgs(),
       '.',
     ],
-    { cwd: root, stdio: ['ignore', 'pipe', 'pipe'], env: fixtureEnv(stub.bin) },
+    // The handoff opener checks the agent's service before opening (`handoff-waits-for-network`): a local stand-in,
+    // so the handoff shots never reach the real API.
+    { cwd: root, stdio: ['ignore', 'pipe', 'pipe'], env: withStubAgentService(fixtureEnv(stub.bin), (agentService ??= await startStubAgentService())) },
   )
   let output = ''
   child.stdout.on('data', (chunk) => (output += chunk))

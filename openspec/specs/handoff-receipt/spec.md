@@ -92,8 +92,8 @@ would arrive as the agent's input and disturb what the user is looking at.
 
 A receipt SHALL be a JSON object naming the file it is for, the time it was written and one status:
 
-- `accepted` — for a handoff, its session is being opened (or will be as soon as a window can receive it,
-  `scheduled-handoff`). Opening is checked again when it happens, and a failure then (its target gone, agent
+- `accepted` — for a handoff, its session is being opened (or will be as soon as a window can receive it and the
+  agent's service can be reached, `scheduled-handoff`). Opening is checked again when it happens, and a failure then (its target gone, agent
   event reporting off) reaches the user only, not the receipt; for a report, it was adopted; for a session command, it was accepted to be carried out
   (a command can still fail or be dropped later, as `agent-session-control` rules, and the receipt does not
   follow that); **for a cancel (`handoff-cancel`), it was carried out**;

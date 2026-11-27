@@ -332,6 +332,20 @@ export function IntakeOverlay({
       </header>
 
       <div className="flex-1 px-4 py-3">
+        {/*
+          Why due handoffs have not opened (`handoff-waits-for-network`, design D5): above every tab, because a held
+          handoff is in the Schedules tab when scheduled and in the inbox when not.
+        */}
+        {snapshot.waitingForNetwork ? (
+          <p role="status" className="mb-3 rounded border border-hairline bg-shell px-3 py-2 text-2xs text-ink">
+            {snapshot.waitingForNetwork.kind === 'held'
+              ? t('intake.waitingForService', {
+                  time: formatDateTime(new Date(snapshot.waitingForNetwork.since), OCCURRED_FORMAT),
+                })
+              : t('intake.releasingBacklog', { count: snapshot.waitingForNetwork.remaining })}
+          </p>
+        ) : null}
+
         {failure ? (
           <p className="mb-3 rounded border border-hairline bg-shell px-3 py-2 text-2xs text-ink">
             {failure}

@@ -43,7 +43,15 @@ is always a new session, opened the same way as a handoff that opens immediately
   did, so it can judge what changed in between.
 - **A scheduled handoff waits quietly.** It sends no notification and adds no count to the inbox entry until
   it opens. Then it notifies you like any arriving handoff.
-- **Run now** opens it at once, and **Cancel** drops it. A paired phone can do both.
+- **It waits for the network, too.** Before any handoff opens by itself, spekterm checks that your agent's
+  service answers (see [Data and network](/docs/reference/data-and-network/)). Closed lid, no Wi-Fi yet, or no
+  network at all: the handoff keeps waiting, and the inbox says so, instead of opening an agent that cannot run.
+  It opens once the service answers. This applies to every handoff that opens by itself, scheduled or not.
+- **What piled up opens one at a time.** Handoffs that waited for the network, and handoffs found overdue when
+  spekterm starts, open oldest first, one every 15 seconds. A handoff that arrives meanwhile does not wait
+  behind them.
+- **Run now** opens it at once, and **Cancel** drops it. A paired phone can do both. Run now, and accepting an
+  item yourself, never wait for the network check.
 - The time must include a time zone and can be at most 30 days ahead. A time that has already passed opens
   at once.
 

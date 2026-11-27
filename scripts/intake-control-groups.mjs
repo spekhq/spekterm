@@ -35,6 +35,43 @@ const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..')
  * 沒有指名的話，一個「因為別的理由紅了」的 mutation 會被當成通過 —— 而那正是這支腳本要防的。
  */
 export const MUTATIONS = [
+  // ── handoff-waits-for-network ──
+  {
+    name: 'held-ignores-check',
+    section: 'runHeldForNetwork',
+    file: 'src/main/handoff-opener.ts',
+    from: `    const reachable = this.#deps.reachable\n    if (!reachable) {`,
+    to: `    const reachable = undefined as HandoffOpenerDeps['reachable']\n    if (!reachable) {`,
+    expectRed: 'a scheduled handoff due while the service cannot be reached does not open',
+    why: '**The opener that never asks**: a due handoff opens on a computer without a network, and its one automatic opening is spent on an agent that cannot run.',
+  },
+  {
+    name: 'only-2xx',
+    section: 'runHeldForNetwork',
+    file: 'src/main/agent-reachability-net.ts',
+    from: `  request.on('response', (response) => {\n    settle(true)`,
+    to: `  request.on('response', (response) => {\n    settle(response.statusCode >= 200 && response.statusCode < 300)`,
+    expectRed: 'only one held handoff opens at once',
+    why: '**A 404 read as unreachable**: an unauthenticated request to the real API answers 404, so every handoff would be held for good.',
+  },
+  {
+    name: 'redirect-unreachable',
+    section: 'runHeldForNetwork',
+    file: 'src/main/agent-reachability-net.ts',
+    from: `  request.on('redirect', () => {\n    settle(true)`,
+    to: `  request.on('redirect', () => {\n    settle(false)`,
+    expectRed: 'a redirect from the agent service counts as reachable',
+    why: '**A redirect read as unreachable** (what `net.fetch` with `redirect: manual` does): a gateway whose root redirects holds its user\'s handoffs for good.',
+  },
+  {
+    name: 'backlog-all-at-once',
+    section: 'runHeldForNetwork',
+    file: 'src/main/handoff-opener.ts',
+    from: `      if (this.#mode === 'held' || this.#atStart) {`,
+    to: `      if (false) {`,
+    expectRed: 'the second held handoff opens at least 15 s after the first',
+    why: '**What piled up opens together** (the user asked for one at a time): a woken laptop starts every waiting agent at once.',
+  },
   // ── handoff-cancel ──
   {
     name: 'cancel-skips-change-signal',

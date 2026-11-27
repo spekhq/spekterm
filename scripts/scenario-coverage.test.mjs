@@ -88,6 +88,7 @@ const COVERED_CHANGES = [
   'openspec-watch-skip-archive',
   'remote-answer-despite-typed',
   'quick-replies',
+  'handoff-waits-for-network',
 ]
 
 /** change 的所在 —— 封存後它會搬到 `archive/` 之下，兩處都找。 */
@@ -2803,7 +2804,7 @@ export const TABLE = [
   ['An overdue handoff opens at start', '(a) an overdue handoff opens at start in its target folder', false,
     'tick only on deliveries', 'probe:intake runScheduledStart'],
   ['Several overdue handoffs all open', 'several due handoffs all open, oldest first', false,
-    'open only the first due record', 'unit'],
+    'open only the first due record', 'unit, with no reachability gate (opens together). Rechecked for handoff-waits-for-network: with the gate, the start\'s due list opens one at a time, carried by probe:intake runScheduledStart "handoffs due at start open one at a time, at least 15 s apart" (both still open)'],
   ['The target folder was removed before the time came', 'a removed folder gives a visible failure, and the record stays pending with firedAt', false,
     'open into the recorded folder id', 'unit'],
   ['A failed opening is not retried', 'a removed folder gives a visible failure, and the record stays pending with firedAt', false,
@@ -3803,6 +3804,50 @@ export const TABLE = [
     'probe: "[quick-replies] a second quick reply while the agent works on the first is sent too"'],
   ['Restoring Agents & sessions restores the quick replies', '[quick-replies] restoring Agents & sessions brings back the three defaults and leaves the terminal font', false,
     'leave updateQuickReplies(null) out of the section\'s restore', 'two defaults removed and one added first; the profile holds a terminal font size of 15, still stored after the restore'],
+  // ── handoff-waits-for-network: scheduled-handoff (ADDED; the MODIFIED copies keep their rows above, rechecked:
+  // their probe carriers now run against the stand-in service, reachable), agent-handoff-source, handoff-receipt,
+  // recurring-handoff, remote-protocol, terminal-preferences (MODIFIED copies). Probe: probe:intake runHeldForNetwork
+  // against scripts/lib/stub-agent-service.mjs; unit: handoff-opener.test.ts, agent-reachability.test.ts.
+  ['A handoff due while the service cannot be reached does not open', 'a scheduled handoff due while the service cannot be reached does not open', false,
+    'the opener ignores the check (intake-control-groups held-ignores-check)', 'the same step asserts the waiting line ("the inbox says due handoffs wait for the agent service") and that no notification names it; unit: "unreachable: nothing opens, firedAt stays unset, the state is held since the check"'],
+  ['A held handoff opens once the service can be reached', 'then reachable: it opens and the line goes', false,
+    'never leave the hold', 'unit with an injected clock; probe: "the waiting line goes once nothing waits" after the stand-in listens again'],
+  ['A held backlog opens one at a time', 'the second held handoff opens at least 15 s after the first', false,
+    'release the backlog all at once (intake-control-groups backlog-all-at-once)', 'unit: "after a hold the backlog opens one at a time, at the scheduled look (control: release one per look)" — **Ran**'],
+  ['Overdue handoffs at start open one at a time', 'handoffs due at start open one at a time, at least 15 s apart', false,
+    'fire the start\'s due list together', 'probe:intake runScheduledStart (an overdue scheduled one and an outbox file left before start); unit: "what is due at the first look after start opens one at a time, checked or not (control: fire it together)" — **Ran**'],
+  ['A handoff not in the backlog does not wait behind it', 'a handoff arriving during the release opens at once (control: queue it behind the backlog)', false,
+    'queue it behind the backlog', '**Ran** (unit control group). No probe step: the backlog in runHeldForNetwork has two records and the arrival would race the second release'],
+  ['Handoffs that fell due during sleep wait for the network after wake', 'an answer to a check sent before a sleep decides nothing (control: drop the generation)', false,
+    'drop the generation', 'no probe can suspend the machine; the wake is `resumed()` in the unit test, and the due time is wall-clock (existing scheduled-handoff unit tests). The real lid close is a dogfood check (tasks 7.3)'],
+  ['A check from before sleep does not decide after wake', 'an answer to a check sent before a sleep decides nothing (control: drop the generation)', false,
+    'drop the generation', '**Ran** (unit control group)'],
+  ['Turning the check off opens every held handoff at once', 'turning the check off during a hold opens everything at once (control: treat null as a successful check)', false,
+    'treat null as a successful check', '**Ran** (unit control group)'],
+  ['Any HTTP status counts as reachable', 'only one held handoff opens at once', false,
+    'count only 2xx as reachable (intake-control-groups only-2xx)', 'the stand-in answers every request 404; with only 2xx counted nothing opens and this step times out'],
+  ['A redirect counts as reachable', 'a redirect from the agent service counts as reachable', false,
+    'count a redirect as unreachable, or use net.fetch with redirect manual (intake-control-groups redirect-unreachable)', 'only the real net.request carries it (design D7): a unit test with an injected function proves nothing about Electron'],
+  ['No request is made while nothing is due', 'nothing due: no check is made (control: check before reading the due list)', false,
+    'check before reading the due list', '**Ran** (unit control group)'],
+  ['The check targets ANTHROPIC_BASE_URL', 'ANTHROPIC_BASE_URL: its origin, the path dropped', false,
+    'ignore ANTHROPIC_BASE_URL', 'the probes reach the stand-in only through ANTHROPIC_BASE_URL, so every probe step that opens a handoff depends on it too'],
+  ['Another provider has no check', 'another provider selected: no check', false,
+    'ignore the CLAUDE_CODE_USE_* switches', 'unit only'],
+  ['The check can be turned off', 'with the check off, no request is made', false,
+    'read the switch nowhere', 'the same step: "with the check off, a handoff opens while the service cannot be reached"'],
+  ['A handoff cancelled during the check does not open', 'a record cancelled, or accepted, while the check runs is not opened (control: fire the list read before the check)', false,
+    'fire the list read before the check', '**Ran** (unit control group)'],
+  ['Run now does not wait for the check', 'Run now opens at once while the service cannot be reached', false,
+    'gate runNow on the check', 'unit: "Run now does not wait for the check"'],
+  ['A held unscheduled handoff stays where it was', 'an unscheduled handoff read while the service cannot be reached does not open', false,
+    'gate only scheduled records', 'same section: "the unscheduled handoff was announced on arrival, as any is", and it opens with the backlog once the stand-in listens; unit: "an unscheduled handoff held is announced on arrival and not again when it opens"'],
+  // Surfaced by the MODIFIED copy of "An approved recurrence keeps at most one upcoming occurrence…": added to the main
+  // spec by the fix a175c04 (no change), never registered here until now.
+  ['An occurrence whose folder is gone names no other folder', 'a named target that resolved to no folder is refused, never matched by a rule or the fallback', false,
+    'let a named target that resolves to nothing fall through to the rules and the fallback', 'unit (intake-routing.test.ts) at the routing step every occurrence goes through; no probe'],
+  ['A held occurrence does not pile up the recurrence', 'an occurrence held for the agent service across three hourly times opens once, and the next is after now', false,
+    'create the next occurrence while one is held', 'unit with a real RecurrenceKeeper and an injected clock'],
 ]
 
 /**

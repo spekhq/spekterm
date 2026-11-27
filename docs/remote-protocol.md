@@ -705,7 +705,9 @@ scheduledAt?, recurrence? }`. `folderId` is the folder routing suggests; `unreso
 the desktop opens its session when that time comes (at the next start if the desktop was closed then). It is
 present only while the item waits for its time — pending, and not yet opened — so the field's presence, not a
 comparison with your clock, is what makes an item scheduled. A value in the past means the item is due and opens
-as soon as the desktop can (within about 30 seconds). When it opens, an `inbox.changed` without the field
+as soon as the desktop can (within about 30 seconds) — or later, while the desktop cannot reach the agent's
+service (it waits for the network before opening anything by itself), or while it opens what piled up at its start
+or during such a wait (one every 15 seconds). When it opens, an `inbox.changed` without the field
 follows. `inbox.accept` on a scheduled item opens it now (its one automatic opening); `inbox.ignore` cancels it.
 
 `recurrence` marks a **repeating handoff**: `{ role, repeat, until?, next? }`. An agent proposed work that comes

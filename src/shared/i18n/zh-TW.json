@@ -351,6 +351,8 @@
     "previewSample": "The quick brown fox 0123456789\nil1 | oO0 {}[]() => != === <= >=\nconst λ = (x) => x ?? 0; // 1lI0O",
     "agentStatus": "在狀態列顯示 agent 狀態",
     "agentStatusHint": "請 claude 把它的模型、context 用量與花費回報給 spekterm。你自己的 status line 照常運作。只對此後建立的 session 生效。",
+    "handoffNetworkCheck": "開啟交接前先等 agent 的服務連得上",
+    "handoffNetworkCheckHint": "交接自動開啟之前，spekterm 會對你的 agent 使用的服務（ANTHROPIC_BASE_URL，或 Anthropic 的 API）送出一個請求，等它有回應才開。如果你的 agent 連到服務的方式是 spekterm 看不到的，例如在 Claude Code 自己的設定裡指定的 provider，或只在 shell 裡設定的 proxy，請關掉這個選項。",
     "about": "關於",
     "aboutVersion": "版本",
     "aboutBuilt": "建置時間",
@@ -705,6 +707,8 @@
   "intake": {
     "label": "收件匣",
     "title": "收件匣",
+    "waitingForService": "已到期的交接從 {{time}} 起在等 agent 的服務連得上，spekterm 每 30 秒再試一次。你可以在 Settings → Agents & sessions 關掉這個檢查。",
+    "releasingBacklog_other": "正在開啟 {{count}} 則等待過的交接，每 15 秒開一則。",
     "empty": "沒有待處理的項目",
     "pendingCount_other": "{{count}} 個待處理",
     "accept": "接受",

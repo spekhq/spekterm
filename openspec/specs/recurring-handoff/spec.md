@@ -159,7 +159,7 @@ for the first matching time after the later of now and its previous occurrence, 
 approved it into. The occurrence SHALL be listed in the inbox's scheduled section with its time, that folder, its
 full body and its expression, and SHALL behave as a scheduled handoff: it raises no notification and does not
 count in the badge while it waits; it opens through the scheduled handoff's path — a new session, at most once,
-only when a window can receive it, its arrival notification raised when it opens.
+only when a window can receive it and the agent's service can be reached (`scheduled-handoff`), its arrival notification raised when it opens.
 
 It SHALL have exactly one, except while:
 
@@ -243,8 +243,9 @@ occurrence created before its end time SHALL still open if it opens late.
 ### Requirement: Times missed while the application was closed run once
 
 When one or more of a recurrence's times passed while its occurrence could not open — the application was not
-running, the computer was asleep, or no window could receive it — its upcoming occurrence SHALL open **once**,
-without asking, as soon as a window can receive it. No further occurrence SHALL be created for the other missed
+running, the computer was asleep, no window could receive it, or the agent's service could not be reached — its
+upcoming occurrence SHALL open **once**, without asking, as soon as a window can receive it and the agent's service
+can be reached (`scheduled-handoff`; an occurrence the service held opens by that capability's release rule). No further occurrence SHALL be created for the other missed
 times; the next occurrence is the first matching time after it opened. Should two overdue occurrences of the same
 recurrence exist at a start (the application stopped between creating one and recording it), only one SHALL
 open: for occurrences of one recurrence, that is the coalescing this requirement asks for, not the dropping of

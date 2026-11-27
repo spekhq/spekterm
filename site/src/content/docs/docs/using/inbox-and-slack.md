@@ -55,6 +55,11 @@ with now. The **Schedules** tab lists everything planned, in three parts:
   the session that did it ([Handoffs](/docs/using/handoffs/#cancelling-or-changing-what-is-scheduled)). Only
   a record: it has no buttons, sends no notification, and is not counted.
 
+When due handoffs are waiting for your agent's service to answer, a line above the tabs says since when, and
+that spekterm tries again every 30 seconds; while what waited opens one at a time, it says how many are left
+([Handoffs](/docs/using/handoffs/#handing-work-off-to-a-later-time)). You can turn the check off in
+[Settings → Agents & sessions](/docs/reference/settings/#agents--sessions).
+
 A proposal waits for you, so it counts on the inbox entry and sends a notification. A scheduled handoff does
 neither until it opens. When a notification is only about proposals, opening the inbox from it shows the
 Schedules tab. Every item, planned or not, counts toward the inbox's limit on waiting items.

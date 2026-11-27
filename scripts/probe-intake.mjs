@@ -43,6 +43,7 @@ import { runSections } from './lib/sections.mjs'
 import { PROBE_PORTS } from './lib/ports.mjs'
 import { ptyPids, ptySessionPids } from './lib/pty-pids.mjs'
 import { makeStubAgent } from './lib/stub-agent.mjs'
+import { startStubAgentService, withStubAgentService } from './lib/stub-agent-service.mjs'
 import { seedLanguage } from './lib/probe-language.mjs'
 import { SETTINGS_DIALOG, openSettings } from './lib/settings.mjs'
 
@@ -109,7 +110,9 @@ async function launch({ profile, configDir, stub, port = PORT, marker }) {
     [`--remote-debugging-port=${port}`, `--user-data-dir=${profile}`, ...electronExtraArgs(), '.'],
     {
       stdio: ['ignore', 'pipe', 'pipe'],
-      env: {
+      // The handoff opener checks that the agent's service answers before opening anything (`handoff-waits-for-network`):
+      // pointed at a local stand-in, so no section reaches the real API.
+      env: withStubAgentService({
         ...process.env,
         SHELL: '/bin/sh',
         CLAUDE_CONFIG_DIR: configDir,
@@ -119,7 +122,7 @@ async function launch({ profile, configDir, stub, port = PORT, marker }) {
         HOME: stub.home,
         PATH: `${stub.bin}:${process.env.PATH}`,
         SPEK_PROBE_MARKER: marker,
-      },
+      }, agentService),
     },
   )
   let output = ''
@@ -3026,7 +3029,12 @@ async function runScheduledStart(_mode, _modeConfig, context) {
   writeFileSync(join(outbox, 'c.json'), JSON.stringify({ target: basename(folders[2].path), title: 'PLAIN-C', body: 'PLAIN-C-BODY' }))
 
   await freshApp(context, { profile, configDir, stub, marker })
+  // What is due at the first look after start opens one at a time (`handoff-waits-for-network`, D4): 15 s apart.
+  await pollFor({ read: () => sessionCwds(marker), settled: (list) => list.length >= 1, timeoutMs: 60_000, label: 'the first session opened at start' })
+  const firstAt = Date.now()
   const cwds = await pollFor({ read: () => sessionCwds(marker), settled: (list) => list.length >= 2, timeoutMs: 60_000, label: 'two sessions opened at start' })
+  const gap = Date.now() - firstAt
+  check(results, 'handoffs due at start open one at a time, at least 15 s apart', gap >= 14_000 && gap <= 35_000, `gap=${Math.round(gap / 1000)}s`)
   await new Promise((resolve) => setTimeout(resolve, WINDOW_WAIT_MS))
   const final = sessionCwds(marker)
   check(results, '(a) an overdue handoff opens at start in its target folder', final.filter((cwd) => cwd === folders[1].path).length === 1, JSON.stringify(final))
@@ -3053,6 +3061,116 @@ async function runScheduledStart(_mode, _modeConfig, context) {
     Boolean(line) && Date.parse(line[1]) === Math.floor(past / 1000) * 1000 && Date.parse(line[2]) > past,
     line ? `${line[1]} / ${line[2]}` : overdue.slice(0, 200),
   )
+}
+
+// ── handoff-waits-for-network ──────────────────────────────────────────────────
+
+/** The inbox's waiting line (`role="status"` in the dialog), or null. */
+const WAITING_LINE = `(() => {
+  const dialog = document.querySelector('[role="dialog"]${label('intake.label')}')
+  return dialog?.querySelector('[role="status"]')?.textContent ?? null
+})()`
+
+/**
+ * handoff-waits-for-network through the real opener and the real `net.request`, against the stand-in for the agent's
+ * service (`ANTHROPIC_BASE_URL`): stopped, a due scheduled handoff and an unscheduled one stay unopened and the inbox
+ * says why; listening again, they open one at a time, 15 s apart; the request is a HEAD with no credentials; a
+ * redirect counts as reachable; Run now does not wait; with the check off in Settings, nothing is asked and it opens.
+ */
+async function runHeldForNetwork(_mode, _modeConfig, context) {
+  const { profile, folders } = seedProfile()
+  seedRouting(profile, { fallbackFolderId: folders[0].id })
+  const configDir = mkTemp('spekterm-intake-config-')
+  const marker = `spek-intake-${process.pid}-${Date.now()}`
+  const stub = makeStubAgent(mkTemp, configDir, { readyDelaySeconds: 2, busySeconds: 1 })
+  drop(profile, 'source', intake({ id: 'src-net', title: 'SOURCE-TITLE' }))
+  const app = await freshApp(context, { profile, configDir, stub, marker })
+  await openInbox(app)
+  await pollFor({ read: () => app.client.evaluate(acceptExpression('SOURCE-TITLE')), settled: Boolean, timeoutMs: 20_000, label: 'source session opened' })
+  const outbox = await awaitOutbox(profile, 'the source outbox')
+  const sessionId = basename(outbox)
+  const target = basename(folders[1].path)
+  const write = (name, payload) => {
+    writeFileSync(join(outbox, `${name}.partial`), JSON.stringify(payload))
+    renameSync(join(outbox, `${name}.partial`), join(outbox, name))
+  }
+  const count = () => ptySessionPids(marker).length
+
+  try {
+    // ── Held: the service refuses connections ──
+    await agentService.stop()
+    const quiet = await settledNotifications(profile, 'notifications settled before the held handoffs')
+    const before = count()
+    write('net-a.json', { target, title: 'NET-A', body: 'scheduled, held', at: new Date(Date.now() + 5_000).toISOString() })
+    await pollFor({ read: () => receiptOf(profile, sessionId, 'net-a.json')?.status, settled: (status) => status === 'scheduled', timeoutMs: 15_000, label: 'NET-A scheduled' })
+    // Accepting the source item closed the inbox; the line is read in it.
+    await openInbox(app)
+    const held = await pollFor({ read: () => app.client.evaluate(WAITING_LINE), settled: (text) => typeof text === 'string' && text.startsWith(prefixOf('intake.waitingForService')), timeoutMs: 60_000, label: 'the waiting line' })
+    check(results, 'the inbox says due handoffs wait for the agent service', typeof held === 'string' && held.startsWith(prefixOf('intake.waitingForService')), JSON.stringify(held))
+    check(results, 'a scheduled handoff due while the service cannot be reached does not open', count() === before, `before=${before} now=${count()}`)
+    await openSchedules(app)
+    const listed = await app.client.evaluate(`Boolean(document.querySelector(${JSON.stringify(scheduledItem('NET-A'))}))`)
+    check(results, 'the held scheduled handoff is still listed as scheduled', listed === true, '')
+
+    write('net-b.json', { target, title: 'NET-B', body: 'unscheduled, held' })
+    await pollFor({ read: () => receiptOf(profile, sessionId, 'net-b.json')?.status, settled: (status) => status === 'accepted', timeoutMs: 15_000, label: 'NET-B accepted' })
+    await new Promise((resolve) => setTimeout(resolve, WINDOW_WAIT_MS))
+    check(results, 'an unscheduled handoff read while the service cannot be reached does not open', count() === before, `before=${before} now=${count()}`)
+    const heldNotes = (await settledNotifications(profile, 'notifications settled while held')).slice(quiet.length).map((n) => `${n.title ?? ''} ${n.body ?? ''}`)
+    check(results, 'being held raises no notification for the scheduled handoff', !heldNotes.some((text) => text.includes('NET-A')), JSON.stringify(heldNotes))
+    check(results, 'the unscheduled handoff was announced on arrival, as any is', heldNotes.some((text) => text.includes('NET-B')), JSON.stringify(heldNotes))
+
+    // ── The service answers again: one at a time, 15 s apart, oldest first ──
+    await agentService.listen()
+    await pollFor({ read: count, settled: (n) => n > before, timeoutMs: 60_000, label: 'the first held handoff opened' })
+    const firstAt = Date.now()
+    const releasing = await pollFor({ read: () => app.client.evaluate(WAITING_LINE), settled: (text) => text === copy('intake.releasingBacklog_one', { count: 1 }), timeoutMs: 10_000, label: 'the releasing line' })
+    check(results, 'while the backlog opens, the inbox says how many are left', releasing === copy('intake.releasingBacklog_one', { count: 1 }), JSON.stringify(releasing))
+    check(results, 'only one held handoff opens at once', count() === before + 1, `opened=${count() - before}`)
+    await pollFor({ read: count, settled: (n) => n > before + 1, timeoutMs: 30_000, label: 'the second held handoff opened' })
+    const gap = Date.now() - firstAt
+    check(results, 'the second held handoff opens at least 15 s after the first', gap >= 14_000 && gap <= 30_000, `gap=${Math.round(gap / 1000)}s`)
+    const gone = await pollFor({ read: () => app.client.evaluate(WAITING_LINE), settled: (text) => text === null, timeoutMs: 10_000, label: 'the line gone' })
+    check(results, 'the waiting line goes once nothing waits', gone === null, JSON.stringify(gone))
+    const asked = agentService.requests
+    check(
+      results,
+      'the check is a HEAD with no credentials or cookies',
+      asked.length > 0 && asked.every((r) => r.method === 'HEAD' && !('authorization' in r.headers) && !('cookie' in r.headers) && !('x-api-key' in r.headers)),
+      JSON.stringify(asked.slice(-1)),
+    )
+
+    // ── A redirect counts as reachable ──
+    agentService.setMode('redirect')
+    const beforeRedirect = count()
+    write('net-redirect.json', { target, title: 'NET-REDIRECT', body: 'opens through a redirect' })
+    const redirected = await pollFor({ read: count, settled: (n) => n > beforeRedirect, timeoutMs: 20_000, label: 'opened through a redirect' })
+    check(results, 'a redirect from the agent service counts as reachable', redirected > beforeRedirect, `opened=${redirected - beforeRedirect}`)
+    agentService.setMode('answer')
+
+    // ── Run now does not wait for the check ──
+    await agentService.stop()
+    write('net-run.json', { target, title: 'NET-RUN', body: 'run now', at: new Date(Date.now() + 24 * 3600_000).toISOString() })
+    await pollFor({ read: () => receiptOf(profile, sessionId, 'net-run.json')?.status, settled: (status) => status === 'scheduled', timeoutMs: 15_000, label: 'NET-RUN scheduled' })
+    await openSchedules(app)
+    const beforeRun = ptySessionPids(marker)
+    await pollFor({ read: () => app.client.evaluate(scheduledClick('NET-RUN', 'intake.runNow')), settled: Boolean, timeoutMs: 10_000, label: 'Run now clicked' })
+    const ran = await newSessionCwd(marker, beforeRun, 'Run now opened a session')
+    check(results, 'Run now opens at once while the service cannot be reached', ran.cwd === folders[1].path, JSON.stringify(ran))
+
+    // ── The check turned off: no request, it opens ──
+    await app.client.evaluate('window.workspace.settings.setHandoffNetworkCheck(false).then(() => true)')
+    const askedBefore = agentService.requests.length
+    const beforeOff = count()
+    write('net-off.json', { target, title: 'NET-OFF', body: 'check off' })
+    const off = await pollFor({ read: count, settled: (n) => n > beforeOff, timeoutMs: 20_000, label: 'opened with the check off' })
+    check(results, 'with the check off, a handoff opens while the service cannot be reached', off > beforeOff, `opened=${off - beforeOff}`)
+    check(results, 'with the check off, no request is made', agentService.requests.length === askedBefore, `requests=${agentService.requests.length - askedBefore}`)
+  } finally {
+    await app.client.evaluate('window.workspace.settings.setHandoffNetworkCheck(null).then(() => true)').catch(() => {})
+    agentService.setMode('answer')
+    await agentService.listen().catch(() => {})
+  }
 }
 
 // ── recurring-handoff ──────────────────────────────────────────────────────────
@@ -5251,6 +5369,7 @@ const SECTIONS = [
   { name: 'runHandoffFailure', run: runHandoffFailure },
   { name: 'runScheduled', run: runScheduled },
   { name: 'runScheduledStart', run: runScheduledStart },
+  { name: 'runHeldForNetwork', run: runHeldForNetwork },
   { name: 'runRecurring', run: runRecurring },
   { name: 'runRecurringStart', run: runRecurringStart },
   { name: 'runRecurringDamaged', run: runRecurringDamaged },
@@ -5266,6 +5385,9 @@ const SECTIONS = [
   { name: 'runSessionControl', run: runSessionControl },
 ]
 
+/** One stand-in for the agent's service for the whole run; `runHeldForNetwork` stops and restarts it. */
+const agentService = await startStubAgentService()
+
 const outcome = await runSections({
   sections: SECTIONS,
   build: { port: PORT, rendererUrl: null },
@@ -5276,6 +5398,7 @@ const outcome = await runSections({
   },
   cleanup: () => {
     for (const dir of temps) rmSync(dir, { recursive: true, force: true })
+    void agentService.close()
   },
 })
 

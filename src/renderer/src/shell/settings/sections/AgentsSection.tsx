@@ -5,7 +5,10 @@ import { usePreferences } from '../../PreferencesProvider'
 import { FieldError, HINT_CLASS, INPUT_CLASS, LABEL_CLASS, RestoreDefaults, useWrite } from '../fields'
 import { QuickRepliesEditor } from '../QuickRepliesEditor'
 
-/** Agents & sessions: agent status reporting, automatic hibernation, the agent session view, and the quick replies. */
+/**
+ * Agents & sessions: agent status reporting, automatic hibernation, the agent session view, the quick replies, and
+ * the handoff network check.
+ */
 export function AgentsSection(): React.JSX.Element {
   const { t } = useTranslation()
   const {
@@ -16,8 +19,11 @@ export function AgentsSection(): React.JSX.Element {
     agentView,
     updateAgentView,
     updateQuickReplies,
+    handoffNetworkCheck,
+    updateHandoffNetworkCheck,
   } = usePreferences()
   const status = useWrite()
+  const networkCheck = useWrite()
   const hibernate = useWrite()
   const view = useWrite()
 
@@ -93,12 +99,29 @@ export function AgentsSection(): React.JSX.Element {
 
       <QuickRepliesEditor />
 
+      {/* The handoff opener's wait for the agent's service (`handoff-waits-for-network`); applies at the next look. */}
+      <label className="mt-4 flex items-center gap-2">
+        <input
+          type="checkbox"
+          checked={handoffNetworkCheck}
+          aria-label={t('settings.handoffNetworkCheck')}
+          onChange={(event) =>
+            void networkCheck.run(() => updateHandoffNetworkCheck(event.target.checked ? null : false))
+          }
+          className="accent-accent"
+        />
+        <span className="text-sm text-ink">{t('settings.handoffNetworkCheck')}</span>
+      </label>
+      <p className={HINT_CLASS}>{t('settings.handoffNetworkCheckHint')}</p>
+      <FieldError message={networkCheck.failure} />
+
       <RestoreDefaults
         onRestore={() =>
           updateAgentStatus(null)
             .then(() => updateAutoHibernate(null))
             .then(() => updateAgentView(null))
             .then(() => updateQuickReplies(null))
+            .then(() => updateHandoffNetworkCheck(null))
         }
       />
     </>

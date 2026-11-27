@@ -3288,6 +3288,9 @@ async function runQuickReplySettings(_mode, _config, context) {
   await openSettings(context.app.client, 'agents')
   await clickSelector(context.app.client, inSettings(`button${label('settings.quickReplyRemove', { sentence: QR_DEFAULTS[2] })}`), 'remove another default')
   await awaitSentences([QR_DEFAULTS[0], ADDED], 'two defaults removed, one added')
+  // The handoff network check (`handoff-waits-for-network`) is in the same section: off before the restore.
+  await clickSelector(context.app.client, inSettings(`input${label('settings.handoffNetworkCheck')}`), 'turn the handoff network check off')
+  const checkOff = await pollFor({ read: () => prefs()?.terminal?.handoffNetworkCheck, settled: (value) => value === false, timeoutMs: 10_000, label: 'the check stored off' })
   await qrClickText(context.app, '[role="dialog"]', copy('settings.restoreDefaults'))
   await qrClickText(context.app, '[role="dialog"]', copy('settings.restore'))
   const restored = await awaitSentences(QR_DEFAULTS, 'the defaults after the restore')
@@ -3298,6 +3301,12 @@ async function runQuickReplySettings(_mode, _config, context) {
     '[quick-replies] restoring Agents & sessions brings back the three defaults and leaves the terminal font',
     JSON.stringify(restored) === JSON.stringify(QR_DEFAULTS) && storedAfterRestore !== null && !('quickReplies' in storedAfterRestore) && storedAfterRestore.fontSize === 15,
     `row=${JSON.stringify(restored)} stored terminal=${JSON.stringify(storedAfterRestore)}`,
+  )
+  check(
+    results,
+    '[handoff-network-check] restoring Agents & sessions turns the handoff network check back on',
+    checkOff === false && storedAfterRestore !== null && !('handoffNetworkCheck' in storedAfterRestore),
+    `before=${JSON.stringify(checkOff)} stored terminal=${JSON.stringify(storedAfterRestore)}`,
   )
 
   // ── A dormant agent session: the row shows, disabled, so waking it does not resize its pty ──

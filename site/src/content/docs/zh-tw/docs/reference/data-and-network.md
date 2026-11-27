@@ -14,6 +14,8 @@ spekterm 沒有帳號，也沒有遙測（telemetry）。這一頁列出 spekter
 - **你開啟的連結** —— 你點的連結會交給你的瀏覽器開啟；spekterm 自己不載入它。
 - **GitHub，用來檢查更新** —— 啟動一分鐘後、之後每六小時（以及你按下**立即檢查**時），spekterm 會向 GitHub 查詢 `spekhq/spekterm` 的最新版本。在 Linux 上，如果它是從一個可以替換的 AppImage 執行的，接著會從那個版本下載新的 AppImage。這些請求不帶任何關於你或你工作的資訊，和任何人下載一個公開檔案時送出的內容一樣。檢查更新**預設開啟**，可以在 **設定 → 關於 → 自動檢查更新** 關掉。更新可不可信，取決於它所來自的 GitHub 版本：用來驗證它的校驗碼，就公布在同一個版本裡。見[安裝 → 更新](/zh-tw/docs/getting-started/install/#更新)。
 
+- **交接自己開啟之前，你的 agent 使用的服務** —— 只在有交接到期、要自動開啟時，spekterm 會對你的 agent 使用的服務送出一個 `HEAD` 請求：如果你設了 `ANTHROPIC_BASE_URL` 就是那個位址，否則是 Anthropic 的 API。請求不帶憑證、cookie 或內容，只帶 spekterm 的瀏覽器引擎每個請求都會帶的資訊（它的名稱與版本、你的作業系統、你的語言）。對方有任何回應都算數：spekterm 只需要知道網路到得了那裡。你的 agent 設定成使用 Bedrock、Vertex 或 Foundry 時，不會送出請求。可以在 **設定 → Agent 與 session → 開啟交接前先等 agent 的服務連得上** 關掉。見[交接](/zh-tw/docs/using/handoffs/#把工作交接到未來的某個時間)。
+
 除此之外沒有別的連線。像是瀏覽器引擎內建的拼字檢查，spekterm 也關掉了，否則它會在啟動時從第三方伺服器下載字典。
 
 ## 團隊 server（預設關閉，加入團隊才會連線）

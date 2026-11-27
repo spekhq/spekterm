@@ -38,6 +38,7 @@ sidebar:
 - **讓閒置的 session 休眠** —— session 閒置超過選定的時間，就結束它的行程，但 session 仍留在 workspace 裡，之後可以喚醒。可選關閉、4 小時、24 小時（預設）、3 天或 7 天。畫面上正在顯示的 session、正在工作的 agent，以及正在跑工作的 shell，都不會休眠。在 macOS 上，閒置的 shell 永遠不會自動休眠。見[終端機與 session](/zh-tw/docs/using/terminals-and-sessions/)。
 - **Agent session 顯示** —— 所有 agent session 要顯示終端機還是對話檢視。這和 agent session 分頁旁的切換鈕是同一個設定。見[對話檢視](/zh-tw/docs/using/conversation-view/)。
 - **快速回覆** —— agent session 底下那排按鈕一點就送出的句子。修改句子後按 Enter 或離開欄位即套用，按 `Esc` 還原。可以上移、下移、移除或新增。每句只能一行、最多 200 個字元，清單最多 12 句，同一句不能重複。你改動清單之前，它是介面語言的三句預設。見[終端機與 session](/zh-tw/docs/using/terminals-and-sessions/#快速回覆)。
+- **開啟交接前先等 agent 的服務連得上** —— 預設開啟。交接要自己開啟之前，spekterm 會對你的 agent 使用的服務送出一個請求，等它有回應才開，免得沒有網路的電腦開出跑不起來的 agent（見[交接](/zh-tw/docs/using/handoffs/#把工作交接到未來的某個時間)與[資料與網路](/zh-tw/docs/reference/data-and-network/)）。如果你的 agent 連到服務的方式是 spekterm 看不到的，例如在 Claude Code 自己的設定裡指定的 provider，或只在 shell 裡設定的 proxy，就把它關掉。在交接等待中關掉，它們會立刻開啟。**還原預設** 會把它重新打開。
 
 ## 整合
 

@@ -1,5 +1,5 @@
 import { type WebContents, ipcMain } from 'electron'
-import type { ApproveResult, RecurrenceKeeper, RecurrenceListing } from '../recurrence-keeper'
+import type { ApproveResult, RecurrenceKeeper } from '../recurrence-keeper'
 
 import { bodyOf } from '../intake-schema'
 import { contextScheduleFor } from '../context-schedule'
@@ -13,8 +13,6 @@ import {
   type RoutingRule,
   type RoutingStore,
 } from '../intake-routing'
-import { listView, type IntakeView } from '../intake-projection'
-import { OVERFLOW_KEY } from '../intake-service'
 import type { IntakeService } from '../intake-service'
 import type { OutgoingView } from '../teammate-outbox'
 import { TEAMMATE_ADAPTER } from '../teammate-inbox'
@@ -24,6 +22,8 @@ import type { AgentCancelView } from '../handoff-cancel'
 import type { FolderLookup } from '../workspace-store'
 import { existingTerminalService } from './terminal'
 import { dismissIntake, notifyIntakeChanged, onIntakeChanged } from '../intake-changes'
+import { buildIntakeSnapshot } from '../intake-snapshot'
+import type { WaitingState } from '../handoff-opener'
 
 /**
  * 收件匣的 IPC。
@@ -140,54 +140,7 @@ function sanitizeRules(input: unknown): RoutingConfig {
   return { rules, fallbackFolderId }
 }
 
-/** `list` 的回傳形狀。 */
-export interface IntakeSnapshot {
-  items: IntakeView[]
-  /**
-   * The approved recurrences (`recurring-handoff`'s Repeating section). Not inbox items, and not in a device's
-   * `inbox.list`. Absent when no keeper is wired.
-   */
-  recurrences?: RecurrenceListing
-  /**
-   * The Outgoing tab (`teammate-handoff`): teammate handoffs of the current membership, narrowed (no `clientId`, no
-   * membership stamp), and how many wait for the user — **from the same call as the pending items**, so the badge
-   * and the tab cannot disagree. Absent when teams are not wired.
-   */
-  outgoing?: { items: OutgoingView[]; waiting: number; damaged?: boolean }
-  /**
-   * The intake ids of pending teammate items that may be declined (`teammate-handoff-return` D9). Desktop only:
-   * outside `listView`, whose items a paired phone receives, and which has no such field in the remote protocol.
-   */
-  declinable?: string[]
-  /**
-   * What agents cancelled in the last 7 days (`handoff-cancel`, design D5), newest first. **Desktop only**: its own
-   * field, never on `IntakeView`, which `remote-host.ts` passes to a device.
-   */
-  agentCancels?: AgentCancelView[]
-  /**
-   * 拒絕的痕跡 —— **逐則**，不是一個總數。
-   *
-   * 一個計數器回答不了「哪一則」「為什麼」「我要怎麼辦」中的任何一個，
-   * 而使用者對一則他自己交辦的工作正是要問這三件事。
-   */
-  notices: {
-    key: string
-    code: string
-    count: number
-    detail?: string
-    at: number
-    origin?: string
-    target?: string
-    permanent: boolean
-    /**
-     * 這是不是「其餘」那一桶。
-     *
-     * **由主行程標示，renderer 不認得那個主鍵** —— 讓 renderer 去比對一個主行程的內部常數
-     * 會把 `intake-service`（連同它的 `node:fs`）整個拉進 renderer 的 bundle。
-     */
-    overflow?: boolean
-  }[]
-}
+export type { IntakeSnapshot } from '../intake-snapshot'
 
 /** routing 規則的回傳形狀。 */
 export interface IntakeRulesSnapshot {
@@ -240,6 +193,8 @@ export interface IntakeHandlerDeps {
   }
   /** What agents cancelled recently (`agentCancels`). Unprovided ⇒ the section is absent. */
   agentCancels?: () => AgentCancelView[]
+  /** Why due handoffs have not opened (`HandoffOpener.waitingState`, `handoff-waits-for-network`). Desktop only. */
+  waitingForNetwork?: () => WaitingState | undefined
   /** The outgoing teammate handoffs (`TeammateOutbox`). Unprovided ⇒ no Outgoing tab, and its handlers refuse. */
   outgoing?: {
     list(): OutgoingView[]
@@ -282,34 +237,16 @@ export function registerIntakeHandlers(deps: IntakeHandlerDeps): void {
     const isNew = !senders.has(event.sender)
     senders.add(event.sender)
     if (isNew) deps.onNewReceiver?.(event.sender.id)
-    const config = routing.get()
-    const ids = knownIds()
-    return {
-      items: listView(service.store.list(), config, ids),
-      ...(deps.recurrences ? { recurrences: deps.recurrences.listing() } : {}),
-      ...(deps.agentCancels ? { agentCancels: deps.agentCancels() } : {}),
-      ...(deps.outgoing
-        ? {
-            outgoing: {
-              items: deps.outgoing.list(),
-              waiting: deps.outgoing.waitingCount(),
-              ...(deps.outgoing.loadIssue() ? { damaged: true } : {}),
-            },
-          }
-        : {}),
-      ...(deps.teammates
-        ? {
-            declinable: service.store
-              .list()
-              .filter((record) => record.adapter === TEAMMATE_ADAPTER && record.state === 'pending' && deps.teammates?.reportable(record))
-              .map((record) => record.id),
-          }
-        : {}),
-      notices: service.notices().map((notice) => ({
-        ...notice,
-        ...(notice.key === OVERFLOW_KEY ? { overflow: true } : {}),
-      })),
-    }
+    return buildIntakeSnapshot({
+      service,
+      routing: routing.get(),
+      knownFolderIds: knownIds(),
+      ...(deps.recurrences ? { recurrences: deps.recurrences } : {}),
+      ...(deps.agentCancels ? { agentCancels: deps.agentCancels } : {}),
+      ...(deps.outgoing ? { outgoing: deps.outgoing } : {}),
+      ...(deps.teammates ? { reportable: (record: IntakeRecord) => deps.teammates?.reportable(record) ?? false } : {}),
+      ...(deps.waitingForNetwork ? { waitingForNetwork: deps.waitingForNetwork } : {}),
+    })
   })
 
   // The user's decisions on a teammate handoff (`teammate-handoff`). The id is an opaque string; the outbox finds

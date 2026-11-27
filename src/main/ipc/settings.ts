@@ -11,6 +11,7 @@ export const SETTINGS_CHANNELS = {
   setTerminalFont: 'workspace:settings:setTerminalFont',
   setGpuAcceleration: 'workspace:settings:setGpuAcceleration',
   setAgentStatus: 'workspace:settings:setAgentStatus',
+  setHandoffNetworkCheck: 'workspace:settings:setHandoffNetworkCheck',
     setAgentView: 'workspace:settings:setAgentView',
   setAutoHibernate: 'workspace:settings:setAutoHibernate',
   setQuickReplies: 'workspace:settings:setQuickReplies',
@@ -105,6 +106,17 @@ export function registerSettingsHandlers(
     SETTINGS_CHANNELS.setAgentStatus,
     (_event, enabled: unknown): ProjectedPreferences =>
       projectPreferences(store.setAgentStatus(typeof enabled === 'boolean' ? enabled : null), store.ui(), store.updates()),
+  )
+
+  // The handoff network check (`handoff-waits-for-network`): a boolean, anything else is unset (= on).
+  ipcMain.handle(
+    SETTINGS_CHANNELS.setHandoffNetworkCheck,
+    (_event, enabled: unknown): ProjectedPreferences =>
+      projectPreferences(
+        store.setHandoffNetworkCheck(typeof enabled === 'boolean' ? enabled : null),
+        store.ui(),
+        store.updates(),
+      ),
   )
 
   // 值的白名單同樣在 store（只認那兩個字面值；其餘一律當成未設定＝預設的終端 view）。

@@ -843,3 +843,31 @@ describe('theme and zoom (ui-appearance)', () => {
     assert.equal(projected.fontFamily, 'Fira Code')
   })
 })
+
+describe('handoffNetworkCheck (handoff-waits-for-network)', () => {
+  it('absent reads as on (unset); off survives a reload; a font change keeps it; null resets it', () => {
+    const file = path.join(tmpdir(), `prefs-netcheck-${process.pid}-${Date.now()}.json`)
+    try {
+      const store = new PreferencesStore(file)
+      store.load()
+      assert.equal(store.get().handoffNetworkCheck, undefined)
+      store.setHandoffNetworkCheck(false)
+      const reloaded = new PreferencesStore(file)
+      reloaded.load()
+      assert.equal(reloaded.get().handoffNetworkCheck, false)
+      reloaded.setTerminalFont('monospace', 14, 1.2)
+      assert.equal(reloaded.get().handoffNetworkCheck, false)
+      reloaded.setHandoffNetworkCheck(null)
+      assert.equal(reloaded.get().handoffNetworkCheck, undefined)
+    } finally {
+      fs.rmSync(file, { force: true })
+    }
+  })
+
+  it('a non-boolean reads as unset', () => {
+    const parsed = parsePreferences(
+      JSON.stringify({ version: PREFERENCES_VERSION, terminal: { handoffNetworkCheck: 'no' } }),
+    )
+    assert.equal(parsed?.terminal.handoffNetworkCheck, undefined)
+  })
+})

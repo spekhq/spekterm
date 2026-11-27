@@ -66,6 +66,12 @@ section back to its defaults. It does not change the other sections or the langu
   one line of at most 200 characters, the list holds at most 12, and the same sentence cannot be there twice.
   Until you change the list, it is three defaults in the interface language. See
   [Terminals and sessions](/docs/using/terminals-and-sessions/#quick-replies).
+- **Wait for the agent's service before opening handoffs** — on by default. Before a handoff opens by itself,
+  spekterm sends one request to the service your agent uses and waits until it answers, so a computer without
+  a network does not open agents that cannot run (see [Handoffs](/docs/using/handoffs/#handing-work-off-to-a-later-time)
+  and [Data and network](/docs/reference/data-and-network/)). Turn it off if your agent reaches its service in
+  a way spekterm cannot see, such as a provider chosen in Claude Code's own settings or a proxy set only in your
+  shell. Turning it off while handoffs wait opens them at once. **Restore defaults** turns it back on.
 
 ## Integrations
 

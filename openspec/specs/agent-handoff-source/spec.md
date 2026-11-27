@@ -623,9 +623,12 @@ normally, and the switch's value SHALL have no effect.
 this same path, and waits until then as a scheduled item (`scheduled-handoff`). Everything this requirement
 says about the opened session applies to it at that moment.
 
-"On arrival" means as soon as a window that has restored its sessions can receive the request: a handoff read
-before that — at start, from an outbox written while the application was closed — opens once such a window
-exists, and every handoff is opened automatically at most once (`scheduled-handoff`).
+"On arrival" means as soon as a window that has restored its sessions can receive the request **and the agent's
+service can be reached** (`scheduled-handoff`, "An automatic opening waits until the agent's service can be
+reached"). A handoff read before both hold — at start, from an outbox written while the application was closed, or
+while the computer is offline — opens once they do, and every handoff is opened automatically at most once
+(`scheduled-handoff`). One read while the service cannot be reached is a pending inbox item meanwhile, announced on
+arrival as any handoff is.
 
 該 session SHALL 經**與使用者手動接受時相同的路徑**建立，於是 context 檔的產生、prompt 的寫入時機、
 session 清單與持久化一律相同。該則交接 SHALL 記為已接受並記錄它建立的 session 識別碼。
@@ -667,7 +670,7 @@ rail、通知與交接單（`handoff-brief`）。
 
 A handoff written into a session's outbox SHALL be delivered — its target session created, as for
 any handoff — even if the file watcher never reports it, without an application restart and within
-one minute of being written. This is the per-session case of the shared drop-point requirement
+one minute of being written, while the agent's service can be reached (`scheduled-handoff`). This is the per-session case of the shared drop-point requirement
 "Detection of a delivery does not depend on the watcher having reported it" in `agent-intake`, and
 it is stated here because this is where it went wrong: a valid handoff sat unread in a session's
 outbox because that outbox was the only one the watcher was not watching, and only a restart picked

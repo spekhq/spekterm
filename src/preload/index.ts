@@ -308,6 +308,8 @@ const workspaceApi = {
     /** 與 agent 的狀態橋接。只影響其後建立或重建的 session（注入發生在 spawn 當下）。 */
     setAgentStatus: (enabled: boolean | null): Promise<ProjectedPreferences> =>
       ipcRenderer.invoke('workspace:settings:setAgentStatus', enabled),
+    setHandoffNetworkCheck: (enabled: boolean | null): Promise<ProjectedPreferences> =>
+      ipcRenderer.invoke('workspace:settings:setHandoffNetworkCheck', enabled),
     /**
      * agent session 以哪一種 view 呈現。`null` ＝回到預設（＝終端）。
      *

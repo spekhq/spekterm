@@ -14,6 +14,9 @@ export function testOpener(
     canReceive?: () => boolean
     now?: () => number
     keeper?: HandoffOpenerDeps['keeper']
+    reachable?: HandoffOpenerDeps['reachable']
+    schedule?: HandoffOpenerDeps['schedule']
+    changed?: () => void
   } = {},
 ): HandoffOpener {
   return new HandoffOpener({
@@ -22,8 +25,10 @@ export function testOpener(
     agentEventsEnabled: options.eventsEnabled ?? (() => true),
     canReceive: options.canReceive ?? (() => true),
     requestOpen: onOpen,
-    changed: () => {},
+    changed: options.changed ?? (() => {}),
     ...(options.now ? { now: options.now } : {}),
     ...(options.keeper ? { keeper: options.keeper } : {}),
+    ...(options.reachable ? { reachable: options.reachable } : {}),
+    ...(options.schedule ? { schedule: options.schedule } : {}),
   })
 }

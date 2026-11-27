@@ -250,7 +250,11 @@ store directly would reach neither the keeper nor an open inbox), an agent's sto
 `scheduled` / `proposed` receipts and `<userData>/handoff/schedules.json`, and each agent cancel is listed quietly in
 the Schedules tab for 7 days (`cancelledBy`, saved with the state). **Every automatic opening goes through `HandoffOpener`**, which waits for a window
 that has restored and lists the inbox, and opens each handoff **at most once, ever** (`firedAt`, persisted
-first) — an open request no window receives is lost. The introduction must stay under the CLI's 10,000-character
+first) — an open request no window receives is lost. **It also waits until the agent's service answers**
+(`handoff-waits-for-network`): one `HEAD` to the agent's own origin (`ANTHROPIC_BASE_URL`, else Anthropic's API), any
+status counting, only while something is due — **never the system's online flag**, which a VPN interface keeps true
+offline. A backlog (what is due at the first look after start, or when the service answers again after a hold) opens
+one every 15 s; Run now and Accept never wait; a Settings switch turns the check off (`docs/lessons/handoff.md` §20). The introduction must stay under the CLI's 10,000-character
 `additionalContext` threshold; past it the agent keeps only a 2 KB preview (`docs/lessons/handoff.md` §16). **Its limits
 sit below the CLI's latent 8,000-character / 200-line cut too, and the rules of rarer actions live in files it points to**
 (`repeating.json`, `commands.json`, the relations file's `about`; `intro-layered-rules`): a new capability adds a

@@ -17,14 +17,38 @@ import type { IntakeRecord } from './intake-store'
  *
  * ## When it looks
  *
- * After each delivery, every 30 s, when a window's restore gate opens, when a window first lists the inbox, and
- * on resume from sleep. A timer per record is not used: `setTimeout` overflows past 2^31−1 ms (about 24.8 days,
- * inside the scheduling bound) and fires at once, and the due time is judged against the wall clock.
+ * After each delivery, every 30 s, when a window's restore gate opens, when a window first lists the inbox, on
+ * resume from sleep (`resumed()`), and at the next release of a backlog (below). A timer per record is not used:
+ * `setTimeout` overflows past 2^31−1 ms (about 24.8 days, inside the scheduling bound) and fires at once, and the due
+ * time is judged against the wall clock.
+ *
+ * ## Waiting for the agent's service (`handoff-waits-for-network`)
+ *
+ * With `reachable` wired, nothing opens automatically until a check says the agent's service answers (design D3):
+ * a computer woken before its Wi-Fi came back, or one offline, would otherwise open sessions whose agents cannot
+ * run — and spend each handoff's one automatic opening on them. One check is in flight per wake (`#generation`); an
+ * answer to a check sent before a sleep decides nothing. **What is due is read again after every check**: the user
+ * may have cancelled, accepted or run one meanwhile.
+ *
+ * **Backlogs open one at a time** (design D4): what is due at the first look after start, and what is due when the
+ * service answers again after a hold, opens oldest first, `RELEASE_SPACING_MS` apart, each after its own check.
+ * Anything else due meanwhile opens at once. The next release is scheduled (`schedule`), not left to the 30-second
+ * tick, which would stretch the spacing to 30 or 60 s. A release that fails still counts, so one broken record
+ * cannot stop the rest. Turning the check off during a hold (`null`) opens everything due at once.
  *
  * Electron-free: `index.ts` wires the window and the timer.
  */
 
 export const OPENER_INTERVAL_MS = 30_000
+
+/** The spacing of a backlog's releases (the user's decision, 2026-11-26). */
+export const RELEASE_SPACING_MS = 15_000
+
+/**
+ * Why due handoffs have not opened, for the inbox's line (design D5): held for the agent's service, or a backlog
+ * being opened one at a time. Desktop only — never on `IntakeView`, which devices receive.
+ */
+export type WaitingState = { kind: 'held'; since: number } | { kind: 'releasing'; remaining: number }
 
 export interface HandoffOpenerDeps {
   service: Pick<IntakeService, 'store' | 'reject' | 'reportFailure' | 'announceArrival'>
@@ -43,8 +67,17 @@ export interface HandoffOpenerDeps {
    * occurrence fires or is refused.
    */
   keeper?: { ensureAll: () => void; ensureNext: (recurrenceId: string) => void }
+  /**
+   * Can the agent's service be reached (`handoff-waits-for-network`)? `null`: no check applies (turned off, or a
+   * provider whose endpoint is not derived). Absent: no gate at all — every due handoff opens at once, as before.
+   */
+  reachable?: () => Promise<boolean | null>
+  /** Run `fn` after `ms` (a backlog's next release). Absent: the next release waits for the next look. */
+  schedule?: (ms: number, fn: () => void) => void
   now?: () => number
 }
+
+type Mode = 'open' | 'held' | 'releasing'
 
 export class HandoffOpener {
   readonly #deps: HandoffOpenerDeps
@@ -56,21 +89,176 @@ export class HandoffOpener {
    */
   readonly #requested = new Set<string>()
 
+  #mode: Mode = 'open'
+  #heldSince = 0
+  /** The keys of a backlog being released one at a time (design D4). */
+  #backlog = new Set<string>()
+  #lastReleasedAt: number | undefined
+  /** The first look after start that can receive has not happened yet: what it finds due is a backlog. */
+  #atStart = true
+  /** Incremented on wake: a check sent before a sleep decides nothing. */
+  #generation = 0
+  #checking: { generation: number } | null = null
+  #pending: Promise<void> = Promise.resolve()
+  #releaseScheduled = false
+
   constructor(deps: HandoffOpenerDeps) {
     this.#deps = deps
     this.#now = deps.now ?? Date.now
   }
 
-  /** Opens every due handoff, oldest first, if a window can receive them. Never throws. */
+  /** Opens what is due, oldest first, if a window can receive them and the agent's service answers. Never throws. */
   tick(): void {
     this.#deps.keeper?.ensureAll()
     if (!this.#deps.canReceive()) return
+    const due = this.#due()
+    if (due.length === 0) {
+      this.#atStart = false
+      this.#setMode('open')
+      return
+    }
+    const reachable = this.#deps.reachable
+    if (!reachable) {
+      this.#fireAll(due)
+      return
+    }
+    if (this.#checking && this.#checking.generation === this.#generation) return
+    this.#startCheck(reachable)
+  }
+
+  /** From `powerMonitor`'s `resume`: an answer to a check sent before the sleep is discarded, and a new look made. */
+  resumed(): void {
+    this.#generation += 1
+    this.tick()
+  }
+
+  /** Why due handoffs have not opened, computed now (design D5); `undefined` when nothing waits. */
+  waitingState(): WaitingState | undefined {
+    if (this.#mode === 'open') return undefined
+    const due = this.#due()
+    if (this.#mode === 'held') return due.length > 0 ? { kind: 'held', since: this.#heldSince } : undefined
+    const dueKeys = new Set(due.map(keyOf))
+    const remaining = [...this.#backlog].filter((key) => dueKeys.has(key)).length
+    return remaining > 0 ? { kind: 'releasing', remaining } : undefined
+  }
+
+  /** Tests: resolves once no check is in flight (including the looks a settling check starts). */
+  async settled(): Promise<void> {
+    let pending: Promise<void>
+    do {
+      pending = this.#pending
+      await pending
+    } while (pending !== this.#pending)
+  }
+
+  #due(): IntakeRecord[] {
     const now = this.#now()
-    const due = this.#deps.service.store
+    return this.#deps.service.store
       .list()
       .filter((record) => isDue(record, now))
       .sort((a, b) => (a.opensAt ?? 0) - (b.opensAt ?? 0))
-    for (const record of due) {
+  }
+
+  #startCheck(reachable: () => Promise<boolean | null>): void {
+    const token = { generation: this.#generation }
+    this.#checking = token
+    this.#pending = (async () => {
+      let answer: boolean | null
+      try {
+        answer = await reachable()
+      } catch (error) {
+        console.error(`[handoff] the reachability check failed: ${String(error)}`)
+        answer = false
+      }
+      if (this.#checking === token) this.#checking = null
+      if (token.generation !== this.#generation) {
+        this.tick()
+        return
+      }
+      this.#afterCheck(answer)
+    })()
+  }
+
+  /** Step 5 of design D3: everything read again, then hold, release or open (D4). */
+  #afterCheck(answer: boolean | null): void {
+    try {
+      this.#deps.keeper?.ensureAll()
+      if (!this.#deps.canReceive()) return
+      const due = this.#due()
+      if (due.length === 0) {
+        this.#atStart = false
+        this.#setMode('open')
+        return
+      }
+      if (answer === false) {
+        this.#atStart = false
+        if (this.#mode === 'open') this.#heldSince = this.#now()
+        this.#setMode('held')
+        return
+      }
+      if (answer === null && this.#mode === 'held') {
+        // The user turned the check off during a hold: everything, now.
+        this.#backlog.clear()
+        this.#setMode('open')
+        this.#fireAll(due)
+        return
+      }
+      if (this.#mode === 'held' || this.#atStart) {
+        this.#atStart = false
+        this.#backlog = new Set(due.map(keyOf))
+        this.#lastReleasedAt = undefined
+        this.#setMode('releasing')
+      }
+      if (this.#mode !== 'releasing') {
+        this.#fireAll(due)
+        return
+      }
+      this.#release(due)
+    } catch (error) {
+      console.error(`[handoff] opening after the reachability check failed: ${String(error)}`)
+    }
+  }
+
+  /** Design D4: what is outside the backlog at once; the backlog's oldest when its spacing has passed. */
+  #release(due: IntakeRecord[]): void {
+    const dueKeys = new Set(due.map(keyOf))
+    for (const key of [...this.#backlog]) if (!dueKeys.has(key)) this.#backlog.delete(key)
+    this.#fireAll(due.filter((record) => !this.#backlog.has(keyOf(record))))
+
+    const now = this.#now()
+    const next = due.find((record) => this.#backlog.has(keyOf(record)))
+    if (next && (this.#lastReleasedAt === undefined || now - this.#lastReleasedAt >= RELEASE_SPACING_MS)) {
+      this.#backlog.delete(keyOf(next))
+      this.#lastReleasedAt = now
+      this.#fireAll([next])
+    }
+    if (this.#backlog.size === 0) {
+      this.#setMode('open')
+      return
+    }
+    this.#scheduleRelease(Math.max(0, (this.#lastReleasedAt ?? now) + RELEASE_SPACING_MS - now))
+  }
+
+  #scheduleRelease(ms: number): void {
+    if (!this.#deps.schedule || this.#releaseScheduled) return
+    this.#releaseScheduled = true
+    this.#deps.schedule(ms, () => {
+      this.#releaseScheduled = false
+      this.tick()
+    })
+  }
+
+  /** A change of the state's kind re-lists the inbox; nothing else does (design D5). */
+  #setMode(mode: Mode): void {
+    // A hold during a release keeps the backlog; only "nothing waits" drops it.
+    if (mode === 'open') this.#backlog.clear()
+    if (mode === this.#mode) return
+    this.#mode = mode
+    this.#deps.changed()
+  }
+
+  #fireAll(records: IntakeRecord[]): void {
+    for (const record of records) {
       try {
         this.#fire(record)
       } catch (error) {
@@ -141,6 +329,10 @@ export class HandoffOpener {
     if (verified.scheduledAt !== undefined) service.announceArrival(service.store.get(record.adapter, record.id) ?? record)
     return true
   }
+}
+
+function keyOf(record: IntakeRecord): string {
+  return `${record.adapter} ${record.id}`
 }
 
 function isDue(record: IntakeRecord, now: number): boolean {

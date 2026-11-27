@@ -39,6 +39,9 @@ const API_ALLOW = [
   // build with the automatic check on, or after "Check now".
   { file: 'src/main/update-net.ts', api: 'net' },
   { file: 'src/main/update-net.ts', api: 'fetch' },
+  // The handoff opener's reachability check (`handoff-waits-for-network`): one HEAD to the agent's own origin, only
+  // while a handoff is due to open automatically and the check is on in Settings.
+  { file: 'src/main/agent-reachability-net.ts', api: 'net' },
 ]
 
 /**

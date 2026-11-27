@@ -72,6 +72,8 @@ import { writeHandoffRules } from './handoff-rules'
 import { configureTeamIntro, configureTeammateReports, refreshIntros, reportKindOf, teamIntro } from './handoff-injection'
 import { configureTeammateHandoffs, refreshRelations, relationsOf, relativeNamesOf } from './handoff-relations'
 import { anyWindowReceives, HandoffOpener, OPENER_INTERVAL_MS, whenAnnounced } from './handoff-opener'
+import { agentOrigin, checkReachable, REACHABILITY_TIMEOUT_MS } from './agent-reachability'
+import { sendReachabilityRequest } from './agent-reachability-net'
 import { ENDED_SOURCE_ID, HandoffService, registerHandoffService } from './handoff-service'
 import { HandoffCompletion } from './handoff-completion'
 import { inTurnOf, observeWaits, openRequestsOf, pokeWait, refreshWait, subscribeWait } from './agent-wait'
@@ -100,7 +102,8 @@ import { createReportService, reportsRoot } from './report'
 
 /** 讀後感請求的模型。報告記錄的是**這個值** —— 實際生效的可能因回退而不同。 */
 const REPORT_MODEL = 'claude-sonnet-5'
-import { applyUserEnvOnce } from './user-env'
+import { applyUserEnvOnce, whenUserEnvReady } from './user-env'
+import { ptyEnv } from './terminal'
 import { WorkspaceStore } from './workspace-store'
 import { type UpdateRuntime, startUpdates } from './update-service'
 import { openExternalUrl } from './navigation'
@@ -635,6 +638,8 @@ void app.whenReady().then(async () => {
   let receivers: () => number[] = () => []
   // Created below, once the folder list and preferences it reads are wired; the handlers only reach it later.
   let opener: HandoffOpener | null = null
+  /** A backlog's next release (`handoff-waits-for-network`, design D4); cleared at quit. */
+  const releaseTimers = new Set<ReturnType<typeof setTimeout>>()
   /**
    * Repeating handoffs (`recurring-handoff`): the approved recurrences, and the one owner of their upcoming
    * occurrences. Every path that can change one reaches the keeper: the opener's tick and firing, approval, Run now,
@@ -670,6 +675,7 @@ void app.whenReady().then(async () => {
     registerReceivers: (list) => { receivers = list },
     onNewReceiver: () => opener?.tick(),
     runNow: (adapter, id) => opener?.runNow(adapter, id) ?? false,
+    waitingForNetwork: () => opener?.waitingState(),
     recurrences: recurrenceKeeper,
     agentCancels: () => agentCancels(intakeService.store.list(), recurrenceStore.available ? recurrenceStore.list() : [], Date.now()),
     // Created with the handoff producers below; the handlers only reach it later.
@@ -1237,12 +1243,31 @@ void app.whenReady().then(async () => {
     requestOpen: (adapter, id, folderId) => requestAutoAccept?.(adapter, id, folderId),
     changed: notifyIntakeChanged,
     keeper: recurrenceKeeper,
+    // `handoff-waits-for-network`: nothing opens on its own until the agent's own origin answers. The environment
+    // is the one an agent session gets, read at each check, after the login shell's has been resolved (design D2).
+    reachable: async () => {
+      await whenUserEnvReady()
+      const origin = agentOrigin(ptyEnv(), preferencesStore.get().handoffNetworkCheck !== false)
+      return origin === null ? null : checkReachable(origin, sendReachabilityRequest, REACHABILITY_TIMEOUT_MS)
+    },
+    schedule: (ms, fn) => {
+      const timer = setTimeout(() => {
+        releaseTimers.delete(timer)
+        fn()
+      }, ms)
+      releaseTimers.add(timer)
+      timer.unref?.()
+    },
   })
   onRestoreGateOpen(() => opener?.tick())
   const openerTimer = setInterval(() => opener?.tick(), OPENER_INTERVAL_MS)
-  // Wall-clock due times: after a sleep the first tick opens what fell due meanwhile.
-  powerMonitor.on('resume', () => opener?.tick())
-  app.on('will-quit', () => clearInterval(openerTimer))
+  // Wall-clock due times: after a sleep the first look opens what fell due meanwhile — once the agent's service
+  // answers, and never on an answer to a check sent before the sleep (`resumed`).
+  powerMonitor.on('resume', () => opener?.resumed())
+  app.on('will-quit', () => {
+    clearInterval(openerTimer)
+    for (const timer of releaseTimers) clearTimeout(timer)
+  })
 
   registerHandoffService(handoffService)
   void handoffService.start().catch((error) => {
