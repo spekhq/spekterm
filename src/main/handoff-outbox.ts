@@ -93,6 +93,15 @@ export function commandsFile(): string {
   return handoffRootPath ? path.join(handoffRootPath, 'commands.json') : ''
 }
 
+/**
+ * The workspace sessions file (`workspace-sessions`): every agent session in the workspace, read by an agent before a
+ * handoff that opens now. One for the whole workspace, at the handoff root — never inside an outbox, where it would be
+ * read as a delivery.
+ */
+export function workspaceSessionsFile(): string {
+  return handoffRootPath ? path.join(handoffRootPath, 'workspace-sessions.json') : ''
+}
+
 /** 某個 session 的自我介紹檔。**在 outbox 之外** —— 放進去會被當成一份投遞。 */
 export function introFile(sessionId: string): string {
   return handoffRootPath ? path.join(handoffRootPath, 'intro', `${sessionId}.json`) : ''

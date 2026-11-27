@@ -105,6 +105,11 @@ OpenSpec 結構的側欄，讓使用者不必另外開 IDE 就能一邊駕駛 ag
   (`agent-session-wake`, `kind: "wake"`): at once, quietly, with no confirmation (the user's decision), so it can then
   message it. **Its reach is the relations file's own output** (`relativeNamesOf`), never a second derivation of
   "who is a sibling".
+  **Before a handoff that opens now, an agent reads the workspace sessions file** (`workspace-sessions-file`,
+  `<handoffRoot>/workspace-sessions.json`): every agent session with its repo, label, running, state, context and
+  summary; its `about` says to message a running session already on the same work instead of opening a new one. Its
+  state follows the raw wait value, so it is refreshed from wait batches, **not from attention alone**
+  (`docs/lessons/handoff.md` §21).
 - **Settings** (`settings-sections`) — one dialog with sections (General, Terminal, Agents & sessions,
   Integrations, Team, Remote access, About) and **one save model: a change applies when it is made** (a choice at
   once, a typed value on Enter or blur, Esc restores). The only exceptions are a Slack token and the remote port,
@@ -183,7 +188,8 @@ OpenSpec 結構的側欄，讓使用者不必另外開 IDE 就能一邊駕駛 ag
     its submit key (15 s, cut to 5 s after an allow because one switch asks the hook twice), and the injected
     `PreModelSwitch` command allows only a command switch to that name. The box it skips is invisible to a device.
   - **A device's model and usage are a per-watch event (`conversation.status`), never a session list field**: context
-    and cost change with every API call, and the list goes to every device. A device's prompt carries the phone-origin
+    and cost change with every API call, and the list goes to every device. (The workspace sessions file's `context` is not bound by this: agents pull it, and it is
+    rewritten only at refreshes it already makes.) A device's prompt carries the phone-origin
     note as hook context, not text (`agent-origin.ts`); the skill list is the transcript's `skill_listing`
     (`transcript-skills.ts`). Both rest on measured CLI behavior: `docs/lessons/transcript.md`.
   - **A device sends an accepted item's filled-in prompt by writing only the submit key** (`sessions.submitPrefill`,

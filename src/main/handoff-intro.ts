@@ -88,6 +88,11 @@ export interface IntroInput {
   repeating?: string
   /** The commands rules file (`intro-layered-rules`). Absent: beside the outbox root, where `commandsFile()` puts it. */
   commands?: string
+  /**
+   * The workspace sessions file (`workspace-sessions`). Absent: beside the outbox root, where `workspaceSessionsFile()`
+   * puts it.
+   */
+  workspaceSessions?: string
 }
 
 /**
@@ -135,7 +140,7 @@ export function introText(input: IntroInput): string {
 }
 
 function composeIntro(
-  { folders, outbox, receipts, name, relations, reportable, timeZone, teammates, schedules, repeating, commands }: IntroInput,
+  { folders, outbox, receipts, name, relations, reportable, timeZone, teammates, schedules, repeating, commands, workspaceSessions }: IntroInput,
   shown: number,
 ): string {
   /**
@@ -156,6 +161,7 @@ function composeIntro(
   const schedulesPath = schedules ?? path.join(handoffRoot, 'schedules.json')
   const repeatingPath = repeating ?? path.join(handoffRoot, 'repeating.json')
   const commandsPath = commands ?? path.join(handoffRoot, 'commands.json')
+  const workspaceSessionsPath = workspaceSessions ?? path.join(handoffRoot, 'workspace-sessions.json')
   const zone = timeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone
   const lines = [
     'You are running inside spekterm, a desktop workspace that hosts this terminal session.',
@@ -185,6 +191,7 @@ function composeIntro(
     ...repoLines(folders, shown),
     '',
     'When a handoff is accepted, spekterm opens a new agent session in the target repo with the body prepared, and sends its first prompt as soon as that agent is ready. It starts working without waiting for the user.',
+    `Before handing work to a repo now, read ${workspaceSessionsPath} - it lists every session in this workspace and says when to message one instead.`,
     ...teammateLines(teammates),
     '',
     'For every file you write into your outbox, spekterm writes a receipt with the same name into:',

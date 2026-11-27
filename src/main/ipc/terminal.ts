@@ -4,7 +4,7 @@ import { t } from '@shared/i18n'
 import { preferredTitle } from '../../shared/lineage/label'
 import type { LiveSession } from '../close-prompt'
 import { clearAgentEvents } from '../agent-events'
-import { clearAgentStatus } from '../agent-status'
+import { clearAgentStatus, contextPercentSince } from '../agent-status'
 import { clearWait, forgetRequests, subscribeWait, waitStateOf } from '../agent-wait'
 import { HibernationTracker } from '../hibernation'
 import { tickPeriodMs } from '../hibernation-policy'
@@ -13,6 +13,9 @@ import { broadcastLifecycle } from './handoff'
 import { createSession } from '../session-create'
 import { lifecycleViewOf } from '../handoff-lifecycle-view'
 import { type RelationsWorld, teammateHandoffsNow } from '../handoff-relations'
+import { lastProcessChangeAt, runStartedAt } from '../session-runs'
+import { seenMarks } from '../wait-seen'
+import type { WorkspaceSessionsWorld } from '../workspace-sessions'
 import type { PreferencesStore } from '../preferences-store'
 import { SessionStatusService } from '../session-status'
 import type { RendererSession, SessionLineage, SessionStore } from '../session-store'
@@ -220,6 +223,20 @@ export function currentRelationsWorld(store: FolderLookup, sessions: SessionStor
     lifecycle: new Map(lifecycleViewOf(sessions).map((view) => [view.sessionId, view])),
     // The sending sessions' teammate handoffs and their status (`teammate-handoff-return` D6).
     teammateHandoffs: teammateHandoffsNow(),
+  }
+}
+
+/**
+ * The relations world plus what the workspace sessions file reads of every session (`workspace-sessions` D2, D6): the
+ * raw wait value, the seen mark, and the context usage reported in the session's current process — a payload from an
+ * earlier process is not used (`lastProcessChangeAt` is this process's start; no record means it started with the run).
+ */
+export function currentWorkspaceSessionsWorld(store: FolderLookup, sessions: SessionStore): WorkspaceSessionsWorld {
+  return {
+    ...currentRelationsWorld(store, sessions),
+    wait: waitStateOf,
+    seen: (sessionId) => seenMarks.seenOf(sessionId),
+    context: (sessionId) => contextPercentSince(sessionId, lastProcessChangeAt(sessionId) ?? runStartedAt()),
   }
 }
 

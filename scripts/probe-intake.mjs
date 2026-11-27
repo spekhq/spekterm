@@ -4765,6 +4765,142 @@ async function runLineageSeen(_mode, _modeConfig, context) {
   )
 }
 
+/**
+ * workspace-sessions: the workspace sessions file lists every agent session — a user's and a handoff's, in two
+ * folders — and follows their state with no other change in the workspace.
+ *
+ * The user session (P, opened by accepting an inbox item, no lineage) is made busy **without a prompt submission**
+ * (`fire PreToolUse` alone, as a message-driven turn may be). The context usage is the stub's statusLine payload, read
+ * at a refresh. Control run (tasks 2.3): with the wait-batch wiring removed this section stays green — the running
+ * app refreshes the file by another path in these cases — so the trigger is carried at unit level.
+ */
+async function runWorkspaceSessions(_mode, _modeConfig, context) {
+  const { profile, folders } = seedProfile()
+  seedRouting(profile, { fallbackFolderId: folders[0].id })
+  const configDir = mkTemp('spekterm-intake-config-')
+  const marker = `spek-intake-ws-${process.pid}-${Date.now()}`
+  const stub = makeStubAgent(mkTemp, configDir, { readyDelaySeconds: 2 })
+  const [nameA, nameB] = [basename(folders[0].path), basename(folders[1].path)]
+  const file = join(profile, 'handoff', 'workspace-sessions.json')
+  const listed = () => {
+    try {
+      return JSON.parse(readFileSync(file, 'utf8')).sessions ?? null
+    } catch {
+      return null
+    }
+  }
+  const entryOf = (name) => listed()?.find((e) => e.name === name) ?? null
+
+  drop(profile, 'source', intake({ id: 'ws-src', title: 'WS-SOURCE' }))
+  const app = await freshApp(context, { profile, configDir, stub, marker })
+  await openInbox(app)
+  await pollFor({ read: () => app.client.evaluate(acceptExpression('WS-SOURCE')), settled: Boolean, timeoutMs: 20_000, label: 'the user session is created by accepting' })
+  const outbox = await awaitOutbox(profile, 'the user session drop point appears')
+  const parentId = basename(outbox)
+  writeFileSync(join(outbox, 'child.json'), JSON.stringify({ target: nameB, title: 'WS-CHILD', body: 'child' }))
+  const C = await pollFor({
+    read: () => persistedSessions(profile).find((s) => s.lineage?.parentId === parentId && s.claudeSessionId) ?? null,
+    settled: Boolean,
+    timeoutMs: 30_000,
+    label: 'the handoff session is persisted',
+  }).catch(() => null)
+  // The user session is persisted after the renderer's debounce: read it once the handoff session exists.
+  const P = persistedSessions(profile).find((s) => s.id === parentId) ?? null
+  check(results, 'precondition: a user session and a handoff session exist', Boolean(P?.peerName && C?.peerName), JSON.stringify(persistedSessions(profile)))
+  if (!P?.peerName || !C?.peerName) return
+
+  // ── Both are listed: name, repo, running; the handoff session by its handoff title.
+  const both = await pollFor({
+    read: listed,
+    settled: (list) => Boolean(list?.find((e) => e.name === P.peerName)?.running && list?.find((e) => e.name === C.peerName)?.running),
+    timeoutMs: 20_000,
+    label: 'both sessions are listed running',
+  }).catch(() => listed())
+  const p0 = both?.find((e) => e.name === P.peerName)
+  const c0 = both?.find((e) => e.name === C.peerName)
+  check(
+    results,
+    'the workspace sessions file lists a user session and a handoff session in two repos, with names, repos and running',
+    p0?.repo === nameA && p0?.running === true && c0?.repo === nameB && c0?.running === true && c0?.title === 'WS-CHILD',
+    JSON.stringify(both),
+  )
+  const raw = existsSync(file) ? readFileSync(file, 'utf8') : ''
+  check(
+    results,
+    'the file written by the app carries no path and no session identifier',
+    raw !== '' && !raw.includes(profile) && !folders.some((f) => raw.includes(f.path)) && ![P.id, C.id, P.claudeSessionId, C.claudeSessionId].some((id) => raw.includes(id)),
+    raw.slice(0, 300),
+  )
+
+  // ── A busy turn with no prompt submission, then its end: only the wait-batch trigger sees these.
+  await pollFor({ read: () => entryOf(P.peerName), settled: (e) => e?.state !== 'working', timeoutMs: 10_000, label: 'the user session starts not working' })
+  stub.command(P.claudeSessionId, 'fire PreToolUse')
+  const working = await pollFor({ read: () => entryOf(P.peerName), settled: (e) => e?.state === 'working', timeoutMs: 10_000, label: 'the user session works' }).catch(() => entryOf(P.peerName))
+  check(results, 'a user session made busy without a prompt submission is listed as working', working?.state === 'working', JSON.stringify(working))
+  stub.command(P.claudeSessionId, 'fire Stop')
+  const ended = await pollFor({ read: () => entryOf(P.peerName), settled: (e) => e?.state !== 'working', timeoutMs: 10_000, label: 'the user session stops working' }).catch(() => entryOf(P.peerName))
+  check(
+    results,
+    "the user session's turn end reaches the file with no other change in the workspace (waiting, or idle where the window has focus)",
+    ended?.state === 'waiting' || ended?.state === 'idle',
+    JSON.stringify(ended),
+  )
+  // A second busy stretch after that turn ended, with no prompt and no keystroke since. **Not a discriminating step
+  // for the wait-batch trigger**: with that wiring removed this section stayed green (ran twice) — another refresh in
+  // the running app covers it. The trigger's carrier is the unit level (`shouldRefresh` and the builder, design D3).
+  stub.command(P.claudeSessionId, 'fire PreToolUse')
+  const again = await pollFor({ read: () => entryOf(P.peerName), settled: (e) => e?.state === 'working', timeoutMs: 10_000, label: 'the user session works again' }).catch(() => entryOf(P.peerName))
+  check(results, 'busy again after its turn ended, with no prompt or keystroke, the user session is listed as working', again?.state === 'working', JSON.stringify(again))
+  stub.command(P.claudeSessionId, 'fire Stop')
+  await pollFor({ read: () => entryOf(P.peerName), settled: (e) => e?.state !== 'working', timeoutMs: 10_000, label: 'the user session stops again' }).catch(() => null)
+
+  // ── Context: written by the agent's status line, read at a refresh (design D6). Written while nothing works, then a
+  // state change refreshes the file.
+  // The handoff session's first prompt is sent for it and the stub ends that turn: wait for that first.
+  const firstTurn = await pollFor({ read: () => entryOf(C.peerName), settled: (e) => e?.state === 'waiting', timeoutMs: 30_000, label: 'the handoff session finished its first turn' }).catch(() => entryOf(C.peerName))
+  check(results, "precondition: the handoff session's first turn ended", firstTurn?.state === 'waiting', JSON.stringify(firstTurn))
+  const quiet = listed()
+  check(results, 'precondition: no listed session is working (no periodic refresh runs)', Boolean(quiet) && quiet.every((e) => e.state !== 'working'), JSON.stringify(quiet))
+  const payloadFile = join(profile, 'agent-status', `${C.id}.json`)
+  const payload = { model: { display_name: 'Probe Model' }, context_window: { used_percentage: 82.6, context_window_size: 1000000 } }
+  stub.command(C.claudeSessionId, stub.statusLine(payload))
+  const reported = await pollFor({ read: () => existsSync(payloadFile), settled: Boolean, timeoutMs: 10_000, label: 'the status payload is written' }).catch(() => false)
+  check(results, 'precondition: the injected status line wrote the payload', reported === true, payloadFile)
+  // No "unchanged right after" assertion: the spec allows a rewrite at any refresh, and other refreshes (the session
+  // list's own writes) can land in any window — measured, it was rewritten within 1.5 s with no state change.
+  stub.command(C.claudeSessionId, 'fire PreToolUse')
+  const afterChange = await pollFor({ read: () => entryOf(C.peerName), settled: (e) => e?.context === 83, timeoutMs: 10_000, label: 'the context reaches the file' }).catch(() => entryOf(C.peerName))
+  check(results, "at the session's next state change the file lists the agent's reported context, whole percent", afterChange?.context === 83, JSON.stringify(afterChange))
+  stub.command(C.claudeSessionId, 'fire Stop')
+  await pollFor({ read: () => entryOf(C.peerName), settled: (e) => e?.state !== 'working', timeoutMs: 10_000, label: 'the handoff session stops working' }).catch(() => null)
+
+  // ── Hibernate the handoff session: not running, idle, no context.
+  await app.client.evaluate(`window.workspace.terminal.hibernate(${JSON.stringify(C.id)})`)
+  const dormant = await pollFor({
+    read: () => entryOf(C.peerName),
+    settled: (e) => e?.running === false,
+    timeoutMs: 15_000,
+    label: 'the handoff session is listed dormant',
+  }).catch(() => entryOf(C.peerName))
+  check(
+    results,
+    'a hibernated session is listed as not running, idle, with no context',
+    dormant?.running === false && dormant?.state === 'idle' && !('context' in dormant),
+    JSON.stringify(dormant),
+  )
+
+  // ── Close it: it leaves the file.
+  await app.client.evaluate(`window.workspace.terminal.kill(${JSON.stringify(C.id)})`)
+  const gone = await pollFor({ read: () => entryOf(C.peerName), settled: (e) => e === null, timeoutMs: 15_000, label: 'the closed session leaves the file' }).catch(() => entryOf(C.peerName))
+  check(results, 'a closed session leaves the workspace sessions file', gone === null && entryOf(P.peerName) !== null, JSON.stringify(listed()))
+
+  // ── Removed from outside: back at the next refresh.
+  rmSync(file)
+  stub.command(P.claudeSessionId, ['fire PreToolUse', 'sleep 1', 'fire Stop'].join('\n'))
+  const back = await pollFor({ read: () => existsSync(file), settled: Boolean, timeoutMs: 15_000, label: 'the file comes back' }).catch(() => false)
+  check(results, 'a workspace sessions file removed from outside comes back at the next refresh', back === true, `back=${back}`)
+}
+
 async function runHibernateUnsent(_mode, _modeConfig, context) {
   const THRESHOLD_S = 4
   const { profile, folders } = seedProfile()
@@ -5383,6 +5519,7 @@ const SECTIONS = [
   { name: 'runLineageSeen', run: runLineageSeen },
   { name: 'runMaximizeHandoff', run: runMaximizeHandoff },
   { name: 'runSessionControl', run: runSessionControl },
+  { name: 'runWorkspaceSessions', run: runWorkspaceSessions },
 ]
 
 /** One stand-in for the agent's service for the whole run; `runHeldForNetwork` stops and restarts it. */

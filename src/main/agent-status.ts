@@ -209,6 +209,23 @@ export function readAgentStatus(sessionId: string): AgentStatus | undefined {
   }
 }
 
+/**
+ * The context usage the session's agent last reported, **only from a payload written at or after `since`** — the
+ * start of the session's current process (`workspace-sessions` design D6). A payload outlives its process: hibernation
+ * and quitting remove none, and `prepareInjection` returns before removing the old one when it does not inject, so a
+ * running session can sit beside a payload from an earlier process. Absent: no payload, an older one, or no usage in it.
+ */
+export function contextPercentSince(sessionId: string, since: number): number | undefined {
+  const target = payloadPath(sessionId)
+  if (!target) return undefined
+  try {
+    if (fs.statSync(target).mtimeMs < since) return undefined
+  } catch {
+    return undefined
+  }
+  return readAgentStatus(sessionId)?.contextPercent
+}
+
 /** session 結束時清掉它的 payload —— 不留下一份沒有主人的狀態。 */
 export function clearAgentStatus(sessionId: string): void {
   const target = payloadPath(sessionId)

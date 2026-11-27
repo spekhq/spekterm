@@ -272,6 +272,26 @@ test('the session commands (agent-session-control, intro-layered-rules)', async 
   })
 })
 
+test('the workspace sessions file (workspace-sessions-file)', async (t) => {
+  const base = { folders: [], outbox: '/data/handoff/outbox/s1' }
+
+  await t.test('every agent session is pointed to it before a handoff, at its location beside the outbox root', () => {
+    // A session not opened by a handoff: no relations, no reportable.
+    assert.match(
+      introText(base),
+      /Before handing work to a repo now, read \/data\/handoff\/workspace-sessions\.json - it lists every session in this workspace and says when to message one instead\./,
+    )
+    assert.match(introText({ ...base, workspaceSessions: '/elsewhere/ws.json' }), /read \/elsewhere\/ws\.json - it lists every session/)
+  })
+
+  await t.test('the file\'s rule and field meanings are not repeated here', () => {
+    const text = introText({ ...base, relations: '/r.json', name: 'alpha-1a2b', reportable: 'lineage' })
+    for (const moved of [/A message gives no receipt/, /does not take new work/, /not merely the same repo/, /or spekterm does not know/, /unless the user asked for a new session/]) {
+      assert.doesNotMatch(text, moved)
+    }
+  })
+})
+
 /**
  * **Every constraint that refuses a delivery or a command has its own assertion** (`scheduled-handoff`, D10): the
  * wording is tightened, and a rule dropped from unasserted text would turn nothing red. Key words, not sentences,

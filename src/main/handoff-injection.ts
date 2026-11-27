@@ -1,7 +1,7 @@
 import { writeHandoffRules } from './handoff-rules'
 import { INTRO_COMMAND, INTRO_ENV, OUTBOX_ENV, RECEIPTS_ENV, RELATIONS_ENV, type ReportKind, writeIntroFile } from './handoff-intro'
 import type { PersistedSession } from './session-store'
-import { commandsFile, introFile, outboxDir, prepareOutbox, receiptsDir, relationsFile, repeatingFile } from './handoff-outbox'
+import { commandsFile, introFile, outboxDir, prepareOutbox, receiptsDir, relationsFile, repeatingFile, workspaceSessionsFile } from './handoff-outbox'
 import { writeRelationsFor, type RelationsWorld } from './handoff-relations'
 import type { InjectionContribution } from './agent-injection'
 import type { WorkspaceFolder } from './workspace-store'
@@ -83,6 +83,7 @@ export function prepareHandoffInjection(
     teammates: teamIntro(),
     repeating: repeatingFile(),
     commands: commandsFile(),
+    workspaceSessions: workspaceSessionsFile(),
   })
 
   return {
@@ -126,6 +127,7 @@ export function refreshIntros(
       teammates: teamIntro(),
       repeating: repeatingFile(),
       commands: commandsFile(),
+      workspaceSessions: workspaceSessionsFile(),
     })
   }
 }

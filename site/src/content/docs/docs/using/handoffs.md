@@ -26,6 +26,25 @@ wrote its text, not a third party. Its first prompt is sent as soon as the new a
 CLI does not take the submit key. The session then shows **A prompt is waiting to be sent**, and you press
 `Enter` yourself; spekterm does not send it a second time.
 
+## When a session is already on it
+
+Before an agent hands work off, it looks at every agent session in your workspace: which repository each is in,
+its label, whether it is running, what it is doing (working, waiting for you, idle, or done), how full its
+conversation is, and what it reported when it finished. If a running session in the target repository is already on
+the same work, the agent **sends the work to that session with Claude Code's own messaging** instead of opening a new
+one, and tells you which session got it. No new tab opens, and there is no handoff card or completion notification
+for it: follow it in that session's tab.
+
+- **A session whose conversation is nearly full does not take new work.** At 70% or more, a new session opens
+  instead, so the work is not compacted halfway through.
+- **A session you never named says little.** Its label is only its fixed name, so the agent asks it what it is
+  doing, or asks you, before sending it anything. Naming your own sessions helps.
+- **A dormant session is woken only if it is related.** The agent can wake its own parent, siblings and the sessions
+  it handed off; for any other dormant session, it tells you the session exists and asks whether to wake it or open a
+  new one.
+- **Asking for a new session wins.** "Open a new session for this" opens one, whatever else is running.
+- Scheduled and repeating handoffs always open a new session.
+
 ## Handing work off to a later time
 
 A change often takes days to finish: the last steps wait for a deploy, for data to pile up, or for a

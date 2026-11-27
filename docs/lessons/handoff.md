@@ -788,3 +788,44 @@ recorded "1 萬字, then a file and a 2,000 preview" all along. The reviewer rep
 - **The introduction is unchanged**, so its "a time not later than now opens at once" holds only while the service
   can be reached. An agent that writes a handoff cannot act on the network rule, and the introduction's budget is
   tight (§16).
+
+## 21. The workspace sessions file: what fails silently here (`workspace-sessions-file`)
+
+An agent used to see only its relatives; every other session was a bare fixed name in `ListAgents`, so it opened a
+new session for work one was already doing. `<handoffRoot>/workspace-sessions.json` lists every agent session (repo,
+label, running, state, context, summary) and its `about` carries the rule: message a running session already on the
+same work instead of handing off; the introduction has one sentence pointing there.
+
+- **One shared file, not a field of each relations file.** The relations file's names are the wake's reach
+  (`relativeNamesOf`); listing everyone there would blur "may be woken" with "exists". The about says only the
+  relations file's sessions can be woken.
+- **The state is the raw wait value (`lifecycleOf`), not the status dot's attention.** Attention reads `inTurn`, and
+  a turn a peer message starts may report no `UserPromptSubmit` (unmeasured, §12.5); raw busy is working. So
+  **attention is not a sufficient trigger** for a wait change (`busy, !inTurn, seen` → `ready, seen` moves the state
+  and not the attention): the file is refreshed from the `observeWaits` observer when the wait value or the seen mark
+  changed (`shouldRefresh`; the tick publishes every 400 ms whether or not anything changed), from the relations
+  trigger, and from `remoteChanged` for a look (with `ready`, a seen change always moves the attention).
+- **The probe cannot discriminate that trigger.** With the wait-batch wiring removed, `probe:intake
+  runWorkspaceSessions` stayed green, twice, including a busy stretch with no prompt and no keystroke: the running app
+  refreshes the file by another path in those cases. The trigger's carrier is the unit level. And an accepted inbox
+  item's session counts as "in a turn" from the start: its prefill was typed into the pty.
+- **A status payload on disk outlives its process.** The maintainer's profile held 44 payloads: 10 of running
+  sessions, 28 of dormant ones, 6 of sessions no longer listed. `clearAgentStatus` runs only on `kill` and on closing a
+  dormant session, and `prepareInjection` returns before removing the old payload when it does not inject, so a running
+  session can sit beside a stale one. `contextPercentSince` uses a payload only when its mtime is not earlier than the
+  session's current process start (`lastProcessChangeAt ?? runStartedAt`).
+- **"The percentage alone does not rewrite the file" cannot be asserted.** The spec permits a rewrite at any refresh,
+  and the session list's own writes rewrote the file within 1.5 s with no state change (measured). The probe writes
+  the payload while nothing works, then changes the session's state and asserts the value.
+- **In the probe, a handoff session's first turn must end before the probe drives it.** Its first prompt is sent for
+  it and the stub ends that turn; a `fire PreToolUse` sent before that is overtaken by the turn's own `Stop`, and a
+  later `fire Stop` then changes nothing — so no refresh reads the new payload. A busy stretch the probe started on a
+  handoff session also went back to waiting within 1.5 s with no `Stop` sent once (cause not found).
+- **Labels need the user's help.** A session the user opened and never renamed is labelled by its fixed name
+  (`--name` pins the pty title) and has no summary; the about tells the agent to ask it or the user. The pty title's
+  status glyph (`✳ `, `◑ `) is stripped — only from the pty title, never from a name the user gave.
+- **Dogfood (2026-11-27, dev build):** in one repo an agent asked to hand off work an open, named session in another
+  repo was doing messaged that session instead of opening one; with that session closed, or with "open a new session"
+  said, a new one opened. **A resumed session reports its usage before any turn**: after a dev restart, the resumed
+  sessions wrote status payloads within about 20 s with their restored usage (5–8%, not 0), so `context` is present
+  from the start (Claude Code 2.1.332).

@@ -37,10 +37,14 @@ export function refreshAttention(): void {
   broadcaster?.update(projection())
 }
 
-/** One drained batch of one session (the `observeWaits` observer): the mark first, then the projection. */
-export function noteWaitBatch(sessionId: string, snapshot: WaitSnapshot): void {
-  seenMarks.onBatch(sessionId, snapshot)
+/**
+ * One drained batch of one session (the `observeWaits` observer): the mark first, then the projection. Returns whether
+ * the batch changed the seen mark (the workspace sessions file's trigger, `workspace-sessions` D3).
+ */
+export function noteWaitBatch(sessionId: string, snapshot: WaitSnapshot): boolean {
+  const seenChanged = seenMarks.onBatch(sessionId, snapshot)
   refreshAttention()
+  return seenChanged
 }
 
 /** A window gained focus: its displayed session is looked at. */

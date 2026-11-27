@@ -22,6 +22,7 @@ import { registerShellHandlers } from './ipc/shell'
 import { displayedInFocus, noteWaitBatch, registerWaitHandlers, windowFocused } from './ipc/wait'
 import {
   currentRelationsWorld,
+  currentWorkspaceSessionsWorld,
   existingTerminalService,
   liveSessionsOf,
   onPtyChange,
@@ -63,7 +64,14 @@ import { electronNotifyBackend } from './intake-notify-electron'
 import { createStubBackend, stubNotifyRoot } from './intake-notify-stub'
 import { IntakeService } from './intake-service'
 import { IntakeSource, inboxRoot } from './intake-source'
-import { configureHandoff, liveSessions, receiptsDir, schedulesFile, teammatesFile } from './handoff-outbox'
+import { configureHandoff, liveSessions, receiptsDir, schedulesFile, teammatesFile, workspaceSessionsFile } from './handoff-outbox'
+import {
+  shouldRefresh,
+  WorkingRefresh,
+  workspaceSessionsContent,
+  workspaceSessionsOf,
+  writeWorkspaceSessions,
+} from './workspace-sessions'
 import { agentCancels, HandoffCanceller } from './handoff-cancel'
 import { listView } from './intake-projection'
 import { bodyOf } from './intake-schema'
@@ -863,10 +871,24 @@ void app.whenReady().then(async () => {
     void remoteOpenSpec.dispose()
     remoteOpenSpec = null
   })
+  /**
+   * The workspace sessions file (`workspace-sessions`): rebuilt from the relations trigger, from a wait batch that
+   * changed a wait value or a seen mark, from an attention change (a look), and every 30 s while a session is working
+   * (design D3, D6). The content is compared with the file on disk, so a refresh that changes nothing writes nothing.
+   */
+  const refreshWorkspaceSessions = (): void => {
+    const entries = workspaceSessionsOf(currentWorkspaceSessionsWorld(store, sessionStore))
+    writeWorkspaceSessions(workspaceSessionsFile(), workspaceSessionsContent(entries))
+    workingRefresh.update(entries)
+  }
+  const workingRefresh = new WorkingRefresh(refreshWorkspaceSessions)
+  app.on('will-quit', () => workingRefresh.dispose())
   // Every drained batch of every session: attention events, and the session list's wait states.
   observeWaits((sessionId, snapshot, previous) => {
     // The seen mark first, so an unseen turn end reaches the window and the lists in this same tick.
-    noteWaitBatch(sessionId, snapshot)
+    const seenChanged = noteWaitBatch(sessionId, snapshot)
+    // Not attention: `busy, !inTurn` → `ready` moves the file's state with no attention change (design D3).
+    if (shouldRefresh(previous, snapshot.state, seenChanged)) refreshWorkspaceSessions()
     remoteAttention.onWait(sessionId, snapshot)
     // A subagent's stop moves no wait state but can change the background tasks (`remote-background-tasks` D6).
     if (snapshot.state !== previous || snapshot.backgroundChanged) remoteService.listChanged('sessions')
@@ -941,6 +963,8 @@ void app.whenReady().then(async () => {
   configureHandoff(app.getPath('userData'))
   // The rules files the introduction points to (`intro-layered-rules`); rewritten at every intro write point too.
   writeHandoffRules()
+  // The workspace sessions file exists before the first agent reads its introduction (`workspace-sessions`).
+  refreshWorkspaceSessions()
 
   /**
    * The schedules file (`handoff-cancel`, design D6): what an agent can cancel, from the Schedules tab's own lists.
@@ -1355,11 +1379,14 @@ void app.whenReady().then(async () => {
    * 關係檔的**單一觸發點**（`handoff-lineage` design D6）：session 清單（含暫定紀錄、標籤）、pty 的
    * 誕生與結束、folder 清單 —— 任何一個變了就整份重算，只寫有變的檔。
    */
-  const refreshAllRelations = (): void =>
+  const refreshAllRelations = (): void => {
     refreshRelations({
       ...currentRelationsWorld(store, sessionStore),
       agents: runningAgents(),
     })
+    // The same trigger serves the workspace sessions file (`workspace-sessions` D3).
+    refreshWorkspaceSessions()
+  }
   sessionStore.subscribe(refreshAllRelations)
   onPtyChange(refreshAllRelations)
   store.subscribe(refreshAllRelations)
@@ -1394,7 +1421,12 @@ void app.whenReady().then(async () => {
   registerWaitHandlers({
     sessions: sessionStore,
     lineageChanged: lifecycleChanged,
-    remoteChanged: () => remoteService.listChanged('sessions'),
+    remoteChanged: () => {
+      remoteService.listChanged('sessions')
+      // A look at a session changes its seen mark outside a wait batch; with "ready", that always moves the attention,
+      // so this is where a look reaches the workspace sessions file (`workspace-sessions` D3).
+      refreshWorkspaceSessions()
+    },
   })
 
   /**
