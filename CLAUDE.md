@@ -49,8 +49,11 @@ OpenSpec 結構的側欄，讓使用者不必另外開 IDE 就能一邊駕駛 ag
   內容來自 agent 自己寫下的紀錄（`~/.claude/projects/**/*.jsonl` 增量 tail），
   「現在能不能送輸入」來自注入的 hooks。
   **The status dots read the same hooks** (`session-wait-indicator`): working / waiting for you / asks for a choice /
-  idle. "Waiting" means a turn ended that no one has looked at; **the seen mark is owned by the main process**
+  idle · running in background / idle. "Waiting" means a turn ended that no one has looked at; **the seen mark is owned by the main process**
   (`wait-seen.ts`) and shared with the phone (`seen` in the remote list) and the handoff lifecycle's "waiting".
+  "Idle · running in background" (`idle-with-background-work`) is the idle row while the agent's last report lists
+  background work — **every kind but `monitor`** (`isBackgroundWork`, a subscription the CLI keeps); the phone applies
+  the same rule to the list's `background`, so the two must change together.
   **SHALL NOT 解析終端畫面** —— 生態系有三個專案走過
   那條路，一個要在自己的 app 裡再養一個 VT100 模擬器，一個已失效，一個公開宣告不可維護後刪光。
 - **收件匣** —— 活動列的 `Handoffs` 入口已接上（PRD §11 Phase 7 的本機 inbox）。外部 producer

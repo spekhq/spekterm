@@ -202,8 +202,13 @@ operation takes a path or a directory.
     does not count. It becomes `false` again at every turn end that no one is looking at, and a turn that ends while
     someone is looking is `true` the first time it is listed ready. An agent that only started, resumed (a wake
     included) or cleared its conversation has no turn end and is `true`. The desktop shows `ready` + `seen: false`
-    as "Waiting for you" and `ready` + `seen: true` as idle. **A `ready` session with no `seen` field comes from a
-    desktop older than the field**: treat `ready` as waiting there.
+    as "Waiting for you" and `ready` + `seen: true` as idle — or, when `background` lists a task whose `kind` is not
+    `"monitor"`, as "Idle · running in background": idle in meaning (the agent can take a prompt), with its own dot,
+    not working and not needing the user. A `"monitor"` is a subscription the agent's CLI keeps for the session and
+    does not count; a `Monitor` tool's wait is a `"shell"` and does. "Waiting for you" is never annotated with
+    background work. The rule reads fields every desktop that sends `background` already sends, so apply it whatever
+    the desktop's version. **A `ready` session with no `seen` field comes from a desktop older than the field**: treat
+    `ready` as waiting there.
     One divergence is known and not carried: a permission prompt the user answered by typing at the desktop reports
     nothing, so the list still says `"awaiting-choice"` (its `prompt.answerable` is already `false`) while the desktop
     no longer shows it as a choice.
@@ -289,6 +294,10 @@ once, with no effect. The session list then shows `running: false`, and watches 
 | `unsent` | agent | A filled-in prompt has not been confirmed sent yet. |
 | `job` | shell | A command is running (or the shell replaced itself with another program). |
 | `unknown` | either | The desktop cannot tell (agent events off; on macOS, every shell). |
+
+An agent session that is idle with background work running (`ready`, `seen: true`, a `background` task other than a
+`"monitor"`) is idle here: it is not refused, and hibernating or closing it ends its background work too (a dev
+server, a test run, a background subagent). The same holds for `sessions.close`.
 
 The desktop's own hibernate and close never ask; a device must (section 9, obligation 12). Errors:
 `SESSION_BUSY`, `NOT_FOUND`, `NO_WINDOW`, `TIMEOUT`, `CREATE_FAILED`, `BAD_PARAMS`.

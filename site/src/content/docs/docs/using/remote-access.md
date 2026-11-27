@@ -37,9 +37,12 @@ the phone can open. Images in a conversation are read from the conversation's re
 ### Background work
 
 An agent can leave work running after its turn ends: a background subagent, a background command such as a
-dev server or a test run, or a monitor. The phone can list that work under the session, each with the
+dev server or a test run, or a wait it set up. The phone can list that work under the session, each with the
 agent's own one-line description. A session that has finished its turn but still has work running then does
-not look idle. The list is what the agent last reported. It is updated when the agent's turn ends and when
+not look idle; on the desktop its dot says **idle · running in background**. A subscription the agent keeps open
+for the session (such as an artifact's live updates) is not counted as background work. Hibernating or closing
+such a session from the phone ends its background work too: it is idle, so the phone is not warned that it is
+busy. The list is what the agent last reported. It is updated when the agent's turn ends and when
 one of its subagents stops, and it is cleared when the session's process ends.
 
 ### Hibernating and closing from the phone

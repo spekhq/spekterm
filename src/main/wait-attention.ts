@@ -15,6 +15,8 @@ export interface AttentionSources {
   /** The open requests' tool start times. */
   requestTimes: (sessionId: string) => number[]
   lastKeystroke: (sessionId: string) => number | null
+  /** The agent's last report lists background work (`isBackgroundWork` over `backgroundOf`). */
+  background: (sessionId: string) => boolean
 }
 
 /**
@@ -33,6 +35,7 @@ export function attentionProjection(sources: AttentionSources): AttentionView[] 
         inTurn: sources.inTurn(sessionId),
         seen: sources.seen(sessionId),
         choiceTypedOver,
+        background: sources.background(sessionId),
       }),
     }
   })

@@ -717,7 +717,10 @@ missed the DECRQM ones: measure inside the app, logging what `noteWrite` counts.
 
 Measured on a real spekterm session: a background copier saved the session's event files before the drain removed
 them, while a background subagent started a `sleep 45` in the background and a `Monitor`, paused on them, resumed and
-reported. **Re-measure after a CLI upgrade**: the remote list's `background` field rests on every line.
+reported. **Re-measure after a CLI upgrade**: the remote list's `background` field rests on every line, and so does
+the desktop's "idle · running in background" dot (`idle-with-background-work`), which also rests on the `kind`
+mapping — a `monitor` is left out (`isBackgroundWork`), so a CLI that starts reporting real work as `monitor`, or a
+`Monitor` tool's wait as anything but `shell`, would show it as plain idle.
 
 - **The list is in two payloads**: the agent's own `Stop`, and **`SubagentStop`**, each with the session's complete
   list. No other event carries it (no capture of `SessionStart` does). A helper agent's `SubagentStop` after a `Stop`
@@ -754,6 +757,11 @@ what they can show. Three consequences, each with a carrier in `src/main/wait-se
   answer. The remote list still says `awaiting-choice` until the agent's next event.
 - **A background subagent's late `PreToolUse` is not a turn.** It can arrive after the turn's `Stop` (one run in
   five) and sets the base state to busy with `inTurn: false`; the dot reads it as the turn-ended row.
+- **A turn held open is seen, never waiting.** An own `Stop` that lists a running non-shell task does not end the
+  turn (`backgroundAgentRunning`), and the seen mark counts a batch in a turn as seen — so the dot shows "idle ·
+  running in background" (`idle-with-background-work`), not "waiting for you", until a later `Stop` ends the turn.
+  A `monitor` holds a turn open too (the `remote-background-tasks` finding), but is not counted as background work,
+  so such a session reads plain idle and never waiting.
 
 Two that come from spekterm, not the CLI:
 

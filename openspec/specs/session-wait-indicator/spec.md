@@ -1,7 +1,7 @@
 # session-wait-indicator Specification
 
 ## Purpose
-What an agent session's status dot shows (asks for a choice, waiting for you, working, idle), how each state is derived from the agent's reported events, the seen mark the main process owns and shares with paired devices and the handoff lifecycle, and the rail item's most-urgent dot.
+What an agent session's status dot shows (asks for a choice, waiting for you, working, idle · running in background, idle), how each state is derived from the agent's reported events, the seen mark the main process owns and shares with paired devices and the handoff lifecycle, and the rail item's most-urgent dot.
 
 ## Requirements
 
@@ -9,14 +9,15 @@ What an agent session's status dot shows (asks for a choice, waiting for you, wo
 
 The status dot of a running agent session — on its rail row and on its tab — SHALL show the session's attention
 state, derived by the main process from the agent's wait state (`agent-event-bridge`), whether a turn is in progress,
-and the seen mark:
+the seen mark, and the background tasks the agent last reported (`agent-event-bridge`):
 
 | Attention state | When |
 |---|---|
 | **asks for a choice** | the agent waits on a choice, and the session has not been typed into since the agent began the tool call the choice is about |
 | **waiting for you** | the agent is not in a turn, its last turn ended while no one was looking at it, and no one has looked at it since |
 | **working** | the agent reports work, within a turn that is in progress (it was given a prompt and has not finished) |
-| **idle** | the agent is not in a turn, and the seen mark says its last turn end has been looked at — or no turn has ended since the agent started |
+| **idle · running in background** | as idle, and the agent's last report of its background tasks lists at least one that is a background subagent, a background shell (a `Monitor` tool's wait included) or a kind not known — a subscription the agent's CLI keeps (kind `monitor`) does not count |
+| **idle** | the agent is not in a turn, and the seen mark says its last turn end has been looked at — or no turn has ended since the agent started — and none of its background tasks counts |
 | **running** | the wait state is unknown |
 
 "Not in a turn" includes an agent whose wait state reports work after its turn ended — a background subagent's tool
@@ -24,12 +25,20 @@ start can arrive after the turn's end, and it does not start a new turn. A choic
 began that tool call is one the user answered at the desktop; the agent reports no event for a denial, so the state is taken from
 the keystroke, and the choice no longer shows.
 
+"Idle · running in background" is idle in meaning — the agent can take a prompt — and SHALL NOT be shown as working
+or as needing the user. Only the idle row reads background tasks: a session waiting for you, asking for a choice,
+working or running SHALL show that state whatever runs in the background, and "waiting for you" SHALL carry no
+background annotation. "Waiting for you" wins wherever the seen mark says the last turn end is unseen; a turn the
+agent holds open while a background subagent runs has not ended, is not unseen, and so reads "idle · running in
+background". The background tasks are the ones the agent last reported: a task that ended with no later report still
+counts until the next one, and hibernation clears them.
+
 These states apply only while the session's process runs. A hibernated session and an ended session SHALL keep the
 dots they have today, and a shell session SHALL keep today's running dot: it has no wait state.
 
 "Asks for a choice" and "waiting for you" SHALL share one dot, visibly distinct from every other dot at a glance,
-without hovering — it is the state the user scans for. "Idle" and "working" SHALL be distinct from each other and from
-the hibernated dot. "Running" (unknown) MAY look like "working", since an unknown state cannot claim to be anything
+without hovering — it is the state the user scans for. "Idle", "idle · running in background" and "working" SHALL be distinct from each
+other and from the hibernated dot. "Running" (unknown) MAY look like "working", since an unknown state cannot claim to be anything
 else.
 
 The dot's tooltip SHALL state the attention state in words, distinguishing a choice from a finished turn. The words
@@ -70,6 +79,38 @@ SHALL come from the dictionary, in every supported language.
 
 - **WHEN** an agent session runs and its wait state is unknown
 - **THEN** its tooltip states running and no attention state
+
+#### Scenario: A seen turn end with a background shell says so
+
+- **WHEN** an agent session's turn ends while the user looks at it, and the agent's report lists a background shell
+  still running
+- **THEN** its tooltips state "idle · running in background", not "idle" and not "working"
+
+#### Scenario: The state returns to idle when the background work is gone
+
+- **WHEN** a session states "idle · running in background" and the agent's next report lists no background task
+- **THEN** its tooltips state "idle"
+
+#### Scenario: A subscription alone does not count
+
+- **WHEN** an agent session's turn end has been seen and the agent's report lists only a task of kind `monitor`
+- **THEN** its tooltips state "idle"
+
+#### Scenario: Waiting is not annotated
+
+- **WHEN** an agent session's turn ends unseen and the agent's report lists a background shell still running
+- **THEN** its tooltips state "waiting for you" and do not mention background work
+
+#### Scenario: A process end clears it
+
+- **WHEN** a session states "idle · running in background" and it is hibernated, then woken
+- **THEN** after the wake it states "idle" until its agent reports background work again
+
+#### Scenario: A turn held open by a background subagent
+
+- **WHEN** an agent session that is not displayed ends its turn while a background subagent is still running, as the
+  agent's report says
+- **THEN** its tooltips state "idle · running in background", not "waiting for you"
 
 ### Requirement: Looking at a session clears its waiting state, and the main process owns that mark
 
@@ -139,8 +180,8 @@ as a complete projection whenever any of them changes.
 ### Requirement: A rail item's row carries the most urgent state of its sessions
 
 Each folder row on the rail, and the global item's row, SHALL carry one dot for the most urgent state among its
-sessions, in this order: asks for a choice or waiting for you, ended with an error, working, running, idle,
-hibernated or ended. A rail item with no session SHALL show no dot. The dot SHALL show whether or not the item's
+sessions, in this order: asks for a choice or waiting for you, ended with an error, working, idle · running in
+background, running, idle, hibernated or ended. A rail item with no session SHALL show no dot. The dot SHALL show whether or not the item's
 session rows are expanded, so a collapsed item still says that something inside it needs the user. The row's tooltip
 SHALL name the state.
 
@@ -159,6 +200,18 @@ SHALL name the state.
 - **WHEN** a folder has no session
 - **THEN** its row shows no state dot and its tooltip names no state
 
+#### Scenario: Background work outranks idle
+
+- **WHEN** a folder's session rows are collapsed, one of its sessions is idle and another is idle · running in
+  background
+- **THEN** the folder row's tooltip states "idle · running in background"
+
+#### Scenario: Background work outranks a running shell
+
+- **WHEN** a folder's session rows are collapsed, one of its sessions is a running shell and another is idle · running
+  in background
+- **THEN** the folder row's tooltip states "idle · running in background"
+
 ### Requirement: The main stage's header counts the workspace's sessions by state and leads to them
 
 The main stage's header SHALL show the name of the selected rail item (a folder's name, or the global item's
@@ -170,8 +223,8 @@ and SHALL NOT be counted.
 For each state that at least one such session is in, the summary SHALL show the number of sessions in it,
 with the state's dot and its words from the dictionary. The states are those of the status dots, each session
 counted once by the state its own dot shows: **needs you** (asks for a choice or waiting for you, counted
-together, as they share a dot), **ended with an error**, **working**, **running** (a shell, or an unknown wait
-state), **idle**, **hibernated**, **ended**. They SHALL be listed in that order, the order of urgency of the
+together, as they share a dot), **ended with an error**, **working**, **idle · running in background**, **running**
+(a shell, or an unknown wait state), **idle**, **hibernated**, **ended**. They SHALL be listed in that order, the order of urgency of the
 rail item's dot. A state with no session SHALL NOT be listed. The total is not repeated here: the status bar
 already shows it (`status-bar`).
 
@@ -269,3 +322,8 @@ are told apart by their tooltip and accessible name only — an accepted cost of
 
 - **WHEN** the main stage is narrowed until the summary's words no longer fit, with four states listed
 - **THEN** the header is one line, the name is wider than zero, every side panel control lies inside the header, and the summary shows each state's dot and count or folds the least urgent into one marker
+
+#### Scenario: Idle with background work is counted on its own
+
+- **WHEN** the workspace has one idle session and one idle · running in background session and nothing else
+- **THEN** the header lists idle · running in background with 1, then idle with 1, as two entries

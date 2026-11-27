@@ -191,6 +191,17 @@ export interface BackgroundTask {
   label: string | null
 }
 
+/**
+ * Whether a held background task is work that keeps a seen, idle session "idle · running in background"
+ * (`session-wait-indicator`, design D1 of `idle-with-background-work`). **Not a `monitor`**: that kind is a subscription
+ * the CLI keeps for the session (an artifact's live updates), which lasts as long as the session — counting it would
+ * make every session with one never read idle again. A `Monitor` tool's wait is reported as a `shell` and counts; an
+ * `other` kind is work until shown otherwise. `docs/remote-protocol.md` states the same rule for clients.
+ */
+export function isBackgroundWork(task: BackgroundTask): boolean {
+  return task.kind !== 'monitor'
+}
+
 export interface AgentEvent {
   name: string
   /** agent 自己回報的紀錄位置。定位的**權威來源**（見 `transcript-follow`）。 */

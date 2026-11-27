@@ -2671,11 +2671,11 @@ async function runSeen(_mode, _config, context) {
   check(results, "watching a session's conversation lists it seen", Boolean(seen), JSON.stringify(agentOf((await list(client)).sessions)))
   const tabs = await pollFor({
     read: () => app.client.evaluate(`[...document.querySelectorAll('[role="tablist"][aria-label="${copy('sessions.tabs')}"] [role="tab"]')].map((t) => t.getAttribute('title') ?? '')`),
-    settled: (titles) => titles[0]?.includes(copy('sessions.attentionIdle')),
+    settled: (titles) => titles[0]?.endsWith(copy('sessions.attentionIdle')),
     timeoutMs: 10_000,
     label: 'the desktop tab idle',
   })
-  check(results, "a device's conversation watch clears the waiting state on the desktop", tabs[0]?.includes(copy('sessions.attentionIdle')), JSON.stringify(tabs))
+  check(results, "a device's conversation watch clears the waiting state on the desktop", tabs[0]?.endsWith(copy('sessions.attentionIdle')), JSON.stringify(tabs))
 
   const turnFrom = client.events.length
   stub.command(conversation, 'fire UserPromptSubmit\nsleep 1\nfire Stop')

@@ -43,6 +43,7 @@ const ATTENTION_KEY = {
   choice: 'sessions.attentionChoice',
   waiting: 'sessions.attentionWaiting',
   working: 'sessions.attentionWorking',
+  idleBackground: 'sessions.attentionIdleBackground',
   idle: 'sessions.attentionIdle',
 } as const
 
@@ -81,6 +82,9 @@ export function rowStateOf(session: SessionState, attention?: Attention): RowSta
  *   working. (It was Tailwind's `emerald-400`, a shade off the token; a palette class does not follow the theme.)
  * - **idle** — a green ring. **Not the mockup's grey**: grey is the hibernated dot here, and "alive, resting" must not
  *   read as "asleep";
+ * - **idle · running in background** — the green ring filled with translucent green: between idle's ring and
+ *   working's solid glowing dot, with no pulse and no amber — the agent can take a prompt, it does not need the user
+ *   (`idle-with-background-work` D5);
  * - **dormant / ended** — grey; **ended with an error** — danger, so a failed start ("claude not found") shows.
  *   Hibernation is never danger: a restored session must not look dead.
  */
@@ -90,6 +94,7 @@ const TONE: Record<RowState, string> = {
   working: 'bg-green shadow-[0_0_6px_color-mix(in_srgb,var(--color-green)_55%,transparent)]',
   running: 'bg-green',
   unknown: 'bg-green',
+  idleBackground: 'border border-green bg-green/40',
   idle: 'border border-green',
   dormant: 'bg-ink-faint',
   ended: 'bg-ink-faint',

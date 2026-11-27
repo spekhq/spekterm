@@ -67,19 +67,23 @@ without opening it. Hover over the dot to see the state in words.
 |---|---|
 | Amber, pulsing | **Waiting for you**: the agent finished its turn and you have not looked at it since, or it **asks for a choice** (a permission prompt or a question) |
 | Green, glowing | **Working**: the agent is in a turn |
-| Green ring | **Idle**: the turn ended and you have already seen it |
+| Green ring, half filled | **Idle · running in background**: idle, but the agent still has work running in the background — a background subagent, a background command such as a dev server or a test run, or a wait it set up. The agent can take a prompt; nothing needs you |
+| Green ring | **Idle**: the turn ended and you have already seen it, and nothing runs in the background |
 | Green | Running: a shell, or an agent whose state is not known (agent events are off) |
 | Grey | Hibernated, or ended |
 | Red | Ended with an error |
 
 Switching to a session in the spekterm window, or opening its conversation in the companion phone app, counts
 as looking at it: its dot changes from waiting to idle. A session that has just started or woken is idle,
-not waiting. Each folder row on the rail has one dot for its most urgent session, so a collapsed folder
+not waiting. A subscription the agent keeps open for the session (such as an artifact's live updates) is not
+background work. While a background subagent is running, the agent's turn is not over yet, so the session shows
+idle · running in background rather than waiting. Each folder row on the rail has one dot for its most urgent session, so a collapsed folder
 still shows that something inside it is waiting.
 
 **The top of the main stage counts the whole workspace.** Next to the selected item's name it lists, for each
 state that has a session, the state's dot and how many sessions are in it: needs you (waiting for you or asks
-for a choice), ended with an error, working, running, idle, hibernated, ended — the most urgent first. Click
+for a choice), ended with an error, working, idle · running in background, running, idle, hibernated, ended —
+the most urgent first. Click
 a count to go to the next session in that state, in the order of the rail; click it again to go on to the
 following one. Hover over a count to see which sessions it holds. When the window is narrow, the words are
 dropped first, then the least urgent states are folded into one `+N` marker.
@@ -145,7 +149,8 @@ while it has focus), or until a related agent wakes it to reach it
 
 - **By hand:** press `Ctrl+Shift+H`, or choose **Hibernate** in the menu of its tab or rail row.
 - **Automatically:** a session idle for 24 hours is hibernated. Change the time, or turn this off, under
-  **Settings → Agents & sessions → Hibernate idle sessions**. The session on screen is never hibernated
+  **Settings → Agents & sessions → Hibernate idle sessions**. A session that is idle · running in background counts as
+  idle here, and hibernating it ends its background work too. The session on screen is never hibernated
   automatically, and neither is an agent that is working or a shell that is running a job. On macOS, idle
   shells are never hibernated automatically; you can still hibernate them by hand.
 

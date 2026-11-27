@@ -4,9 +4,11 @@ import os from 'node:os'
 import path from 'node:path'
 import { after, describe, it } from 'node:test'
 
-import { configureAgentEvents, prepareEventInjection } from './agent-events'
+import { configureAgentEvents, isBackgroundWork, prepareEventInjection } from './agent-events'
+import { attentionProjection } from './wait-attention'
 import {
   activeWaitSessions,
+  backgroundOf,
   clearWait,
   dismissRequest,
   lastTranscriptPathOf,
@@ -310,6 +312,46 @@ describe('on-demand refresh, answers and dismissal (remote-prompts-attachments-r
       refreshWait(sessionId)
       assert.equal(dismissRequest(sessionId, openRequestsOf(sessionId)[0].id), true)
       assert.equal(waitStateOf(sessionId), 'busy', 'the base state the subagent\'s start left')
+    } finally {
+      off()
+      clearWait(sessionId)
+    }
+  })
+})
+
+describe('idle with background work (`idle-with-background-work`)', () => {
+  it('hibernation clears it: after clearWait and a wake the session is idle until the agent reports work again', async () => {
+    // Control: keep `background` across clearWait → the post-wake assertion goes red.
+    const base = configure()
+    const sessionId = 'BG1'
+    prepareEventInjection(sessionId, true)
+    const project = () =>
+      attentionProjection({
+        running: () => [sessionId],
+        wait: waitStateOf,
+        inTurn: () => false,
+        seen: () => true,
+        requestTimes: () => [],
+        lastKeystroke: () => null,
+        background: (id) => backgroundOf(id).some(isBackgroundWork),
+      })[0]?.attention
+    // A failed assertion must not leave a drain's timer running: the run would never end.
+    let off = subscribeWait(sessionId, () => {})
+    try {
+      fire(base, sessionId, {
+        hook_event_name: 'Stop',
+        background_tasks: [{ id: 'sh1', type: 'shell', status: 'running', command: 'npm run dev' }],
+      })
+      await waitFor('the shell is held', () => backgroundOf(sessionId).length === 1)
+      assert.equal(project(), 'idleBackground')
+      off()
+      clearWait(sessionId)
+      // The wake: a fresh drain over a prepared drop point, with only the agent's start reported.
+      prepareEventInjection(sessionId, true)
+      off = subscribeWait(sessionId, () => {})
+      fire(base, sessionId, { hook_event_name: 'SessionStart', source: 'resume' })
+      await waitFor('the start is read', () => waitStateOf(sessionId) === 'ready')
+      assert.equal(project(), 'idle')
     } finally {
       off()
       clearWait(sessionId)

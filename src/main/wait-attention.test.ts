@@ -4,7 +4,7 @@ import test from 'node:test'
 import type { WaitValue } from '../shared/lineage/lifecycle'
 import { AttentionBroadcaster, attentionProjection, type AttentionView } from './wait-attention'
 
-function sources(over: Partial<Record<string, { wait: WaitValue; inTurn?: boolean; seen?: boolean; at?: number[]; key?: number | null }>>) {
+function sources(over: Partial<Record<string, { wait: WaitValue; inTurn?: boolean; seen?: boolean; at?: number[]; key?: number | null; background?: boolean }>>) {
   const of = (id: string) => over[id]!
   return {
     running: () => Object.keys(over),
@@ -13,6 +13,7 @@ function sources(over: Partial<Record<string, { wait: WaitValue; inTurn?: boolea
     seen: (id: string) => of(id).seen ?? true,
     requestTimes: (id: string) => of(id).at ?? [],
     lastKeystroke: (id: string) => of(id).key ?? null,
+    background: (id: string) => of(id).background ?? false,
   }
 }
 
@@ -32,6 +33,22 @@ test('the projection derives each running session; a choice typed over after eve
     { sessionId: 'c', attention: 'choice' },
     { sessionId: 'd', attention: 'idle' },
     { sessionId: 'e', attention: 'working' },
+  ])
+})
+
+test('the projection reads background work for the idle row only', () => {
+  // Control: drop the `background` source from the projection → the first entry goes red.
+  const views = attentionProjection(
+    sources({
+      a: { wait: 'ready', background: true },
+      b: { wait: 'ready', seen: false, background: true },
+      c: { wait: 'busy', inTurn: true, background: true },
+    }),
+  )
+  assert.deepEqual(views, [
+    { sessionId: 'a', attention: 'idleBackground' },
+    { sessionId: 'b', attention: 'waiting' },
+    { sessionId: 'c', attention: 'working' },
   ])
 })
 
@@ -64,6 +81,14 @@ test('a seen flip, a session starting and a session ending each send', () => {
   b.update([{ sessionId: 'b', attention: 'idle' }])
   assert.equal(sent.length, 4)
   assert.deepEqual(sent.at(-1), [{ sessionId: 'b', attention: 'idle' }], 'an ended session has no entry')
+})
+
+test('a switch between idle and idle with background work sends', () => {
+  const { b, sent } = broadcaster()
+  b.update([{ sessionId: 'a', attention: 'idle' }])
+  b.update([{ sessionId: 'a', attention: 'idleBackground' }])
+  b.update([{ sessionId: 'a', attention: 'idle' }])
+  assert.equal(sent.length, 3)
 })
 
 test('a change on a handoff session refreshes the relations; one on any other session does not', () => {

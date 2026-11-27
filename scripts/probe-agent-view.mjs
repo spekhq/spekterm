@@ -2015,10 +2015,44 @@ const STATUS = (key) => copy('sessions.statusRunningWith', { state: copy(key) })
 const WAITING = STATUS('sessions.attentionWaiting')
 const CHOICE = STATUS('sessions.attentionChoice')
 const WORKING = STATUS('sessions.attentionWorking')
+/**
+ * **Match a title's state with `endsWith`, never `includes`** (`idle-with-background-work`): "Running · Idle" is a
+ * prefix of "Running · Idle · running in background", so `includes(IDLE)` cannot tell the two apart. Every title read
+ * here ends with its state (`<label> — <status>`).
+ */
 const IDLE = STATUS('sessions.attentionIdle')
+const IDLE_BG = STATUS('sessions.attentionIdleBackground')
 const URGENT = (key) => copy('rail.mostUrgent', { state: copy(key) })
 /** Any attention words at all, for "running and nothing more". */
-const ANY_ATTENTION = [WAITING, CHOICE, WORKING, IDLE]
+const ANY_ATTENTION = [WAITING, CHOICE, WORKING, IDLE, IDLE_BG]
+
+/** The agent's background tasks as its CLI reports them on `Stop` / `SubagentStop`. */
+const BG_SHELL = { id: 'sh1', type: 'shell', status: 'running', description: 'Start the dev server', command: 'npm run dev' }
+const BG_MONITOR = { id: 'm1', type: 'monitor', status: 'running', description: 'live updates for artifact https://example.com/a' }
+const BG_SUBAGENT = { id: 'sub9', type: 'subagent', status: 'running', description: 'A background helper' }
+/** A subagent's stop carrying the whole list: it replaces the held tasks and is not a turn end. */
+const SUBAGENT_STOP = (tasks) => `firej SubagentStop '${JSON.stringify({ hook_event_name: 'SubagentStop', agent_id: 'sub-other', background_tasks: tasks })}'`
+const STOP_WITH = (tasks) => `firej Stop '${JSON.stringify({ hook_event_name: 'Stop', background_tasks: tasks })}'`
+
+/**
+ * Runs `command` in the stub's session and waits until its drop point has been read empty, plus one drain tick: a
+ * positive barrier, so a "still the same" assertion cannot pass on an event that was never read.
+ */
+async function commandDrained(stub, conversation, command, what) {
+  const marker = join(mkTemp('spekterm-agentview-drain-'), 'drop-point')
+  stub.command(conversation, `${command}\nprintf %s "$SPEKTERM_EVENT_DIR" > '${marker}'`)
+  await pollFor({
+    read: () => {
+      if (!existsSync(marker)) return null
+      const dir = readFileSync(marker, 'utf8')
+      return existsSync(dir) ? readdirSync(dir).filter((name) => name.endsWith('.json')).length : null
+    },
+    settled: (pending) => pending === 0,
+    timeoutMs: 15_000,
+    label: what,
+  })
+  await new Promise((resolve) => setTimeout(resolve, 1_000))
+}
 
 /** A turn: the prompt is reported, the agent works for a moment, the turn ends. */
 const TURN = (seconds = 1) => `fire UserPromptSubmit\nsleep ${seconds}\nfire Stop`
@@ -2091,14 +2125,14 @@ async function runAttention(_mode, _config, context) {
 
   const baseline = await pollFor({
     read: state,
-    settled: (s) => s.tabs.length === 4 && s.tabs.slice(0, 3).every((t) => t.includes(IDLE)),
+    settled: (s) => s.tabs.length === 4 && s.tabs.slice(0, 3).every((t) => t.endsWith(IDLE)),
     timeoutMs: 25_000,
     label: 'three idle agents',
   })
   check(
     results,
     'a started agent that reported only its start is idle, not waiting (the baseline)',
-    baseline.tabs.slice(0, 3).every((t) => t.includes(IDLE)) && !baseline.tabs.some((t) => t.includes(WAITING)),
+    baseline.tabs.slice(0, 3).every((t) => t.endsWith(IDLE)) && !baseline.tabs.some((t) => t.includes(WAITING)),
     JSON.stringify(baseline.tabs),
   )
   check(
@@ -2113,6 +2147,57 @@ async function runAttention(_mode, _config, context) {
     baseline.empty !== null && !baseline.empty.includes(prefixOf('rail.mostUrgent')),
     JSON.stringify(baseline.empty),
   )
+
+  // ── idle · running in background (`idle-with-background-work`) — before the focus gate: B has had no turn end, so
+  // it is seen without anyone looking. A and C are idle, the shell D runs.
+  // Controls (ran): the projection's `background` source wired to `() => false` turns the first check red;
+  // `isBackgroundWork` always true turns "only a monitor" red.
+  await commandDrained(stub, b, SUBAGENT_STOP([BG_SHELL]), "B's background shell was read")
+  const withShell = await pollFor({ read: state, settled: (s) => s.tabs[1]?.endsWith(IDLE_BG), timeoutMs: 10_000, label: 'B idle with background work' })
+  check(
+    results,
+    'a seen session whose agent reports a background shell states idle · running in background, not idle or working',
+    withShell.tabs[1]?.endsWith(IDLE_BG) && withShell.rows[1]?.endsWith(IDLE_BG) && !withShell.tabs[1].includes(WORKING),
+    JSON.stringify({ tab: withShell.tabs[1], row: withShell.rows[1] }),
+  )
+  await app.client.evaluate(`document.querySelector('${label('rail.collapseSessions', { name: names.f })}')?.click()`)
+  const ranked = await pollFor({ read: state, settled: (s) => s.rows.length === 0, timeoutMs: 10_000, label: 'F collapsed' })
+  check(
+    // A and C are idle and D is a running shell: ranked below either, the row would say idle or running.
+    results,
+    'a collapsed folder with idle agents and a running shell states idle · running in background',
+    ranked.rows.length === 0 && Boolean(ranked.folder?.endsWith(URGENT('sessions.attentionIdleBackground'))),
+    JSON.stringify(ranked.folder),
+  )
+  await app.client.evaluate(`document.querySelector('${label('rail.expandSessions', { name: names.f })}')?.click()`)
+  await pollFor({ read: state, settled: (s) => s.rows.length === 4, timeoutMs: 10_000, label: 'F expanded' })
+  const summaryCounts = countsOf(await app.client.evaluate(SUMMARY_STATE))
+  check(
+    results,
+    'the header lists idle · running in background and idle as two entries',
+    summaryCounts.idleBackground === 1 && summaryCounts.idle === 2,
+    JSON.stringify(summaryCounts),
+  )
+  await commandDrained(stub, b, SUBAGENT_STOP([BG_MONITOR]), "B's monitor-only list was read")
+  const monitorOnly = await pollFor({ read: state, settled: (s) => s.tabs[1]?.endsWith(IDLE), timeoutMs: 5_000, label: 'B idle with only a monitor' })
+  check(results, 'a session whose agent reports only a monitor states idle', monitorOnly.tabs[1]?.endsWith(IDLE), JSON.stringify(monitorOnly.tabs[1]))
+  await commandDrained(stub, b, SUBAGENT_STOP([BG_SHELL]), "B's background shell was read again")
+  await pollFor({ read: state, settled: (s) => s.tabs[1]?.endsWith(IDLE_BG), timeoutMs: 10_000, label: 'B idle with background work again' })
+  await commandDrained(stub, b, SUBAGENT_STOP([]), "B's empty list was read")
+  const cleared = await pollFor({ read: state, settled: (s) => s.tabs[1]?.endsWith(IDLE), timeoutMs: 5_000, label: 'B idle again' })
+  check(results, 'a session whose agent next reports no background task states idle again', cleared.tabs[1]?.endsWith(IDLE), JSON.stringify(cleared.tabs[1]))
+
+  // C, not displayed (the shell is), ends a turn while a background subagent runs: the turn is held open, so seen.
+  stub.command(c, `fire UserPromptSubmit\nsleep 1\n${STOP_WITH([BG_SUBAGENT])}`)
+  const heldOpen = await pollFor({ read: state, settled: (s) => s.tabs[2]?.endsWith(IDLE_BG), timeoutMs: 20_000, label: 'C held open' })
+  check(
+    results,
+    'a turn held open by a background subagent states idle · running in background, not waiting',
+    heldOpen.tabs[2]?.endsWith(IDLE_BG) && !heldOpen.tabs[2].includes(WAITING),
+    JSON.stringify(heldOpen.tabs[2]),
+  )
+  // C's own plain Stop ends that turn and clears its list: back to the flow below with C idle or waiting.
+  await commandDrained(stub, c, 'fire Stop', "C's plain Stop was read")
 
   // The agent reports a conversation end with nothing after it (CLI 2.1.317+ does, in a live process): B stays idle.
   // The barrier is positive — the command writes its drop point's path after firing, and the read waits until the
@@ -2135,7 +2220,7 @@ async function runAttention(_mode, _config, context) {
   check(
     results,
     'a conversation end the agent reports with nothing after it leaves an idle session idle, not running',
-    ended.tabs[1]?.includes(IDLE) && !ANY_ATTENTION.some((w) => w !== IDLE && ended.tabs[1].includes(w)),
+    ended.tabs[1]?.endsWith(IDLE) && !ANY_ATTENTION.some((w) => w !== IDLE && ended.tabs[1].includes(w)),
     JSON.stringify(ended.tabs[1]),
   )
 
@@ -2179,6 +2264,16 @@ async function runAttention(_mode, _config, context) {
   await new Promise((resolve) => setTimeout(resolve, 2_000))
   const late = await state()
   check(results, "a subagent's late tool start leaves the session waiting", late.tabs[0]?.includes(WAITING), JSON.stringify(late.tabs[0]))
+  // A waits after an unseen turn end; its agent now reports a background shell: still waiting, nothing added.
+  await commandDrained(stub, a, SUBAGENT_STOP([BG_SHELL]), "A's background shell was read")
+  const waitingWithWork = await state()
+  check(
+    results,
+    'an unseen turn end with a background shell states waiting for you, with no background words',
+    Boolean(waitingWithWork.tabs[0]?.endsWith(WAITING)) && !waitingWithWork.tabs[0].includes(copy('sessions.attentionIdleBackground')),
+    JSON.stringify(waitingWithWork.tabs[0]),
+  )
+  await commandDrained(stub, a, SUBAGENT_STOP([]), "A's empty list was read")
   stub.command(c, 'fire Stop')
 
   if (!late.focus) {
@@ -2188,12 +2283,12 @@ async function runAttention(_mode, _config, context) {
 
   // Looking at A clears it.
   await app.client.evaluate(focusTabExpression(0))
-  const looked = await pollFor({ read: state, settled: (s) => s.tabs[0]?.includes(IDLE), timeoutMs: 10_000, label: 'A looked at' })
-  check(results, 'turning to a session in the focused window states "idle"', looked.tabs[0]?.includes(IDLE), JSON.stringify(looked.tabs[0]))
+  const looked = await pollFor({ read: state, settled: (s) => s.tabs[0]?.endsWith(IDLE), timeoutMs: 10_000, label: 'A looked at' })
+  check(results, 'turning to a session in the focused window states "idle"', looked.tabs[0]?.endsWith(IDLE), JSON.stringify(looked.tabs[0]))
 
   // B finishes a turn while displayed: working, then idle, never waiting.
   await app.client.evaluate(focusTabExpression(1))
-  await pollFor({ read: state, settled: (s) => s.tabs[1]?.includes(IDLE), timeoutMs: 10_000, label: 'B displayed and idle' })
+  await pollFor({ read: state, settled: (s) => s.tabs[1]?.endsWith(IDLE), timeoutMs: 10_000, label: 'B displayed and idle' })
   const seenStates = []
   stub.command(b, TURN(2))
   await pollFor({
@@ -2202,16 +2297,37 @@ async function runAttention(_mode, _config, context) {
       seenStates.push(s.tabs[1])
       return s
     },
-    settled: (s) => seenStates.some((t) => t?.includes(WORKING)) && s.tabs[1]?.includes(IDLE),
+    settled: (s) => seenStates.some((t) => t?.includes(WORKING)) && s.tabs[1]?.endsWith(IDLE),
     timeoutMs: 20_000,
     label: 'B worked and is idle',
   })
   check(
     results,
     'a turn that ends while the user watches goes working → idle, never waiting',
-    seenStates.some((t) => t?.includes(WORKING)) && seenStates.at(-1)?.includes(IDLE) && !seenStates.some((t) => t?.includes(WAITING)),
+    seenStates.some((t) => t?.includes(WORKING)) && seenStates.at(-1)?.endsWith(IDLE) && !seenStates.some((t) => t?.includes(WAITING)),
     JSON.stringify([...new Set(seenStates)]),
   )
+
+  // B, displayed and looked at, ends a turn that leaves a background shell running: seen, with background work.
+  const bgStates = []
+  stub.command(b, `fire UserPromptSubmit\nsleep 2\n${STOP_WITH([BG_SHELL])}`)
+  await pollFor({
+    read: async () => {
+      const s = await state()
+      bgStates.push(s.tabs[1])
+      return s
+    },
+    settled: (s) => bgStates.some((t) => t?.includes(WORKING)) && s.tabs[1]?.endsWith(IDLE_BG),
+    timeoutMs: 20_000,
+    label: 'B worked and is idle with background work',
+  })
+  check(
+    results,
+    'a turn that ends while the user watches, leaving a background shell, goes working → idle · running in background',
+    bgStates.some((t) => t?.includes(WORKING)) && bgStates.at(-1)?.endsWith(IDLE_BG) && !bgStates.some((t) => t?.includes(WAITING)),
+    JSON.stringify([...new Set(bgStates)]),
+  )
+  await commandDrained(stub, b, SUBAGENT_STOP([]), "B's empty list was read")
 
   // A, displayed, asks for permission: a choice even while looked at; typing into it answers it.
   await app.client.evaluate(focusTabExpression(0))
@@ -2236,7 +2352,7 @@ async function runAttention(_mode, _config, context) {
 
   // After A was seen, a new turn that ends while B is displayed is unseen again.
   stub.command(a, `firej PostToolUse '{"hook_event_name":"PostToolUse","tool_name":"Bash","tool_use_id":"t-ask","tool_input":{"command":"rm x"}}'\nfire Stop`)
-  await pollFor({ read: state, settled: (s) => s.tabs[0]?.includes(IDLE), timeoutMs: 10_000, label: 'A idle again' })
+  await pollFor({ read: state, settled: (s) => s.tabs[0]?.endsWith(IDLE), timeoutMs: 10_000, label: 'A idle again' })
   await app.client.evaluate(focusTabExpression(1))
   stub.command(a, TURN())
   const again = await pollFor({ read: state, settled: (s) => s.tabs[0]?.includes(WAITING), timeoutMs: 20_000, label: 'A waits again' })
@@ -2266,7 +2382,7 @@ async function runAttentionUnreported(_mode, _config, context) {
 
 // ── The main stage header's workspace summary (`session-wait-indicator`) ─────
 
-const SUMMARY_BUCKETS = ['needsYou', 'error', 'working', 'running', 'idle', 'hibernated', 'ended']
+const SUMMARY_BUCKETS = ['needsYou', 'error', 'working', 'idleBackground', 'running', 'idle', 'hibernated', 'ended']
 const BUCKET_OF_WORDS = new Map(SUMMARY_BUCKETS.map((bucket) => [copy(`stage.summaryState.${bucket}`), bucket]))
 
 /** The header: its first line, the summary's controls (bucket, count, tooltip, rect), and its layout. */

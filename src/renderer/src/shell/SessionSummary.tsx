@@ -21,6 +21,7 @@ const BUCKET_DOT: Record<SummaryBucket, RowState> = {
   needsYou: 'waiting',
   error: 'error',
   working: 'working',
+  idleBackground: 'idleBackground',
   running: 'running',
   idle: 'idle',
   hibernated: 'dormant',

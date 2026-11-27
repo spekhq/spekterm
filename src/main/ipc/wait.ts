@@ -1,6 +1,7 @@
 import { BrowserWindow, ipcMain } from 'electron'
 
-import { inTurnOf, openRequestsOf, waitStateOf, type WaitSnapshot } from '../agent-wait'
+import { isBackgroundWork } from '../agent-events'
+import { backgroundOf, inTurnOf, openRequestsOf, waitStateOf, type WaitSnapshot } from '../agent-wait'
 import { createLookedAt, type LookedAt } from '../looked-at'
 import { lastKeystrokeAt } from '../pty-input'
 import type { SessionStore } from '../session-store'
@@ -26,6 +27,9 @@ const projection = (): AttentionView[] =>
     seen: (sessionId) => seenMarks.seenOf(sessionId),
     requestTimes: (sessionId) => openRequestsOf(sessionId).map((request) => request.at),
     lastKeystroke: lastKeystrokeAt,
+    // Every drained batch refreshes this, a SubagentStop-only one included, and a process end resets the held list
+    // before the pty change refreshes it (design D4 of `idle-with-background-work`).
+    background: (sessionId) => backgroundOf(sessionId).some(isBackgroundWork),
   })
 
 /** Recomputes and sends the projection if it changed. */

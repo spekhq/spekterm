@@ -5,15 +5,17 @@ import { type RowState, URGENCY } from './attention'
  * sessions by state"): every session with a rail entry, counted by the state its own dot shows.
  *
  * Choice and waiting share a dot, so they are one bucket ("needs you"); running and unknown share one too, as do
- * the dots of hibernated and ended — but those two stay apart, ended last.
+ * the dots of hibernated and ended — but those two stay apart, ended last. Idle with background work has its own dot
+ * and its own bucket: it is not idle at a glance.
  */
-export type SummaryBucket = 'needsYou' | 'error' | 'working' | 'running' | 'idle' | 'hibernated' | 'ended'
+export type SummaryBucket = 'needsYou' | 'error' | 'working' | 'idleBackground' | 'running' | 'idle' | 'hibernated' | 'ended'
 
 export const BUCKET_OF: Record<RowState, SummaryBucket> = {
   choice: 'needsYou',
   waiting: 'needsYou',
   error: 'error',
   working: 'working',
+  idleBackground: 'idleBackground',
   running: 'running',
   unknown: 'running',
   idle: 'idle',

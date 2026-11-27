@@ -89,6 +89,7 @@ const COVERED_CHANGES = [
   'remote-answer-despite-typed',
   'quick-replies',
   'handoff-waits-for-network',
+  'idle-with-background-work',
 ]
 
 /** change 的所在 —— 封存後它會搬到 `archive/` 之下，兩處都找。 */
@@ -3848,6 +3849,28 @@ export const TABLE = [
     'let a named target that resolves to nothing fall through to the rules and the fallback', 'unit (intake-routing.test.ts) at the routing step every occurrence goes through; no probe'],
   ['A held occurrence does not pile up the recurrence', 'an occurrence held for the agent service across three hourly times opens once, and the next is after now', false,
     'create the next occurrence while one is held', 'unit with a real RecurrenceKeeper and an injected clock'],
+  // ── idle-with-background-work: session-wait-indicator (MODIFIED; only the new scenarios — the copied ones keep
+  //    their rows above, and their idle assertions now match by `endsWith`, since "Running · Idle" is a prefix of the
+  //    new state's words) ──
+  ['A seen turn end with a background shell says so', 'a turn that ends while the user watches, leaving a background shell, goes working → idle · running in background', false,
+    'the projection\'s background source wired to () => false',
+    'probe:agent-view runAttention, inside the focus gate (a recorded gap without focus). Without focus the same state is carried before the gate by "a seen session whose agent reports a background shell states idle · running in background, not idle or working" (a SubagentStop on a seen session); unit: attention.test.ts "background work changes only the idle row"'],
+  ['The state returns to idle when the background work is gone', 'a session whose agent next reports no background task states idle again', false,
+    'a held list that a report never shrinks', 'probe:agent-view runAttention (before the focus gate)'],
+  ['A subscription alone does not count', 'a session whose agent reports only a monitor states idle', false,
+    'isBackgroundWork always true', 'probe:agent-view runAttention (before the focus gate); unit: agent-events.test.ts "background work is every kind but a monitor"'],
+  ['Waiting is not annotated', 'an unseen turn end with a background shell states waiting for you, with no background words', false,
+    'return idleBackground whenever background, before the seen test', 'probe:agent-view runAttention (a drained-barrier read, so "still waiting" cannot pass on an unread event); unit: attention.test.ts'],
+  ['A process end clears it', 'hibernation clears it: after clearWait and a wake the session is idle until the agent reports work again', false,
+    'clearWait keeps the held background list (ran: red)', 'unit: agent-wait.test.ts on the real drain and backgroundOf. Hibernation only — another end can fold a late Stop (design Risks)'],
+  ['A turn held open by a background subagent', 'a turn held open by a background subagent states idle · running in background, not waiting', false,
+    'end the turn on every own Stop (then the unseen turn end reads waiting)', 'probe:agent-view runAttention (before the focus gate); unit: attention.test.ts "the paths into the idle row reach idle with background work too"'],
+  ['Background work outranks idle', 'a collapsed folder with idle agents and a running shell states idle · running in background', false,
+    'URGENCY ranks idleBackground with idle', 'probe:agent-view runAttention: A and C idle, B idle · running in background, D a running shell; unit: attention.test.ts ranking'],
+  ['Background work outranks a running shell', 'ranking: choice/waiting > error > working > idle with background > running > idle > dormant/ended', false,
+    'URGENCY ranks idleBackground after running', 'unit: attention.test.ts; probe:agent-view "a collapsed folder with idle agents and a running shell states idle · running in background" (the same folder holds a running shell)'],
+  ['Idle with background work is counted on its own', 'the header lists idle · running in background and idle as two entries', false,
+    'BUCKET_OF maps idleBackground to idle', 'probe:agent-view runAttention (the summary\'s accessible names); unit: summary.test.ts "idle with background work and idle are two entries"'],
 ]
 
 /**

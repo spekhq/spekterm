@@ -14,6 +14,7 @@ import {
   heldWait,
   EVENT_COMMAND,
   HOOKED_EVENTS,
+  isBackgroundWork,
   nextWaitState,
   parseEvent,
   prepareEventInjection,
@@ -782,6 +783,14 @@ test('a background label is the command on one line when there is no description
   assert.equal(label({ type: 'shell', description: '   ', command: 'ls' }), 'ls', 'a blank description falls back to the command')
   assert.equal(label({ type: 'agent-ish', command: 'not a shell' }), null, 'only a shell\'s command is a label')
   assert.equal(label({ type: 'shell', description: 'x'.repeat(300) })?.length, 200)
+})
+
+test('background work is every kind but a monitor (a subscription the CLI keeps)', () => {
+  const work = (kind: 'agent' | 'shell' | 'monitor' | 'other') => isBackgroundWork({ id: 't', kind, label: null })
+  assert.equal(work('agent'), true)
+  assert.equal(work('shell'), true, "a Monitor tool's wait is a shell")
+  assert.equal(work('other'), true)
+  assert.equal(work('monitor'), false)
 })
 
 test('background tasks are read only from Stop and SubagentStop', () => {
